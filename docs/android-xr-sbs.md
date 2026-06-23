@@ -9,6 +9,12 @@ surface/stereo pipeline. **Treat this as a plan, not finished design — verify 
 against the current Jetpack XR release before writing code, and confirm decisions with the
 maintainer where this doc says "DECISION NEEDED".**
 
+> **This is an XR-only build.** The app is distributed only to Android XR devices
+> (`<uses-feature android:name="android.software.xr.api.spatial" android:required="true"/>`,
+> `minSdk 24`). Every device running it is an XR device, so the XR SBS path is the **primary**
+> experience — not an optional mode hidden on phones. Device-detection guards are therefore a
+> safety net, not the main gate; favor making XR the default and 2D a fallback panel.
+
 ## Goal & scope
 
 - **In scope:** When running on an Android XR device and streaming SBS content (e.g. a 3D
@@ -78,10 +84,11 @@ Android XR apps use **Jetpack XR (SceneCore)**. The relevant pieces:
 ### 1. Gradle / manifest
 
 - Add Jetpack XR dependencies to `app/build.gradle` (scenecore, runtime, and the openxr
-  runtime impl). Gate them so non-XR builds still work — these libraries are designed to be
-  no-ops / absent at runtime on phones, but verify minSdk impact (XR requires a high API
-  level; our `minSdk` is 21, so **all XR code must be runtime-guarded**, never called on old
-  devices).
+  runtime impl). The app's `minSdk` is **24**, which satisfies the XR libraries' declared
+  minSdk (23/24), so no manifest `overrideLibrary` is required. XR APIs are still only
+  exercised on actual XR devices (API 34+), so **all XR code must be runtime-guarded** behind
+  device detection — both for correctness on non-XR devices and to avoid loading XR classes
+  there.
 - `AndroidManifest.xml`: declare XR support as **optional** so the app still installs on
   phones/tablets/TV:
   ```xml
@@ -165,9 +172,8 @@ resolution-inverting for `renderMode != 0`.
 
 - **Android XR emulator** (Android Studio AVD with the XR system image) is the primary dev
   target before hardware; it supports `SurfaceEntity` stereo rendering.
-- Verify on phone/tablet that the app still builds and runs and that `MODE_XR_SBS` is hidden
-  / harmless (no XR classes loaded, no crash) — this is the critical regression risk given
-  `minSdk 21`.
+- Verify on phone/tablet (API 24+) that the app still builds and runs and that `MODE_XR_SBS`
+  is hidden / harmless (no XR classes loaded, no crash) — the key non-XR regression check.
 - Test SBS source: a known SBS video or a host configured to output side-by-side. Confirm
   left/right eyes are not swapped (add a swap toggle if uncertain).
 - Run `./gradlew test` — keep the existing unit tests green; `MoonBridge` is shadowed.

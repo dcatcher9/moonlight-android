@@ -11,6 +11,13 @@
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+    <!-- XR-only app: restrict distribution/install to Android XR devices.
+         android.software.xr.api.spatial is the Jetpack XR (SceneCore) feature; required=true
+         means the app is only visible/installable on Android XR devices (e.g. Galaxy XR). -->
+    <uses-feature
+        android:name="android.software.xr.api.spatial"
+        android:required="true" />
     <!-- We don't need a MulticastLock on API level 34+ because we use NsdManager for mDNS -->
     <uses-permission
         android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"

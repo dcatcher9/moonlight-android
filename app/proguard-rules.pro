@@ -46,3 +46,8 @@
 # MPAndroidChart
 -keep class com.github.mikephil.charting.** { *; }
 -dontwarn com.github.mikephil.charting.**
+# Android XR (Jetpack XR / SceneCore)
+# The com.android.extensions.xr.* classes are part of the Android XR platform
+# extensions, provided by the device's XR system image at runtime, so they are
+# not present on the build classpath. They are only ever invoked on XR devices.
+-dontwarn com.android.extensions.xr.**

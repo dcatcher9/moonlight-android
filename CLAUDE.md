@@ -12,12 +12,21 @@ with many extra features. The Java package is `com.limelight` (historical name).
 The active branch is `moonlight-noir`. Application IDs: release `com.limelight.noir`,
 debug `com.limelight.noirdebug` (release flavor app name "Artemis", debug "Diana").
 
-### Current focus: Android XR (Galaxy XR) SBS support
+### Current focus: Android XR (Galaxy XR) SBS support — XR-ONLY build
 
-We are adding support so a **side-by-side (SBS) stereo stream produced on the PC**
-can be displayed stereoscopically on **Android XR devices (Samsung Galaxy XR)**.
-See [docs/android-xr-sbs.md](docs/android-xr-sbs.md) for the design and implementation plan.
-Read that document before touching any rendering / surface / stereo code.
+This fork is being retargeted as an **Android XR-only app**: it is built to run **only on
+Android XR devices (Samsung Galaxy XR)**, not phones/tablets/TV. The manifest declares
+`<uses-feature android:name="android.software.xr.api.spatial" android:required="true" />`,
+which restricts Play Store distribution/install to XR devices. `minSdk = 24` (the Jetpack XR
+floor per Google's guidance — do NOT raise to 34).
+
+The goal: display a **side-by-side (SBS) stereo stream produced on the PC** stereoscopically
+on the headset. See [docs/android-xr-sbs.md](docs/android-xr-sbs.md) for the design and
+implementation plan. Read that document before touching any rendering / surface / stereo code.
+
+Implication: since every device running this build is an XR device, the XR SBS path should be
+the **primary** experience. Non-XR code paths (the legacy phone/tablet OSC, the AI-depth
+modes) still exist but are no longer the target; don't invest in non-XR regressions.
 
 > Note: there is already an *unrelated* "SBS 3D" feature that uses an on-device AI
 > depth model (MiDaS) to synthesize 3D from a flat 2D stream. The XR work is different:
@@ -26,15 +35,23 @@ Read that document before touching any rendering / surface / stereo code.
 
 ## Build & test
 
-- Android Studio + Android NDK (NDK `27.0.12077973`, declared in `app/build.gradle`).
+- **Toolchain:** Gradle `9.6.0` (wrapper) + AGP `9.2.0`, run on **JDK 25** (the current
+  build JDK). Gradle 9.6 accepts JDK 17–25, so an older 17/21 JDK also works if needed, but
+  JDK 25 is the standard here. JDK 26 is too new for Gradle and will be rejected — point
+  `JAVA_HOME` at JDK 25.
+- Android NDK `27.0.12077973` (declared in `app/build.gradle`); AGP auto-provisions it if
+  `cmdline-tools`/`sdkmanager` is available, otherwise install via Android Studio's SDK Manager.
 - First checkout: `git submodule update --init --recursive` (pulls `moonlight-common-c`).
-- Create `local.properties` with `ndk.dir=<path>` (and `sdk.dir=`).
-- Build: `./gradlew assembleNonRoot_gameDebug` (Windows: `gradlew.bat`). The Bash tool
-  here runs Git Bash; `gradlew` (the shell script) works from it.
+- Create `local.properties` with `sdk.dir=<path>` (and `ndk.dir=` if the NDK isn't auto-found).
+- Build: `JAVA_HOME=<jdk> ./gradlew :app:assembleNonRoot_gameDebug` (Windows: `gradlew.bat`).
+  The Bash tool here runs Git Bash; the `gradlew` shell script works from it.
 - Unit tests: `./gradlew test` (root aggregates all `*UnitTest` tasks; uses Robolectric +
   Mockito; native `MoonBridge` is stubbed by `app/src/test/.../shadows/ShadowMoonBridge.java`).
-- `compileSdk = 36`, `targetSdk = 34`, `minSdk = 21`. Java 11 source/target.
+- `compileSdk = 36`, `targetSdk = 34`, `minSdk = 24` (raised from 21 to satisfy the Jetpack
+  XR libraries' minSdk without a manifest override). Java 11 source/target.
 - Product flavors: `root` (maxSdk 25) and `nonRoot_game`. ABI splits enabled.
+- **AGP 9 notes:** uses `proguard-android-optimize.txt` (the non-optimize default was removed),
+  and `buildFeatures { resValues = true }` is required because the build uses `resValue`.
 
 ## Architecture map
 
