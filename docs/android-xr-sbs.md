@@ -15,22 +15,51 @@ maintainer where this doc says "DECISION NEEDED".**
 > experience — not an optional mode hidden on phones. Device-detection guards are therefore a
 > safety net, not the main gate; favor making XR the default and 2D a fallback panel.
 
-## Status — bring-up on the XR emulator (2026-06-23)
+## Status — working on Galaxy XR hardware (2026-06-24)
 
-Verified on the Galaxy XR emulator updated to the **v3 spatial API** image
-(`android.software.xr.api.spatial=3`, `openxr=65537`), built with the Android Studio
-**Canary JBR (JDK 21)** (JDK 25 also works). `MODE_XR_SBS` now runs end-to-end up to the
-compositor: the stream enters `full-space-managed`, the OpenXR session reaches `FOCUSED`,
-`SPATIAL_3D_CONTENT` capability is `true`, the SBS `SurfaceEntity` is created/attached and
-**visibly composites as a quad floating in 3D** (correct per-eye aspect), and HEVC decodes
-at 1280×720×60.
+`MODE_XR_SBS` **works end-to-end on a real Galaxy XR** (SM-I610, Android 14, arm64-v8a): the
+PC's packed side-by-side stream is decoded by the hardware HEVC decoder rendering **directly**
+into a SceneCore `SurfaceEntity` (`StereoMode.SIDE_BY_SIDE`), and the headset fuses it into one
+stereo image. No GL/intermediate pass is needed — the decoder feeds the entity surface directly,
+keeping latency minimal.
 
-**Remaining blocker (emulator-only, not a code bug):** the quad stays **black** because the
-emulator's `c2.goldfish.hevc.decoder` cannot bind its output to the SurfaceEntity consumer —
-`Codec2Client: setOutputSurface -- failed to set consumer usage (6/BAD_INDEX)`, alongside
-`Native fences not supported on this device`. This is an emulated-GPU/codec limitation; the
-decoded frames never reach the quad texture. **Validate the actual SBS visual on real Galaxy
-XR hardware.**
+The working sequence in `XrStreamPresenter.init()`:
+1. `SurfaceEntity.create(session, pose, Quad, SIDE_BY_SIDE)` at ~2 m in front.
+2. `setSurfacePixelDimensions(width, height)` so the L/R split lands on the half boundary.
+3. **`setParent(scene.getActivitySpace())`** + `setEnabled(true)` + `setAlpha(1)`.
+4. **`scene.getMainPanelEntity().setEnabled(false)`** to hide the activity's 2D panel.
+5. Hand `surfaceEntity.getSurface()` straight to `decoderRenderer.setRenderTarget(...)`.
+
+### What the long "black quad" investigation actually was (lessons)
+This looked for a while like an emulator/codec buffer problem. It was not. The black quad had
+two real causes, both fixed above:
+- **Missing `setParent`** — without an explicit parent the entity isn't attached to the rendered
+  scene graph, so the quad never appears even though its surface is being fed and consumed.
+  This was the main bug.
+- **The 2D main panel occluded the quad** — in full-space mode the activity window (which hosts
+  `StreamContainer`'s placeholder `SurfaceView`, carrying no video) renders as an opaque panel
+  in front of the quad. Hiding the main panel reveals the SBS quad.
+
+Two misreads that cost significant time, recorded so they are not repeated:
+- **`onWorkDone` is NOT a per-frame counter.** It's an infrequent CCodec debug log (output-delay
+  updates, etc.) that sat at 2–4 whether the stream rendered or not. The "decoder stalls after a
+  few frames" theory was based entirely on misreading it; the decoder never stalled. To gauge
+  real frame flow, instrument the *consumer* (e.g. a `SurfaceTexture` `onFrameAvailable` counter),
+  not `onWorkDone`.
+- **`setOutputSurface ... failed to set consumer usage (6/BAD_INDEX)` is BENIGN** — it also
+  appears in the working 2D `SurfaceView` path, so it is not a cause.
+
+A GL-bridge workaround (decoder → our `SurfaceTexture` → GL blit → SurfaceEntity surface) was
+built and did work — which proved SceneCore consumes our frames fine — but it became unnecessary
+once parenting + panel-hide were in place, so it was removed. If per-eye recoloring/reshaping is
+ever needed, that pattern is the reference: an EGL14 window surface on `getSurface()`, an OES
+`SurfaceTexture` for the decoder, and **force opaque alpha** in the OES fragment shader (video
+sampled via `samplerExternalOES` yields alpha 0, which composites transparent/black otherwise).
+
+> The earlier emulator note (2026-06-23) attributed the black quad to the emulator's
+> `c2.goldfish.hevc.decoder` and `setOutputSurface ... BAD_INDEX`. That conclusion was wrong —
+> see above. (The emulator may still have its own codec/GPU limitations, but the black quad on
+> both emulator and hardware was the parenting + panel occlusion.)
 
 ### Jetpack XR dependency version matrix (do not "align" them)
 The `androidx.xr.*` modules version **independently**. The matched set is **scenecore family
@@ -39,14 +68,17 @@ runtime:alpha14 / arcore:alpha14; runtime alpha15 dropped `XrExtensionsHolder`, 
 scenecore-spatial-core:alpha15 loads via a provider). Declare those exact versions in
 `app/build.gradle`; do **not** add a blanket `resolutionStrategy` force to one version.
 
-### Minification (R8) keep rules — required
-The XR libraries use JNI/ServiceLoader/reflection R8 can't trace, so minified builds strip
-classes/members and crash at stream start (JNI `NoSuchMethodError` on `ViewCameraState`'s
-ctor; `AbstractMethodError` on `com.android.extensions.xr...Consumer.accept`;
-`NoClassDefFoundError XrExtensionsHolder`). `app/proguard-rules.pro` keeps the whole
-`androidx.xr.**` tree. `minifyEnabled` stays **true** for both buildTypes; if the
-`Consumer.accept AbstractMethodError` recurs in a minified build, that is the open item to
-chase (it disappears with minify off, so it is an R8 artifact, not a device ABI skew).
+### Minification (R8) — debug currently builds with minify OFF
+The XR libraries use JNI/ServiceLoader/reflection R8 can't trace. `app/proguard-rules.pro` keeps
+the whole `androidx.xr.**` tree, which fixes the JNI `NoSuchMethodError` on `ViewCameraState`'s
+ctor and the `NoClassDefFoundError XrExtensionsHolder`. But one crash the keep rules do **not**
+fix: `AbstractMethodError` on `com.android.extensions.xr.function.Consumer.accept` at
+`XrExtensions.lambda$setSpatialStateCallback$7`, confirmed to reproduce **on hardware** with
+minify on. R8 desugars the runtime's `setSpatialStateCallback` lambda into a class implementing
+the device-provided `Consumer` interface (which isn't in the APK), leaving `accept()` abstract.
+So **`minifyEnabled` is `false` for the `debug` buildType** as the current workaround. **Open
+item:** make `release` builds work with minify on (the `androidx.xr.**` keep rules alone are
+insufficient).
 
 ## Goal & scope
 
