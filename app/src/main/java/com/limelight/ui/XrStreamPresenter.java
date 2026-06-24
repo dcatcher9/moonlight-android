@@ -104,19 +104,29 @@ public class XrStreamPresenter {
                 quad,
                 SurfaceEntity.StereoMode.SIDE_BY_SIDE);
 
-        // Tell the entity the producer buffer size so it matches the full decoded SBS frame
-        // (decoder renders at prefConfig.width x height; the compositor splits L/R from it).
+        // Pin the entity's surface to the full SBS frame size so the L/R split lands on the half
+        // boundary.
         surfaceEntity.setSurfacePixelDimensions(new IntSize2d(prefConfig.width, prefConfig.height));
-
-        // Make attachment/visibility explicit rather than relying on create() defaults:
-        // parent the quad to the activity space (the rendered scene root), and ensure it is
-        // enabled and fully opaque so the compositor presents it.
+        // Parent to the activity space (the rendered scene root) and make visibility explicit.
+        // Without the explicit parent the entity isn't attached to the rendered scene graph, so the
+        // quad never appears even though its surface is being fed/consumed.
         surfaceEntity.setParent(scene.getActivitySpace());
         surfaceEntity.setEnabled(true);
         surfaceEntity.setAlpha(1.0f);
-        LimeLog.info("XR: SurfaceEntity created and attached; dimensions=" + surfaceEntity.getDimensions());
+        LimeLog.info("XR: SurfaceEntity created; dimensions=" + surfaceEntity.getDimensions());
 
+        // Hide the activity's 2D main panel. In full-space mode it's rendered as an opaque panel
+        // (it hosts the placeholder SurfaceView, which carries no video) and sits in front of the
+        // SBS quad, occluding it. We present everything through the SurfaceEntity, so hide it.
+        scene.getMainPanelEntity().setEnabled(false);
+
+        // Hand the decoder the entity's surface directly. The hardware decoder feeds the
+        // SurfaceEntity with no extra GL pass, which keeps latency minimal. (An earlier "black
+        // quad" symptom was misattributed to a codec/consumer buffer stall; the real causes were
+        // the missing setParent above and the occluding 2D main panel — both fixed here — so the
+        // direct path works and no GL bridge is needed.)
         videoSurface = surfaceEntity.getSurface();
+
         if (listener != null) {
             listener.onSurfaceReady(videoSurface);
         }
