@@ -15,6 +15,39 @@ maintainer where this doc says "DECISION NEEDED".**
 > experience — not an optional mode hidden on phones. Device-detection guards are therefore a
 > safety net, not the main gate; favor making XR the default and 2D a fallback panel.
 
+## Status — bring-up on the XR emulator (2026-06-23)
+
+Verified on the Galaxy XR emulator updated to the **v3 spatial API** image
+(`android.software.xr.api.spatial=3`, `openxr=65537`), built with the Android Studio
+**Canary JBR (JDK 21)** (JDK 25 also works). `MODE_XR_SBS` now runs end-to-end up to the
+compositor: the stream enters `full-space-managed`, the OpenXR session reaches `FOCUSED`,
+`SPATIAL_3D_CONTENT` capability is `true`, the SBS `SurfaceEntity` is created/attached and
+**visibly composites as a quad floating in 3D** (correct per-eye aspect), and HEVC decodes
+at 1280×720×60.
+
+**Remaining blocker (emulator-only, not a code bug):** the quad stays **black** because the
+emulator's `c2.goldfish.hevc.decoder` cannot bind its output to the SurfaceEntity consumer —
+`Codec2Client: setOutputSurface -- failed to set consumer usage (6/BAD_INDEX)`, alongside
+`Native fences not supported on this device`. This is an emulated-GPU/codec limitation; the
+decoded frames never reach the quad texture. **Validate the actual SBS visual on real Galaxy
+XR hardware.**
+
+### Jetpack XR dependency version matrix (do not "align" them)
+The `androidx.xr.*` modules version **independently**. The matched set is **scenecore family
+= alpha15** and **runtime + arcore family = alpha14** (scenecore:alpha15 `requires`
+runtime:alpha14 / arcore:alpha14; runtime alpha15 dropped `XrExtensionsHolder`, which
+scenecore-spatial-core:alpha15 loads via a provider). Declare those exact versions in
+`app/build.gradle`; do **not** add a blanket `resolutionStrategy` force to one version.
+
+### Minification (R8) keep rules — required
+The XR libraries use JNI/ServiceLoader/reflection R8 can't trace, so minified builds strip
+classes/members and crash at stream start (JNI `NoSuchMethodError` on `ViewCameraState`'s
+ctor; `AbstractMethodError` on `com.android.extensions.xr...Consumer.accept`;
+`NoClassDefFoundError XrExtensionsHolder`). `app/proguard-rules.pro` keeps the whole
+`androidx.xr.**` tree. `minifyEnabled` stays **true** for both buildTypes; if the
+`Consumer.accept AbstractMethodError` recurs in a minified build, that is the open item to
+chase (it disappears with minify off, so it is an R8 artifact, not a device ABI skew).
+
 ## Goal & scope
 
 - **In scope:** When running on an Android XR device and streaming SBS content (e.g. a 3D

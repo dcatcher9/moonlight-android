@@ -219,6 +219,13 @@ public class PreferenceConfiguration {
     public static final int FRAME_PACING_CAP_FPS = 2;
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
 
+    // Values of the "render_mode_list" preference. These mirror the ordinals of
+    // StreamContainer.StreamMode.
+    public static final int RENDER_MODE_2D = 0;
+    public static final int RENDER_MODE_AI_3D = 1;
+    public static final int RENDER_MODE_AI_3D_MOVIE = 2;
+    public static final int RENDER_MODE_XR_SBS = 3;
+
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";
@@ -391,6 +398,16 @@ public class PreferenceConfiguration {
     private static final String BALANCE_SHIFT = "balance_shift";
     private static final String NUMBER_PAN_OFFSET_X = "number_pan_offset_x";
     private static final String NUMBER_PAN_OFFSET_Y = "number_pan_offset_y";
+
+    /**
+     * True for any stereoscopic render mode (currently the AI-3D and AI-3D-movie
+     * paths; future XR SBS would belong here too) — i.e. anything that is not plain 2D.
+     * Stereo modes maintain the configured resolution, force STRETCH scaling, and
+     * skip portrait resolution inversion.
+     */
+    public boolean isStereoMode() {
+        return renderMode != RENDER_MODE_2D;
+    }
 
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option

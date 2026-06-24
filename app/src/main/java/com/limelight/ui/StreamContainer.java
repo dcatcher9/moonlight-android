@@ -36,12 +36,16 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     public enum StreamMode {
         MODE_2D,
         MODE_AI_3D,
-        MODE_AI_3D_MOVIE
+        MODE_AI_3D_MOVIE,
+        // Host-side SBS: the PC sends a real side-by-side frame; the XR compositor splits
+        // it to each eye. Presentation is owned by XrStreamPresenter, not a SurfaceView.
+        MODE_XR_SBS
     }
 
     private Game game;
     private PreferenceConfiguration prefConfig;
     private Stereo3DRenderer mStereoRenderer;
+    private XrStreamPresenter mXrPresenter;
 
     private SurfaceView mSurfaceView;
     private Surface mCurrentSurface;
@@ -71,31 +75,44 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         this.prefConfig = prefConfig;
         this.renderMode = mapIntToStreamMode(prefConfig.renderMode);
 
-        Stereo3DRenderer.isMovieMode = renderMode == StreamMode.MODE_AI_3D_MOVIE;
-
         isSurfaceReady = false;
         mCurrentSurface = null;
 
         Context context = getContext();
         LayoutParams childParams = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
 
-        // Always craete a surface view as a Workaround for the sizing issue of GLSurfaceView
-        mSurfaceView = new SurfaceView(context);
-        addView(mSurfaceView, childParams);
-
-        if (renderMode != StreamMode.MODE_2D) {
+        if (renderMode == StreamMode.MODE_2D) {
+            // 2D: the decoder renders directly into the SurfaceView's surface.
+            mSurfaceView = new SurfaceView(context);
+        } else if (renderMode == StreamMode.MODE_XR_SBS) {
+            // Host-side SBS: the decoder renders into the XR compositor's SurfaceEntity, not an
+            // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
+            // We still create a placeholder SurfaceView so the activity's 2D view/touch/lifecycle
+            // plumbing (PanZoomHandler, surface callbacks) has a valid view to attach to; it
+            // carries no video.
+            mSurfaceView = new SurfaceView(context);
+            mXrPresenter = new XrStreamPresenter(game, prefConfig, this::onStereo3DSurfaceReady);
+            mXrPresenter.init();
+        } else {
+            // AI 3D: a GLSurfaceView drives Stereo3DRenderer, which owns the video surface.
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
             glSurfaceView.setEGLContextClientVersion(3);
-            mStereoRenderer = new Stereo3DRenderer(glSurfaceView, this, context, prefConfig);
+            boolean movieMode = renderMode == StreamMode.MODE_AI_3D_MOVIE;
+            mStereoRenderer = new Stereo3DRenderer(glSurfaceView, this, context, prefConfig, movieMode);
             glSurfaceView.setRenderer(mStereoRenderer);
             glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
             mSurfaceView = glSurfaceView;
-            addView(mSurfaceView, childParams);
         }
+        addView(mSurfaceView, childParams);
 
-        mSurfaceView.getHolder().addCallback(this);
-        if (mSurfaceView.getHolder().getSurface() != null && mSurfaceView.getHolder().getSurface().isValid()) {
-            surfaceChanged(mSurfaceView.getHolder(), PixelFormat.RGBA_8888, mSurfaceView.getWidth(), mSurfaceView.getHeight());
+        SurfaceHolder holder = mSurfaceView.getHolder();
+        holder.addCallback(this);
+        // If the surface is somehow already valid (no create callback will fire),
+        // drive the lifecycle manually in the correct order: created before changed.
+        Surface existingSurface = holder.getSurface();
+        if (existingSurface != null && existingSurface.isValid()) {
+            surfaceCreated(holder);
+            surfaceChanged(holder, PixelFormat.RGBA_8888, mSurfaceView.getWidth(), mSurfaceView.getHeight());
         }
     }
 
@@ -268,6 +285,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     public void onDestroy() {
         if (mStereoRenderer != null) {
             mStereoRenderer.onSurfaceDestroyed();
+        }
+        if (mXrPresenter != null) {
+            mXrPresenter.onDestroy();
         }
     }
 }

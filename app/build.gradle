@@ -95,11 +95,10 @@ android {
             pickFirsts.add('META-INF/versions/9/OSGI-INF/MANIFEST.MF')
         }
         jniLibs {
-            // Jetpack XR has a version skew: scenecore:alpha13 pulls arcore:alpha12
-            // while runtime:alpha13 pulls runtime-openxr:alpha13. The arcore-openxr
-            // artifact bundles both the arcore and runtime OpenXR native libs, which
-            // collide with the ones from runtime-openxr. Pick one of each duplicate
-            // to resolve the merge conflict (glob covers all libandroidx.xr.*.openxr.so).
+            // The arcore-openxr artifact bundles both the arcore and runtime OpenXR native
+            // libs, which collide with the ones from runtime-openxr. With all androidx.xr.*
+            // pinned to alpha13 (see deps below) the duplicates are the same version, so
+            // picking either resolves the packaging merge without a version mismatch.
             pickFirsts.add('**/libandroidx.xr.*.openxr.so')
         }
     }
@@ -204,8 +203,22 @@ dependencies {
     // exercised on actual XR devices (API 34+), gated by runtime device detection.
     // NOTE: these are alpha APIs; pin the version and verify symbols against
     // https://developer.android.com/jetpack/androidx/releases/xr-scenecore
-    implementation 'androidx.xr.runtime:runtime:1.0.0-alpha13'
-    implementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha13'
+    // IMPORTANT: the Jetpack XR modules version INDEPENDENTLY and are NOT meant to all be
+    // the same alpha. scenecore:alpha15 (which ships the consumer ProGuard rules that fix
+    // the com.android.extensions.xr Consumer.accept AbstractMethodError, and matches the
+    // Galaxy XR "v3" spatial-API system image) declares that it REQUIRES runtime:alpha14
+    // and arcore:alpha14. runtime alpha15 dropped androidx.xr.runtime.XrExtensionsHolder,
+    // which scenecore-spatial-core:alpha15 still loads via its provider — so forcing the
+    // runtime/arcore family up to alpha15 causes NoClassDefFoundError at Session.create().
+    // Keep the matched set: scenecore family = alpha15, runtime + arcore family = alpha14.
+    // (arcore-openxr/runtime-openxr are pinned explicitly so the arcore.openxr native lib
+    // and its Kotlin classes stay on the same alpha14 build — a mismatch there crashes the
+    // JNI ViewCameraState construction.)
+    implementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha15'
+    implementation 'androidx.xr.runtime:runtime:1.0.0-alpha14'
+    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-alpha14'
+    implementation 'androidx.xr.arcore:arcore:1.0.0-alpha14'
+    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-alpha14'
 
     // Unit test dependencies
     testImplementation 'junit:junit:4.13.2'

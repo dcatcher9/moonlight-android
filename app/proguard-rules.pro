@@ -51,3 +51,14 @@
 # extensions, provided by the device's XR system image at runtime, so they are
 # not present on the build classpath. They are only ever invoked on XR devices.
 -dontwarn com.android.extensions.xr.**
+# The Jetpack XR libraries rely heavily on JNI callbacks, ServiceLoader/provider lookups,
+# and reflective class resolution that R8 cannot trace statically. With minification on,
+# R8 strips members/classes that are only reached through those paths, which surfaces at
+# runtime as a cascade of failures when an XR Session is created / a stream starts:
+#   - JNI NoSuchMethodError: arcore.openxr's native lib does NewObject on
+#     ViewCameraState(Pose, FieldOfView) (its ctor was tree-shaken).
+#   - NoClassDefFoundError: scenecore's SpatialCoreXrExtensionsHolderProvider resolves
+#     androidx.xr.runtime.XrExtensionsHolder via a provider (the class was tree-shaken).
+# Since this is an XR-only app where these libraries are central, keep the whole tree.
+-keep class androidx.xr.** { *; }
+-keep interface androidx.xr.** { *; }

@@ -61,7 +61,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final int[] pboHandles = new int[2];
     private int pboIndex = 0;
 
-    public static boolean isMovieMode = true;
+    private final boolean isMovieMode;
     private int PBO_SIZE = modelInputWidth * modelInputHeight * 4;
 
     // Public Static Fields
@@ -141,11 +141,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context, PreferenceConfiguration prefConfig) {
+    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context, PreferenceConfiguration prefConfig, boolean isMovieMode) {
         this.glSurfaceView = view;
         this.onSurfaceReadyListener = listener;
         this.context = context;
         this.prefConfig = prefConfig;
+        this.isMovieMode = isMovieMode;
 
         quadVertexBuffer = ByteBuffer.allocateDirect(QUAD_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
         quadVertexBuffer.put(QUAD_VERTICES).position(0);
