@@ -208,8 +208,17 @@ an explicit `MODE_XR_SBS` check.
 
 In immersive XR, the on-screen touch OSC / floating buttons won't make sense. For v1, route
 gameplay input from a controller/gamepad (already supported via `binding/input/`) and hide
-the 2D OSC overlays when in `MODE_XR_SBS`. **DECISION NEEDED:** how the user opens the game
-menu / disconnects in XR (e.g. a small spatial panel or a controller button).
+the 2D OSC overlays when in `MODE_XR_SBS`.
+
+**Resolved (control bar):** `XrStreamPresenter` floats a spatial control bar beneath the video
+quad — a row of icon+label tiles, each its own `PanelEntity` with an `InteractableComponent`
+(gaze+pinch, the same activation the original Disconnect button used). Tiles are data-driven
+(`BarItem` list) so the bar is easy to extend. Current tiles:
+- **Normal** / **SBS** — a single-select group that flips the `SurfaceEntity` `StereoMode`
+  (`MONO` &harr; `SIDE_BY_SIDE`) live. Because the surface always carries the same packed frame,
+  switching also reshapes the quad to the matching aspect (full-frame for MONO, half-width per-eye
+  for SBS), keeping the **height** constant and varying the width. Default is **MONO** (flat).
+- **Disconnect** — ends the stream (`activity.finish()`).
 
 ### 7. Resolution (optional refinement)
 
@@ -248,7 +257,8 @@ resolution-inverting for `renderMode != 0`.
 1. Confirm the exact Galaxy XR system-feature string and minimum API for XR APIs.
 2. Compose spatial UI vs. SceneCore-only for the panel + controls.
 3. Default render mode on XR devices (auto vs. manual).
-4. In-game menu / disconnect affordance in immersive mode.
+4. ~~In-game menu / disconnect affordance in immersive mode.~~ **Resolved** — spatial control bar
+   (Normal/SBS modes + Disconnect) beneath the quad; see "Input & overlay" above.
 5. Whether to request a higher host resolution to compensate for the per-eye width halving.
 6. Handling of host SBS that is **top-bottom** instead of side-by-side
    (`StereoMode.TOP_BOTTOM`) — expose as a sub-option?

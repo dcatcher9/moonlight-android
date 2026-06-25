@@ -574,6 +574,10 @@
     <string name="render_mode_3d_sbs">AI SBS 3D</string>
     <string name="render_mode_3d_sbs_movie">AI SBS 3D Movie (Synced)</string>
     <string name="render_mode_xr_sbs">XR SBS 3D (Host)</string>
+    <!-- Labels on the in-headset XR control bar below the video panel. -->
+    <string name="xr_bar_normal">Normal</string>
+    <string name="xr_bar_sbs">SBS</string>
+    <string name="xr_bar_disconnect">Disconnect</string>
     <string name="mouse_mode_absolute_touch">Absolute touch</string>
     <string name="mouse_mode_track_pad_natural">Track pad(Natural/Double tap to drag)</string>
     <string name="mouse_mode_track_pad_gaming">Track pad(Gaming/Long press to drag)</string>
