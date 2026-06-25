@@ -1,16 +1,28 @@
 package com.limelight.ui;
 
 import android.app.Activity;
+import android.graphics.Color;
 import android.view.Surface;
+import android.widget.Button;
 
 import androidx.xr.runtime.Session;
 import androidx.xr.runtime.SessionCreateResult;
 import androidx.xr.runtime.SessionCreateSuccess;
 import androidx.xr.runtime.math.FloatSize2d;
+import androidx.xr.runtime.math.FloatSize3d;
 import androidx.xr.runtime.math.IntSize2d;
 import androidx.xr.runtime.math.Pose;
 import androidx.xr.runtime.math.Quaternion;
+import androidx.xr.runtime.math.Ray;
 import androidx.xr.runtime.math.Vector3;
+import androidx.xr.scenecore.Entity;
+import androidx.xr.scenecore.EntityMoveListener;
+import androidx.xr.scenecore.InputEvent;
+import androidx.xr.scenecore.InteractableComponent;
+import androidx.xr.scenecore.MovableComponent;
+import androidx.xr.scenecore.PanelEntity;
+import androidx.xr.scenecore.ResizableComponent;
+import androidx.xr.scenecore.ResizeEvent;
 import androidx.xr.scenecore.Scene;
 import androidx.xr.scenecore.SessionExt;
 import androidx.xr.scenecore.SpatialCapability;
@@ -35,10 +47,14 @@ import com.limelight.preferences.PreferenceConfiguration;
  * <p>This class is the <i>only</i> one that imports the Jetpack XR SDK, and it is constructed
  * exclusively behind {@code XrUtils.isXrDevice(...)}.
  *
- * <p>See docs/android-xr-sbs.md. This is a scaffold; several decisions there are still open
- * (panel sizing/placement, in-game menu affordance, session lifecycle on pause/resume).
+ * <p>The quad is placed ~2 m in front, sized to one eye's aspect, and the user can move/resize it
+ * (with a minimum distance clamp); an always-visible spatial "Disconnect" button exits the stream.
+ * See docs/android-xr-sbs.md. Still open: session lifecycle on pause/resume (see {@link #onDestroy}).
  */
 public class XrStreamPresenter {
+
+    /** Nearest the user may drag the panel toward the eyes, in meters from the activity-space origin. */
+    private static final float MIN_PANEL_DISTANCE_METERS = 0.75f;
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -50,6 +66,7 @@ public class XrStreamPresenter {
 
     private Session session;
     private SurfaceEntity surfaceEntity;
+    private PanelEntity disconnectPanel;
     private Surface videoSurface;
 
     public XrStreamPresenter(Activity activity, PreferenceConfiguration prefConfig,
@@ -86,10 +103,14 @@ public class XrStreamPresenter {
                     + "stereoscopically (activity likely not in Full Space mode).");
         }
 
-        // Quad sized to a single eye's aspect ratio. In a packed SBS frame each eye gets half
-        // the horizontal resolution, so the per-eye aspect is (width/2):height.
+        // Quad sized to one eye's pixel aspect. In a packed SBS frame each eye occupies half the
+        // width, so the per-eye region is (width/2) x height pixels — for a 1280x720 stream that's
+        // 640x720 (portrait, 0.889). Using the full-frame aspect instead stretches this region ~2x
+        // horizontally. NOTE: if the stream shows black bars top/bottom, that is the host drawing a
+        // 16:9 image into this taller per-eye slot (letterbox baked into the stream) — the client
+        // aspect can't remove it; stream wider so each eye is 16:9, or fix the host SBS layout.
         float perEyeAspect = (prefConfig.width / 2.0f) / prefConfig.height;
-        float panelWidthMeters = 1.0f; // TODO: make placement/size configurable.
+        float panelWidthMeters = 2.0f; // larger default; user can grab-resize via ResizableComponent.
         float panelHeightMeters = panelWidthMeters / perEyeAspect;
         SurfaceEntity.Shape quad =
                 new SurfaceEntity.Shape.Quad(new FloatSize2d(panelWidthMeters, panelHeightMeters));
@@ -120,6 +141,71 @@ public class XrStreamPresenter {
         // SBS quad, occluding it. We present everything through the SurfaceEntity, so hide it.
         scene.getMainPanelEntity().setEnabled(false);
 
+        // Let the user reposition and resize the panel in-headset. Use a CUSTOM movable (not
+        // system-movable) so we can clamp how close the panel may be dragged — otherwise it can be
+        // pulled right up against the eyes. We apply the proposed pose ourselves, pushing it back
+        // out to MIN_PANEL_DISTANCE_METERS from the activity-space origin (~the initial head pose).
+        MovableComponent movable = MovableComponent.createCustomMovable(
+                session, /* scaleInZ= */ false, activity.getMainExecutor(),
+                new EntityMoveListener() {
+                    @Override
+                    public void onMoveUpdate(Entity entity, Ray currentRay, Pose proposedPose,
+                                             float scale) {
+                        surfaceEntity.setPose(clampToMinDistance(proposedPose));
+                    }
+
+                    @Override
+                    public void onMoveEnd(Entity entity, Ray currentRay, Pose proposedPose,
+                                          float scale, Entity updatedParent) {
+                        surfaceEntity.setPose(clampToMinDistance(proposedPose));
+                    }
+                });
+        surfaceEntity.addComponent(movable);
+
+        // The resizable affordance lets the user grab a corner to scale. Keep the aspect ratio
+        // fixed so the SBS halves stay aligned, and apply the new size to the quad when resize ends.
+
+        ResizableComponent resizable = ResizableComponent.create(session, (ResizeEvent event) -> {
+            if (event.getResizeState() == ResizeEvent.ResizeState.END) {
+                FloatSize3d ns = event.getNewSize();
+                surfaceEntity.setShape(
+                        new SurfaceEntity.Shape.Quad(new FloatSize2d(ns.getWidth(), ns.getHeight())));
+            }
+        });
+        resizable.setFixedAspectRatioEnabled(true);
+        resizable.setMinimumEntitySize(new FloatSize3d(0.5f, 0.5f / perEyeAspect, 0f));
+        resizable.setMaximumEntitySize(new FloatSize3d(8.0f, 8.0f / perEyeAspect, 0f));
+        surfaceEntity.addComponent(resizable);
+
+        // Since the 2D main panel is hidden, the Android XR system orbiter (with its Close button)
+        // isn't available, so provide our own always-visible "Disconnect" button below the video.
+        // It's a real Android Button hosted in a PanelEntity, parented to the quad so it follows when
+        // the user moves the panel. Tapping (gaze + pinch) exits via the InteractableComponent's UP
+        // event (the Button's own click is kept as a fallback); finish() is the same clean exit as
+        // the controller quit combo.
+        Button disconnectButton = new Button(activity);
+        disconnectButton.setText("Disconnect");
+        disconnectButton.setAllCaps(false);
+        disconnectButton.setTextColor(Color.WHITE);
+        disconnectButton.setTextSize(28f);
+        disconnectButton.setBackgroundColor(0xCC222222);
+        disconnectButton.setOnClickListener(v -> activity.finish());
+
+        Pose buttonPose = new Pose(
+                new Vector3(0.0f, -(panelHeightMeters / 2.0f) - 0.12f, 0.02f), Quaternion.Identity);
+        disconnectPanel = PanelEntity.create(
+                session, disconnectButton, new FloatSize2d(0.6f, 0.18f), "xr-disconnect",
+                buttonPose, surfaceEntity);
+        disconnectPanel.setEnabled(true);
+
+        InteractableComponent interactable = InteractableComponent.create(
+                session, activity.getMainExecutor(), (InputEvent event) -> {
+                    if (event.getAction() == InputEvent.Action.UP) {
+                        activity.finish();
+                    }
+                });
+        disconnectPanel.addComponent(interactable);
+
         // Hand the decoder the entity's surface directly. The hardware decoder feeds the
         // SurfaceEntity with no extra GL pass, which keeps latency minimal. (An earlier "black
         // quad" symptom was misattributed to a codec/consumer buffer stall; the real causes were
@@ -130,6 +216,25 @@ public class XrStreamPresenter {
         if (listener != null) {
             listener.onSurfaceReady(videoSurface);
         }
+    }
+
+    /**
+     * Clamp a proposed panel pose so it can't be dragged closer than {@link #MIN_PANEL_DISTANCE_METERS}
+     * from the activity-space origin (≈ the initial head position), preserving direction and rotation.
+     */
+    private static Pose clampToMinDistance(Pose pose) {
+        Vector3 t = pose.getTranslation();
+        float len = t.getLength();
+        if (len >= MIN_PANEL_DISTANCE_METERS) {
+            return pose;
+        }
+        if (len < 1e-4f) {
+            // Degenerate (panel essentially at the origin) — push straight forward.
+            return new Pose(new Vector3(0f, 0f, -MIN_PANEL_DISTANCE_METERS), pose.getRotation());
+        }
+        float s = MIN_PANEL_DISTANCE_METERS / len;
+        Vector3 clamped = new Vector3(t.getX() * s, t.getY() * s, t.getZ() * s);
+        return new Pose(clamped, pose.getRotation());
     }
 
     public Surface getVideoSurface() {
@@ -145,6 +250,7 @@ public class XrStreamPresenter {
         //  (pause/resume vs. full dispose). For now just drop references.
         videoSurface = null;
         surfaceEntity = null;
+        disconnectPanel = null;
         session = null;
     }
 }
