@@ -123,7 +123,8 @@ Stereo-related preferences: `renderMode`, `parallax_depth`, `convergence_ratio`,
   translating it everywhere, but keep the default `values/strings.xml` authoritative.
 - New user-facing settings: add the field to `PreferenceConfiguration`, the key/default,
   the UI entry in `res/xml/preferences.xml`, and strings/arrays as needed.
-- Don't commit or push unless asked. If asked, branch off `moonlight-noir` first.
+- Don't commit or push unless asked. When asked, commit **directly to `moonlight-noir`** — this is
+  a personal fork; no feature branches or PRs.
 - Don't edit the `moonlight-common-c` submodule unless explicitly required.
 
 ## Gotchas
