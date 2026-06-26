@@ -110,15 +110,10 @@ android {
             resValue "string", "app_label_root", "Diana (Root)"
             resValue "string", "app_label_game", "Diana (Game)"
 
-            // minifyEnabled is OFF for debug: with R8 on, the runtime's
-            // setSpatialStateCallback(state -> ...) lambda is desugared into a class
-            // implementing the device-provided com.android.extensions.xr.function.Consumer
-            // interface. Because that interface is not in the APK (provided by the XR system
-            // image), the desugared accept(Object) is left abstract and the platform's
-            // XrExtensions invocation throws AbstractMethodError at stream start (confirmed on
-            // Galaxy XR hardware, not just the emulator). Keep rules can't fix it — the
-            // interface isn't in the APK to keep. See docs/android-xr-sbs.md.
-            minifyEnabled false
+            // minifyEnabled is OFF for debug for faster builds.
+            // Note: The previous R8 AbstractMethodError for the XR Consumer lambda has been fixed
+            // by adding a compile-time stub for com.android.extensions.xr.function.Consumer.
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {

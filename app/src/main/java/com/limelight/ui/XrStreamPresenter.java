@@ -712,12 +712,26 @@ public class XrStreamPresenter {
      * {@code StreamContainer.onDestroy()} ordering.
      */
     public void onDestroy() {
-        // TODO: confirm the correct SceneCore teardown for the entity and session lifecycle
-        //  (pause/resume vs. full dispose). For now just drop references.
+        if (surfaceEntity != null) {
+            if (!surfaceEntity.isDisposed()) {
+                surfaceEntity.dispose();
+            }
+            surfaceEntity = null;
+        }
+        if (barPanel != null) {
+            if (!barPanel.isDisposed()) {
+                barPanel.dispose();
+            }
+            barPanel = null;
+        }
+        if (statsPanel != null) {
+            if (!statsPanel.isDisposed()) {
+                statsPanel.dispose();
+            }
+            statsPanel = null;
+        }
+
         videoSurface = null;
-        surfaceEntity = null;
-        barPanel = null;
-        statsPanel = null;
         statsTable = null;
         statsItem = null;
         barItems.clear();

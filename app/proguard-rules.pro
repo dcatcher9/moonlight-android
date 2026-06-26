@@ -51,6 +51,11 @@
 # extensions, provided by the device's XR system image at runtime, so they are
 # not present on the build classpath. They are only ever invoked on XR devices.
 -dontwarn com.android.extensions.xr.**
+-dontwarn android.extensions.xr.**
+-keep class com.android.extensions.xr.** { *; }
+-keep interface com.android.extensions.xr.** { *; }
+-keep class android.extensions.xr.** { *; }
+-keep interface android.extensions.xr.** { *; }
 # The Jetpack XR libraries rely heavily on JNI callbacks, ServiceLoader/provider lookups,
 # and reflective class resolution that R8 cannot trace statically. With minification on,
 # R8 strips members/classes that are only reached through those paths, which surfaces at
