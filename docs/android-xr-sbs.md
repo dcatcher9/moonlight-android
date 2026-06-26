@@ -211,14 +211,56 @@ gameplay input from a controller/gamepad (already supported via `binding/input/`
 the 2D OSC overlays when in `MODE_XR_SBS`.
 
 **Resolved (control bar):** `XrStreamPresenter` floats a spatial control bar beneath the video
-quad — a row of icon+label tiles, each its own `PanelEntity` with an `InteractableComponent`
-(gaze+pinch, the same activation the original Disconnect button used). Tiles are data-driven
-(`BarItem` list) so the bar is easy to extend. Current tiles:
+quad — **one `PanelEntity` hosting a horizontal `LinearLayout` of clickable icon-over-label
+tiles** (a normal toolbar). Tiles are data-driven (`BarItem` list) so the bar is easy to extend.
+A vertical divider splits it into a single-select mode group and one-shot actions. Current tiles:
 - **Normal** / **SBS** — a single-select group that flips the `SurfaceEntity` `StereoMode`
   (`MONO` &harr; `SIDE_BY_SIDE`) live. Because the surface always carries the same packed frame,
   switching also reshapes the quad to the matching aspect (full-frame for MONO, half-width per-eye
-  for SBS), keeping the **height** constant and varying the width. Default is **MONO** (flat).
+  for SBS), keeping the **height** constant and varying the width. Default is **MONO** (flat). The
+  active mode tile is shown with an accent fill.
+- **Machines** — ends the stream and returns to the host list (`PcView`) via
+  `FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP`.
 - **Disconnect** — ends the stream (`activity.finish()`).
+
+Each tile handles its own tap through its `View.OnClickListener`; there is **no per-tile
+`InteractableComponent`**. See "Spatial UI learnings" below for why the bar is one panel.
+
+> **Navigation:** in immersive (full-space) XR the activity's main panel is hidden, so there is no
+> system back affordance on the 2D screens either. The host list (`PcView`), app grid (`AppView`),
+> profiles, and settings (`StreamSettings`) screens therefore each carry an explicit in-app back
+> button (a FAB) — without them you can enter a screen and have no way back on the headset.
+
+#### Spatial UI learnings (Galaxy XR, scenecore alpha15)
+
+Hard-won, verified on hardware — read before building any in-headset UI here:
+
+- **One panel, many views — not one panel per control.** Model controls as an ordinary Android
+  `View` hierarchy inside a *single* `PanelEntity` (like a toolbar), exactly as you would a 2D
+  screen. The platform draws the **gaze hover highlight** on each clickable child view in a single
+  panel (the same way several FABs on a 2D screen each highlight). It does **not** highlight
+  separate interactable child `PanelEntity`s — a row of one-panel-per-tile looked correct but no
+  tile ever highlighted. The single-panel toolbar both highlights *and* is far less code.
+- **Hosted-view input is native in a single panel.** A clickable view's `OnClickListener` fires
+  from gaze+pinch, and its hover/pressed visuals render live — no `InteractableComponent` needed
+  for per-control taps. (The original lone Disconnect button used an `InteractableComponent` only
+  because it predated this understanding.) Dynamic restyling of a hosted view (e.g. the active-mode
+  accent) also renders live in a single panel.
+- **`InteractableComponent` intercepts gaze input.** Attaching one to a panel routes gaze/pinch to
+  the entity-level callback instead of the hosted view, which suppresses the view's own highlight.
+  Use it only when you genuinely need entity-level input and no per-view highlight.
+- **`InputEvent.Action` equality gotcha.** If you *do* use `InteractableComponent`, the runtime
+  delivers **hover** actions (`HOVER_ENTER`/`HOVER_MOVE`/`HOVER_EXIT`) as different instances than
+  the SDK's `InputEvent.Action` constants, so `==` never matches them — while *pointer* actions
+  (`UP`/`DOWN`/`MOVE`) do reuse the constants and compare fine. `Action` exposes no value getter or
+  `equals()`, so there's no clean way to match hover by identity; prefer the hosted-view route above.
+- **Icon-over-label needs a real layout.** A `Button` with a `drawableTop` compound drawable
+  centers only the *text* and hangs the icon above it (icon-rides-to-top). Use a vertical
+  `LinearLayout` (`ImageView` over `TextView`, `gravity=center`) for a properly centered pair.
+- **Panel content scales with the panel's meter size.** Sizes are tuned in meters
+  (`BAR_WIDTH_METERS`/`BAR_HEIGHT_METERS`) plus `dp`/`sp` for the child views; shrinking the panel
+  shrinks everything, so to make content larger *and* the bar smaller, raise the `dp`/`sp` and
+  trim padding/margins rather than only changing the meters.
 
 ### 7. Resolution (optional refinement)
 
@@ -257,8 +299,9 @@ resolution-inverting for `renderMode != 0`.
 1. Confirm the exact Galaxy XR system-feature string and minimum API for XR APIs.
 2. Compose spatial UI vs. SceneCore-only for the panel + controls.
 3. Default render mode on XR devices (auto vs. manual).
-4. ~~In-game menu / disconnect affordance in immersive mode.~~ **Resolved** — spatial control bar
-   (Normal/SBS modes + Disconnect) beneath the quad; see "Input & overlay" above.
+4. ~~In-game menu / disconnect affordance in immersive mode.~~ **Resolved** — single-panel spatial
+   control bar (Normal/SBS modes, divider, Machines, Disconnect) beneath the quad, plus in-app back
+   buttons on the 2D screens; see "Input & overlay" and "Spatial UI learnings" above.
 5. Whether to request a higher host resolution to compensate for the per-eye width halving.
 6. Handling of host SBS that is **top-bottom** instead of side-by-side
    (`StereoMode.TOP_BOTTOM`) — expose as a sub-option?

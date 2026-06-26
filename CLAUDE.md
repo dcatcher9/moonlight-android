@@ -22,7 +22,10 @@ floor per Google's guidance — do NOT raise to 34).
 
 The goal: display a **side-by-side (SBS) stereo stream produced on the PC** stereoscopically
 on the headset. See [docs/android-xr-sbs.md](docs/android-xr-sbs.md) for the design and
-implementation plan. Read that document before touching any rendering / surface / stereo code.
+implementation plan. Read that document before touching any rendering / surface / stereo code —
+and its **"Spatial UI learnings"** section before building any in-headset UI (key rule: put
+controls as ordinary clickable `View`s in a *single* `PanelEntity`, like a toolbar, not one panel
+per control — that's what gives the gaze highlight and native taps).
 
 Implication: since every device running this build is an XR device, the XR SBS path should be
 the **primary** experience. Non-XR code paths (the legacy phone/tablet OSC, the AI-depth
