@@ -577,6 +577,9 @@
     <!-- Labels on the in-headset XR control bar below the video panel. -->
     <string name="xr_bar_normal">Normal</string>
     <string name="xr_bar_sbs">SBS</string>
+    <string name="xr_bar_machines">Machines</string>
+    <string name="app_view_back_to_machines">Back to machines</string>
+    <string name="action_back">Back</string>
     <string name="xr_bar_disconnect">Disconnect</string>
     <string name="mouse_mode_absolute_touch">Absolute touch</string>
     <string name="mouse_mode_track_pad_natural">Track pad(Natural/Double tap to drag)</string>

@@ -64,4 +64,17 @@
         android:contentDescription="@string/profile_manager_new_profile"
         android:src="@drawable/ic_add_base" />
 
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/backFab"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignTop="@id/addProfileFab"
+        android:layout_alignBottom="@id/addProfileFab"
+        android:layout_toStartOf="@id/addProfileFab"
+        android:layout_toLeftOf="@id/addProfileFab"
+        android:layout_marginEnd="12dp"
+        android:layout_marginRight="12dp"
+        android:contentDescription="@string/action_back"
+        android:src="@drawable/ic_arrow_back" />
+
 </RelativeLayout>

@@ -1,6 +1,7 @@
 package com.limelight.ui;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.util.TypedValue;
@@ -36,6 +37,7 @@ import androidx.xr.scenecore.SpatialCapability;
 import androidx.xr.scenecore.SurfaceEntity;
 
 import com.limelight.LimeLog;
+import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 
@@ -252,17 +254,22 @@ public class XrStreamPresenter {
         BarItem sbs = new BarItem(
                 activity.getString(R.string.xr_bar_sbs),
                 R.drawable.ic_xr_mode_sbs, SurfaceEntity.StereoMode.SIDE_BY_SIDE);
+        BarItem machines = new BarItem(
+                activity.getString(R.string.xr_bar_machines),
+                R.drawable.ic_computer, /* selectsMode= */ null);
         BarItem disconnect = new BarItem(
                 activity.getString(R.string.xr_bar_disconnect),
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
 
         normal.onTap = () -> selectMode(normal);
         sbs.onTap = () -> selectMode(sbs);
+        machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
 
         barItems.clear();
         barItems.add(normal);
         barItems.add(sbs);
+        barItems.add(machines);
         barItems.add(disconnect);
 
         for (BarItem item : barItems) {
@@ -272,10 +279,13 @@ public class XrStreamPresenter {
                     new FloatSize2d(TILE_WIDTH_METERS, TILE_HEIGHT_METERS),
                     "xr-bar-" + item.label, Pose.Identity, surfaceEntity);
             panel.setEnabled(true);
+            controlPanels.add(panel);
 
-            // Reliable gaze+pinch activation: the InteractableComponent's UP event drives the tap,
-            // matching the previously-proven Disconnect path. (Hosted-View click listeners are not
-            // relied upon here.)
+            // The InteractableComponent's UP event reliably fires the tap (gaze + pinch). Note: the
+            // platform does not draw a gaze hover highlight on these custom SurfaceEntity-child
+            // panels (it does for the activity's main panel, which we hide), so there is no per-tile
+            // hover animation — confirmed by reproducing the original Button recipe, which also
+            // didn't highlight here. The video itself changing is the feedback for a mode switch.
             InteractableComponent interactable = InteractableComponent.create(
                     session, activity.getMainExecutor(), (InputEvent event) -> {
                         if (event.getAction() == InputEvent.Action.UP && item.onTap != null) {
@@ -283,11 +293,9 @@ public class XrStreamPresenter {
                         }
                     });
             panel.addComponent(interactable);
-            controlPanels.add(panel);
         }
 
         repositionControlBar(videoHeightMeters);
-        refreshModeSelection();
     }
 
     /** Lay the tiles out in a centered row just beneath the quad of the given height. */
@@ -325,8 +333,19 @@ public class XrStreamPresenter {
         surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(width, height)));
         applyResizeBounds(aspect);
         repositionControlBar(height);
+    }
 
-        refreshModeSelection();
+    /**
+     * End the stream and return to the machine-selection screen (PcView). The back stack is
+     * PcView &rarr; AppView &rarr; Game, so CLEAR_TOP finishes AppView and this Game activity and
+     * brings the existing PcView forward (SINGLE_TOP reuses it rather than recreating). Finishing
+     * Game also tears the stream down via its normal lifecycle, same as Disconnect.
+     */
+    private void returnToMachineSelection() {
+        Intent intent = new Intent(activity, PcView.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        activity.startActivity(intent);
+        activity.finish();
     }
 
     /** Quad aspect (width/height) for a mode: full frame for MONO, half-width region otherwise. */
@@ -343,43 +362,38 @@ public class XrStreamPresenter {
         resizable.setMaximumEntitySize(new FloatSize3d(6.0f * aspect, 6.0f, 0f));
     }
 
-    /** Highlight the active mode tile; action tiles always use the resting style. */
-    private void refreshModeSelection() {
-        for (BarItem item : barItems) {
-            item.setSelected(item.selectsMode != null && item.selectsMode == currentStereoMode);
-        }
-    }
-
-    /** Build the icon-over-label view for a tile and stash references on the item for restyling. */
+    /** Build the tile: icon centered above its label on a dark rounded background. Tap is handled by
+     *  the panel's InteractableComponent (see {@link #buildControlBar}). */
     private void buildBarItemView(BarItem item) {
         LinearLayout col = new LinearLayout(activity);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
-        int pad = dp(12);
+        int pad = dp(10);
         col.setPadding(pad, pad, pad, pad);
 
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(18));
+        bg.setColor(0xCC1E2630);
+        col.setBackground(bg);
+
         ImageView icon = new ImageView(activity);
-        int iconSize = dp(44);
-        icon.setLayoutParams(new LinearLayout.LayoutParams(iconSize, iconSize));
+        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
         icon.setImageResource(item.iconRes);
         icon.setColorFilter(Color.WHITE);
 
         TextView text = new TextView(activity);
         text.setText(item.label);
         text.setTextColor(Color.WHITE);
-        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         text.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tp.topMargin = dp(6);
+        tp.topMargin = dp(4);
         text.setLayoutParams(tp);
 
         col.addView(icon);
         col.addView(text);
-
         item.root = col;
-        item.iconView = icon;
-        item.labelView = text;
     }
 
     private int dp(float v) {
@@ -389,7 +403,7 @@ public class XrStreamPresenter {
     /**
      * One tile on the {@link #buildControlBar control bar}. Carries its icon+label, the tap action,
      * and — for the mode group — which {@link SurfaceEntity.StereoMode} it selects (null for actions
-     * like Disconnect). Inner (non-static) so {@link #setSelected} can size its rounded background.
+     * like Disconnect).
      */
     private final class BarItem {
         final String label;
@@ -398,24 +412,11 @@ public class XrStreamPresenter {
         final SurfaceEntity.StereoMode selectsMode;
         Runnable onTap;
         View root;
-        ImageView iconView;
-        TextView labelView;
 
         BarItem(String label, int iconRes, SurfaceEntity.StereoMode selectsMode) {
             this.label = label;
             this.iconRes = iconRes;
             this.selectsMode = selectsMode;
-        }
-
-        /** Accent-fill when this is the active mode; a translucent dark resting fill otherwise. */
-        void setSelected(boolean selected) {
-            if (root == null) {
-                return;
-            }
-            GradientDrawable bg = new GradientDrawable();
-            bg.setCornerRadius(dp(18));
-            bg.setColor(selected ? 0xFF2C72E0 : 0x66101418);
-            root.setBackground(bg);
         }
     }
 

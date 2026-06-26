@@ -31,6 +31,19 @@
         android:textSize="28sp" />
 
     <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/backButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignTop="@id/profilesButton"
+        android:layout_alignBottom="@id/profilesButton"
+        android:layout_toStartOf="@id/profilesButton"
+        android:layout_toLeftOf="@id/profilesButton"
+        android:layout_marginEnd="12dp"
+        android:layout_marginRight="12dp"
+        android:contentDescription="@string/app_view_back_to_machines"
+        app:icon="@drawable/ic_arrow_back" />
+
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
         android:id="@+id/profilesButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

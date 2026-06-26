@@ -84,7 +84,7 @@ public class StreamSettings extends AppCompatActivity {
                 PreferenceManager.getDefaultSharedPreferences(this)
         ));
         getSupportFragmentManager().beginTransaction().replace(
-                R.id.stream_settings, prefsFragment
+                R.id.settings_container, prefsFragment
         ).commitAllowingStateLoss();
     }
 
@@ -98,6 +98,10 @@ public class StreamSettings extends AppCompatActivity {
         UiHelper.setLocale(this);
 
         setContentView(R.layout.activity_stream_settings);
+
+        // Back button — returns to the previous screen. In immersive XR there's no system back
+        // affordance on the panel, so this in-app button is the way back.
+        findViewById(R.id.settingsBackFab).setOnClickListener(v -> finish());
 
 //        UiHelper.notifyNewRootView(this);
     }

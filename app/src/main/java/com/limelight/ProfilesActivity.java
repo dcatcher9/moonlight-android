@@ -42,6 +42,11 @@ public class ProfilesActivity extends AppCompatActivity implements ProfilesManag
             startActivity(intent);
         });
 
+        // Setup back button — returns to the previous screen (the app grid). In immersive XR
+        // there's no system back affordance on the panel, so this in-app button is the way back.
+        FloatingActionButton backFab = findViewById(R.id.backFab);
+        backFab.setOnClickListener(v -> finish());
+
         // Register for profile changes
         ProfilesManager.getInstance().addListener(this);
 

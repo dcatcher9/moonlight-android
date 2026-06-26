@@ -313,6 +313,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
         UiHelper.notifyNewRootView(this);
 
+        // Setup the back button — returns to the machine (Pc) list. AppView was started from
+        // PcView, so finishing pops straight back to it. (In immersive XR there's no system
+        // back affordance on the panel, so this in-app button is the way back.)
+        findViewById(R.id.backButton)
+            .setOnClickListener(v -> finish());
+
         // Setup the profiles button
         findViewById(R.id.profilesButton)
             .setOnClickListener(v -> startActivity(new Intent(this, ProfilesActivity.class)));
