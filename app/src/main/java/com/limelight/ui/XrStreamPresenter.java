@@ -13,7 +13,10 @@ import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
 
+import androidx.xr.runtime.Config;
+import androidx.xr.runtime.DeviceTrackingMode;
 import androidx.xr.runtime.Session;
+import androidx.xr.runtime.SessionConfigureResult;
 import androidx.xr.runtime.SessionCreateResult;
 import androidx.xr.runtime.SessionCreateSuccess;
 import androidx.xr.runtime.math.FloatSize2d;
@@ -23,6 +26,7 @@ import androidx.xr.runtime.math.Pose;
 import androidx.xr.runtime.math.Quaternion;
 import androidx.xr.runtime.math.Ray;
 import androidx.xr.runtime.math.Vector3;
+import androidx.xr.arcore.RenderViewpoint;
 import androidx.xr.scenecore.Entity;
 import androidx.xr.scenecore.EntityMoveListener;
 import androidx.xr.scenecore.MovableComponent;
@@ -31,6 +35,7 @@ import androidx.xr.scenecore.ResizableComponent;
 import androidx.xr.scenecore.ResizeEvent;
 import androidx.xr.scenecore.Scene;
 import androidx.xr.scenecore.SessionExt;
+import androidx.xr.scenecore.Space;
 import androidx.xr.scenecore.SpatialCapability;
 import androidx.xr.scenecore.SurfaceEntity;
 
@@ -143,6 +148,18 @@ public class XrStreamPresenter {
             return;
         }
         session = ((SessionCreateSuccess) result).getSession();
+
+        // Enable device (head) tracking so the "Reset" tile can recenter the panel in front of the
+        // user's current head pose (via RenderViewpoint). The default session has it DISABLED, which
+        // is why RenderViewpoint.mono(session) was null. Head pose needs no runtime permission.
+        try {
+            Config cfg = session.getConfig();
+            SessionConfigureResult cr = session.configure(cfg.copy(
+                    cfg.getPlaneTracking(), cfg.getHandTracking(), DeviceTrackingMode.LAST_KNOWN));
+            LimeLog.info("XR: device-tracking configure -> " + cr.getClass().getSimpleName());
+        } catch (Throwable t) {
+            LimeLog.warning("XR: device-tracking configure failed: " + t);
+        }
 
         // Stereo SurfaceEntity content only renders when the activity has the SPATIAL_3D_CONTENT
         // capability, which requires Full Space mode. scenecore alpha13 has no runtime request
@@ -270,6 +287,9 @@ public class XrStreamPresenter {
         BarItem stats = new BarItem(
                 activity.getString(R.string.xr_bar_stats),
                 R.drawable.ic_xr_stats, /* selectsMode= */ null);
+        BarItem reset = new BarItem(
+                activity.getString(R.string.xr_bar_reset),
+                R.drawable.ic_xr_reset, /* selectsMode= */ null);
         BarItem machines = new BarItem(
                 activity.getString(R.string.xr_bar_machines),
                 R.drawable.ic_computer, /* selectsMode= */ null);
@@ -280,6 +300,7 @@ public class XrStreamPresenter {
         normal.onTap = () -> selectMode(normal);
         sbs.onTap = () -> selectMode(sbs);
         stats.onTap = this::toggleStats;
+        reset.onTap = this::resetView;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
@@ -288,6 +309,7 @@ public class XrStreamPresenter {
         barItems.add(normal);
         barItems.add(sbs);
         barItems.add(stats);
+        barItems.add(reset);
         barItems.add(machines);
         barItems.add(disconnect);
 
@@ -402,6 +424,8 @@ public class XrStreamPresenter {
                 addStatsRow(entry, "", STATS_VALUE_COLOR);
             }
         }
+        // Requested ceiling (a max, not a target) — compare against the live "Bandwidth" row above.
+        addStatsRow("Max bitrate", (prefConfig.bitrate / 1000) + " Mbps", STATS_VALUE_COLOR);
         addStatsRow("HDR", hdrActive ? "On" : "Off",
                 hdrActive ? STATS_ON_COLOR : STATS_LABEL_COLOR);
     }
@@ -513,6 +537,62 @@ public class XrStreamPresenter {
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         activity.startActivity(intent);
         activity.finish();
+    }
+
+    /**
+     * Reset the video panel after the user has moved/resized it: back to the default distance,
+     * orientation, scale, and size for the current mode. The bar and stats panel follow.
+     */
+    private void resetView() {
+        if (surfaceEntity == null) {
+            return;
+        }
+        surfaceEntity.setScale(1.0f);
+        float aspect = aspectFor(currentStereoMode);
+        float height = DEFAULT_PANEL_HEIGHT_METERS;
+        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
+        applyResizeBounds(aspect);
+
+        // Place the quad ~2 m in front of the user's CURRENT head pose (not the activity-space
+        // origin, which is fixed at session start — that's why a plain reset lands off to the side
+        // after you've turned). Fall back to activity-space-forward if the head pose isn't available.
+        Pose placed = null;
+        try {
+            // A stereo headset has no mono viewpoint; use the two eye viewpoints and take their
+            // midpoint as the head position (orientation from the left eye).
+            Pose lp = poseOf(RenderViewpoint.left(session));
+            Pose rp = poseOf(RenderViewpoint.right(session));
+            Pose head = null;
+            if (lp != null && rp != null) {
+                Vector3 lt = lp.getTranslation();
+                Vector3 rt = rp.getTranslation();
+                head = new Pose(new Vector3((lt.getX() + rt.getX()) / 2f,
+                        (lt.getY() + rt.getY()) / 2f, (lt.getZ() + rt.getZ()) / 2f), lp.getRotation());
+            } else if (lp != null) {
+                head = lp;
+            }
+            if (head != null) {
+                Pose inFront = head.compose(
+                        new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
+                surfaceEntity.setPose(inFront, Space.REAL_WORLD);
+                placed = inFront;
+            }
+        } catch (Throwable t) {
+            LimeLog.warning("XR reset: current head pose unavailable (" + t + ")");
+        }
+        if (placed == null) {
+            surfaceEntity.setPose(new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
+        }
+        repositionControlBar(height);
+    }
+
+    /** Current pose of a render viewpoint (eye), or null if unavailable. */
+    private static Pose poseOf(RenderViewpoint vp) {
+        if (vp == null || vp.getState() == null) {
+            return null;
+        }
+        RenderViewpoint.State s = vp.getState().getValue();
+        return s != null ? s.getPose() : null;
     }
 
     /** Quad aspect (width/height) for a mode: full frame for MONO, half-width region otherwise. */
