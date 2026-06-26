@@ -3,12 +3,10 @@ package com.limelight.ui;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -25,8 +23,6 @@ import androidx.xr.runtime.math.Ray;
 import androidx.xr.runtime.math.Vector3;
 import androidx.xr.scenecore.Entity;
 import androidx.xr.scenecore.EntityMoveListener;
-import androidx.xr.scenecore.InputEvent;
-import androidx.xr.scenecore.InteractableComponent;
 import androidx.xr.scenecore.MovableComponent;
 import androidx.xr.scenecore.PanelEntity;
 import androidx.xr.scenecore.ResizableComponent;
@@ -63,7 +59,7 @@ import java.util.List;
  * <p>The quad is placed ~2 m in front, sized to one eye's aspect, and the user can move/resize it
  * (with a minimum distance clamp). A floating control bar beneath it offers single-select
  * presentation modes (Normal/MONO &harr; SBS, which reshapes the quad to the matching aspect since
- * the surface always carries the same packed frame) plus a Disconnect action.
+ * the surface always carries the same packed frame) plus Machines and Disconnect actions.
  * See docs/android-xr-sbs.md. Still open: session lifecycle on pause/resume (see {@link #onDestroy}).
  */
 public class XrStreamPresenter {
@@ -73,11 +69,12 @@ public class XrStreamPresenter {
 
     // Control-bar tile geometry (meters). Shared by build + reposition so the bar stays glued
     // beneath the quad as it changes size on a mode switch or a user resize.
-    private static final float TILE_WIDTH_METERS = 0.34f;
-    private static final float TILE_HEIGHT_METERS = 0.30f;
-    private static final float TILE_SPACING_METERS = 0.40f;   // center-to-center
+    private static final float BAR_WIDTH_METERS = 0.66f;      // the whole bar (row of buttons)
+    private static final float BAR_HEIGHT_METERS = 0.19f;
     private static final float BAR_GAP_METERS = 0.24f;        // quad bottom -> bar center
     private static final float BAR_Z_METERS = 0.02f;          // nudge toward viewer vs. the quad
+    private static final int TILE_IDLE_COLOR = 0xCC1E2630;    // resting tile fill
+    private static final int TILE_ACTIVE_COLOR = 0xFF2C72E0;  // active (selected) mode tile fill
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -91,9 +88,9 @@ public class XrStreamPresenter {
     private SurfaceEntity surfaceEntity;
     private Surface videoSurface;
 
-    /** The control bar's panels (one PanelEntity per item), kept for teardown. */
-    private final List<PanelEntity> controlPanels = new ArrayList<>();
-    /** The control-bar items, kept so the mode group's selection highlight can be refreshed. */
+    /** The single PanelEntity hosting the whole row of buttons. */
+    private PanelEntity barPanel;
+    /** The control-bar items (one clickable tile each, all hosted in {@link #barPanel}). */
     private final List<BarItem> barItems = new ArrayList<>();
     /** Comfortable default quad height in meters; mode switches keep this height and vary width. */
     private static final float DEFAULT_PANEL_HEIGHT_METERS = 1.2f;
@@ -241,9 +238,9 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Build the floating control bar below the video quad: a horizontal row of icon+label tiles.
-     * The mode tiles ({@code Normal}/{@code SBS}) are a single-select group; {@code Disconnect} is a
-     * one-shot action. Designed to be extended — append more {@link BarItem}s to grow the bar.
+     * Build the floating control bar below the video quad: a horizontal row of icon+label tiles,
+     * split by a divider into a single-select mode group ({@code Normal}/{@code SBS}) and one-shot
+     * actions ({@code Machines}/{@code Disconnect}). Extend by appending more {@link BarItem}s.
      *
      * @param videoHeightMeters the quad's height, used to place the bar just beneath it.
      */
@@ -272,40 +269,76 @@ public class XrStreamPresenter {
         barItems.add(machines);
         barItems.add(disconnect);
 
-        for (BarItem item : barItems) {
-            buildBarItemView(item);
-            PanelEntity panel = PanelEntity.create(
-                    session, item.root,
-                    new FloatSize2d(TILE_WIDTH_METERS, TILE_HEIGHT_METERS),
-                    "xr-bar-" + item.label, Pose.Identity, surfaceEntity);
-            panel.setEnabled(true);
-            controlPanels.add(panel);
+        // One panel hosting a horizontal row of clickable tiles — like a normal toolbar. This is what
+        // makes the platform draw the per-tile gaze highlight: a single panel whose View hierarchy
+        // holds multiple clickable views highlights each one (the way several FABs on a 2D screen do),
+        // whereas one interactable child PanelEntity per tile did NOT. Each tile handles its own tap.
+        LinearLayout bar = new LinearLayout(activity);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER);
 
-            // The InteractableComponent's UP event reliably fires the tap (gaze + pinch). Note: the
-            // platform does not draw a gaze hover highlight on these custom SurfaceEntity-child
-            // panels (it does for the activity's main panel, which we hide), so there is no per-tile
-            // hover animation — confirmed by reproducing the original Button recipe, which also
-            // didn't highlight here. The video itself changing is the feedback for a mode switch.
-            InteractableComponent interactable = InteractableComponent.create(
-                    session, activity.getMainExecutor(), (InputEvent event) -> {
-                        if (event.getAction() == InputEvent.Action.UP && item.onTap != null) {
-                            item.onTap.run();
-                        }
-                    });
-            panel.addComponent(interactable);
+        boolean prevWasMode = false;
+        boolean first = true;
+        for (BarItem item : barItems) {
+            boolean isMode = item.selectsMode != null;
+            // Divider between the mode group (Normal/SBS) and the action group (Machines/Disconnect).
+            if (!first && prevWasMode && !isMode) {
+                bar.addView(makeDivider());
+            }
+            View tile = buildBarItemView(item);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+            int m = dp(2);
+            lp.setMargins(m, m, m, m);
+            bar.addView(tile, lp);
+            item.root = tile;
+            prevWasMode = isMode;
+            first = false;
         }
 
-        repositionControlBar(videoHeightMeters);
+        // Bake the initial active-mode highlight into the views before the panel is created.
+        updateModeSelection();
+
+        barPanel = PanelEntity.create(
+                session, bar, new FloatSize2d(BAR_WIDTH_METERS, BAR_HEIGHT_METERS),
+                "xr-control-bar", barPose(videoHeightMeters), surfaceEntity);
+        barPanel.setEnabled(true);
     }
 
-    /** Lay the tiles out in a centered row just beneath the quad of the given height. */
+    /** A thin vertical separator between button groups. */
+    private View makeDivider() {
+        View d = new View(activity);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                dp(2), LinearLayout.LayoutParams.MATCH_PARENT);
+        int vm = dp(10);
+        lp.topMargin = vm;
+        lp.bottomMargin = vm;
+        lp.leftMargin = dp(4);
+        lp.rightMargin = dp(4);
+        d.setLayoutParams(lp);
+        d.setBackgroundColor(0x55FFFFFF);
+        return d;
+    }
+
+    /** Highlight whichever mode tile matches the current stereo mode (single-select). */
+    private void updateModeSelection() {
+        for (BarItem item : barItems) {
+            if (item.selectsMode != null) {
+                item.setSelected(item.selectsMode == currentStereoMode);
+            }
+        }
+    }
+
+    /** Local pose of the control-bar panel: centered just beneath the quad of the given height. */
+    private Pose barPose(float videoHeightMeters) {
+        float y = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS;
+        return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
+    }
+
+    /** Move the bar when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
-        int n = controlPanels.size();
-        float barY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS;
-        for (int i = 0; i < n; i++) {
-            float x = (i - (n - 1) / 2.0f) * TILE_SPACING_METERS;
-            controlPanels.get(i).setPose(
-                    new Pose(new Vector3(x, barY, BAR_Z_METERS), Quaternion.Identity));
+        if (barPanel != null) {
+            barPanel.setPose(barPose(videoHeightMeters));
         }
     }
 
@@ -333,6 +366,7 @@ public class XrStreamPresenter {
         surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(width, height)));
         applyResizeBounds(aspect);
         repositionControlBar(height);
+        updateModeSelection();
     }
 
     /**
@@ -362,38 +396,48 @@ public class XrStreamPresenter {
         resizable.setMaximumEntitySize(new FloatSize3d(6.0f * aspect, 6.0f, 0f));
     }
 
-    /** Build the tile: icon centered above its label on a dark rounded background. Tap is handled by
-     *  the panel's InteractableComponent (see {@link #buildControlBar}). */
-    private void buildBarItemView(BarItem item) {
+    /** Build one tile: a clickable vertical layout with the icon truly centered above the label.
+     *  Clickable+focusable (with a selectable foreground) so the platform draws the gaze highlight
+     *  — which works now that all tiles live in one panel. The OnClickListener handles the tap. */
+    private View buildBarItemView(BarItem item) {
         LinearLayout col = new LinearLayout(activity);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
-        int pad = dp(10);
+        col.setClickable(true);
+        col.setFocusable(true);
+        col.setBackgroundColor(TILE_IDLE_COLOR);
+        int pad = dp(3);
         col.setPadding(pad, pad, pad, pad);
-
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(18));
-        bg.setColor(0xCC1E2630);
-        col.setBackground(bg);
+        col.setOnClickListener(v -> {
+            if (item.onTap != null) {
+                item.onTap.run();
+            }
+        });
+        // Visible press/hover feedback on top of the dark fill.
+        TypedValue fg = new TypedValue();
+        if (activity.getTheme().resolveAttribute(
+                android.R.attr.selectableItemBackground, fg, true) && fg.resourceId != 0) {
+            col.setForeground(activity.getDrawable(fg.resourceId));
+        }
 
         ImageView icon = new ImageView(activity);
-        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
+        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(56), dp(56)));
         icon.setImageResource(item.iconRes);
         icon.setColorFilter(Color.WHITE);
 
         TextView text = new TextView(activity);
         text.setText(item.label);
         text.setTextColor(Color.WHITE);
-        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f);
         text.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         tp.topMargin = dp(4);
         text.setLayoutParams(tp);
 
         col.addView(icon);
         col.addView(text);
-        item.root = col;
+        return col;
     }
 
     private int dp(float v) {
@@ -417,6 +461,13 @@ public class XrStreamPresenter {
             this.label = label;
             this.iconRes = iconRes;
             this.selectsMode = selectsMode;
+        }
+
+        /** Active mode tile gets an accent fill; everything else stays dark. */
+        void setSelected(boolean selected) {
+            if (root != null) {
+                root.setBackgroundColor(selected ? TILE_ACTIVE_COLOR : TILE_IDLE_COLOR);
+            }
         }
     }
 
@@ -452,7 +503,7 @@ public class XrStreamPresenter {
         //  (pause/resume vs. full dispose). For now just drop references.
         videoSurface = null;
         surfaceEntity = null;
-        controlPanels.clear();
+        barPanel = null;
         barItems.clear();
         session = null;
     }
