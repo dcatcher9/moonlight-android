@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this project is
 
@@ -48,8 +48,15 @@ modes) still exist but are no longer the target; don't invest in non-XR regressi
 - Create `local.properties` with `sdk.dir=<path>` (and `ndk.dir=` if the NDK isn't auto-found).
 - Build: `JAVA_HOME=<jdk> ./gradlew :app:assembleNonRoot_gameDebug` (Windows: `gradlew.bat`).
   The Bash tool here runs Git Bash; the `gradlew` shell script works from it.
-- Unit tests: `./gradlew test` (root aggregates all `*UnitTest` tasks; uses Robolectric +
-  Mockito; native `MoonBridge` is stubbed by `app/src/test/.../shadows/ShadowMoonBridge.java`).
+- Install/run on a connected device: `./gradlew :app:installNonRoot_gameDebug`. The launcher
+  activity is `com.limelight.PcView`. (The XR control bar only appears inside an active stream.)
+- Unit tests (JVM/Robolectric, no emulator): `./gradlew test` aggregates all `*UnitTest` tasks.
+  Per flavor: `:app:testNonRoot_gameDebugUnitTest` / `:app:testRootDebugUnitTest`. Single test:
+  `./gradlew :app:testNonRoot_gameDebugUnitTest --tests "com.limelight.<pkg>.<Class>"`. Tests live
+  in `app/src/test/java/com/limelight/...`. Native/platform classes **must** be shadowed or the
+  JVM throws `UnsatisfiedLinkError` — `ShadowMoonBridge` stubs the `System.loadLibrary("moonbr")`
+  init and `ShadowGameManager` avoids a `ServiceManager` lookup; add more shadows the same way.
+  See [android_test_setup.md](android_test_setup.md) for the full Robolectric/shadow/mock recipe.
 - `compileSdk = 36`, `targetSdk = 34`, `minSdk = 24` (raised from 21 to satisfy the Jetpack
   XR libraries' minSdk without a manifest override). Java 11 source/target.
 - Product flavors: `root` (maxSdk 25) and `nonRoot_game`. ABI splits enabled.
@@ -127,3 +134,12 @@ Stereo-related preferences: `renderMode`, `parallax_depth`, `convergence_ratio`,
   comment in `app/build.gradle` before changing `applicationId`/signing.
 - GL work must happen on the GLSurfaceView thread (`queueEvent`). Surface lifecycle is
   driven by `SurfaceHolder.Callback` / `OnSurfaceReadyListener`; respect create/destroy ordering.
+
+## Reference docs
+
+- [docs/android-xr-sbs.md](docs/android-xr-sbs.md) — the Android XR SBS design/plan **and**
+  "Spatial UI learnings" (read before any rendering/surface/stereo or in-headset UI work).
+- [android_test_setup.md](android_test_setup.md) — Robolectric unit-test recipe (shadows for
+  native/platform classes, singleton/prefs resets, Activity testing, mocks).
+- [README.md](README.md) — the fork's feature list and project identity/background.
+- [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) — upstream Moonlight contribution guidance.
