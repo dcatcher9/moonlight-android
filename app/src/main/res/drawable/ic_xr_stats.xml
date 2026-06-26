@@ -1,0 +1,11 @@
+<!-- Ascending bar chart: the "Stats" toggle on the XR control bar (performance overlay). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="#FFFFFF"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M4,12h3v8h-3z M10.5,8h3v12h-3z M17,4h3v16h-3z" />
+</vector>

@@ -9,6 +9,8 @@ import android.view.Surface;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.TableLayout;
+import android.widget.TableRow;
 import android.widget.TextView;
 
 import androidx.xr.runtime.Session;
@@ -69,12 +71,15 @@ public class XrStreamPresenter {
 
     // Control-bar tile geometry (meters). Shared by build + reposition so the bar stays glued
     // beneath the quad as it changes size on a mode switch or a user resize.
-    private static final float BAR_WIDTH_METERS = 0.66f;      // the whole bar (row of buttons)
-    private static final float BAR_HEIGHT_METERS = 0.19f;
+    private static final float BAR_HEIGHT_METERS = 0.21f;     // also the per-tile size (square tiles)
+    private static final float BAR_DIVIDER_METERS = 0.05f;    // extra width for the group divider
     private static final float BAR_GAP_METERS = 0.24f;        // quad bottom -> bar center
     private static final float BAR_Z_METERS = 0.02f;          // nudge toward viewer vs. the quad
     private static final int TILE_IDLE_COLOR = 0xCC1E2630;    // resting tile fill
     private static final int TILE_ACTIVE_COLOR = 0xFF2C72E0;  // active (selected) mode tile fill
+    private static final float STATS_WIDTH_METERS = 0.95f;    // performance-stats panel beside quad
+    private static final float STATS_HEIGHT_METERS = 1.1f;
+    private static final float STATS_GAP_METERS = 0.10f;      // gap between quad edge and stats panel
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -92,6 +97,17 @@ public class XrStreamPresenter {
     private PanelEntity barPanel;
     /** The control-bar items (one clickable tile each, all hosted in {@link #barPanel}). */
     private final List<BarItem> barItems = new ArrayList<>();
+
+    /** Floating performance-stats panel beside the quad and its table; toggled by the Stats tile. */
+    private PanelEntity statsPanel;
+    private TableLayout statsTable;
+    private BarItem statsItem;
+    private boolean statsVisible;
+
+    private static final int STATS_LABEL_COLOR = 0xFF9FB3C8;  // muted blue-grey for row labels
+    private static final int STATS_VALUE_COLOR = 0xFFFFFFFF;  // white for values
+    private static final int STATS_ON_COLOR = 0xFF5CD65C;     // green for "on"/HDR active
+    private static final float STATS_TEXT_SP = 30f;
     /** Comfortable default quad height in meters; mode switches keep this height and vary width. */
     private static final float DEFAULT_PANEL_HEIGHT_METERS = 1.2f;
 
@@ -251,6 +267,9 @@ public class XrStreamPresenter {
         BarItem sbs = new BarItem(
                 activity.getString(R.string.xr_bar_sbs),
                 R.drawable.ic_xr_mode_sbs, SurfaceEntity.StereoMode.SIDE_BY_SIDE);
+        BarItem stats = new BarItem(
+                activity.getString(R.string.xr_bar_stats),
+                R.drawable.ic_xr_stats, /* selectsMode= */ null);
         BarItem machines = new BarItem(
                 activity.getString(R.string.xr_bar_machines),
                 R.drawable.ic_computer, /* selectsMode= */ null);
@@ -260,12 +279,15 @@ public class XrStreamPresenter {
 
         normal.onTap = () -> selectMode(normal);
         sbs.onTap = () -> selectMode(sbs);
+        stats.onTap = this::toggleStats;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
+        statsItem = stats;
 
         barItems.clear();
         barItems.add(normal);
         barItems.add(sbs);
+        barItems.add(stats);
         barItems.add(machines);
         barItems.add(disconnect);
 
@@ -296,13 +318,112 @@ public class XrStreamPresenter {
             first = false;
         }
 
-        // Bake the initial active-mode highlight into the views before the panel is created.
+        // Bake the initial highlights into the views before the panel is created.
+        statsVisible = prefConfig.enablePerfOverlay;
         updateModeSelection();
+        statsItem.setSelected(statsVisible);
 
+        // Width scales with the tile count so each tile stays square (tile size = bar height),
+        // plus a little for the divider — adding tiles widens the bar instead of squeezing them.
+        float barWidth = barItems.size() * BAR_HEIGHT_METERS + BAR_DIVIDER_METERS;
         barPanel = PanelEntity.create(
-                session, bar, new FloatSize2d(BAR_WIDTH_METERS, BAR_HEIGHT_METERS),
+                session, bar, new FloatSize2d(barWidth, BAR_HEIGHT_METERS),
                 "xr-control-bar", barPose(videoHeightMeters), surfaceEntity);
         barPanel.setEnabled(true);
+
+        createStatsPanel(videoHeightMeters);
+    }
+
+    /**
+     * Floating performance-stats panel above the quad, fed by {@link #setStatsText} (which
+     * {@code Game.onPerfUpdate} forwards to). Hidden until the Stats tile toggles it. The 2D perf
+     * overlay can't be used in XR because the activity's main panel is hidden.
+     */
+    private void createStatsPanel(float videoHeightMeters) {
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xCC101418);
+        int p = dp(14);
+        root.setPadding(p, p, p, p);
+
+        TextView title = new TextView(activity);
+        title.setText("Performance");
+        title.setTextColor(TILE_ACTIVE_COLOR);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP + 2f);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        title.setPadding(0, 0, 0, dp(8));
+        root.addView(title);
+
+        statsTable = new TableLayout(activity);
+        statsTable.setColumnShrinkable(1, true);
+        root.addView(statsTable);
+
+        statsPanel = PanelEntity.create(
+                session, root, new FloatSize2d(STATS_WIDTH_METERS, STATS_HEIGHT_METERS),
+                "xr-stats", statsPose(videoHeightMeters), surfaceEntity);
+        statsPanel.setEnabled(statsVisible);
+    }
+
+    /** Toggle the performance-stats panel; also flips the pref so the decoder emits perf text. */
+    private void toggleStats() {
+        statsVisible = !statsVisible;
+        prefConfig.enablePerfOverlay = statsVisible;
+        if (statsPanel != null) {
+            statsPanel.setEnabled(statsVisible);
+        }
+        if (statsItem != null) {
+            statsItem.setSelected(statsVisible);
+        }
+    }
+
+    /**
+     * Rebuild the stats table from the decoder's perf string. Called (on the UI thread) from
+     * {@code Game.onPerfUpdate}. The string is a set of {@code Label: value} entries separated by
+     * newlines/tabs; we split them into colored rows and append an HDR row.
+     *
+     * @param hdrActive whether the <i>negotiated stream</i> is actually HDR (10-bit) — this reflects
+     *                  what the host is really sending, not just the {@code enableHdr} request setting.
+     */
+    public void setStatsText(String text, boolean hdrActive) {
+        if (statsTable == null) {
+            return;
+        }
+        statsTable.removeAllViews();
+        for (String part : text.split("[\\n\\t]+")) {
+            String entry = part.trim();
+            if (entry.isEmpty()) {
+                continue;
+            }
+            int idx = entry.indexOf(':');
+            if (idx >= 0) {
+                addStatsRow(entry.substring(0, idx).trim(), entry.substring(idx + 1).trim(),
+                        STATS_VALUE_COLOR);
+            } else {
+                addStatsRow(entry, "", STATS_VALUE_COLOR);
+            }
+        }
+        addStatsRow("HDR", hdrActive ? "On" : "Off",
+                hdrActive ? STATS_ON_COLOR : STATS_LABEL_COLOR);
+    }
+
+    private void addStatsRow(String label, String value, int valueColor) {
+        TableRow row = new TableRow(activity);
+
+        TextView l = new TextView(activity);
+        l.setText(label);
+        l.setTextColor(STATS_LABEL_COLOR);
+        l.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        l.setPadding(0, dp(1), dp(16), dp(1));
+
+        TextView v = new TextView(activity);
+        v.setText(value);
+        v.setTextColor(valueColor);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        v.setPadding(0, dp(1), 0, dp(1));
+
+        row.addView(l);
+        row.addView(v);
+        statsTable.addView(row);
     }
 
     /** A thin vertical separator between button groups. */
@@ -335,10 +456,22 @@ public class XrStreamPresenter {
         return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
-    /** Move the bar when the quad height changes (mode switch). */
+    /** Local pose of the stats panel: just off the quad's right edge, top-aligned, so it doesn't
+     *  cover the video. */
+    private Pose statsPose(float videoHeightMeters) {
+        float quadWidth = videoHeightMeters * aspectFor(currentStereoMode);
+        float x = (quadWidth / 2.0f) + STATS_GAP_METERS + (STATS_WIDTH_METERS / 2.0f);
+        float y = (videoHeightMeters / 2.0f) - (STATS_HEIGHT_METERS / 2.0f);
+        return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
+    }
+
+    /** Move the bar and stats panel when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
         if (barPanel != null) {
             barPanel.setPose(barPose(videoHeightMeters));
+        }
+        if (statsPanel != null) {
+            statsPanel.setPose(statsPose(videoHeightMeters));
         }
     }
 
@@ -421,14 +554,14 @@ public class XrStreamPresenter {
         }
 
         ImageView icon = new ImageView(activity);
-        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(56), dp(56)));
+        icon.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         icon.setImageResource(item.iconRes);
         icon.setColorFilter(Color.WHITE);
 
         TextView text = new TextView(activity);
         text.setText(item.label);
         text.setTextColor(Color.WHITE);
-        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
         text.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -504,6 +637,9 @@ public class XrStreamPresenter {
         videoSurface = null;
         surfaceEntity = null;
         barPanel = null;
+        statsPanel = null;
+        statsTable = null;
+        statsItem = null;
         barItems.clear();
         session = null;
     }

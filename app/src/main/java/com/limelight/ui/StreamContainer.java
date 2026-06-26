@@ -66,6 +66,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         setFocusableInTouchMode(true);
     }
 
+    /** The XR presenter when in {@code MODE_XR_SBS}, else null. Lets {@code Game} forward perf text. */
+    public XrStreamPresenter getXrPresenter() {
+        return mXrPresenter;
+    }
+
     public void init(Game game, PreferenceConfiguration prefConfig) {
         if (this.game != null) {
             return;

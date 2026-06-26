@@ -3937,6 +3937,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }else{
                     performanceOverlayBig.setText(text);
                 }
+                // In XR the 2D overlay above lives on the hidden main panel; mirror the text to the
+                // XR stats panel so the "Stats" bar toggle can show it in the headset. HDR reflects
+                // the actual negotiated stream format (10-bit), not just the enableHdr request.
+                if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                    boolean hdrActive = decoderRenderer != null
+                            && (decoderRenderer.getActiveVideoFormat()
+                                & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
+                    streamContainer.getXrPresenter().setStatsText(text, hdrActive);
+                }
             }
         });
     }

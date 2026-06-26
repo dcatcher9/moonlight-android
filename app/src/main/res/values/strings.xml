@@ -578,6 +578,7 @@
     <string name="xr_bar_normal">Normal</string>
     <string name="xr_bar_sbs">SBS</string>
     <string name="xr_bar_machines">Machines</string>
+    <string name="xr_bar_stats">Stats</string>
     <string name="app_view_back_to_machines">Back to machines</string>
     <string name="action_back">Back</string>
     <string name="xr_bar_disconnect">Disconnect</string>
