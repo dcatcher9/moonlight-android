@@ -3769,6 +3769,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
+    /** True when the negotiated stream is actually 10-bit HDR (not just the enableHdr request). */
+    public boolean isStreamHdrActive() {
+        return decoderRenderer != null
+                && (decoderRenderer.getActiveVideoFormat() & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         float desiredFrameRate;

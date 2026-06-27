@@ -529,6 +529,7 @@ public class XrStreamPresenter {
         }
 
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
+        applyContentColorMetadata();
         LimeLog.info("XR: stereo mode -> " + item.label);
 
         float aspect = aspectFor(currentPresenterMode);
@@ -619,6 +620,38 @@ public class XrStreamPresenter {
 
     private SurfaceEntity.StereoMode stereoModeFor(PresenterMode mode) {
         return (mode == PresenterMode.NORMAL) ? SurfaceEntity.StereoMode.MONO : SurfaceEntity.StereoMode.SIDE_BY_SIDE;
+    }
+
+    /**
+     * HDR for Client SBS. The Client-SBS GL pass renders into the XR surface, but its output
+     * buffers don't carry the decoder's HDR dataspace — so the compositor would treat 10-bit PQ
+     * content as SDR and wash it out (the direct Normal/Host SBS paths look fine because MediaCodec
+     * tags the buffer dataspace itself). When Client SBS is active on a 10-bit stream, tell the
+     * compositor how to read the pixels: HDR10 = BT2020 primaries + ST2084 (PQ) transfer, range per
+     * the full-range pref. For every other case reset to the unset default so the direct decoder
+     * path auto-detects its own dataspace.
+     */
+    private void applyContentColorMetadata() {
+        if (surfaceEntity == null) {
+            return;
+        }
+        boolean hdr = (activity instanceof com.limelight.Game)
+                && ((com.limelight.Game) activity).isStreamHdrActive();
+        if (currentPresenterMode == PresenterMode.CLIENT_SBS && hdr) {
+            surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
+                    SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,
+                    SurfaceEntity.ContentColorMetadata.ColorTransfer.ST2084,
+                    prefConfig.fullRange
+                            ? SurfaceEntity.ContentColorMetadata.ColorRange.FULL
+                            : SurfaceEntity.ContentColorMetadata.ColorRange.LIMITED,
+                    SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN));
+            LimeLog.info("XR: Client SBS HDR — ContentColorMetadata BT2020/ST2084/"
+                    + (prefConfig.fullRange ? "FULL" : "LIMITED"));
+        } else {
+            surfaceEntity.setContentColorMetadata(
+                    SurfaceEntity.ContentColorMetadata.Companion
+                            .getDEFAULT_UNSET_CONTENT_COLOR_METADATA());
+        }
     }
 
     /** Bound the resize affordance to a height range, deriving width from the active aspect. */
