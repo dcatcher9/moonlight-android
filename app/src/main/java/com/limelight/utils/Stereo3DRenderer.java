@@ -71,6 +71,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     public static Boolean isDebugMode = false;
     public static Boolean isActive = false;
     public static String renderer = "CPU";
+    public static volatile boolean clientSbs = false;
 
     // Private Static Fields
     private static float calcFps = 0;
@@ -127,6 +128,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private SurfaceTexture videoSurfaceTexture;
 
     private float ON_DRAW_CHANGE_TRESHOLD = 2.0f;
+    private int surfaceWidth;
+    private int surfaceHeight;
+    // When >0, the explicit pixel size of the GL output (EGL) surface to render into, overriding the
+    // on-screen GLSurfaceView/SurfaceHolder size. Needed for the XR client-SBS path: the GL output is
+    // an off-screen XR compositor surface (2W×H, packing two full-resolution eye views) whose size is
+    // unrelated to this view's on-screen SurfaceHolder size.
+    private volatile int outputWidthOverride;
+    private volatile int outputHeightOverride;
 
 
     public interface OnSurfaceReadyListener {
@@ -223,6 +232,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     public Surface getVideoSurface() {
         return videoSurface;
+    }
+
+    /** Force the render viewport to a fixed output size, for when the GL output surface is not the
+     *  on-screen view (XR client-SBS renders into a 2W×H XR compositor surface). Pass 0,0 to fall
+     *  back to the SurfaceHolder/view size. */
+    public void setOutputSizeOverride(int width, int height) {
+        this.outputWidthOverride = width;
+        this.outputHeightOverride = height;
     }
 
     @Override
@@ -347,8 +364,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void drawBothEyes(int dualBubble3dProgram, float convergence, float shift) {
-        int viewWidth = glSurfaceView.getWidth();
-        int viewHeight = glSurfaceView.getHeight();
+        int viewWidth = outputWidthOverride > 0 ? outputWidthOverride
+                : (surfaceWidth > 0 ? surfaceWidth : glSurfaceView.getWidth());
+        int viewHeight = outputHeightOverride > 0 ? outputHeightOverride
+                : (surfaceHeight > 0 ? surfaceHeight : glSurfaceView.getHeight());
 
         float parallax = getParallax() * 0.06f;
 
@@ -415,8 +434,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     public void onDrawFrame(GL10 gl) {
         long startTime = System.nanoTime();
 
+        boolean hasNewFrame = false;
         synchronized (frameLock) {
-            if (!frameAvailable.get()) {
+            hasNewFrame = frameAvailable.get();
+            if (!hasNewFrame) {
                 if (!isMovieMode) {
                     glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
                 } else {
@@ -428,11 +449,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
             frameAvailable.set(false);
         }
-        try {
-            videoSurfaceTexture.updateTexImage();
-        } catch (Exception e) {
-            Log.w("Stereo3DRenderer", "updateTexImagse failed", e);
-            return;
+        
+        if (hasNewFrame) {
+            try {
+                videoSurfaceTexture.updateTexImage();
+            } catch (Exception e) {
+                Log.w("Stereo3DRenderer", "updateTexImagse failed", e);
+                return;
+            }
         }
 
         if (currentlyRenderingMap != null) {
@@ -442,7 +466,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         long startTimeAi = System.nanoTime();
         long endTimeAi = System.nanoTime();
         if (tflite != null) {
-            if (block || !isMovieMode) {
+            if (hasNewFrame && (block || !isMovieMode)) {
                 ByteBuffer pixelBufferForAI = freeInputBuffers.poll();
                 if (pixelBufferForAI != null) {
                     boolean success = readPixelsForAI(pixelBufferForAI);
@@ -756,6 +780,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     @Override
     public void onSurfaceChanged(GL10 gl, int width, int height) {
         GLES20.glViewport(0, 0, width, height);
+        surfaceWidth = width;
+        surfaceHeight = height;
     }
 
     private void initializeFbo() {

@@ -579,7 +579,8 @@
     <string name="render_mode_xr_sbs">XR SBS 3D (Host)</string>
     <!-- Labels on the in-headset XR control bar below the video panel. -->
     <string name="xr_bar_normal">Normal</string>
-    <string name="xr_bar_sbs">SBS</string>
+    <string name="xr_bar_client_sbs">Client SBS</string>
+    <string name="xr_bar_host_sbs">Host SBS</string>
     <string name="xr_bar_machines">Machines</string>
     <string name="xr_bar_stats">Stats</string>
     <string name="xr_bar_reset">Reset</string>

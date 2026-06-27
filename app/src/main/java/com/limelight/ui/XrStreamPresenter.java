@@ -116,8 +116,14 @@ public class XrStreamPresenter {
     /** Comfortable default quad height in meters; mode switches keep this height and vary width. */
     private static final float DEFAULT_PANEL_HEIGHT_METERS = 1.2f;
 
-    /** Which stereo mode the SurfaceEntity is currently presenting (defaults to MONO / flat). */
-    private SurfaceEntity.StereoMode currentStereoMode = SurfaceEntity.StereoMode.MONO;
+    public enum PresenterMode {
+        NORMAL,
+        HOST_SBS,
+        CLIENT_SBS
+    }
+
+    /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
+    private PresenterMode currentPresenterMode = PresenterMode.NORMAL;
 
     // Quad aspect ratios for each presentation mode (the surface always carries the same packed
     // SBS frame; only the visible region differs). In SBS the compositor shows each eye the
@@ -184,7 +190,7 @@ public class XrStreamPresenter {
         fullAspect = (float) prefConfig.width / prefConfig.height;
         perEyeAspect = fullAspect / 2.0f;
         float panelHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
-        float panelWidthMeters = panelHeightMeters * aspectFor(currentStereoMode);
+        float panelWidthMeters = panelHeightMeters * aspectFor(currentPresenterMode);
         SurfaceEntity.Shape quad =
                 new SurfaceEntity.Shape.Quad(new FloatSize2d(panelWidthMeters, panelHeightMeters));
 
@@ -196,7 +202,7 @@ public class XrStreamPresenter {
                 session,
                 panelPose,
                 quad,
-                currentStereoMode);
+                stereoModeFor(currentPresenterMode));
 
         // Pin the entity's surface to the full SBS frame size so the L/R split lands on the half
         // boundary.
@@ -248,7 +254,7 @@ public class XrStreamPresenter {
             }
         });
         resizable.setFixedAspectRatioEnabled(true);
-        applyResizeBounds(aspectFor(currentStereoMode));
+        applyResizeBounds(aspectFor(currentPresenterMode));
         surfaceEntity.addComponent(resizable);
 
         // Since the 2D main panel is hidden, the Android XR system orbiter (with its Close button)
@@ -280,10 +286,13 @@ public class XrStreamPresenter {
     private void buildControlBar(float videoHeightMeters) {
         BarItem normal = new BarItem(
                 activity.getString(R.string.xr_bar_normal),
-                R.drawable.ic_xr_mode_normal, SurfaceEntity.StereoMode.MONO);
-        BarItem sbs = new BarItem(
-                activity.getString(R.string.xr_bar_sbs),
-                R.drawable.ic_xr_mode_sbs, SurfaceEntity.StereoMode.SIDE_BY_SIDE);
+                R.drawable.ic_xr_mode_normal, PresenterMode.NORMAL);
+        BarItem clientSbs = new BarItem(
+                activity.getString(R.string.xr_bar_client_sbs),
+                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS);
+        BarItem hostSbs = new BarItem(
+                activity.getString(R.string.xr_bar_host_sbs),
+                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS);
         BarItem stats = new BarItem(
                 activity.getString(R.string.xr_bar_stats),
                 R.drawable.ic_xr_stats, /* selectsMode= */ null);
@@ -298,7 +307,8 @@ public class XrStreamPresenter {
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
 
         normal.onTap = () -> selectMode(normal);
-        sbs.onTap = () -> selectMode(sbs);
+        clientSbs.onTap = () -> selectMode(clientSbs);
+        hostSbs.onTap = () -> selectMode(hostSbs);
         stats.onTap = this::toggleStats;
         reset.onTap = this::resetView;
         machines.onTap = this::returnToMachineSelection;
@@ -307,7 +317,8 @@ public class XrStreamPresenter {
 
         barItems.clear();
         barItems.add(normal);
-        barItems.add(sbs);
+        barItems.add(clientSbs);
+        barItems.add(hostSbs);
         barItems.add(stats);
         barItems.add(reset);
         barItems.add(machines);
@@ -469,7 +480,7 @@ public class XrStreamPresenter {
     private void updateModeSelection() {
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
-                item.setSelected(item.selectsMode == currentStereoMode);
+                item.setSelected(item.selectsMode == currentPresenterMode);
             }
         }
     }
@@ -483,7 +494,7 @@ public class XrStreamPresenter {
     /** Local pose of the stats panel: just off the quad's right edge, top-aligned, so it doesn't
      *  cover the video. */
     private Pose statsPose(float videoHeightMeters) {
-        float quadWidth = videoHeightMeters * aspectFor(currentStereoMode);
+        float quadWidth = videoHeightMeters * aspectFor(currentPresenterMode);
         float x = (quadWidth / 2.0f) + STATS_GAP_METERS + (STATS_WIDTH_METERS / 2.0f);
         float y = (videoHeightMeters / 2.0f) - (STATS_HEIGHT_METERS / 2.0f);
         return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
@@ -507,14 +518,20 @@ public class XrStreamPresenter {
      */
     private void selectMode(BarItem item) {
         if (item.selectsMode == null || surfaceEntity == null
-                || item.selectsMode == currentStereoMode) {
+                || item.selectsMode == currentPresenterMode) {
             return;
         }
-        surfaceEntity.setStereoMode(item.selectsMode);
-        currentStereoMode = item.selectsMode;
+        currentPresenterMode = item.selectsMode;
+        com.limelight.utils.Stereo3DRenderer.clientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
+        
+        if (activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).getStreamContainer().switchToClientSbs(currentPresenterMode == PresenterMode.CLIENT_SBS);
+        }
+
+        surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         LimeLog.info("XR: stereo mode -> " + item.label);
 
-        float aspect = aspectFor(currentStereoMode);
+        float aspect = aspectFor(currentPresenterMode);
         SurfaceEntity.Shape shape = surfaceEntity.getShape();
         float height = (shape instanceof SurfaceEntity.Shape.Quad)
                 ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight()
@@ -548,7 +565,7 @@ public class XrStreamPresenter {
             return;
         }
         surfaceEntity.setScale(1.0f);
-        float aspect = aspectFor(currentStereoMode);
+        float aspect = aspectFor(currentPresenterMode);
         float height = DEFAULT_PANEL_HEIGHT_METERS;
         surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
         applyResizeBounds(aspect);
@@ -596,8 +613,12 @@ public class XrStreamPresenter {
     }
 
     /** Quad aspect (width/height) for a mode: full frame for MONO, half-width region otherwise. */
-    private float aspectFor(SurfaceEntity.StereoMode mode) {
-        return mode == SurfaceEntity.StereoMode.MONO ? fullAspect : perEyeAspect;
+    private float aspectFor(PresenterMode mode) {
+        return (mode == PresenterMode.HOST_SBS) ? perEyeAspect : fullAspect;
+    }
+
+    private SurfaceEntity.StereoMode stereoModeFor(PresenterMode mode) {
+        return (mode == PresenterMode.NORMAL) ? SurfaceEntity.StereoMode.MONO : SurfaceEntity.StereoMode.SIDE_BY_SIDE;
     }
 
     /** Bound the resize affordance to a height range, deriving width from the active aspect. */
@@ -666,11 +687,11 @@ public class XrStreamPresenter {
         final String label;
         final int iconRes;
         /** Non-null for mode tiles (single-select group); null for one-shot action tiles. */
-        final SurfaceEntity.StereoMode selectsMode;
+        final PresenterMode selectsMode;
         Runnable onTap;
         View root;
 
-        BarItem(String label, int iconRes, SurfaceEntity.StereoMode selectsMode) {
+        BarItem(String label, int iconRes, PresenterMode selectsMode) {
             this.label = label;
             this.iconRes = iconRes;
             this.selectsMode = selectsMode;
@@ -705,6 +726,23 @@ public class XrStreamPresenter {
 
     public Surface getVideoSurface() {
         return videoSurface;
+    }
+
+    /**
+     * Resize the XR surface for the client-side SBS path. The on-device renderer packs two
+     * <i>full-resolution</i> eye views side by side, so the surface must be twice as wide
+     * ({@code 2W×H}) to preserve each eye's full input resolution. Every other mode presents a
+     * single input-sized ({@code W×H}) frame (flat for NORMAL, host-packed for HOST_SBS), so the
+     * surface is restored to {@code W×H}. Re-fetches the entity's surface in case the resize
+     * re-creates it. Main-thread only (SceneCore is Activity-bound).
+     */
+    public void setClientSbsSurfaceSize(boolean fullStereo) {
+        if (surfaceEntity == null) {
+            return;
+        }
+        int width = fullStereo ? prefConfig.width * 2 : prefConfig.width;
+        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(width, prefConfig.height));
+        videoSurface = surfaceEntity.getSurface();
     }
 
     /**

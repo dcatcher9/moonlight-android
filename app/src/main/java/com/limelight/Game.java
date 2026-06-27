@@ -3374,6 +3374,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return handleMotionEvent(view, event);
     }
 
+    public StreamContainer getStreamContainer() {
+        return streamContainer;
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouch(View view, MotionEvent event) {
@@ -3756,6 +3760,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (!isInPictureInPictureMode()) {
                 updatePipAutoEnter();
             }
+        }
+    }
+
+    public void setDecoderOutputSurface(Surface surface) {
+        if (decoderRenderer != null) {
+            decoderRenderer.setOutputSurface(surface);
         }
     }
 

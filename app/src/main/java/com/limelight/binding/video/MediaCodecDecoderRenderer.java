@@ -817,6 +817,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return initializeDecoder(false);
     }
 
+    // Swap the decoder's output Surface live (used by the XR client-SBS path to move the decoder
+    // between the XR compositor surface and the on-device renderer's surface).
+    @TargetApi(Build.VERSION_CODES.M)
+    public void setOutputSurface(Surface surface) {
+        if (videoDecoder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                videoDecoder.setOutputSurface(surface);
+                renderTarget = surface;
+            } catch (Exception e) {
+                LimeLog.warning(e.toString());
+            }
+        }
+    }
+
     // All threads that interact with the MediaCodec instance must call this function regularly!
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
         // NB: We cannot check 'stopping' here because we could end up bailing in a partially

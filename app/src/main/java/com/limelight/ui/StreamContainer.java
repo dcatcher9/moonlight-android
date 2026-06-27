@@ -49,6 +49,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private SurfaceView mSurfaceView;
     private Surface mCurrentSurface;
+    private Surface mClientSbsSurface;
     private Runnable onSurfaceAvailable;
     private StreamMode renderMode = null;
     private InputCallbacks mInputCallbacks;
@@ -58,6 +59,14 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private boolean fillDisplay = false;
 
     private boolean isSurfaceReady = false;
+
+    private android.graphics.SurfaceTexture mDummySurfaceTexture;
+    private Surface mDummySurface;
+
+    // Set once teardown starts so the GL EGLWindowSurfaceFactory.destroySurface() callback (which
+    // fires on the GL thread as the view detaches) doesn't try to rebind the decoder to an
+    // already-disposed XR surface.
+    private volatile boolean mDestroyed = false;
 
     public StreamContainer(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -92,16 +101,71 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         } else if (renderMode == StreamMode.MODE_XR_SBS) {
             // Host-side SBS: the decoder renders into the XR compositor's SurfaceEntity, not an
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
-            // We still create a placeholder SurfaceView so the activity's 2D view/touch/lifecycle
-            // plumbing (PanZoomHandler, surface callbacks) has a valid view to attach to; it
-            // carries no video.
-            mSurfaceView = new SurfaceView(context);
+            GLSurfaceView glSurfaceView = new GLSurfaceView(context);
+            glSurfaceView.setEGLContextClientVersion(3);
+            glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
             mXrPresenter = new XrStreamPresenter(game, prefConfig, this::onStereo3DSurfaceReady);
             mXrPresenter.init();
+
+            // Persistent dummy surface used by switchToClientSbs() to park MediaCodec while the XR
+            // surface is handed between the decoder and the GL renderer (a transient/GC'd surface
+            // crashes MediaCodec). Only the XR path needs it.
+            mDummySurfaceTexture = new android.graphics.SurfaceTexture(0);
+            mDummySurfaceTexture.detachFromGLContext();
+            mDummySurface = new Surface(mDummySurfaceTexture);
+
+            glSurfaceView.setEGLWindowSurfaceFactory(new GLSurfaceView.EGLWindowSurfaceFactory() {
+                @Override
+                public javax.microedition.khronos.egl.EGLSurface createWindowSurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLConfig config, Object nativeWindow) {
+                    // Render into the XR compositor surface. If XR init failed (no surface yet),
+                    // fall back to the view's own window so EGL still gets a valid target.
+                    Object target = (mXrPresenter != null && mXrPresenter.getVideoSurface() != null)
+                            ? mXrPresenter.getVideoSurface() : nativeWindow;
+                    return egl.eglCreateWindowSurface(display, config, target, null);
+                }
+                @Override
+                public void destroySurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLSurface surface) {
+                    egl.eglDestroySurface(display, surface);
+                    // EGL has released the XR surface: in a normal mode-switch (leaving Client SBS)
+                    // hand it back to the decoder. Skip during teardown, or if the XR surface is
+                    // already gone/invalid.
+                    if (mDestroyed || com.limelight.utils.Stereo3DRenderer.clientSbs
+                            || game == null || mXrPresenter == null) {
+                        return;
+                    }
+                    Surface xrSurface = mXrPresenter.getVideoSurface();
+                    if (xrSurface != null && xrSurface.isValid()) {
+                        game.setDecoderOutputSurface(xrSurface);
+                    }
+                }
+            });
+
+            mStereoRenderer = new Stereo3DRenderer(glSurfaceView, new Stereo3DRenderer.OnSurfaceReadyListener() {
+                @Override
+                public void onStereo3DSurfaceReady(Surface surface) {
+                    mClientSbsSurface = surface;
+                    // If we are actively in Client SBS mode, feed the decoder into the renderer.
+                    if (Stereo3DRenderer.clientSbs && game != null) {
+                        game.setDecoderOutputSurface(surface);
+                    }
+                }
+            }, context, prefConfig, false);
+            // Client SBS renders into the XR compositor surface (2W×H, two full-res eyes packed
+            // side by side), which is not this view's on-screen size — tell the renderer explicitly.
+            mStereoRenderer.setOutputSizeOverride(prefConfig.width * 2, prefConfig.height);
+            glSurfaceView.setRenderer(mStereoRenderer);
+            glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+            glSurfaceView.setPreserveEGLContextOnPause(true);
+            
+            // Start paused so EGL doesn't grab the XR surface initially
+            glSurfaceView.onPause();
+            mSurfaceView = glSurfaceView;
+
         } else {
             // AI 3D: a GLSurfaceView drives Stereo3DRenderer, which owns the video surface.
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
             glSurfaceView.setEGLContextClientVersion(3);
+            glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
             boolean movieMode = renderMode == StreamMode.MODE_AI_3D_MOVIE;
             mStereoRenderer = new Stereo3DRenderer(glSurfaceView, this, context, prefConfig, movieMode);
             glSurfaceView.setRenderer(mStereoRenderer);
@@ -118,6 +182,42 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (existingSurface != null && existingSurface.isValid()) {
             surfaceCreated(holder);
             surfaceChanged(holder, PixelFormat.RGBA_8888, mSurfaceView.getWidth(), mSurfaceView.getHeight());
+        }
+    }
+
+    public void switchToClientSbs(boolean enable) {
+        if (renderMode != StreamMode.MODE_XR_SBS || mStereoRenderer == null) return;
+        GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
+
+        if (enable) {
+            // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
+            // null/garbage-collected surface crashes MediaCodec).
+            game.setDecoderOutputSurface(mDummySurface);
+
+            // Widen the XR surface to 2W×H so the renderer can pack two full-resolution eye views
+            // side by side. Must happen before onResume() so EGL creates its window surface at the
+            // new size.
+            mXrPresenter.setClientSbsSurfaceSize(true);
+
+            // XR surface is now free. Resume the GLSurfaceView so EGL connects to it. When
+            // Stereo3DRenderer finishes setup it calls onStereo3DSurfaceReady, which feeds the
+            // decoder into the renderer's own surface.
+            glView.onResume();
+            if (mClientSbsSurface != null) {
+                game.setDecoderOutputSurface(mClientSbsSurface);
+            }
+        } else {
+            // Detach the decoder from the renderer's surface onto the persistent dummy surface.
+            game.setDecoderOutputSurface(mDummySurface);
+
+            // Release EGL from the XR surface. This is asynchronous; the EGLWindowSurfaceFactory's
+            // destroySurface() reconnects the decoder to the XR surface once EGL is fully detached.
+            glView.onPause();
+
+            // Restore the XR surface to a single input frame (W×H) for the direct decoder path.
+            // Runs synchronously on the main thread here, ahead of the GL-thread reconnect, so the
+            // decoder rebinds at W×H.
+            mXrPresenter.setClientSbsSurfaceSize(false);
         }
     }
 
@@ -288,6 +388,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     public void onDestroy() {
+        mDestroyed = true;
         if (mStereoRenderer != null) {
             mStereoRenderer.onSurfaceDestroyed();
         }
