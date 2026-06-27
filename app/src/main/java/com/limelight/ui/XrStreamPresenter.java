@@ -623,13 +623,15 @@ public class XrStreamPresenter {
     }
 
     /**
-     * HDR for Client SBS. The Client-SBS GL pass renders into the XR surface, but its output
-     * buffers don't carry the decoder's HDR dataspace — so the compositor would treat 10-bit PQ
-     * content as SDR and wash it out (the direct Normal/Host SBS paths look fine because MediaCodec
-     * tags the buffer dataspace itself). When Client SBS is active on a 10-bit stream, tell the
-     * compositor how to read the pixels: HDR10 = BT2020 primaries + ST2084 (PQ) transfer, range per
-     * the full-range pref. For every other case reset to the unset default so the direct decoder
-     * path auto-detects its own dataspace.
+     * Color metadata for the XR surface. The stream's HDR-ness is the same in every presentation
+     * mode, so when the negotiated stream is 10-bit HDR we tag the surface as HDR10 (BT2020
+     * primaries + ST2084/PQ transfer, range per the full-range pref) in ALL modes:
+     *  - Client SBS NEEDS it: its GL output buffers don't carry the decoder's HDR dataspace, so
+     *    without the tag the compositor treats 10-bit PQ as SDR and washes it out.
+     *  - Normal/Host SBS render the decoder's HDR buffers directly; tagging matches their dataspace.
+     * Crucially we must NOT reset to the unset default when leaving Client SBS on an HDR stream:
+     * once explicit metadata has been set, an unset default makes the compositor treat the direct
+     * HDR paths as SDR and wash them out too. Only a genuinely SDR stream uses the unset default.
      */
     private void applyContentColorMetadata() {
         if (surfaceEntity == null) {
@@ -637,7 +639,7 @@ public class XrStreamPresenter {
         }
         boolean hdr = (activity instanceof com.limelight.Game)
                 && ((com.limelight.Game) activity).isStreamHdrActive();
-        if (currentPresenterMode == PresenterMode.CLIENT_SBS && hdr) {
+        if (hdr) {
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,
                     SurfaceEntity.ContentColorMetadata.ColorTransfer.ST2084,
@@ -645,8 +647,8 @@ public class XrStreamPresenter {
                             ? SurfaceEntity.ContentColorMetadata.ColorRange.FULL
                             : SurfaceEntity.ContentColorMetadata.ColorRange.LIMITED,
                     SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN));
-            LimeLog.info("XR: Client SBS HDR — ContentColorMetadata BT2020/ST2084/"
-                    + (prefConfig.fullRange ? "FULL" : "LIMITED"));
+            LimeLog.info("XR: HDR ContentColorMetadata BT2020/ST2084/"
+                    + (prefConfig.fullRange ? "FULL" : "LIMITED") + " (mode " + currentPresenterMode + ")");
         } else {
             surfaceEntity.setContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.Companion
