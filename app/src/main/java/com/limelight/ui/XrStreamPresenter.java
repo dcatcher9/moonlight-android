@@ -109,6 +109,13 @@ public class XrStreamPresenter {
     private BarItem statsItem;
     private boolean statsVisible;
 
+    // CPU/GPU thermal-zone temp files under /sys/class/thermal (readable by the app on this device),
+    // discovered once and bucketed by zone type ("cpu*"/"gpu*"). Temps are reported in milli-°C.
+    private java.util.List<java.io.File> cpuThermalFiles;
+    private java.util.List<java.io.File> gpuThermalFiles;
+    private boolean thermalScanned;
+    private static final int TEMP_UNKNOWN = Integer.MIN_VALUE;
+
     private static final int STATS_LABEL_COLOR = 0xFF9FB3C8;  // muted blue-grey for row labels
     private static final int STATS_VALUE_COLOR = 0xFFFFFFFF;  // white for values
     private static final int STATS_ON_COLOR = 0xFF5CD65C;     // green for "on"/HDR active
@@ -124,6 +131,11 @@ public class XrStreamPresenter {
 
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
     private PresenterMode currentPresenterMode = PresenterMode.NORMAL;
+
+    /** Debounce window for mode-tile taps: a switch starts an async surface handoff, so ignore a
+     *  second tap that lands within this window (double-tap / impatient re-tap). */
+    private static final long MODE_SWITCH_DEBOUNCE_MS = 600L;
+    private long lastModeSwitchMs;
 
     // Quad aspect ratios for each presentation mode (the surface always carries the same packed
     // SBS frame; only the visible region differs). In SBS the compositor shows each eye the
@@ -437,8 +449,87 @@ public class XrStreamPresenter {
         }
         // Requested ceiling (a max, not a target) — compare against the live "Bandwidth" row above.
         addStatsRow("Max bitrate", (prefConfig.bitrate / 1000) + " Mbps", STATS_VALUE_COLOR);
+
+        // Hottest CPU/GPU zone, colored by thermal pressure (Client SBS can run the headset hot).
+        ensureThermalScanned();
+        int cpuTemp = maxThermalC(cpuThermalFiles);
+        int gpuTemp = maxThermalC(gpuThermalFiles);
+        if (cpuTemp != TEMP_UNKNOWN) {
+            addStatsRow("CPU temp", cpuTemp + "°C", tempColor(cpuTemp));
+        }
+        if (gpuTemp != TEMP_UNKNOWN) {
+            addStatsRow("GPU temp", gpuTemp + "°C", tempColor(gpuTemp));
+        }
+
         addStatsRow("HDR", hdrActive ? "On" : "Off",
                 hdrActive ? STATS_ON_COLOR : STATS_LABEL_COLOR);
+    }
+
+    /** Lazily scan /sys/class/thermal once, bucketing each zone's temp file by type (CPU vs GPU). */
+    private void ensureThermalScanned() {
+        if (thermalScanned) {
+            return;
+        }
+        thermalScanned = true;
+        cpuThermalFiles = new java.util.ArrayList<>();
+        gpuThermalFiles = new java.util.ArrayList<>();
+        java.io.File[] zones = new java.io.File("/sys/class/thermal")
+                .listFiles((dir, name) -> name.startsWith("thermal_zone"));
+        if (zones == null) {
+            return;
+        }
+        for (java.io.File zone : zones) {
+            String type = readFirstLine(new java.io.File(zone, "type"));
+            if (type == null) {
+                continue;
+            }
+            type = type.toLowerCase();
+            if (type.startsWith("cpu")) {
+                cpuThermalFiles.add(new java.io.File(zone, "temp"));
+            } else if (type.startsWith("gpu")) {
+                gpuThermalFiles.add(new java.io.File(zone, "temp"));
+            }
+        }
+    }
+
+    /** Hottest zone temperature in whole °C among the files, or TEMP_UNKNOWN if none readable. */
+    private int maxThermalC(java.util.List<java.io.File> files) {
+        int max = TEMP_UNKNOWN;
+        if (files != null) {
+            for (java.io.File f : files) {
+                String s = readFirstLine(f);
+                if (s == null) {
+                    continue;
+                }
+                try {
+                    int c = Integer.parseInt(s.trim()) / 1000;
+                    if (c > max) {
+                        max = c;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return max;
+    }
+
+    private static String readFirstLine(java.io.File f) {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f))) {
+            return r.readLine();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Green/amber/red by temperature, to flag thermal pressure at a glance. */
+    private int tempColor(int c) {
+        if (c >= 85) {
+            return 0xFFE05A5A;  // hot
+        }
+        if (c >= 70) {
+            return 0xFFE0B020;  // warm
+        }
+        return STATS_ON_COLOR;  // cool
     }
 
     private void addStatsRow(String label, String value, int valueColor) {
@@ -521,6 +612,13 @@ public class XrStreamPresenter {
                 || item.selectsMode == currentPresenterMode) {
             return;
         }
+        // A switch kicks off an async surface handoff (GL pause/resume + resize); ignore a second
+        // mode tap landing right after one so overlapping handoffs can't interleave and glitch.
+        long now = android.os.SystemClock.uptimeMillis();
+        if (now - lastModeSwitchMs < MODE_SWITCH_DEBOUNCE_MS) {
+            return;
+        }
+        lastModeSwitchMs = now;
         currentPresenterMode = item.selectsMode;
         com.limelight.utils.Stereo3DRenderer.clientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
         
