@@ -24,13 +24,11 @@ public class ShaderUtils {
                     "void main() {\n" +
                     "  float depth = texture2D(s_DepthTexture, v_TexCoord).r;\n" +
                     "\n" +
-                    "  // Remap depth into symmetric range around convergence\n" +
-                    "  float depthDiff;\n" +
-                    "  if (depth < u_convergence) {\n" +
-                    "    depthDiff = (depth - u_convergence) / u_convergence; // [-1,0]\n" +
-                    "  } else {\n" +
-                    "    depthDiff = (depth - u_convergence) / (1.0 - u_convergence); // [0,1]\n" +
-                    "  }\n" +
+                    "  // Depth disparity pivots at mid-depth (this equals the old convergence=0.5\n" +
+                    "  // behavior, so the default look is unchanged). Convergence is applied separately\n" +
+                    "  // below as a GLOBAL screen-plane shift that moves the whole scene in front of /\n" +
+                    "  // behind the screen — a far stronger, more intuitive control than re-pivoting.\n" +
+                    "  float depthDiff = (depth - 0.5) * 2.0; // [-1, 1]\n" +
                     "\n" +
                     "  float parallax_magnitude = abs(u_parallax);\n" +
                     "  float ai_shift = parallax_magnitude * depthDiff;\n" +
@@ -53,9 +51,13 @@ public class ShaderUtils {
                     "    ai_shift *= isLeftEye ? (1.0-u_shift) : u_shift;\n" +
                     "  }\n" +
                     "\n" +
+                    "  // Global convergence: a uniform per-eye disparity (0.5 = neutral). Scaled by the\n" +
+                    "  // overall strength so its range tracks the Depth slider.\n" +
+                    "  float conv_shift = (u_convergence - 0.5) * 2.0 * parallax_magnitude * 2.0;\n" +
+                    "\n" +
                     "  float h_dist = pow(abs(v_TexCoord.x - 0.5) * 2.0, 1.5);\n" +
                     "  float vignette_factor = 1.0 - smoothstep(vignette_start, vignette_end, h_dist);\n" +
-                    "  float final_shift = ai_shift * vignette_factor;\n" +
+                    "  float final_shift = (ai_shift + conv_shift) * vignette_factor;\n" +
                     "\n" +
                     "  // ---------------- Backward Warping nur horizontal -----------------\n" +
                     "  vec2 srcUV = vec2(v_TexCoord.x - final_shift * isLeftEyeIndicator, v_TexCoord.y);\n" +

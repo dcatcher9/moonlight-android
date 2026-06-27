@@ -234,6 +234,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         return videoSurface;
     }
 
+    /** Force a single redraw — used to reflect a live 2D→3D param change while in on-demand
+     *  (RENDERMODE_WHEN_DIRTY) rendering, e.g. when adjusting a slider on a paused/low-fps stream. */
+    public void requestRender() {
+        if (glSurfaceView != null) {
+            glSurfaceView.requestRender();
+        }
+    }
+
     /** Force the render viewport to a fixed output size, for when the GL output surface is not the
      *  on-screen view (XR client-SBS renders into a 2W×H XR compositor surface). Pass 0,0 to fall
      *  back to the SurfaceHolder/view size. */
@@ -369,7 +377,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int viewHeight = outputHeightOverride > 0 ? outputHeightOverride
                 : (surfaceHeight > 0 ? surfaceHeight : glSurfaceView.getHeight());
 
-        float parallax = getParallax() * 0.06f;
+        // Max per-eye disparity at 100% Depth ≈ parallax_depth(1.0) * 0.7 * 0.15 ≈ 0.105 (10.5%).
+        // The Depth slider scales this; raised from 0.06 so the slider's top end is a strong effect
+        // (and convergence, which reshapes depth scaled by this, becomes visibly meaningful).
+        float parallax = getParallax() * 0.15f;
 
         GLES20.glViewport(0, 0, viewWidth / 2, viewHeight);
         drawEye(dualBubble3dProgram, -parallax, convergence, shift);
@@ -438,9 +449,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         synchronized (frameLock) {
             hasNewFrame = frameAvailable.get();
             if (!hasNewFrame) {
-                if (!isMovieMode) {
+                if (!isMovieMode && !clientSbs) {
                     glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
                 } else {
+                    // Client SBS / movie: render on demand only. Re-rendering unchanged full-eye
+                    // frames every vsync fills the compositor's buffer queue, so a live param change
+                    // lands behind several already-queued stale frames and the 3D effect visibly
+                    // trails. On-demand keeps the queue shallow (and cuts GPU/heat). New video frames
+                    // re-trigger via onFrameAvailable; live param edits via requestRender().
                     glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
                     return;
                 }

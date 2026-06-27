@@ -221,6 +221,13 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
     }
 
+    /** Ask the stereo renderer to redraw once (e.g. after a live 2D→3D effect-param change). */
+    public void requestStereoRender() {
+        if (mStereoRenderer != null) {
+            mStereoRenderer.requestRender();
+        }
+    }
+
     // --- Aspect Ratio and Scaling Logic ---
     public void setDesiredAspectRatio(double aspectRatio) {
         this.desiredAspectRatio = aspectRatio;

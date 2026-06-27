@@ -9,6 +9,7 @@ import android.view.Surface;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
@@ -85,6 +86,14 @@ public class XrStreamPresenter {
     private static final float STATS_WIDTH_METERS = 0.95f;    // performance-stats panel beside quad
     private static final float STATS_HEIGHT_METERS = 1.1f;
     private static final float STATS_GAP_METERS = 0.10f;      // gap between quad edge and stats panel
+    // 2D→3D adjustment sub-panel (Client SBS only), docked under the control bar.
+    private static final float ADJUST_WIDTH_METERS = 1.7f;
+    private static final float ADJUST_HEIGHT_METERS = 0.72f;
+    private static final float ADJUST_GAP_METERS = 0.06f;     // gap between bar bottom and sub-panel
+    // Effect-parameter ids (map to the shared prefConfig fields the renderer reads every frame).
+    private static final int PARAM_DEPTH = 0;
+    private static final int PARAM_CONVERGENCE = 1;
+    private static final int PARAM_BALANCE = 2;
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -102,6 +111,9 @@ public class XrStreamPresenter {
     private PanelEntity barPanel;
     /** The control-bar items (one clickable tile each, all hosted in {@link #barPanel}). */
     private final List<BarItem> barItems = new ArrayList<>();
+
+    /** Sub-panel under the quad with live 2D→3D effect sliders; shown only in Client SBS. */
+    private PanelEntity adjustPanel;
 
     /** Floating performance-stats panel beside the quad and its table; toggled by the Stats tile. */
     private PanelEntity statsPanel;
@@ -377,6 +389,7 @@ public class XrStreamPresenter {
         barPanel.setEnabled(true);
 
         createStatsPanel(videoHeightMeters);
+        createAdjustPanel(videoHeightMeters);
     }
 
     /**
@@ -532,6 +545,155 @@ public class XrStreamPresenter {
         return STATS_ON_COLOR;  // cool
     }
 
+    /**
+     * Sub-panel docked under the control bar with live 2D→3D effect controls (Depth / Convergence /
+     * Balance), each a −/value/+ stepper. Steps mutate the shared {@code prefConfig} fields that
+     * {@code Stereo3DRenderer} reads every frame, so the effect updates in real time; the new value
+     * is also persisted. Shown only in Client SBS (hidden in Normal/Host SBS, which do no synthesis).
+     */
+    private void createAdjustPanel(float videoHeightMeters) {
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xCC101418);
+        int p = dp(14);
+        root.setPadding(p, p, p, p);
+
+        TextView title = new TextView(activity);
+        title.setText("3D adjust");
+        title.setTextColor(TILE_ACTIVE_COLOR);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP + 2f);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        title.setPadding(0, 0, 0, dp(6));
+        root.addView(title);
+
+        addParamRow(root, "Strength",
+                "Overall 3D intensity. Higher = stronger pop-out, but more eye strain.", PARAM_DEPTH);
+        addParamRow(root, "Convergence",
+                "Screen plane for the whole scene. Lower = pops in front, higher = sits behind.",
+                PARAM_CONVERGENCE);
+
+        adjustPanel = PanelEntity.create(
+                session, root, new FloatSize2d(ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS),
+                "xr-3d-adjust", adjustPose(videoHeightMeters), surfaceEntity);
+        adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS);
+    }
+
+    /**
+     * One effect block: a header (bold label + live value%), a one-line description, and a
+     * full-width slider. Each block is generously padded so the sliders are easy to target by gaze.
+     * Dragging updates the shared {@code prefConfig} on every change (renderer reads it next frame),
+     * so the effect changes live; the value is persisted on release. The value label is fixed-width
+     * so changing it mid-drag doesn't trigger a row re-layout (which made the drag feel laggy).
+     */
+    private void addParamRow(LinearLayout parent, String label, String desc, int paramId) {
+        LinearLayout block = new LinearLayout(activity);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setPadding(0, dp(22), 0, dp(22));
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView lbl = new TextView(activity);
+        lbl.setText(label);
+        lbl.setTextColor(STATS_VALUE_COLOR);
+        lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        lbl.setTypeface(lbl.getTypeface(), android.graphics.Typeface.BOLD);
+        lbl.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView value = new TextView(activity);
+        value.setText(pct(getParam(paramId)));
+        value.setTextColor(TILE_ACTIVE_COLOR);
+        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        value.setGravity(Gravity.END);
+        value.setWidth(dp(96));
+
+        header.addView(lbl);
+        header.addView(value);
+
+        TextView description = new TextView(activity);
+        description.setText(desc);
+        description.setTextColor(STATS_LABEL_COLOR);
+        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP - 8f);
+        description.setPadding(0, dp(2), 0, dp(4));
+
+        SeekBar slider = new SeekBar(activity);
+        slider.setMax(100);
+        slider.setProgress(Math.round(getParam(paramId) * 100f));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        slp.setMargins(0, dp(8), 0, dp(8));
+        slider.setLayoutParams(slp);
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+                float v = progress / 100f;
+                setParam(paramId, v);          // live: shared prefConfig -> renderer next frame
+                value.setText(pct(v));
+                // Client SBS now renders on demand, so nudge a redraw to show the change even when
+                // no new video frame is arriving (e.g. paused stream).
+                if (activity instanceof com.limelight.Game) {
+                    ((com.limelight.Game) activity).getStreamContainer().requestStereoRender();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar sb) { }
+            @Override public void onStopTrackingTouch(SeekBar sb) {
+                persistParam(paramKey(paramId), sb.getProgress() / 100f);
+            }
+        });
+
+        block.addView(header);
+        block.addView(description);
+        block.addView(slider);
+        parent.addView(block);
+    }
+
+    private float getParam(int paramId) {
+        switch (paramId) {
+            case PARAM_DEPTH: return prefConfig.parallax_depth;
+            case PARAM_CONVERGENCE: return prefConfig.convergence_ratio;
+            default: return prefConfig.balance_shift;
+        }
+    }
+
+    private void setParam(int paramId, float v) {
+        switch (paramId) {
+            case PARAM_DEPTH: prefConfig.parallax_depth = v; break;
+            case PARAM_CONVERGENCE: prefConfig.convergence_ratio = v; break;
+            default: prefConfig.balance_shift = v; break;
+        }
+    }
+
+    private static String paramKey(int paramId) {
+        switch (paramId) {
+            case PARAM_DEPTH: return "parallax_depth";
+            case PARAM_CONVERGENCE: return "convergence_ratio";
+            default: return "balance_shift";
+        }
+    }
+
+    private static String pct(float v) {
+        return Math.round(v * 100f) + "%";
+    }
+
+    /** Persist a 0..1 effect param back to the int (0–100) pref the settings UI / loader use. */
+    private void persistParam(String key, float value01) {
+        try {
+            androidx.preference.PreferenceManager.getDefaultSharedPreferences(activity)
+                    .edit().putInt(key, Math.round(value01 * 100f)).apply();
+        } catch (Throwable t) {
+            LimeLog.warning("XR 3D-adjust: persist failed: " + t);
+        }
+    }
+
+    /** Show the adjust sub-panel only in Client SBS (the only mode that synthesizes 3D on-device). */
+    private void updateAdjustPanelVisibility() {
+        if (adjustPanel != null) {
+            adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS);
+        }
+    }
+
     private void addStatsRow(String label, String value, int valueColor) {
         TableRow row = new TableRow(activity);
 
@@ -591,13 +753,23 @@ public class XrStreamPresenter {
         return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
-    /** Move the bar and stats panel when the quad height changes (mode switch). */
+    /** Local pose of the 3D-adjust sub-panel: centered just beneath the control bar. */
+    private Pose adjustPose(float videoHeightMeters) {
+        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS - (BAR_HEIGHT_METERS / 2.0f);
+        float y = barBottomY - ADJUST_GAP_METERS - (ADJUST_HEIGHT_METERS / 2.0f);
+        return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
+    }
+
+    /** Move the bar, stats and adjust panels when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
         if (barPanel != null) {
             barPanel.setPose(barPose(videoHeightMeters));
         }
         if (statsPanel != null) {
             statsPanel.setPose(statsPose(videoHeightMeters));
+        }
+        if (adjustPanel != null) {
+            adjustPanel.setPose(adjustPose(videoHeightMeters));
         }
     }
 
@@ -640,6 +812,7 @@ public class XrStreamPresenter {
         applyResizeBounds(aspect);
         repositionControlBar(height);
         updateModeSelection();
+        updateAdjustPanelVisibility();
     }
 
     /**
@@ -900,6 +1073,12 @@ public class XrStreamPresenter {
                 statsPanel.dispose();
             }
             statsPanel = null;
+        }
+        if (adjustPanel != null) {
+            if (!adjustPanel.isDisposed()) {
+                adjustPanel.dispose();
+            }
+            adjustPanel = null;
         }
 
         videoSurface = null;
