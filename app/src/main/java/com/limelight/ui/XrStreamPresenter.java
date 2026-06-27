@@ -10,6 +10,7 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
@@ -88,8 +89,9 @@ public class XrStreamPresenter {
     private static final float STATS_GAP_METERS = 0.10f;      // gap between quad edge and stats panel
     // 2D→3D adjustment sub-panel (Client SBS only), docked under the control bar.
     private static final float ADJUST_WIDTH_METERS = 1.7f;
-    private static final float ADJUST_HEIGHT_METERS = 0.72f;
+    private static final float ADJUST_HEIGHT_METERS = 0.9f;
     private static final float ADJUST_GAP_METERS = 0.06f;     // gap between bar bottom and sub-panel
+    private static final String CLIENT_SBS_HALF_WIDTH_KEY = "xr_client_sbs_half_width";
     // Effect-parameter ids (map to the shared prefConfig fields the renderer reads every frame).
     private static final int PARAM_DEPTH = 0;
     private static final int PARAM_CONVERGENCE = 1;
@@ -144,6 +146,10 @@ public class XrStreamPresenter {
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
     private PresenterMode currentPresenterMode = PresenterMode.NORMAL;
 
+    /** Half-width Client SBS: render each eye at W/2 into a W×H surface instead of full W into 2W×H.
+     *  ~Halves GPU load and heat at slightly softer per-eye sharpness. Persisted; default off. */
+    private boolean clientSbsHalfWidth;
+
     /** Debounce window for mode-tile taps: a switch starts an async surface handoff, so ignore a
      *  second tap that lands within this window (double-tap / impatient re-tap). */
     private static final long MODE_SWITCH_DEBOUNCE_MS = 600L;
@@ -163,6 +169,8 @@ public class XrStreamPresenter {
         this.activity = activity;
         this.prefConfig = prefConfig;
         this.listener = listener;
+        this.clientSbsHalfWidth = androidx.preference.PreferenceManager
+                .getDefaultSharedPreferences(activity).getBoolean(CLIENT_SBS_HALF_WIDTH_KEY, false);
     }
 
     /**
@@ -571,6 +579,7 @@ public class XrStreamPresenter {
         addParamRow(root, "Convergence",
                 "Screen plane for the whole scene. Lower = pops in front, higher = sits behind.",
                 PARAM_CONVERGENCE);
+        addHalfWidthToggle(root);
 
         adjustPanel = PanelEntity.create(
                 session, root, new FloatSize2d(ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS),
@@ -647,6 +656,67 @@ public class XrStreamPresenter {
         block.addView(description);
         block.addView(slider);
         parent.addView(block);
+    }
+
+    /** Toggle row for half-width Client SBS (performance/thermal). A Switch in the same panel gets
+     *  the gaze highlight + native tap like the bar tiles. */
+    private void addHalfWidthToggle(LinearLayout parent) {
+        LinearLayout block = new LinearLayout(activity);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setPadding(0, dp(18), 0, dp(8));
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView lbl = new TextView(activity);
+        lbl.setText("Half-width (performance)");
+        lbl.setTextColor(STATS_VALUE_COLOR);
+        lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        lbl.setTypeface(lbl.getTypeface(), android.graphics.Typeface.BOLD);
+        lbl.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Switch sw = new Switch(activity);
+        sw.setChecked(clientSbsHalfWidth);
+        sw.setOnCheckedChangeListener((b, checked) -> setClientSbsHalfWidth(checked));
+
+        header.addView(lbl);
+        header.addView(sw);
+
+        TextView description = new TextView(activity);
+        description.setText("Renders each eye at half width — much cooler and smoother, slightly softer.");
+        description.setTextColor(STATS_LABEL_COLOR);
+        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP - 8f);
+        description.setPadding(0, dp(2), 0, dp(2));
+
+        block.addView(header);
+        block.addView(description);
+        parent.addView(block);
+    }
+
+    /** Apply the half-width toggle: persist it, and — if currently in Client SBS — re-cycle the GL
+     *  surface at the new width and reshape the quad to the matching aspect. */
+    private void setClientSbsHalfWidth(boolean half) {
+        if (clientSbsHalfWidth == half) {
+            return;
+        }
+        clientSbsHalfWidth = half;
+        persistBool(CLIENT_SBS_HALF_WIDTH_KEY, half);
+        // Only the surface resolution changes (W <-> 2W); the quad keeps fullAspect / same size.
+        if (currentPresenterMode == PresenterMode.CLIENT_SBS
+                && activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).getStreamContainer().recycleClientSbs();
+        }
+    }
+
+    private void persistBool(String key, boolean value) {
+        try {
+            androidx.preference.PreferenceManager.getDefaultSharedPreferences(activity)
+                    .edit().putBoolean(key, value).apply();
+        } catch (Throwable t) {
+            LimeLog.warning("XR: persist failed: " + t);
+        }
     }
 
     private float getParam(int paramId) {
@@ -884,7 +954,10 @@ public class XrStreamPresenter {
         return s != null ? s.getPose() : null;
     }
 
-    /** Quad aspect (width/height) for a mode: full frame for MONO, half-width region otherwise. */
+    /** Quad aspect (width/height). Host SBS shows each eye the host's native half-width slot
+     *  (perEyeAspect). Client SBS renders the FULL frame per eye in both full- and half-width modes
+     *  (half-width just squeezes it into W/2 and the compositor stretches it back across the quad),
+     *  so the quad stays fullAspect and the same physical size — only the resolution changes. */
     private float aspectFor(PresenterMode mode) {
         return (mode == PresenterMode.HOST_SBS) ? perEyeAspect : fullAspect;
     }
@@ -1046,9 +1119,16 @@ public class XrStreamPresenter {
         if (surfaceEntity == null) {
             return;
         }
-        int width = fullStereo ? prefConfig.width * 2 : prefConfig.width;
+        int width = fullStereo ? getClientSbsSurfaceWidth() : prefConfig.width;
         surfaceEntity.setSurfacePixelDimensions(new IntSize2d(width, prefConfig.height));
         videoSurface = surfaceEntity.getSurface();
+    }
+
+    /** XR surface / render width for Client SBS: 2W for full per-eye resolution (default), or W in
+     *  half-width mode (≈half the GPU/heat). Used by {@link StreamContainer} for the renderer's
+     *  output viewport and by {@link #setClientSbsSurfaceSize}. */
+    public int getClientSbsSurfaceWidth() {
+        return clientSbsHalfWidth ? prefConfig.width : prefConfig.width * 2;
     }
 
     /**

@@ -150,9 +150,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                     }
                 }
             }, context, prefConfig, false);
-            // Client SBS renders into the XR compositor surface (2W×H, two full-res eyes packed
-            // side by side), which is not this view's on-screen size — tell the renderer explicitly.
-            mStereoRenderer.setOutputSizeOverride(prefConfig.width * 2, prefConfig.height);
+            // Client SBS renders into the XR compositor surface (full-width 2W×H, or W×H in
+            // half-width mode), which is not this view's on-screen size — tell the renderer explicitly.
+            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(), prefConfig.height);
             glSurfaceView.setRenderer(mStereoRenderer);
             glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
             glSurfaceView.setPreserveEGLContextOnPause(true);
@@ -190,13 +190,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
 
         if (enable) {
+            // Match the renderer viewport to the active Client SBS width (2W full / W half).
+            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(), prefConfig.height);
+
             // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
             // null/garbage-collected surface crashes MediaCodec).
             game.setDecoderOutputSurface(mDummySurface);
 
-            // Widen the XR surface to 2W×H so the renderer can pack two full-resolution eye views
-            // side by side. Must happen before onResume() so EGL creates its window surface at the
-            // new size.
+            // Size the XR surface for Client SBS (2W×H full, or W×H half-width). Must happen before
+            // onResume() so EGL creates its window surface at the new size.
             mXrPresenter.setClientSbsSurfaceSize(true);
 
             // XR surface is now free. Resume the GLSurfaceView so EGL connects to it. When
@@ -219,6 +221,17 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // decoder rebinds at W×H.
             mXrPresenter.setClientSbsSurfaceSize(false);
         }
+    }
+
+    /**
+     * Re-cycle the Client SBS GL surface at the presenter's current width (used by the half-width
+     * toggle). {@code GLSurfaceView.onPause()} blocks until the GL thread tears down the EGL window
+     * surface, so the subsequent re-enter rebuilds it at the new XR-surface size.
+     */
+    public void recycleClientSbs() {
+        if (renderMode != StreamMode.MODE_XR_SBS || mStereoRenderer == null) return;
+        ((GLSurfaceView) mSurfaceView).onPause();
+        switchToClientSbs(true);
     }
 
     /** Ask the stereo renderer to redraw once (e.g. after a live 2D→3D effect-param change). */
