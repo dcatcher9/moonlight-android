@@ -520,6 +520,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    private int getActualColorRange() {
+        if (outputFormat != null && outputFormat.containsKey(MediaFormat.KEY_COLOR_RANGE)) {
+            int range = outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE);
+            if (range == MediaFormat.COLOR_RANGE_FULL) {
+                return MoonBridge.COLOR_RANGE_FULL;
+            } else if (range == MediaFormat.COLOR_RANGE_LIMITED) {
+                return MoonBridge.COLOR_RANGE_LIMITED;
+            }
+        }
+        return getPreferredColorRange();
+    }
+
     public void notifyVideoForeground() {
         foreground = true;
     }
@@ -1816,6 +1828,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    sb.append("\t Range: ");
+                    sb.append(context.getString(getActualColorRange() == MoonBridge.COLOR_RANGE_FULL ?
+                            R.string.video_range_full : R.string.video_range_limited));
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
@@ -1847,6 +1862,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps));
                     }
                     sb.append('\n');
+                    sb.append(context.getString(R.string.perf_overlay_video_range, 
+                            context.getString(getActualColorRange() == MoonBridge.COLOR_RANGE_FULL ? 
+                                    R.string.video_range_full : R.string.video_range_limited))).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');

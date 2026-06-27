@@ -224,12 +224,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean overlayToggleZoomButtonShown;
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
-    private View performanceOverlayView;
-
-    private TextView performanceOverlayLite;
-
-    private TextView performanceOverlayBig;
-
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
 
@@ -517,12 +511,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         notificationOverlayView = findViewById(R.id.notificationOverlay);
 
-        performanceOverlayView = findViewById(R.id.performanceOverlay);
-
-        performanceOverlayLite = findViewById(R.id.performanceOverlayLite);
-
-        performanceOverlayBig = findViewById(R.id.performanceOverlayBig);
-
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this, this);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -627,25 +615,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 else {
                     Toast.makeText(this, "HDR requires Android 7.0 or later", Toast.LENGTH_LONG).show();
                 }
-            }
-        }
-
-        // Check if the user has enabled performance stats overlay
-        if (prefConfig.enablePerfOverlay) {
-            performanceOverlayView.setVisibility(View.VISIBLE);
-            if (prefConfig.enablePerfOverlayLite) {
-                performanceOverlayLite.setVisibility(View.VISIBLE);
-                if(prefConfig.enablePerfOverlayLiteDialog){
-                    performanceOverlayLite.setOnClickListener(v -> showGameMenu(null));
-                }
-            } else {
-                performanceOverlayBig.setVisibility(View.VISIBLE);
-            }
-            if (prefConfig.enablePerfOverlayBottom) {
-                //performanceOverlayView.getLayoutParams().layout_gravity = Gravity.BOTTOM;
-                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) performanceOverlayView.getLayoutParams();
-                params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-                performanceOverlayView.setLayoutParams(params);
             }
         }
 
@@ -1235,7 +1204,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 hideGameMenu();
 
-                performanceOverlayView.setVisibility(View.GONE);
+
                 notificationOverlayView.setVisibility(View.GONE);
 
                 // Disable sensors while in PiP mode
@@ -1269,9 +1238,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     keyBoardLayoutController.show();
                 }
 
-                if (prefConfig.enablePerfOverlay) {
-                    performanceOverlayView.setVisibility(View.VISIBLE);
-                }
+
 
                 notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
 
@@ -3932,12 +3899,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if(prefConfig.enablePerfOverlayLite){
-                    performanceOverlayLite.setText(text);
-                }else{
-                    performanceOverlayBig.setText(text);
-                }
-                // In XR the 2D overlay above lives on the hidden main panel; mirror the text to the
                 // XR stats panel so the "Stats" bar toggle can show it in the headset. HDR reflects
                 // the actual negotiated stream format (10-bit), not just the enableHdr request.
                 if (streamContainer != null && streamContainer.getXrPresenter() != null) {
@@ -4202,16 +4163,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     public void toggleHUD() {
-        prefConfig.enablePerfOverlay = !prefConfig.enablePerfOverlay;
-        if (prefConfig.enablePerfOverlay) {
-            performanceOverlayView.setVisibility(View.VISIBLE);
-            if(prefConfig.enablePerfOverlayLite){
-                performanceOverlayLite.setVisibility(View.VISIBLE);
-            }else{
-                performanceOverlayBig.setVisibility(View.VISIBLE);
-            }
+        if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+            streamContainer.getXrPresenter().toggleStats();
         } else {
-            performanceOverlayView.setVisibility(View.GONE);
+            prefConfig.enablePerfOverlay = !prefConfig.enablePerfOverlay;
         }
     }
 

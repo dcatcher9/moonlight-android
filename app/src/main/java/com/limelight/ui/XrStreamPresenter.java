@@ -387,7 +387,7 @@ public class XrStreamPresenter {
     }
 
     /** Toggle the performance-stats panel; also flips the pref so the decoder emits perf text. */
-    private void toggleStats() {
+    public void toggleStats() {
         statsVisible = !statsVisible;
         prefConfig.enablePerfOverlay = statsVisible;
         if (statsPanel != null) {

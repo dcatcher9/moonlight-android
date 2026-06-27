@@ -134,6 +134,9 @@
     <string name="perf_overlay_netlatency">Average network latency: %1$d ms (variance: %2$d ms)</string>
     <string name="perf_overlay_dectime">Average decoding time: %1$.2f ms</string>
     <string name="perf_overlay_drawdelay"> Delay: %1$.2f ms</string>
+    <string name="perf_overlay_video_range">Video range: %1$s</string>
+    <string name="video_range_full">Full</string>
+    <string name="video_range_limited">Limited</string>
 
     <!-- Performance Report Sharing -->
     <string name="email_prefix_message">
