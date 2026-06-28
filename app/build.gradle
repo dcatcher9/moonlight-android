@@ -111,8 +111,6 @@ android {
             resValue "string", "app_label_game", "Diana (Game)"
 
             // minifyEnabled is OFF for debug for faster builds.
-            // Note: The previous R8 AbstractMethodError for the XR Consumer lambda has been fixed
-            // by adding a compile-time stub for com.android.extensions.xr.function.Consumer.
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -207,21 +205,15 @@ dependencies {
     // NOTE: these are alpha APIs; pin the version and verify symbols against
     // https://developer.android.com/jetpack/androidx/releases/xr-scenecore
     // IMPORTANT: the Jetpack XR modules version INDEPENDENTLY and are NOT meant to all be
-    // the same alpha. scenecore:alpha15 (which ships the consumer ProGuard rules that fix
-    // the com.android.extensions.xr Consumer.accept AbstractMethodError, and matches the
-    // Galaxy XR "v3" spatial-API system image) declares that it REQUIRES runtime:alpha14
-    // and arcore:alpha14. runtime alpha15 dropped androidx.xr.runtime.XrExtensionsHolder,
-    // which scenecore-spatial-core:alpha15 still loads via its provider — so forcing the
-    // runtime/arcore family up to alpha15 causes NoClassDefFoundError at Session.create().
-    // Keep the matched set: scenecore family = alpha15, runtime + arcore family = alpha14.
+    // the same alpha. DP4 (Developer Preview 4) aligns these on alpha16.
     // (arcore-openxr/runtime-openxr are pinned explicitly so the arcore.openxr native lib
-    // and its Kotlin classes stay on the same alpha14 build — a mismatch there crashes the
+    // and its Kotlin classes stay on the same alpha16 build — a mismatch there crashes the
     // JNI ViewCameraState construction.)
-    implementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha15'
-    implementation 'androidx.xr.runtime:runtime:1.0.0-alpha14'
-    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-alpha14'
-    implementation 'androidx.xr.arcore:arcore:1.0.0-alpha14'
-    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-alpha14'
+    implementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha16'
+    implementation 'androidx.xr.runtime:runtime:1.0.0-alpha16'
+    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-alpha16'
+    implementation 'androidx.xr.arcore:arcore:1.0.0-alpha16'
+    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-alpha16'
 
     // Unit test dependencies
     testImplementation 'junit:junit:4.13.2'

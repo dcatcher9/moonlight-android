@@ -192,8 +192,9 @@ public class XrStreamPresenter {
         // is why RenderViewpoint.mono(session) was null. Head pose needs no runtime permission.
         try {
             Config cfg = session.getConfig();
-            SessionConfigureResult cr = session.configure(cfg.copy(
-                    cfg.getPlaneTracking(), cfg.getHandTracking(), DeviceTrackingMode.LAST_KNOWN));
+            SessionConfigureResult cr = session.configure(new Config.Builder(cfg)
+                    .setDeviceTracking(DeviceTrackingMode.LAST_KNOWN)
+                    .build());
             LimeLog.info("XR: device-tracking configure -> " + cr.getClass().getSimpleName());
         } catch (Throwable t) {
             LimeLog.warning("XR: device-tracking configure failed: " + t);
