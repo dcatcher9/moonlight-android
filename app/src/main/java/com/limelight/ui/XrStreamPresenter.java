@@ -983,6 +983,8 @@ public class XrStreamPresenter {
         }
         boolean hdr = (activity instanceof com.limelight.Game)
                 && ((com.limelight.Game) activity).isStreamHdrActive();
+        // Tell the AI-input shader to tonemap PQ->SDR for MiDaS when the stream is HDR.
+        com.limelight.utils.Stereo3DRenderer.hdrInput = hdr;
         if (hdr) {
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,

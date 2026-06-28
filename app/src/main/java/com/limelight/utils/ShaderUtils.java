@@ -193,12 +193,36 @@ public class ShaderUtils {
 
 
 
+    // Used only to render the decoded frame into the 256x256 FBO that feeds the MiDaS depth model.
+    // When the stream is HDR the decoded frame is PQ-encoded (BT.2100 ST.2084); MiDaS was trained on
+    // SDR (gamma) images, so a raw PQ frame looks dark/low-contrast to it and produces flat depth.
+    // With u_isHdr set we decode PQ->linear, expose so ~100-nit SDR white lands near 1.0, Reinhard-
+    // compress highlights, and re-encode to gamma — giving the model an SDR-looking image. (highp is
+    // needed for the PQ exponentials.)
     public static final String SIMPLE_FRAGMENT_SHADER =
             "#extension GL_OES_EGL_image_external : require\n" +
-                    "precision mediump float;\n" +
+                    "precision highp float;\n" +
                     "varying vec2 v_TexCoord;\n" +
                     "uniform samplerExternalOES u_Texture;\n" +
+                    "uniform bool u_isHdr;\n" +
+                    "vec3 pqToLinear(vec3 e) {\n" +
+                    "  const float m1 = 0.1593017578125;\n" +
+                    "  const float m2 = 78.84375;\n" +
+                    "  const float c1 = 0.8359375;\n" +
+                    "  const float c2 = 18.8515625;\n" +
+                    "  const float c3 = 18.6875;\n" +
+                    "  vec3 ep = pow(max(e, 0.0), vec3(1.0 / m2));\n" +
+                    "  vec3 num = max(ep - c1, 0.0);\n" +
+                    "  vec3 den = max(c2 - c3 * ep, 1e-5);\n" +
+                    "  return pow(num / den, vec3(1.0 / m1));\n" +
+                    "}\n" +
                     "void main() {\n" +
-                    "    gl_FragColor = texture2D(u_Texture, v_TexCoord);\n" +
+                    "  vec4 c = texture2D(u_Texture, v_TexCoord);\n" +
+                    "  if (u_isHdr) {\n" +
+                    "    vec3 lin = pqToLinear(c.rgb) * 100.0;\n" +
+                    "    lin = lin / (1.0 + lin);\n" +
+                    "    c.rgb = pow(clamp(lin, 0.0, 1.0), vec3(1.0 / 2.2));\n" +
+                    "  }\n" +
+                    "  gl_FragColor = c;\n" +
                     "}\n";
 }

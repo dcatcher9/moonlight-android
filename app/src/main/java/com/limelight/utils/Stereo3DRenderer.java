@@ -72,6 +72,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     public static Boolean isActive = false;
     public static String renderer = "CPU";
     public static volatile boolean clientSbs = false;
+    /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
+     *  PQ frame to SDR before feeding MiDaS (which expects SDR). Set by the presenter. */
+    public static volatile boolean hdrInput = false;
 
     // Private Static Fields
     private static float calcFps = 0;
@@ -602,6 +605,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         if (scaleHandle != -1) GLES20.glUniform1f(scaleHandle, scale);
         if (offsetHandle != -1) GLES20.glUniform1f(offsetHandle, offset);
+        int isHdrHandle = GLES20.glGetUniformLocation(program, "u_isHdr");
+        if (isHdrHandle != -1) GLES20.glUniform1i(isHdrHandle, hdrInput ? 1 : 0);
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     }
