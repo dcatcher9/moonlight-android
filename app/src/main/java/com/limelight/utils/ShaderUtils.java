@@ -52,8 +52,9 @@ public class ShaderUtils {
                     "  }\n" +
                     "\n" +
                     "  // Global convergence: a uniform per-eye disparity (0.5 = neutral). Scaled by the\n" +
-                    "  // overall strength so its range tracks the Depth slider.\n" +
-                    "  float conv_shift = (u_convergence - 0.5) * 2.0 * parallax_magnitude * 2.0;\n" +
+                    "  // overall strength so its range tracks the Depth slider. Gain kept low so even the\n" +
+                    "  // extremes stay within the eyes' fusion limit (too large -> double images).\n" +
+                    "  float conv_shift = (u_convergence - 0.5) * 2.0 * parallax_magnitude * 0.5;\n" +
                     "\n" +
                     "  float h_dist = pow(abs(v_TexCoord.x - 0.5) * 2.0, 1.5);\n" +
                     "  float vignette_factor = 1.0 - smoothstep(vignette_start, vignette_end, h_dist);\n" +
