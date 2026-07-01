@@ -862,11 +862,13 @@ public class XrStreamPresenter {
             return;
         }
         lastModeSwitchMs = now;
+        boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
         currentPresenterMode = item.selectsMode;
-        com.limelight.utils.Stereo3DRenderer.clientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
+        boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
+        com.limelight.utils.Stereo3DRenderer.clientSbs = isClientSbs;
         
-        if (activity instanceof com.limelight.Game) {
-            ((com.limelight.Game) activity).getStreamContainer().switchToClientSbs(currentPresenterMode == PresenterMode.CLIENT_SBS);
+        if (wasClientSbs != isClientSbs && activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).getStreamContainer().switchToClientSbs(isClientSbs);
         }
 
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
@@ -978,6 +980,8 @@ public class XrStreamPresenter {
      * once explicit metadata has been set, an unset default makes the compositor treat the direct
      * HDR paths as SDR and wash them out too. Only a genuinely SDR stream uses the unset default.
      */
+    private boolean isColorMetadataExplicit = false;
+
     private void applyContentColorMetadata() {
         if (surfaceEntity == null) {
             return;
@@ -986,7 +990,7 @@ public class XrStreamPresenter {
                 && ((com.limelight.Game) activity).isStreamHdrActive();
         // Tell the AI-input shader to tonemap PQ->SDR for MiDaS when the stream is HDR.
         com.limelight.utils.Stereo3DRenderer.hdrInput = hdr;
-        if (hdr) {
+        if (currentPresenterMode == PresenterMode.CLIENT_SBS && hdr) {
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,
                     SurfaceEntity.ContentColorMetadata.ColorTransfer.ST2084,
@@ -994,12 +998,14 @@ public class XrStreamPresenter {
                             ? SurfaceEntity.ContentColorMetadata.ColorRange.FULL
                             : SurfaceEntity.ContentColorMetadata.ColorRange.LIMITED,
                     SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN));
+            isColorMetadataExplicit = true;
             LimeLog.info("XR: HDR ContentColorMetadata BT2020/ST2084/"
                     + (prefConfig.fullRange ? "FULL" : "LIMITED") + " (mode " + currentPresenterMode + ")");
-        } else {
+        } else if (isColorMetadataExplicit) {
             surfaceEntity.setContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.Companion
                             .getDEFAULT_UNSET_CONTENT_COLOR_METADATA());
+            isColorMetadataExplicit = false;
         }
     }
 
