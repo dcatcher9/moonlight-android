@@ -77,7 +77,7 @@ import java.util.List;
 public class XrStreamPresenter {
 
     /** Nearest the user may drag the panel toward the eyes, in meters from the activity-space origin. */
-    private static final float MIN_PANEL_DISTANCE_METERS = 0.75f;
+    private static final float MIN_PANEL_DISTANCE_METERS = 0.4f;
 
     // Control-bar tile geometry (meters). Shared by build + reposition so the bar stays glued
     // beneath the quad as it changes size on a mode switch or a user resize.
@@ -137,8 +137,10 @@ public class XrStreamPresenter {
     private static final int STATS_VALUE_COLOR = 0xFFFFFFFF;  // white for values
     private static final int STATS_ON_COLOR = 0xFF5CD65C;     // green for "on"/HDR active
     private static final float STATS_TEXT_SP = 30f;
-    /** Comfortable default quad height in meters; mode switches keep this height and vary width. */
-    private static final float DEFAULT_PANEL_HEIGHT_METERS = 1.2f;
+    /** Comfortable default quad height in meters; mode switches keep this height and vary width.
+     *  Shared by the initial placement and Reset so both land at the same size. Tune by feel on
+     *  the headset (at the ~2 m default distance, 2.0 m ≈ a large cinema screen). */
+    private static final float DEFAULT_PANEL_HEIGHT_METERS = 2.0f;
 
     public enum PresenterMode {
         NORMAL,
@@ -986,7 +988,16 @@ public class XrStreamPresenter {
                 head = lp;
             }
             if (head != null) {
-                Pose inFront = head.compose(
+                // Level the placement: keep only the head's yaw (heading), discarding pitch and
+                // roll. Otherwise clicking Reset while looking down (e.g. at the control bar below
+                // the quad) tilts the panel up to face the eyes and drops it below eye level, so it
+                // reads as "looking down at a tilted screen". Round-tripping the Y (yaw) euler
+                // component zeroes pitch/roll regardless of angle units, and reusing the proven
+                // compose(-2 m forward) keeps the panel facing the user at eye height, 2 m ahead.
+                Vector3 euler = head.getRotation().getEulerAngles();
+                Pose level = new Pose(head.getTranslation(),
+                        Quaternion.fromEulerAngles(0.0f, euler.getY(), 0.0f));
+                Pose inFront = level.compose(
                         new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
                 surfaceEntity.setPose(inFront, Space.REAL_WORLD);
                 placed = inFront;
