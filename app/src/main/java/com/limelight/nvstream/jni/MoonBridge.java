@@ -356,6 +356,15 @@ public class MoonBridge {
 
     public static native void sendExecServerCmd(int cmdId);
 
+    // Host-side SBS modes for sendSetSbsMode (Apollo protocol extension). Must match the
+    // SBS_MODE_* values in moonlight-common-c's Limelight.h.
+    public static final int SBS_MODE_OFF = 0;   // No host depth; plain W x H frame.
+    public static final int SBS_MODE_GAME = 1;  // Async low-latency depth; 2W x H frame.
+    public static final int SBS_MODE_MOVIE = 2; // Sync high-latency depth; 2W x H frame (future).
+
+    // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
+    public static native void sendSetSbsMode(int mode);
+
     public static native void sendEmptyPayload();
 
     public static native void sendMouseMove(short deltaX, short deltaY);

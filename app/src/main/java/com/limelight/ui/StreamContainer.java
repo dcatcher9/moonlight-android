@@ -35,11 +35,26 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     public enum StreamMode {
         MODE_2D,
-        MODE_AI_3D,
-        MODE_AI_3D_MOVIE,
+        MODE_CLIENT_SBS_GAME,
+        MODE_CLIENT_SBS_MOVIE,
         // Host-side SBS: the PC sends a real side-by-side frame; the XR compositor splits
         // it to each eye. Presentation is owned by XrStreamPresenter, not a SurfaceView.
-        MODE_XR_SBS
+        MODE_HOST_SBS_RAW,
+        // Host-side SBS driven by a host depth pipeline (2W x H). Same presentation as
+        // MODE_HOST_SBS_RAW; the difference is the client requests SBS_MODE_GAME (async) or
+        // SBS_MODE_MOVIE (sync) from the host.
+        MODE_HOST_SBS_GAME,
+        MODE_HOST_SBS_MOVIE
+    }
+
+    /** True for the host-SBS presentation modes (Raw + host depth), which share XrStreamPresenter. */
+    private static boolean isHostSbsPresentation(StreamMode mode) {
+        return mode == StreamMode.MODE_HOST_SBS_RAW || isHostDepthPresentation(mode);
+    }
+
+    /** True for the host depth pipelines (Game/Movie) — the ones where the host doubles the width. */
+    private static boolean isHostDepthPresentation(StreamMode mode) {
+        return mode == StreamMode.MODE_HOST_SBS_GAME || mode == StreamMode.MODE_HOST_SBS_MOVIE;
     }
 
     private Game game;
@@ -75,7 +90,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         setFocusableInTouchMode(true);
     }
 
-    /** The XR presenter when in {@code MODE_XR_SBS}, else null. Lets {@code Game} forward perf text. */
+    /** The XR presenter in the host-SBS presentation modes (Raw + Game/Movie), else null. Lets {@code Game} forward perf text. */
     public XrStreamPresenter getXrPresenter() {
         return mXrPresenter;
     }
@@ -98,7 +113,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (renderMode == StreamMode.MODE_2D) {
             // 2D: the decoder renders directly into the SurfaceView's surface.
             mSurfaceView = new SurfaceView(context);
-        } else if (renderMode == StreamMode.MODE_XR_SBS) {
+        } else if (isHostSbsPresentation(renderMode)) {
             // Host-side SBS: the decoder renders into the XR compositor's SurfaceEntity, not an
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
@@ -162,11 +177,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mSurfaceView = glSurfaceView;
 
         } else {
-            // AI 3D: a GLSurfaceView drives Stereo3DRenderer, which owns the video surface.
+            // Client SBS (Game/Movie): a GLSurfaceView drives Stereo3DRenderer (on-device AI depth),
+            // which owns the video surface.
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
             glSurfaceView.setEGLContextClientVersion(3);
             glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
-            boolean movieMode = renderMode == StreamMode.MODE_AI_3D_MOVIE;
+            boolean movieMode = renderMode == StreamMode.MODE_CLIENT_SBS_MOVIE;
             mStereoRenderer = new Stereo3DRenderer(glSurfaceView, this, context, prefConfig, movieMode);
             glSurfaceView.setRenderer(mStereoRenderer);
             glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
@@ -186,7 +202,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     public void switchToClientSbs(boolean enable) {
-        if (renderMode != StreamMode.MODE_XR_SBS || mStereoRenderer == null) return;
+        // Available in any host-SBS presentation (Raw + Game/Movie). The three presentations
+        // (Normal / Host SBS / Client SBS) are mutually exclusive: entering Client SBS runs
+        // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
+        // at the same time (so host SBS stops when you switch to Client SBS).
+        if (!isHostSbsPresentation(renderMode) || mStereoRenderer == null) return;
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
 
         if (enable) {
@@ -229,9 +249,30 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * surface, so the subsequent re-enter rebuilds it at the new XR-surface size.
      */
     public void recycleClientSbs() {
-        if (renderMode != StreamMode.MODE_XR_SBS || mStereoRenderer == null) return;
+        if (!isHostSbsPresentation(renderMode) || mStereoRenderer == null) return;
         ((GLSurfaceView) mSurfaceView).onPause();
         switchToClientSbs(true);
+    }
+
+    /**
+     * Re-pin the XR surface to the target host depth-mode frame size — the plain 2D frame
+     * ({@code W x H}) or the packed SBS frame ({@code 2W' x H'}) — and rebind the decoder to it.
+     * Mirrors {@link #switchToClientSbs}'s dummy-surface handoff so MediaCodec never sees a
+     * transient/garbage surface. The decoder's adaptive playback absorbs the host-driven
+     * resolution change that accompanies the switch. Only meaningful in the host depth modes
+     * (Game/Movie, where the host doubles the width); Raw host SBS keeps a fixed-size frame.
+     */
+    public void resizeHostSbsSurface(boolean sbs) {
+        if (!isHostDepthPresentation(renderMode) || mXrPresenter == null || mDestroyed) {
+            return;
+        }
+        // Park the decoder on the persistent dummy surface while the XR surface is resized.
+        game.setDecoderOutputSurface(mDummySurface);
+        mXrPresenter.setHostSurfaceSize(sbs);
+        Surface s = mXrPresenter.getVideoSurface();
+        if (s != null && s.isValid()) {
+            game.setDecoderOutputSurface(s);
+        }
     }
 
     /** Ask the stereo renderer to redraw once (e.g. after a live 2D→3D effect-param change). */

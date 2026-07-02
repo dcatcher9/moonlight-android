@@ -554,7 +554,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Populate keys for adaptive playback
         if (adaptivePlayback) {
-            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, initialWidth);
+            // Host depth SBS makes the host switch the encoded frame from W x H (2D) to a packed
+            // 2W' x H' side-by-side frame on the fly. Pre-size the adaptive-playback max so
+            // MediaCodec absorbs it without a reconfigure. The packed width is capped at the
+            // encoder/decoder max (2 * MAX_HOST_SBS_EYE_WIDTH), and the packed height never exceeds
+            // the 2D height, so max height stays initialHeight.
+            int maxWidth = initialWidth;
+            if (prefs != null && prefs.isHostDoubledWidthMode()) {
+                maxWidth = Math.min(initialWidth * 2,
+                        PreferenceConfiguration.MAX_HOST_SBS_EYE_WIDTH * 2);
+            }
+            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, maxWidth);
             videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
         }
 

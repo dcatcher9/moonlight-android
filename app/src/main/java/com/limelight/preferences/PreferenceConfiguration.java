@@ -222,9 +222,16 @@ public class PreferenceConfiguration {
     // Values of the "render_mode_list" preference. These mirror the ordinals of
     // StreamContainer.StreamMode.
     public static final int RENDER_MODE_2D = 0;
-    public static final int RENDER_MODE_AI_3D = 1;
-    public static final int RENDER_MODE_AI_3D_MOVIE = 2;
-    public static final int RENDER_MODE_XR_SBS = 3;
+    public static final int RENDER_MODE_CLIENT_SBS_GAME = 1;
+    public static final int RENDER_MODE_CLIENT_SBS_MOVIE = 2;
+    public static final int RENDER_MODE_HOST_SBS_RAW = 3;  // "Raw" host SBS: host frame is already SBS.
+    public static final int RENDER_MODE_HOST_SBS_GAME = 4;  // Host async (low-latency) depth pipeline (2W x H).
+    public static final int RENDER_MODE_HOST_SBS_MOVIE = 5;  // Host sync (aligned, higher-latency) depth pipeline (2W x H).
+
+    // Max per-eye width for the host depth modes (Game/Movie): the host doubles this to 2W, which
+    // must fit the encoder's max width (NVENC HEVC/AV1 = 8192). Keep 2*this <= that cap. Mirrors the
+    // host's sbs_3d_max_encode_width (default 8192).
+    public static final int MAX_HOST_SBS_EYE_WIDTH = 4096;
 
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
@@ -407,6 +414,15 @@ public class PreferenceConfiguration {
      */
     public boolean isStereoMode() {
         return renderMode != RENDER_MODE_2D;
+    }
+
+    /**
+     * True for host SBS modes where the host doubles the encoded width (the depth pipelines:
+     * Game = async, Movie = sync). Raw host SBS does NOT double - it carries an already-SBS
+     * source at the negotiated size.
+     */
+    public boolean isHostDoubledWidthMode() {
+        return renderMode == RENDER_MODE_HOST_SBS_GAME || renderMode == RENDER_MODE_HOST_SBS_MOVIE;
     }
 
     public static boolean isNativeResolution(int width, int height) {
@@ -904,7 +920,10 @@ private static int getFramePacingValue(Context context) {
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.fullScreen = prefs.getBoolean(FULL_SCREEN_PREF_STRING, DEFAULT_FULL_SCREEN);
 
-        String renderMode = prefs.getString("render_mode_list", "0");
+        // Default to Host SBS Game: the XR presenter starting in the Normal (2D) presentation with
+        // the full mode bar, so the stream starts flat 2D and the user switches modes on the fly.
+        // (The standalone 2D render mode is kept for now but is slated to fold into this XR path.)
+        String renderMode = prefs.getString("render_mode_list", "4");
         int renderModeInt = Integer.parseInt(renderMode);
         config.renderMode = renderModeInt;
 

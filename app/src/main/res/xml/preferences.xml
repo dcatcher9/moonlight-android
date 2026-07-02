@@ -163,14 +163,10 @@
             android:summary="@string/summary_checkbox_enforce_display_mode"
             android:title="@string/title_checkbox_enforce_display_mode"
             app:iconSpaceReserved="false" />
-        <ListPreference
-            android:defaultValue="0"
-            android:entries="@array/render_mode_names"
-            android:entryValues="@array/render_mode_values"
-            android:key="render_mode_list"
-            android:summary="@string/summary_render_mode"
-            android:title="@string/title_render_mode"
-            app:iconSpaceReserved="false" />
+        <!-- SBS render-mode selection removed: the stream always uses the XR route (starts in the
+             Normal/2D presentation) and modes are switched from the in-headset control bar. The
+             render mode is fixed in code (PreferenceConfiguration defaults render_mode_list to the
+             XR route). -->
         <com.limelight.preferences.SeekBarPreference
             android:key="parallax_depth"
             android:dialogMessage=""

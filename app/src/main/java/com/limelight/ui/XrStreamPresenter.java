@@ -44,13 +44,15 @@ import androidx.xr.scenecore.SurfaceEntity;
 import com.limelight.LimeLog;
 import com.limelight.PcView;
 import com.limelight.R;
+import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Presentation owner for the <b>host-side SBS</b> render mode ({@code MODE_XR_SBS}).
+ * Presentation owner for the <b>host-side SBS</b> render modes ({@code MODE_HOST_SBS_RAW} /
+ * {@code MODE_HOST_SBS_GAME} / {@code MODE_HOST_SBS_MOVIE}).
  *
  * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
  * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR
@@ -67,9 +69,10 @@ import java.util.List;
  *
  * <p>The quad is placed ~2 m in front, sized to one eye's aspect, and the user can move/resize it
  * (with a minimum distance clamp). A floating control bar beneath it offers single-select
- * presentation modes (Normal/MONO &harr; SBS, which reshapes the quad to the matching aspect since
- * the surface always carries the same packed frame) plus Machines and Disconnect actions.
- * See docs/android-xr-sbs.md. Still open: session lifecycle on pause/resume (see {@link #onDestroy}).
+ * presentation modes (Normal / Host SBS / Client SBS) plus Machines and Disconnect actions.
+ * Switching presentations re-pins the surface and, in the host depth modes (Game/Movie), drives
+ * the host's SBS pipeline on/off. See docs/android-xr-sbs.md. Still open: session lifecycle on
+ * pause/resume (see {@link #onDestroy}).
  */
 public class XrStreamPresenter {
 
@@ -139,8 +142,16 @@ public class XrStreamPresenter {
 
     public enum PresenterMode {
         NORMAL,
-        HOST_SBS,
-        CLIENT_SBS
+        HOST_SBS_RAW,
+        HOST_SBS_GAME,
+        HOST_SBS_MOVIE,
+        CLIENT_SBS_GAME
+    }
+
+    /** The host depth presentations (Game async / Movie sync) — both make the host emit a packed
+     *  2W' x H' side-by-side frame; they differ only in the wire mode sent (GAME vs MOVIE). */
+    private static boolean isHostDepthPresenterMode(PresenterMode mode) {
+        return mode == PresenterMode.HOST_SBS_GAME || mode == PresenterMode.HOST_SBS_MOVIE;
     }
 
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
@@ -155,10 +166,13 @@ public class XrStreamPresenter {
     private static final long MODE_SWITCH_DEBOUNCE_MS = 600L;
     private long lastModeSwitchMs;
 
-    // Quad aspect ratios for each presentation mode (the surface always carries the same packed
-    // SBS frame; only the visible region differs). In SBS the compositor shows each eye the
-    // half-width region — aspect (w/2)/h. In MONO it shows the whole frame to both eyes — aspect
-    // w/h, i.e. twice as wide. The quad must match so the image isn't stretched.
+    // Quad aspect ratios (width/height) for the presentations, so the image isn't stretched.
+    //  - fullAspect = w/h: the whole frame shown to both eyes (Normal/MONO), and the per-eye view
+    //    in the host depth modes (Game/Movie) and Client SBS, whose packed frame is a
+    //    proportionally-scaled 2D so each eye keeps the 2D aspect.
+    //  - perEyeAspect: Raw host SBS only — its packed frame is a fixed 2W-wide side-by-side at the
+    //    negotiated width, so each eye is half as wide, (w/2)/h. (For the depth modes this is set
+    //    equal to fullAspect; see init.)
     private float perEyeAspect;
     private float fullAspect;
     /** Kept so the resize affordance's bounds can be re-derived for the active mode's aspect. */
@@ -171,6 +185,8 @@ public class XrStreamPresenter {
         this.listener = listener;
         this.clientSbsHalfWidth = androidx.preference.PreferenceManager
                 .getDefaultSharedPreferences(activity).getBoolean(CLIENT_SBS_HALF_WIDTH_KEY, false);
+        // Every session starts in plain 2D (NORMAL); the user enables Host/Client SBS on the fly
+        // from the XR control bar. selectMode() then drives the host's depth pipeline to match.
     }
 
     /**
@@ -213,15 +229,20 @@ public class XrStreamPresenter {
                     + "stereoscopically (activity likely not in Full Space mode).");
         }
 
-        // The surface always carries the packed SBS frame; the quad's aspect depends on the mode.
-        // MONO (default) shows the whole frame to both eyes — full-frame aspect (w/h). SBS shows
-        // each eye the half-width region — per-eye aspect (w/2)/h, i.e. half as wide. A mode switch
-        // keeps the height and varies the width (see selectMode), so size from a default height here.
-        // NOTE: if the stream shows black bars top/bottom in SBS, that is the host drawing a 16:9
-        // image into the taller per-eye slot (letterbox baked into the stream) — the client aspect
-        // can't remove it; stream wider so each eye is 16:9, or fix the host SBS layout.
+        // Every session starts in NORMAL (2D): the decoder feeds a plain W x H frame shown to both
+        // eyes. Switching to a stereo mode changes BOTH the compositor split AND the frame the host
+        // sends — a host depth mode (Game/Movie) -> a packed 2W' x H' side-by-side frame (capped to
+        // the encoder max), Client SBS -> on-device depth packed into a 2W surface. selectMode
+        // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
+        //
+        // Quad aspect handling differs by host-SBS flavor:
+        //  - Host depth (Game/Movie): starts 2D (W x H) and switches to a packed SBS that is a
+        //    proportionally-scaled 2D, so the per-eye aspect equals the 2D aspect (full == per-eye);
+        //    the surface is re-pinned per mode (see setHostSurfaceSize).
+        //  - Raw host SBS: the frame is an already-packed 2W-wide side-by-side at the negotiated
+        //    width, so MONO shows the whole w/h frame and SBS shows each eye a half-width slot.
         fullAspect = (float) prefConfig.width / prefConfig.height;
-        perEyeAspect = fullAspect / 2.0f;
+        perEyeAspect = prefConfig.isHostDoubledWidthMode() ? fullAspect : (fullAspect / 2.0f);
         float panelHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
         float panelWidthMeters = panelHeightMeters * aspectFor(currentPresenterMode);
         SurfaceEntity.Shape quad =
@@ -237,8 +258,7 @@ public class XrStreamPresenter {
                 quad,
                 stereoModeFor(currentPresenterMode));
 
-        // Pin the entity's surface to the full SBS frame size so the L/R split lands on the half
-        // boundary.
+        // Start at the 2D frame size (W x H); selectMode re-pins to the packed SBS size on switch.
         surfaceEntity.setSurfacePixelDimensions(new IntSize2d(prefConfig.width, prefConfig.height));
         // Parent to the activity space (the rendered scene root) and make visibility explicit.
         // Without the explicit parent the entity isn't attached to the rendered scene graph, so the
@@ -321,11 +341,17 @@ public class XrStreamPresenter {
                 activity.getString(R.string.xr_bar_normal),
                 R.drawable.ic_xr_mode_normal, PresenterMode.NORMAL);
         BarItem clientSbs = new BarItem(
-                activity.getString(R.string.xr_bar_client_sbs),
-                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS);
+                activity.getString(R.string.xr_bar_client_sbs_game),
+                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS_GAME);
+        BarItem hostSbsRaw = new BarItem(
+                activity.getString(R.string.xr_bar_host_sbs_raw),
+                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_RAW);
         BarItem hostSbs = new BarItem(
-                activity.getString(R.string.xr_bar_host_sbs),
-                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS);
+                activity.getString(R.string.xr_bar_host_sbs_game),
+                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_GAME);
+        BarItem hostSbsMovie = new BarItem(
+                activity.getString(R.string.xr_bar_host_sbs_movie),
+                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_MOVIE);
         BarItem stats = new BarItem(
                 activity.getString(R.string.xr_bar_stats),
                 R.drawable.ic_xr_stats, /* selectsMode= */ null);
@@ -341,7 +367,9 @@ public class XrStreamPresenter {
 
         normal.onTap = () -> selectMode(normal);
         clientSbs.onTap = () -> selectMode(clientSbs);
+        hostSbsRaw.onTap = () -> selectMode(hostSbsRaw);
         hostSbs.onTap = () -> selectMode(hostSbs);
+        hostSbsMovie.onTap = () -> selectMode(hostSbsMovie);
         stats.onTap = this::toggleStats;
         reset.onTap = this::resetView;
         machines.onTap = this::returnToMachineSelection;
@@ -350,8 +378,10 @@ public class XrStreamPresenter {
 
         barItems.clear();
         barItems.add(normal);
-        barItems.add(clientSbs);
+        barItems.add(hostSbsRaw);
         barItems.add(hostSbs);
+        barItems.add(hostSbsMovie);
+        barItems.add(clientSbs);
         barItems.add(stats);
         barItems.add(reset);
         barItems.add(machines);
@@ -585,7 +615,7 @@ public class XrStreamPresenter {
         adjustPanel = PanelEntity.create(
                 session, root, new FloatSize2d(ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS),
                 "xr-3d-adjust", adjustPose(videoHeightMeters), surfaceEntity);
-        adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS);
+        adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
     }
 
     /**
@@ -705,7 +735,7 @@ public class XrStreamPresenter {
         clientSbsHalfWidth = half;
         persistBool(CLIENT_SBS_HALF_WIDTH_KEY, half);
         // Only the surface resolution changes (W <-> 2W); the quad keeps fullAspect / same size.
-        if (currentPresenterMode == PresenterMode.CLIENT_SBS
+        if (currentPresenterMode == PresenterMode.CLIENT_SBS_GAME
                 && activity instanceof com.limelight.Game) {
             ((com.limelight.Game) activity).getStreamContainer().recycleClientSbs();
         }
@@ -761,7 +791,7 @@ public class XrStreamPresenter {
     /** Show the adjust sub-panel only in Client SBS (the only mode that synthesizes 3D on-device). */
     private void updateAdjustPanelVisibility() {
         if (adjustPanel != null) {
-            adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS);
+            adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
         }
     }
 
@@ -845,10 +875,10 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Apply a stereo mode chosen from the bar: switch the compositor's eye split and reshape the
-     * quad to the mode's aspect (the surface always carries the same packed SBS frame — SBS shows
-     * each eye the half-width region, MONO shows the whole double-wide frame). The quad's height is
-     * preserved; only the width changes, so the screen keeps its vertical size across the switch.
+     * Apply a presentation chosen from the bar. Sets the compositor eye split, drives the host SBS
+     * pipeline on/off in the host depth modes (Game/Movie), re-pins the surface to the target
+     * frame size, and reshapes the quad to the mode's aspect. The quad's height is preserved; only
+     * the width changes (when the aspect changes), so the screen keeps its vertical size.
      */
     private void selectMode(BarItem item) {
         if (item.selectsMode == null || surfaceEntity == null
@@ -862,13 +892,35 @@ public class XrStreamPresenter {
             return;
         }
         lastModeSwitchMs = now;
-        boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
+        boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
         currentPresenterMode = item.selectsMode;
-        boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS);
+        boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
         com.limelight.utils.Stereo3DRenderer.clientSbs = isClientSbs;
         
         if (wasClientSbs != isClientSbs && activity instanceof com.limelight.Game) {
             ((com.limelight.Game) activity).getStreamContainer().switchToClientSbs(isClientSbs);
+        }
+
+        // Host depth SBS: drive the host's depth pipeline on the fly to match the chosen tile. The
+        // host emits a 2W x H side-by-side frame for Host SBS Game (async) or Host SBS Movie (sync);
+        // Normal and Client SBS get a plain W x H frame (Normal shows it mono, Client SBS runs
+        // on-device depth on it). The TILE decides GAME vs MOVIE. Gated to the host depth render
+        // modes so the decoder is pre-sized for 2W (Raw / already-SBS input is never toggled).
+        if (prefConfig.isHostDoubledWidthMode()) {
+            int wireMode = currentPresenterMode == PresenterMode.HOST_SBS_GAME ? MoonBridge.SBS_MODE_GAME :
+                           currentPresenterMode == PresenterMode.HOST_SBS_MOVIE ? MoonBridge.SBS_MODE_MOVIE :
+                           MoonBridge.SBS_MODE_OFF;
+            MoonBridge.sendSetSbsMode(wireMode);
+        }
+
+        // Re-pin the surface to the target frame size. Client SBS is handled by switchToClientSbs
+        // above; the direct-decoder host presentations resize between the 2D frame (W x H) and the
+        // packed SBS frame (2W' x H') and rebind the decoder. The decoder's adaptive playback
+        // absorbs the matching host-driven resolution change.
+        if (!isClientSbs && prefConfig.isHostDoubledWidthMode()
+                && activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).getStreamContainer()
+                    .resizeHostSbsSurface(isHostDepthPresenterMode(currentPresenterMode));
         }
 
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
@@ -957,12 +1009,19 @@ public class XrStreamPresenter {
         return s != null ? s.getPose() : null;
     }
 
-    /** Quad aspect (width/height). Host SBS shows each eye the host's native half-width slot
-     *  (perEyeAspect). Client SBS renders the FULL frame per eye in both full- and half-width modes
-     *  (half-width just squeezes it into W/2 and the compositor stretches it back across the quad),
-     *  so the quad stays fullAspect and the same physical size — only the resolution changes. */
+    /** Quad aspect (width/height). Only the host SBS presentation uses perEyeAspect, which differs
+     *  from fullAspect for Raw (half-width per eye); for the host depth modes (Game/Movie)
+     *  perEyeAspect is set equal to fullAspect. Normal and Client SBS always use fullAspect (Client
+     *  SBS renders the full frame per eye; half-width just squeezes it into W/2 and the compositor
+     *  stretches it back), so the quad keeps its physical size — only the surface resolution changes. */
     private float aspectFor(PresenterMode mode) {
-        return (mode == PresenterMode.HOST_SBS) ? perEyeAspect : fullAspect;
+        // Raw splits the host's single W-wide frame into two W/2 eyes -> half the aspect. Depth
+        // modes (Game/Movie) show each eye a full-width per-eye view (perEyeAspect); Normal and
+        // Client show the full frame (fullAspect).
+        if (mode == PresenterMode.HOST_SBS_RAW) {
+            return fullAspect / 2.0f;
+        }
+        return isHostDepthPresenterMode(mode) ? perEyeAspect : fullAspect;
     }
 
     private SurfaceEntity.StereoMode stereoModeFor(PresenterMode mode) {
@@ -990,7 +1049,12 @@ public class XrStreamPresenter {
                 && ((com.limelight.Game) activity).isStreamHdrActive();
         // Tell the AI-input shader to tonemap PQ->SDR for MiDaS when the stream is HDR.
         com.limelight.utils.Stereo3DRenderer.hdrInput = hdr;
-        if (currentPresenterMode == PresenterMode.CLIENT_SBS && hdr) {
+        // Tag HDR10 for EVERY mode on an HDR stream, not just Client SBS. Client SBS *needs* it (its
+        // GL buffers carry no dataspace); Normal/Host render the decoder's HDR buffers directly, so
+        // the tag simply matches their dataspace. Crucially, once explicit metadata has been set the
+        // compositor treats a later "unset" as SDR and washes out the direct HDR paths -- so we must
+        // NOT reset to unset when leaving Client SBS. Only a genuinely SDR stream returns to unset.
+        if (hdr) {
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,
                     SurfaceEntity.ContentColorMetadata.ColorTransfer.ST2084,
@@ -1120,7 +1184,7 @@ public class XrStreamPresenter {
      * Resize the XR surface for the client-side SBS path. The on-device renderer packs two
      * <i>full-resolution</i> eye views side by side, so the surface must be twice as wide
      * ({@code 2W×H}) to preserve each eye's full input resolution. Every other mode presents a
-     * single input-sized ({@code W×H}) frame (flat for NORMAL, host-packed for HOST_SBS), so the
+     * single input-sized ({@code W×H}) frame (flat for NORMAL, host-packed for HOST_SBS_GAME), so the
      * surface is restored to {@code W×H}. Re-fetches the entity's surface in case the resize
      * re-creates it. Main-thread only (SceneCore is Activity-bound).
      */
@@ -1138,6 +1202,34 @@ public class XrStreamPresenter {
      *  output viewport and by {@link #setClientSbsSurfaceSize}. */
     public int getClientSbsSurfaceWidth() {
         return clientSbsHalfWidth ? prefConfig.width : prefConfig.width * 2;
+    }
+
+    /** Capped per-eye width for the host depth modes (Game/Movie): the negotiated per-eye width,
+     *  clamped to the encoder/decoder ceiling (MAX_HOST_SBS_EYE_WIDTH). */
+    private int hostSbsEyeWidth() {
+        return Math.min(prefConfig.width, PreferenceConfiguration.MAX_HOST_SBS_EYE_WIDTH);
+    }
+
+    /** Packed Host SBS frame dimensions (2W' x H'). When the per-eye width is capped, the height is
+     *  scaled by the same factor so the per-eye aspect is preserved. Even dimensions. */
+    private int hostSbsPackedWidth() {
+        return (hostSbsEyeWidth() * 2) & ~1;
+    }
+    private int hostSbsPackedHeight() {
+        return Math.round(prefConfig.height * (hostSbsEyeWidth() / (float) prefConfig.width)) & ~1;
+    }
+
+    /** Re-pin the XR surface for a host presentation: the packed SBS frame ({@code 2W' x H'}) when a
+     *  host depth mode's SBS is active, or the plain 2D frame ({@code W x H}) for NORMAL. Re-fetches
+     *  the surface in case the resize re-creates it. Main-thread only (SceneCore is Activity-bound). */
+    public void setHostSurfaceSize(boolean sbs) {
+        if (surfaceEntity == null) {
+            return;
+        }
+        int w = sbs ? hostSbsPackedWidth() : prefConfig.width;
+        int h = sbs ? hostSbsPackedHeight() : prefConfig.height;
+        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(w, h));
+        videoSurface = surfaceEntity.getSurface();
     }
 
     /**

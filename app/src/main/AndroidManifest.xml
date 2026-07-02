@@ -210,7 +210,7 @@
             android:preferMinimalPostProcessing="true">
 
             <!-- Launch the streaming activity in Android XR Full Space. Spatialization (the
-                 SBS SurfaceEntity stereo split in MODE_XR_SBS) is only available in Full Space;
+                 SBS SurfaceEntity stereo split in MODE_HOST_SBS_RAW) is only available in Full Space;
                  Home Space is the default. Scoped to this activity so the host-list UI keeps its
                  normal Home Space panel. See XrStreamPresenter and docs/android-xr-sbs.md. -->
             <property

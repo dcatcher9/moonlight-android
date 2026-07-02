@@ -710,8 +710,11 @@
     <string name="title_render_mode_strength_description">参考值 50。数值越高效果越强，但可能更累眼且不自然；数值越低更护眼，体验更柔和。</string>
     <string name="summary_render_mode">2D（默认） 或 SBS 3D。3D 会将画面宽度加倍并使用 AI 自动 2D 转 3D。</string>
     <string name="render_mode_2d">2D</string>
-    <string name="render_mode_3d_sbs">AI SBS 3D</string>
-    <string name="render_mode_3d_sbs_movie">AI SBS 3D 电影模式（同步）</string>
+    <string name="render_mode_client_sbs_game">客户端 SBS 游戏</string>
+    <string name="render_mode_client_sbs_movie">客户端 SBS 电影（同步）</string>
+    <string name="render_mode_host_sbs_raw">主机 SBS 原始</string>
+    <string name="render_mode_host_sbs_game">主机 SBS 游戏</string>
+    <string name="render_mode_host_sbs_movie">主机 SBS 电影</string>
 
     <string name="title_checkbox_full_screen">启用全屏</string>
     <string name="summary_checkbox_full_screen">使用沉浸模式隐藏系统状态栏</string>

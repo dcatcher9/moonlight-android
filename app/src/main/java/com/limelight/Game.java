@@ -422,6 +422,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             boolean portraitMode = currentOrientation == Configuration.ORIENTATION_PORTRAIT;
             shouldInvertDecoderResolution = portraitMode && prefConfig.autoInvertVideoResolution;
 
+            // Host depth SBS (Game/Movie) keeps the full requested resolution for 2D. The per-eye
+            // cap only applies when SBS is actually switched on: the host then caps the packed frame
+            // to the encoder max (rendering the SBS directly at that target), and the client resizes
+            // its decoder/XR surface for the capped frame. So no launch-time clamp here.
+
             displayWidth = shouldInvertDecoderResolution ? prefConfig.height : prefConfig.width;
             displayHeight = shouldInvertDecoderResolution ? prefConfig.width : prefConfig.height;
 
@@ -3691,6 +3696,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // This may be null if launched from the "Resume Session" PC context menu item
             shortcutHelper.reportGameLaunched(computer, app);
         }
+
+        // Note: we intentionally do NOT request host SBS here. Every session starts in plain 2D
+        // (host defaults to SBS_MODE_OFF), and the user enables host SBS on the fly from the XR
+        // control bar (XrStreamPresenter.selectMode -> MoonBridge.sendSetSbsMode).
     }
 
     @Override
