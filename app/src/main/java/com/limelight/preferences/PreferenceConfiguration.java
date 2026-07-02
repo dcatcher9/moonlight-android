@@ -219,14 +219,8 @@ public class PreferenceConfiguration {
     public static final int FRAME_PACING_CAP_FPS = 2;
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
 
-    // Values of the "render_mode_list" preference. These mirror the ordinals of
-    // StreamContainer.StreamMode.
-    public static final int RENDER_MODE_2D = 0;
-    public static final int RENDER_MODE_CLIENT_SBS_GAME = 1;
-    public static final int RENDER_MODE_CLIENT_SBS_MOVIE = 2;
-    public static final int RENDER_MODE_HOST_SBS_RAW = 3;  // "Raw" host SBS: host frame is already SBS.
-    public static final int RENDER_MODE_HOST_SBS_GAME = 4;  // Host async (low-latency) depth pipeline (2W x H).
-    public static final int RENDER_MODE_HOST_SBS_MOVIE = 5;  // Host sync (aligned, higher-latency) depth pipeline (2W x H).
+    // The render-mode preference is deprecated: streaming always uses the single XR route (starts
+    // in Normal/2D, modes switched from the in-headset bar). The per-variant render modes are gone.
 
     // Max per-eye width for the host depth modes (Game/Movie): the host doubles this to 2W, which
     // must fit the encoder's max width (NVENC HEVC/AV1 = 8192). Keep 2*this <= that cap. Mirrors the
@@ -261,7 +255,6 @@ public class PreferenceConfiguration {
     public boolean enforceDisplayMode, useVirtualDisplay, enableSops, playHostAudio, disableWarnings, fullScreen;
     public ScaleMode videoScaleMode;
     public String language;
-    public int renderMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean onscreenController;
     public boolean hideOSCWhenHasGamepad;
@@ -407,22 +400,20 @@ public class PreferenceConfiguration {
     private static final String NUMBER_PAN_OFFSET_Y = "number_pan_offset_y";
 
     /**
-     * True for any stereoscopic render mode (currently the AI-3D and AI-3D-movie
-     * paths; future XR SBS would belong here too) — i.e. anything that is not plain 2D.
-     * Stereo modes maintain the configured resolution, force STRETCH scaling, and
-     * skip portrait resolution inversion.
+     * The XR route is always stereoscopic: it maintains the configured resolution, forces STRETCH
+     * scaling, and skips portrait resolution inversion. (Kept as a method so existing call sites
+     * in Game.java stay unchanged.)
      */
     public boolean isStereoMode() {
-        return renderMode != RENDER_MODE_2D;
+        return true;
     }
 
     /**
-     * True for host SBS modes where the host doubles the encoded width (the depth pipelines:
-     * Game = async, Movie = sync). Raw host SBS does NOT double - it carries an already-SBS
-     * source at the negotiated size.
+     * The XR route can switch to a host depth mode (Game/Movie) at any time via the bar, so the
+     * host may double the encoded width to a packed 2W frame; the decoder always pre-sizes for it.
      */
     public boolean isHostDoubledWidthMode() {
-        return renderMode == RENDER_MODE_HOST_SBS_GAME || renderMode == RENDER_MODE_HOST_SBS_MOVIE;
+        return true;
     }
 
     public static boolean isNativeResolution(int width, int height) {
@@ -919,13 +910,6 @@ private static int getFramePacingValue(Context context) {
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.fullScreen = prefs.getBoolean(FULL_SCREEN_PREF_STRING, DEFAULT_FULL_SCREEN);
-
-        // Default to Host SBS Game: the XR presenter starting in the Normal (2D) presentation with
-        // the full mode bar, so the stream starts flat 2D and the user switches modes on the fly.
-        // (The standalone 2D render mode is kept for now but is slated to fold into this XR path.)
-        String renderMode = prefs.getString("render_mode_list", "4");
-        int renderModeInt = Integer.parseInt(renderMode);
-        config.renderMode = renderModeInt;
 
         // Read mouse mode and set touch settings accordingly
         String mouseMode = prefs.getString("mouse_mode_list", "0");

@@ -436,7 +436,6 @@
 	<string name="summary_custom_refresh_rate">手動輸入更新率。僅支援 Apollo。</string>
 	<string name="dialog_custom_refresh_rate">請以 Hz 輸入更新率。可為小數。</string>
 
-	<string name="title_render_mode">渲染模式</string>
 	<string name="title_render_mode_convergence_title">3D 會聚</string>
 	<string name="title_render_mode_convergence_description">參考值：50 - 平衡 / 0 - 螢幕前 / 100 - 螢幕後</string>
 	<string name="title_render_mode_balance_shift_title">3D 視覺平衡</string>
@@ -445,7 +444,6 @@
 	<string name="title_render_mode_strength_description">參考值：50。數值越高效果越強，但可能造成眼睛疲勞且不自然；數值越低更護眼，體驗更柔和。</string>
 
 	<string name="title_touchscreen_mode">觸控螢幕模式</string>
-	<string name="summary_render_mode">預設為 2D 或 SBS 3D。3D 會自動加倍寬度並套用效果，無需設定。支援 AI 2D 轉 3D。</string>
 	<string name="summary_touchscreen_mode">在多點觸控/單點觸控/觸控板/停用模式間選擇。\n當選擇停用時，手寫筆/觸控筆仍可使用。\n使用外接顯示器時將強制為觸控板（自然）模式。</string>
 
 	<string name="title_checkbox_mouse_local_cursor">使用本機滑鼠游標</string>
@@ -622,12 +620,6 @@
 	<string name="virtual_keyboard_hide">隱藏\nKBD</string>
 
 	<string name="mouse_mode_multi_touch">多點觸控</string>
-	<string name="render_mode_2d">預設 2D</string>
-	<string name="render_mode_client_sbs_game">用戶端 SBS 遊戲</string>
-	<string name="render_mode_client_sbs_movie">用戶端 SBS 電影（同步）</string>
-	<string name="render_mode_host_sbs_raw">主機 SBS 原始</string>
-	<string name="render_mode_host_sbs_game">主機 SBS 遊戲</string>
-	<string name="render_mode_host_sbs_movie">主機 SBS 電影</string>
 	<string name="mouse_mode_absolute_touch">單點觸控</string>
 	<string name="mouse_mode_track_pad_natural">觸控板（自然/雙擊拖曳）</string>
 	<string name="mouse_mode_track_pad_gaming">觸控板（遊戲/長按拖曳）</string>

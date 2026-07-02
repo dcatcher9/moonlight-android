@@ -51,8 +51,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Presentation owner for the <b>host-side SBS</b> render modes ({@code MODE_HOST_SBS_RAW} /
- * {@code MODE_HOST_SBS_GAME} / {@code MODE_HOST_SBS_MOVIE}).
+ * Presentation owner for the single XR route ({@code MODE_XR}): starts in the Normal (flat 2D)
+ * presentation and switches Host SBS Raw/Game/Movie and Client SBS from the in-headset control bar.
  *
  * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
  * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR

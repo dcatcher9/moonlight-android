@@ -1567,34 +1567,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             getWindow().setAttributes(windowLayoutParams);
         }
 
-        // Until Marshmallow, we can't ask for a 4K display mode, so we'll
-        // need to hint the OS to provide one.
-        boolean aspectRatioMatch = false;
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            // We'll calculate whether we need to scale by aspect ratio. If not, we'll use
-            // setFixedSize so we can handle 4K properly. The only known devices that have
-            // >= 4K screens have exactly 4K screens, so we'll be able to hit this good path
-            // on these devices. On Marshmallow, we can start changing to 4K manually but no
-            // 4K devices run 6.0 at the moment.
-            Point screenSize = new Point(0, 0);
-            currentDisplay.getSize(screenSize);
-
-            double screenAspectRatio = ((double)screenSize.y) / screenSize.x;
-            double streamAspectRatio = ((double)displayHeight) / displayWidth;
-            if (Math.abs(screenAspectRatio - streamAspectRatio) < 0.001|| isOnExternalDisplay()) {
-                LimeLog.info("Stream has compatible aspect ratio with output display");
-                aspectRatioMatch = true;
-            }
-        }
-
-        // Don't do setFixedSize since it might not update the view dimensions correctly when entering PiP mode
-        if (!(prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.STRETCH || aspectRatioMatch)) {
-            // Set the surface to scale based on the aspect ratio of the stream
-            streamContainer.setDesiredAspectRatio((double)displayWidth / (double)displayHeight);
-            streamContainer.setFillDisplay(prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.FILL);
-            LimeLog.info("surfaceChanged-->"+(double)displayWidth / (double)displayHeight);
-            LimeLog.info("scaleMode-->"+prefConfig.videoScaleMode);
-        }
+        // Note: on-screen surface aspect-ratio scaling was removed — the XR route always uses STRETCH
+        // (isStereoMode) and presents the video in the XR compositor, so there's nothing to fit here.
 
         // Set the desired refresh rate that will get passed into setFrameRate() later
         desiredRefreshRate = displayRefreshRate;

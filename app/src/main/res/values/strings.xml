@@ -435,7 +435,6 @@
     <string name="title_custom_refresh_rate">Custom refresh rate</string>
     <string name="summary_custom_refresh_rate">Enter refresh rate manually. Only supports Apollo.</string>
     <string name="dialog_custom_refresh_rate">Enter refresh rate in Hz. Can be fractional.</string>
-    <string name="title_render_mode">Render Mode</string>
     <string name="title_render_mode_convergence_title">3D Convergence</string>
     <string name="title_render_mode_convergence_description">Reference: 50 - Balanced / 0: InFrontOfScreen /  100 - BehindOfScreen</string>
     <string name="title_render_mode_balance_shift_title">3D Eye Balance</string>
@@ -443,7 +442,6 @@
     <string name="title_render_mode_strength_title">3D Effect Strength</string>
     <string name="title_render_mode_strength_description">Reference: 50 - Higher more effect, but maybe strain on eyes and unnatural. Lower, easier on eyes and smoother expierence.</string>
     <string name="title_touchscreen_mode">Touchscreen Mode</string>
-    <string name="summary_render_mode">Default 2D or SBS 3D. 3D will simply double your width and add the effect automatically, no setup required. AI 2D to 3D conversion </string>
     <string name="summary_touchscreen_mode">Select between MultiTouch/SingleTouch/Trackpad/Disabled mode.\nPen/Stylus are still usable when Disabled is selected.\nForced to Track Pad(Natural) mode when useing external display.</string>
     <string name="title_checkbox_mouse_local_cursor">Use local mouse cursor</string>
     <string name="summary_checkbox_mouse_local_cursor">Default external physical mouse cursor will be captured, this option can display Android system cursor</string>
@@ -573,13 +571,6 @@
     <string name="summary_checkbox_enable_sticky_modifier_key_virtual_keyboard">Use sticky modifier keys on virtual full keyboard and custom onscreen keyboard.</string>
     <string name="virtual_keyboard_hide">Hide\nKBD</string>
     <string name="mouse_mode_multi_touch">Multi touch</string>
-    <string name="render_mode_xr">XR</string>
-    <string name="render_mode_2d">Default 2D</string>
-    <string name="render_mode_client_sbs_game">Client SBS Game</string>
-    <string name="render_mode_client_sbs_movie">Client SBS Movie</string>
-    <string name="render_mode_host_sbs_raw">Host SBS Raw</string>
-    <string name="render_mode_host_sbs_game">Host SBS Game</string>
-    <string name="render_mode_host_sbs_movie">Host SBS Movie</string>
     <!-- Labels on the in-headset XR control bar below the video panel. -->
     <string name="xr_bar_normal">Normal</string>
     <string name="xr_bar_client_sbs_game">Client SBS Game</string>

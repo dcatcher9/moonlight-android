@@ -33,29 +33,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         boolean handleFocusChange(boolean hasWindowFocus);
     }
 
-    public enum StreamMode {
-        MODE_2D,
-        MODE_CLIENT_SBS_GAME,
-        MODE_CLIENT_SBS_MOVIE,
-        // Host-side SBS: the PC sends a real side-by-side frame; the XR compositor splits
-        // it to each eye. Presentation is owned by XrStreamPresenter, not a SurfaceView.
-        MODE_HOST_SBS_RAW,
-        // Host-side SBS driven by a host depth pipeline (2W x H). Same presentation as
-        // MODE_HOST_SBS_RAW; the difference is the client requests SBS_MODE_GAME (async) or
-        // SBS_MODE_MOVIE (sync) from the host.
-        MODE_HOST_SBS_GAME,
-        MODE_HOST_SBS_MOVIE
-    }
-
-    /** True for the host-SBS presentation modes (Raw + host depth), which share XrStreamPresenter. */
-    private static boolean isHostSbsPresentation(StreamMode mode) {
-        return mode == StreamMode.MODE_HOST_SBS_RAW || isHostDepthPresentation(mode);
-    }
-
-    /** True for the host depth pipelines (Game/Movie) — the ones where the host doubles the width. */
-    private static boolean isHostDepthPresentation(StreamMode mode) {
-        return mode == StreamMode.MODE_HOST_SBS_GAME || mode == StreamMode.MODE_HOST_SBS_MOVIE;
-    }
+    // Streaming always uses the single XR route: XrStreamPresenter, starting in the Normal (flat 2D)
+    // presentation, with modes switched from the in-headset control bar (Normal / Host SBS Raw /
+    // Host SBS Game / Host SBS Movie / Client SBS). The legacy plain-2D (SurfaceView) and standalone
+    // on-device SBS (Stereo3DRenderer) render modes are gone.
 
     private Game game;
     private PreferenceConfiguration prefConfig;
@@ -66,12 +47,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private Surface mCurrentSurface;
     private Surface mClientSbsSurface;
     private Runnable onSurfaceAvailable;
-    private StreamMode renderMode = null;
     private InputCallbacks mInputCallbacks;
     private boolean commitTextEnabled = false;
-
-    private double desiredAspectRatio;
-    private boolean fillDisplay = false;
 
     private boolean isSurfaceReady = false;
 
@@ -102,7 +79,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         this.game = game;
         this.prefConfig = prefConfig;
-        this.renderMode = mapIntToStreamMode(prefConfig.renderMode);
 
         isSurfaceReady = false;
         mCurrentSurface = null;
@@ -110,11 +86,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         Context context = getContext();
         LayoutParams childParams = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
 
-        if (renderMode == StreamMode.MODE_2D) {
-            // 2D: the decoder renders directly into the SurfaceView's surface.
-            mSurfaceView = new SurfaceView(context);
-        } else if (isHostSbsPresentation(renderMode)) {
-            // Host-side SBS: the decoder renders into the XR compositor's SurfaceEntity, not an
+        {
+            // Single XR route: the decoder renders into the XR compositor's SurfaceEntity, not an
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
             glSurfaceView.setEGLContextClientVersion(3);
@@ -175,18 +148,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // Start paused so EGL doesn't grab the XR surface initially
             glSurfaceView.onPause();
             mSurfaceView = glSurfaceView;
-
-        } else {
-            // Client SBS (Game/Movie): a GLSurfaceView drives Stereo3DRenderer (on-device AI depth),
-            // which owns the video surface.
-            GLSurfaceView glSurfaceView = new GLSurfaceView(context);
-            glSurfaceView.setEGLContextClientVersion(3);
-            glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
-            boolean movieMode = renderMode == StreamMode.MODE_CLIENT_SBS_MOVIE;
-            mStereoRenderer = new Stereo3DRenderer(glSurfaceView, this, context, prefConfig, movieMode);
-            glSurfaceView.setRenderer(mStereoRenderer);
-            glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-            mSurfaceView = glSurfaceView;
         }
         addView(mSurfaceView, childParams);
 
@@ -206,7 +167,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         // (Normal / Host SBS / Client SBS) are mutually exclusive: entering Client SBS runs
         // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
         // at the same time (so host SBS stops when you switch to Client SBS).
-        if (!isHostSbsPresentation(renderMode) || mStereoRenderer == null) return;
+        if (mStereoRenderer == null) return;
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
 
         if (enable) {
@@ -249,7 +210,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * surface, so the subsequent re-enter rebuilds it at the new XR-surface size.
      */
     public void recycleClientSbs() {
-        if (!isHostSbsPresentation(renderMode) || mStereoRenderer == null) return;
+        if (mStereoRenderer == null) return;
         ((GLSurfaceView) mSurfaceView).onPause();
         switchToClientSbs(true);
     }
@@ -263,7 +224,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * (Game/Movie, where the host doubles the width); Raw host SBS keeps a fixed-size frame.
      */
     public void resizeHostSbsSurface(boolean sbs) {
-        if (!isHostDepthPresentation(renderMode) || mXrPresenter == null || mDestroyed) {
+        if (mXrPresenter == null || mDestroyed) {
             return;
         }
         // Park the decoder on the persistent dummy surface while the XR surface is resized.
@@ -282,54 +243,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
     }
 
-    // --- Aspect Ratio and Scaling Logic ---
-    public void setDesiredAspectRatio(double aspectRatio) {
-        this.desiredAspectRatio = aspectRatio;
-        requestLayout();
-    }
-
-    public void setFillDisplay(boolean fillDisplay) {
-        this.fillDisplay = fillDisplay;
-        requestLayout();
-    }
-
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        if (renderMode != StreamMode.MODE_2D) {
-            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            return;
-        }
-        if (desiredAspectRatio == 0) {
-            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            return;
-        }
-
-        int widthSize = MeasureSpec.getSize(widthMeasureSpec);
-        int heightSize = MeasureSpec.getSize(heightMeasureSpec);
-        int measuredHeight, measuredWidth;
-
-        if (fillDisplay) {
-            if (widthSize < heightSize * desiredAspectRatio) {
-                measuredHeight = heightSize;
-                measuredWidth = (int)(heightSize * desiredAspectRatio);
-            } else {
-                measuredWidth = widthSize;
-                measuredHeight = (int)(widthSize / desiredAspectRatio);
-            }
-        } else {
-            if (widthSize > heightSize * desiredAspectRatio) {
-                measuredHeight = heightSize;
-                measuredWidth = (int)(measuredHeight * desiredAspectRatio);
-            } else {
-                measuredWidth = widthSize;
-                measuredHeight = (int)(measuredWidth / desiredAspectRatio);
-            }
-        }
-
-        setMeasuredDimension(measuredWidth, measuredHeight);
-        int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY);
-        int childHeightMeasureSpec = MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY);
-        measureChildren(childWidthMeasureSpec, childHeightMeasureSpec);
+        // Single XR route: the video is presented in the XR compositor, so there is no on-screen
+        // aspect-ratio fitting to do -- measure normally. (The legacy 2D SurfaceView path did the
+        // aspect-ratio math here.)
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
     }
 
     public void setInputCallbacks(InputCallbacks callbacks) {
@@ -399,15 +318,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mSurfaceView;
     }
 
-    public StreamMode mapIntToStreamMode(int modeIndex) {
-        StreamContainer.StreamMode[] modes = StreamContainer.StreamMode.values();
-        if (modeIndex >= 0 && modeIndex < modes.length) {
-            return modes[modeIndex];
-        } else {
-            return StreamContainer.StreamMode.MODE_2D;
-        }
-    }
-
     private void notifySurfaceReady() {
         isSurfaceReady = true;
         if (onSurfaceAvailable != null) {
@@ -421,19 +331,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        if (renderMode == StreamMode.MODE_2D && width > 0 && height > 0) {
-            mCurrentSurface = holder.getSurface();
-            notifySurfaceReady();
-        }
-
+        // XR route: the video surface is delivered via onStereo3DSurfaceReady, not the holder.
         game.surfaceChanged(holder, format, width, height);
     }
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        if (renderMode == StreamMode.MODE_2D) {
-            isSurfaceReady = false;
-            mCurrentSurface = null;
-        } else if (mStereoRenderer != null) {
+        if (mStereoRenderer != null) {
             mStereoRenderer.onSurfaceDestroyed();
         }
 
@@ -442,10 +345,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     @Override
     public void onStereo3DSurfaceReady(Surface surface) {
-        if (renderMode != StreamMode.MODE_2D) {
-            mCurrentSurface = surface;
-            notifySurfaceReady();
-        }
+        mCurrentSurface = surface;
+        notifySurfaceReady();
     }
 
     public void onDestroy() {

@@ -162,16 +162,6 @@
         <item>OSC_Keyboard_4</item>
         <item>OSC_Keyboard_5</item>
     </string-array>
-    <!-- Single "XR" route: always uses the XrStreamPresenter, starts in the Normal (flat 2D)
-         presentation, and the in-stream bar switches between Normal / Host SBS Raw / Host SBS Game /
-         Host SBS Movie / Client SBS. Value 4 maps to StreamMode.MODE_HOST_SBS_GAME, the XR route.
-         (The other render modes still exist in code; folding them out is a later cleanup.) -->
-    <string-array name="render_mode_names">
-        <item>@string/render_mode_xr</item>
-    </string-array>
-    <string-array name="render_mode_values" translatable="false">
-        <item>4</item>
-    </string-array>
     <string-array name="mouse_mode_names">
         <item>@string/mouse_mode_multi_touch</item>
         <item>@string/mouse_mode_absolute_touch</item>
