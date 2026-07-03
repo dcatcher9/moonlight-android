@@ -28,6 +28,11 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass cl
 }
 
 JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_sendSbsDebugDump(JNIEnv *env, jclass clazz) {
+    LiSendSbsDebugDump();
+}
+
+JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendEmptyPayload(JNIEnv *env, jclass clazz) {
     LiSendEmptyPayload();
 }

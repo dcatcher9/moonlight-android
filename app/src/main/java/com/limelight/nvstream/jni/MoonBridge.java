@@ -365,6 +365,10 @@ public class MoonBridge {
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
     public static native void sendSetSbsMode(int mode);
 
+    // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)
+    // to the host's configured debug dir. For diagnosing 2D->3D reprojection artifacts.
+    public static native void sendSbsDebugDump();
+
     public static native void sendEmptyPayload();
 
     public static native void sendMouseMove(short deltaX, short deltaY);

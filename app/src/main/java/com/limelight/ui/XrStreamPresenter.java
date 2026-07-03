@@ -360,6 +360,9 @@ public class XrStreamPresenter {
         BarItem reset = new BarItem(
                 activity.getString(R.string.xr_bar_reset),
                 R.drawable.ic_xr_reset, /* selectsMode= */ null);
+        BarItem dump = new BarItem(
+                activity.getString(R.string.xr_bar_dump),
+                R.drawable.ic_xr_dump, /* selectsMode= */ null);
         BarItem machines = new BarItem(
                 activity.getString(R.string.xr_bar_machines),
                 R.drawable.ic_computer, /* selectsMode= */ null);
@@ -374,6 +377,7 @@ public class XrStreamPresenter {
         hostSbsMovie.onTap = () -> selectMode(hostSbsMovie);
         stats.onTap = this::toggleStats;
         reset.onTap = this::resetView;
+        dump.onTap = XrStreamPresenter::requestHostDebugDump;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
@@ -386,6 +390,7 @@ public class XrStreamPresenter {
         barItems.add(clientSbs);
         barItems.add(stats);
         barItems.add(reset);
+        barItems.add(dump);
         barItems.add(machines);
         barItems.add(disconnect);
 
@@ -1009,6 +1014,14 @@ public class XrStreamPresenter {
             surfaceEntity.setPose(new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
         }
         repositionControlBar(height);
+    }
+
+    /** Client "Dump 3D" button: ask the host to dump one SBS debug frame (2D source / depth /
+     *  SBS result) to its configured debug dir, for offline diagnosis of the reprojection.
+     *  Only produces files when a host depth-SBS mode is active on the host. */
+    private static void requestHostDebugDump() {
+        LimeLog.info("XR: requesting host SBS debug frame dump");
+        MoonBridge.sendSbsDebugDump();
     }
 
     /** Current pose of a render viewpoint (eye), or null if unavailable. */
