@@ -365,6 +365,19 @@ public class MoonBridge {
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
     public static native void sendSetSbsMode(int mode);
 
+    // Host depth-model registry ids for sendSetDepthModel (Apollo protocol extension). Must match
+    // the DEPTH_MODEL_* values in moonlight-common-c's Limelight.h and config::depth_model_registry().
+    public static final int DEPTH_MODEL_DA_V2_SMALL = 0;      // DA-V2 small (default, fastest).
+    public static final int DEPTH_MODEL_DA_V2_BASE = 1;       // DA-V2 base (more small-feature relief).
+    public static final int DEPTH_MODEL_DA_V3_SMALL = 2;      // DA-V3 small, fp16 (rank-5 + reciprocal).
+    public static final int DEPTH_MODEL_DA_V3_BASE = 3;       // DA-V3 base, fp16.
+    public static final int DEPTH_MODEL_DA_V3_SMALL_FP32 = 4; // DA-V3 small, fp32 (reference build).
+    public static final int DEPTH_MODEL_DA_V3_BASE_FP32 = 5;  // DA-V3 base, fp32 (reference build).
+
+    // Ask the host (Apollo protocol extension) to switch the host-side depth model mid-stream.
+    // id is one of the DEPTH_MODEL_* values above.
+    public static native void sendSetDepthModel(int id);
+
     // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)
     // to the host's configured debug dir. For diagnosing 2D->3D reprojection artifacts.
     public static native void sendSbsDebugDump();

@@ -28,6 +28,12 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass cl
 }
 
 JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_sendSetDepthModel(JNIEnv *env, jclass clazz,
+                                                             jint id) {
+    LiSendSetDepthModel((uint8_t) id);
+}
+
+JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendSbsDebugDump(JNIEnv *env, jclass clazz) {
     LiSendSbsDebugDump();
 }

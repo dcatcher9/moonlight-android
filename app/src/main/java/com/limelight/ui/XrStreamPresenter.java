@@ -14,6 +14,7 @@ import android.widget.Switch;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.xr.runtime.Config;
 import androidx.xr.runtime.DeviceTrackingMode;
@@ -363,6 +364,9 @@ public class XrStreamPresenter {
         BarItem dump = new BarItem(
                 activity.getString(R.string.xr_bar_dump),
                 R.drawable.ic_xr_dump, /* selectsMode= */ null);
+        BarItem model = new BarItem(
+                activity.getString(R.string.xr_bar_model),
+                R.drawable.ic_xr_model, /* selectsMode= */ null);
         BarItem machines = new BarItem(
                 activity.getString(R.string.xr_bar_machines),
                 R.drawable.ic_computer, /* selectsMode= */ null);
@@ -378,6 +382,7 @@ public class XrStreamPresenter {
         stats.onTap = this::toggleStats;
         reset.onTap = this::resetView;
         dump.onTap = XrStreamPresenter::requestHostDebugDump;
+        model.onTap = this::cycleDepthModel;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
@@ -391,6 +396,7 @@ public class XrStreamPresenter {
         barItems.add(stats);
         barItems.add(reset);
         barItems.add(dump);
+        barItems.add(model);
         barItems.add(machines);
         barItems.add(disconnect);
 
@@ -918,6 +924,13 @@ public class XrStreamPresenter {
                            currentPresenterMode == PresenterMode.HOST_SBS_MOVIE ? MoonBridge.SBS_MODE_MOVIE :
                            MoonBridge.SBS_MODE_OFF;
             MoonBridge.sendSetSbsMode(wireMode);
+            // Sync the host to the "Model" tile's current selection whenever a host depth pipeline
+            // is (re)activated, so the client is authoritative and the tile can never desync from
+            // the host's actual model (which otherwise starts on whatever sbs_3d_depth_model config
+            // says). Sent right after the mode so the host coalesces both into one encode rebuild.
+            if (wireMode != MoonBridge.SBS_MODE_OFF) {
+                MoonBridge.sendSetDepthModel(DEPTH_MODEL_CYCLE[depthModelCycleIndex]);
+            }
         }
 
         // Re-pin the surface to the target frame size. Client SBS is handled by switchToClientSbs
@@ -1022,6 +1035,38 @@ public class XrStreamPresenter {
     private static void requestHostDebugDump() {
         LimeLog.info("XR: requesting host SBS debug frame dump");
         MoonBridge.sendSbsDebugDump();
+    }
+
+    // Depth-model cycle for the "Model" tile. Ids match MoonBridge.DEPTH_MODEL_* and the host's
+    // config::depth_model_registry() ordering: DA-V2 baseline, then DA-V3 small (fp32 ref, fp16),
+    // then DA-V3 base (fp32 ref, fp16). (DA-V2 base is omitted as not worth its cost; add
+    // MoonBridge.DEPTH_MODEL_DA_V2_BASE to re-check it.)
+    // NOTE: the first switch to a model whose engine isn't built yet streams flat for a few minutes
+    // while the host builds it in the background (watch the host log for "Saved built engine").
+    private static final int[] DEPTH_MODEL_CYCLE = {
+            MoonBridge.DEPTH_MODEL_DA_V2_SMALL,
+            MoonBridge.DEPTH_MODEL_DA_V3_SMALL_FP32,
+            MoonBridge.DEPTH_MODEL_DA_V3_SMALL,
+            MoonBridge.DEPTH_MODEL_DA_V3_BASE_FP32,
+            MoonBridge.DEPTH_MODEL_DA_V3_BASE,
+    };
+    private static final String[] DEPTH_MODEL_CYCLE_NAMES = {
+            "DA-V2 Small", "DA-V3 Small fp32", "DA-V3 Small fp16", "DA-V3 Base fp32", "DA-V3 Base fp16"};
+    private int depthModelCycleIndex = 0;
+
+    /** Client "Model" tile: cycle the host depth model and tell the host (0x3005). Only meaningful
+     *  while a host depth-SBS mode is active; harmless otherwise. The host rebuilds the encode
+     *  session and reloads the model (building its engine in the background the first time, so the
+     *  first switch to a not-yet-built model streams flat for a bit). */
+    private void cycleDepthModel() {
+        depthModelCycleIndex = (depthModelCycleIndex + 1) % DEPTH_MODEL_CYCLE.length;
+        int id = DEPTH_MODEL_CYCLE[depthModelCycleIndex];
+        String name = DEPTH_MODEL_CYCLE_NAMES[depthModelCycleIndex];
+        LimeLog.info("XR: switching host depth model -> " + name + " (id " + id + ")");
+        MoonBridge.sendSetDepthModel(id);
+        // Tap arrives on the UI thread (View click), so show the toast directly.
+        Toast.makeText(activity, activity.getString(R.string.xr_toast_depth_model, name),
+                Toast.LENGTH_SHORT).show();
     }
 
     /** Current pose of a render viewpoint (eye), or null if unavailable. */
