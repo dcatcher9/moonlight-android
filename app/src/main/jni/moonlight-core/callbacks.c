@@ -38,6 +38,7 @@ static jmethodID BridgeClSetHdrModeMethod;
 static jmethodID BridgeClRumbleTriggersMethod;
 static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
+static jmethodID BridgeClDepthStatusMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
 
@@ -102,6 +103,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClRumbleTriggersMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClRumbleTriggers", "(SSS)V");
     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
+    BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(II)V");
 }
 
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
@@ -355,6 +357,16 @@ void BridgeClSetHdrMode(bool enabled) {
     }
 }
 
+void BridgeClDepthStatus(uint8_t phase, uint8_t modelId) {
+    JNIEnv* env = GetThreadEnv();
+
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClDepthStatusMethod, (jint)phase, (jint)modelId);
+    if ((*env)->ExceptionCheck(env)) {
+        // We will crash here
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
 void BridgeClRumbleTriggers(unsigned short controllerNumber, unsigned short leftTrigger, unsigned short rightTrigger) {
     JNIEnv* env = GetThreadEnv();
 
@@ -426,6 +438,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .rumbleTriggers = BridgeClRumbleTriggers,
         .setMotionEventState = BridgeClSetMotionEventState,
         .setControllerLED = BridgeClSetControllerLED,
+        .depthStatus = BridgeClDepthStatus,
 };
 
 static bool

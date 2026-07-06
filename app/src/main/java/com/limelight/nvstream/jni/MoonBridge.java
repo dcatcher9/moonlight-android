@@ -328,6 +328,13 @@ public class MoonBridge {
         }
     }
 
+    // Host SBS depth-engine phase (Apollo extension 0x3006): 0 = idle, 1 = loading, 2 = ready.
+    public static void bridgeClDepthStatus(int phase, int modelId) {
+        if (connectionListener != null) {
+            connectionListener.depthStatus(phase, modelId);
+        }
+    }
+
     public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         MoonBridge.videoRenderer = videoRenderer;
         MoonBridge.audioRenderer = audioRenderer;
@@ -373,6 +380,7 @@ public class MoonBridge {
     public static final int DEPTH_MODEL_DA_V3_BASE = 3;       // DA-V3 base, fp16.
     public static final int DEPTH_MODEL_DA_V3_SMALL_FP32 = 4; // DA-V3 small, fp32 (reference build).
     public static final int DEPTH_MODEL_DA_V3_BASE_FP32 = 5;  // DA-V3 base, fp32 (reference build).
+    public static final int DEPTH_MODEL_DA3MONO_LARGE = 6;    // DA3MONO-LARGE (monocular DA-V3, 0.35B, V2-level pop).
 
     // Ask the host (Apollo protocol extension) to switch the host-side depth model mid-stream.
     // id is one of the DEPTH_MODEL_* values above.

@@ -9,6 +9,7 @@ import android.view.Surface;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TableLayout;
@@ -88,6 +89,7 @@ public class XrStreamPresenter {
     private static final float BAR_Z_METERS = 0.02f;          // nudge toward viewer vs. the quad
     private static final int TILE_IDLE_COLOR = 0xCC1E2630;    // resting tile fill
     private static final int TILE_ACTIVE_COLOR = 0xFF2C72E0;  // active (selected) mode tile fill
+    private static final int TILE_ACTIVE_BORDER_COLOR = 0xFFFFFFFF;  // border on the active mode tile
     private static final float STATS_WIDTH_METERS = 0.95f;    // performance-stats panel beside quad
     private static final float STATS_HEIGHT_METERS = 1.1f;
     private static final float STATS_GAP_METERS = 0.10f;      // gap between quad edge and stats panel
@@ -126,6 +128,13 @@ public class XrStreamPresenter {
     private TableLayout statsTable;
     private BarItem statsItem;
     private boolean statsVisible;
+
+    /** Small centered panel shown above the quad while the host builds/loads/warms a depth engine
+     *  (driven by the host's 0x3006 depth-status push via {@link #onDepthStatus}). */
+    private PanelEntity depthStatusPanel;
+    private TextView depthStatusText;
+    private static final float DEPTH_STATUS_WIDTH_METERS = 0.9f;
+    private static final float DEPTH_STATUS_HEIGHT_METERS = 0.11f;
 
     // CPU/GPU thermal-zone temp files under /sys/class/thermal (readable by the app on this device),
     // discovered once and bucketed by zone type ("cpu*"/"gpu*"). Temps are reported in milli-°C.
@@ -441,6 +450,7 @@ public class XrStreamPresenter {
         barPanel.setEnabled(true);
 
         createStatsPanel(videoHeightMeters);
+        createDepthStatusPanel(videoHeightMeters);
         createAdjustPanel(videoHeightMeters);
     }
 
@@ -472,6 +482,89 @@ public class XrStreamPresenter {
                 session, root, new FloatSize2d(STATS_WIDTH_METERS, STATS_HEIGHT_METERS),
                 "xr-stats", statsPose(videoHeightMeters), surfaceEntity);
         statsPanel.setEnabled(statsVisible);
+    }
+
+    /**
+     * Centered panel above the quad that appears while the host is spinning up a depth engine
+     * (build/load/warmup) and disappears once depth is live. Shows an indeterminate spinner (no
+     * real progress is available from TensorRT) plus a "Loading &lt;model&gt; depth…" line. Driven
+     * entirely by the host's {@link #onDepthStatus} phase pushes, so it reflects actual host state.
+     */
+    private void createDepthStatusPanel(float videoHeightMeters) {
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.HORIZONTAL);
+        root.setGravity(Gravity.CENTER);
+        root.setBackgroundColor(0xE6101418);
+        int p = dp(12);
+        root.setPadding(p, p, p, p);
+
+        ProgressBar spinner = new ProgressBar(activity);
+        spinner.setIndeterminate(true);
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(dp(28), dp(28));
+        sp.setMargins(0, 0, dp(14), 0);
+        root.addView(spinner, sp);
+
+        depthStatusText = new TextView(activity);
+        depthStatusText.setTextColor(Color.WHITE);
+        depthStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+        root.addView(depthStatusText);
+
+        depthStatusPanel = PanelEntity.create(
+                session, root, new FloatSize2d(DEPTH_STATUS_WIDTH_METERS, DEPTH_STATUS_HEIGHT_METERS),
+                "xr-depth-status", depthStatusPose(videoHeightMeters), surfaceEntity);
+        depthStatusPanel.setEnabled(false);  // hidden until the host reports a loading phase
+    }
+
+    /** Local pose of the depth-status panel: centered just below the control bar. */
+    private Pose depthStatusPose(float videoHeightMeters) {
+        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS - (BAR_HEIGHT_METERS / 2.0f);
+        float y = barBottomY - BAR_GAP_METERS - (DEPTH_STATUS_HEIGHT_METERS / 2.0f);
+        return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
+    }
+
+    private final android.os.Handler depthStatusHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private int depthStatusPendingModel = -1;
+    // Method reference (not a field lambda) so the initializer doesn't read the not-yet-assigned
+    // final `activity` field; the body runs later, once everything is constructed.
+    private final Runnable showDepthStatusRunnable = this::showDepthStatusNow;
+
+    private void showDepthStatusNow() {
+        if (depthStatusPanel != null && !depthStatusPanel.isDisposed()) {
+            if (depthStatusText != null) {
+                depthStatusText.setText(activity.getString(R.string.xr_depth_loading, depthModelName(depthStatusPendingModel)));
+            }
+            depthStatusPanel.setEnabled(true);
+        }
+    }
+
+    /**
+     * Host depth-engine phase push (Apollo 0x3006), on the UI thread: 0 = idle, 1 = loading,
+     * 2 = ready. Show the "loading" indicator on phase 1, hide it on ready/idle. The show is
+     * delayed ~600 ms so an already-cached model (which reports loading→ready almost instantly on
+     * every switch) doesn't flash the panel; only genuinely slow first-use loads surface it.
+     */
+    public void onDepthStatus(int phase, int modelId) {
+        if (depthStatusPanel == null) {
+            return;
+        }
+        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
+        if (phase == 1) {
+            depthStatusPendingModel = modelId;
+            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
+        } else {
+            depthStatusPanel.setEnabled(false);
+        }
+    }
+
+    /** Display name for a host depth-model registry id (falls back to a generic label; the string
+     *  template is "Loading %s depth…", so the fallback reads "Loading 3D depth…"). */
+    private String depthModelName(int modelId) {
+        for (int i = 0; i < DEPTH_MODEL_CYCLE.length; i++) {
+            if (DEPTH_MODEL_CYCLE[i] == modelId) {
+                return DEPTH_MODEL_CYCLE_NAMES[i];
+            }
+        }
+        return "3D";
     }
 
     /** Toggle the performance-stats panel; also flips the pref so the decoder emits perf text. */
@@ -882,6 +975,9 @@ public class XrStreamPresenter {
         if (statsPanel != null) {
             statsPanel.setPose(statsPose(videoHeightMeters));
         }
+        if (depthStatusPanel != null) {
+            depthStatusPanel.setPose(depthStatusPose(videoHeightMeters));
+        }
         if (adjustPanel != null) {
             adjustPanel.setPose(adjustPose(videoHeightMeters));
         }
@@ -924,12 +1020,23 @@ public class XrStreamPresenter {
                            currentPresenterMode == PresenterMode.HOST_SBS_MOVIE ? MoonBridge.SBS_MODE_MOVIE :
                            MoonBridge.SBS_MODE_OFF;
             MoonBridge.sendSetSbsMode(wireMode);
-            // Sync the host to the "Model" tile's current selection whenever a host depth pipeline
-            // is (re)activated, so the client is authoritative and the tile can never desync from
-            // the host's actual model (which otherwise starts on whatever sbs_3d_depth_model config
-            // says). Sent right after the mode so the host coalesces both into one encode rebuild.
+            // Bind the depth model to the mode: Game (async/low-latency) -> DA-V2 Small for speed,
+            // Movie (sync/high-quality) -> DA3MONO Large for pop. Pin the "Model" tile to match so
+            // the two never disagree (a manual Model tap afterward can still override for the mode).
+            // Sent right after the mode so the host coalesces both into one encode rebuild.
             if (wireMode != MoonBridge.SBS_MODE_OFF) {
-                MoonBridge.sendSetDepthModel(DEPTH_MODEL_CYCLE[depthModelCycleIndex]);
+                int wantModel = (wireMode == MoonBridge.SBS_MODE_MOVIE)
+                        ? MoonBridge.DEPTH_MODEL_DA3MONO_LARGE
+                        : MoonBridge.DEPTH_MODEL_DA_V2_SMALL;
+                for (int i = 0; i < DEPTH_MODEL_CYCLE.length; i++) {
+                    if (DEPTH_MODEL_CYCLE[i] == wantModel) {
+                        depthModelCycleIndex = i;
+                        break;
+                    }
+                }
+                MoonBridge.sendSetDepthModel(wantModel);
+                // The host pushes a depth-status "loading" phase (0x3006) if the engine actually
+                // needs to spin up; onDepthStatus() surfaces the indicator, so no toast is needed here.
             }
         }
 
@@ -1038,20 +1145,16 @@ public class XrStreamPresenter {
     }
 
     // Depth-model cycle for the "Model" tile. Ids match MoonBridge.DEPTH_MODEL_* and the host's
-    // config::depth_model_registry() ordering: DA-V2 baseline, then DA-V3 small (fp32 ref, fp16),
-    // then DA-V3 base (fp32 ref, fp16). (DA-V2 base is omitted as not worth its cost; add
-    // MoonBridge.DEPTH_MODEL_DA_V2_BASE to re-check it.)
-    // NOTE: the first switch to a model whose engine isn't built yet streams flat for a few minutes
-    // while the host builds it in the background (watch the host log for "Saved built engine").
+    // config::depth_model_registry() ordering: DA-V2 small baseline, then DA-V3 small/base (fp16).
+    // fp16 only: the fp32 reference builds are far slower and functionally identical (measured
+    // corr 0.9999+ vs fp16). To A/B a fp32 reference or DA-V2 base, add its DEPTH_MODEL_* id here.
+    // NOTE: the first switch to a model whose engine isn't built yet streams flat for a minute or
+    // few while the host builds it in the background (watch the host log for "Saved built engine").
     private static final int[] DEPTH_MODEL_CYCLE = {
             MoonBridge.DEPTH_MODEL_DA_V2_SMALL,
-            MoonBridge.DEPTH_MODEL_DA_V3_SMALL_FP32,
-            MoonBridge.DEPTH_MODEL_DA_V3_SMALL,
-            MoonBridge.DEPTH_MODEL_DA_V3_BASE_FP32,
-            MoonBridge.DEPTH_MODEL_DA_V3_BASE,
+            MoonBridge.DEPTH_MODEL_DA3MONO_LARGE,
     };
-    private static final String[] DEPTH_MODEL_CYCLE_NAMES = {
-            "DA-V2 Small", "DA-V3 Small fp32", "DA-V3 Small fp16", "DA-V3 Base fp32", "DA-V3 Base fp16"};
+    private static final String[] DEPTH_MODEL_CYCLE_NAMES = {"DA-V2 Small", "DA3MONO Large"};
     private int depthModelCycleIndex = 0;
 
     /** Client "Model" tile: cycle the host depth model and tell the host (0x3005). Only meaningful
@@ -1064,7 +1167,7 @@ public class XrStreamPresenter {
         String name = DEPTH_MODEL_CYCLE_NAMES[depthModelCycleIndex];
         LimeLog.info("XR: switching host depth model -> " + name + " (id " + id + ")");
         MoonBridge.sendSetDepthModel(id);
-        // Tap arrives on the UI thread (View click), so show the toast directly.
+        // Brief confirmation of the tap; the host's depth-status push drives the loading indicator.
         Toast.makeText(activity, activity.getString(R.string.xr_toast_depth_model, name),
                 Toast.LENGTH_SHORT).show();
     }
@@ -1218,11 +1321,22 @@ public class XrStreamPresenter {
             this.selectsMode = selectsMode;
         }
 
-        /** Active mode tile gets an accent fill; everything else stays dark. */
+        /** Active mode tile gets a bright accent fill + white border so the current mode is
+         *  unmistakable at a glance; everything else stays a flat dark fill. */
         void setSelected(boolean selected) {
-            if (root != null) {
-                root.setBackgroundColor(selected ? TILE_ACTIVE_COLOR : TILE_IDLE_COLOR);
+            if (root == null) {
+                return;
             }
+            if (selected) {
+                android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+                bg.setColor(TILE_ACTIVE_COLOR);
+                bg.setStroke(dp(3), TILE_ACTIVE_BORDER_COLOR);
+                bg.setCornerRadius(dp(4));
+                root.setBackground(bg);
+            } else {
+                root.setBackgroundColor(TILE_IDLE_COLOR);
+            }
+            root.invalidate();  // force the XR panel to re-render the tile's new fill/border
         }
     }
 
@@ -1323,6 +1437,13 @@ public class XrStreamPresenter {
                 statsPanel.dispose();
             }
             statsPanel = null;
+        }
+        if (depthStatusPanel != null) {
+            depthStatusHandler.removeCallbacks(showDepthStatusRunnable);  // cancel a pending delayed show
+            if (!depthStatusPanel.isDisposed()) {
+                depthStatusPanel.dispose();
+            }
+            depthStatusPanel = null;
         }
         if (adjustPanel != null) {
             if (!adjustPanel.isDisposed()) {

@@ -583,6 +583,7 @@
     <string name="xr_bar_dump">Dump 3D</string>
     <string name="xr_bar_model">Model</string>
     <string name="xr_toast_depth_model">Depth model: %s</string>
+    <string name="xr_depth_loading">Loading %s depth…</string>
     <string name="app_view_back_to_machines">Back to machines</string>
     <string name="action_back">Back</string>
     <string name="xr_bar_disconnect">Disconnect</string>

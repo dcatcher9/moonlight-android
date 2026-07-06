@@ -3730,6 +3730,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
+    public void depthStatus(int phase, int modelId) {
+        // Host SBS depth-engine phase changed; forward to the XR presenter to show/hide the
+        // "loading depth model" indicator. Callback arrives off the UI thread.
+        runOnUiThread(() -> {
+            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onDepthStatus(phase, modelId);
+            }
+        });
+    }
+
+    @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if (!surfaceCreated) {
             throw new IllegalStateException("Surface changed before creation!");
