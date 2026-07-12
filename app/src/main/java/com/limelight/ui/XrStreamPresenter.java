@@ -190,6 +190,9 @@ public class XrStreamPresenter {
      *  second tap that lands within this window (double-tap / impatient re-tap). */
     private static final long MODE_SWITCH_DEBOUNCE_MS = 600L;
     private long lastModeSwitchMs;
+    /** Mode changes resize or hand off the decoder surface, so they remain disabled until the
+     *  decoder confirms that the initial stream frame has reached the XR surface. */
+    private boolean streamPresentationReady;
 
     // Quad aspect ratios (width/height) for the presentations, so the image isn't stretched.
     //  - fullAspect = w/h: the whole frame shown to both eyes (Normal/MONO), and the per-eye view
@@ -461,6 +464,9 @@ public class XrStreamPresenter {
             lp.setMargins(m, m, m, m);
             bar.addView(tile, lp);
             item.root = tile;
+            if (isMode) {
+                item.setEnabled(streamPresentationReady);
+            }
             prevWasMode = isMode;
             first = false;
         }
@@ -1247,6 +1253,21 @@ public class XrStreamPresenter {
         return barItems.size() * BAR_HEIGHT_METERS + dividers * BAR_DIVIDER_METERS;
     }
 
+    /** Enable presentation switching after MediaCodec has rendered the stream's first frame. */
+    public void onFirstVideoFrameRendered() {
+        if (streamPresentationReady) {
+            return;
+        }
+
+        streamPresentationReady = true;
+        for (BarItem item : barItems) {
+            if (item.selectsMode != null) {
+                item.setEnabled(true);
+            }
+        }
+        LimeLog.info("XR: first video frame rendered; presentation switching enabled");
+    }
+
     /** Place a mode's sub-panel so its top-left corner starts at the tile's bottom-left corner. */
     private Pose modeSubpanelPose(float videoHeightMeters, PresenterMode mode,
                                   float panelWidth, float panelHeight, float gap) {
@@ -1307,7 +1328,7 @@ public class XrStreamPresenter {
      * the width changes (when the aspect changes), so the screen keeps its vertical size.
      */
     private void selectMode(BarItem item) {
-        if (item.selectsMode == null || surfaceEntity == null
+        if (!streamPresentationReady || item.selectsMode == null || surfaceEntity == null
                 || item.selectsMode == currentPresenterMode) {
             return;
         }
@@ -1568,6 +1589,7 @@ public class XrStreamPresenter {
                 item.onTap.run();
             }
         });
+        item.tapTarget = col;
         applySelectableForeground(col);
         addBarItemContent(col, item);
 
@@ -1643,6 +1665,7 @@ public class XrStreamPresenter {
         Runnable onTap;
         Runnable onExpand;
         View root;
+        View tapTarget;
         TextView expandIndicator;
 
         BarItem(String label, int iconRes, PresenterMode selectsMode) {
@@ -1661,6 +1684,18 @@ public class XrStreamPresenter {
                             : R.string.xr_expand_mode_options,
                     label));
             expandIndicator.invalidate();
+        }
+
+        void setEnabled(boolean enabled) {
+            if (root != null) {
+                root.setAlpha(enabled ? 1.0f : 0.4f);
+            }
+            if (tapTarget != null) {
+                tapTarget.setEnabled(enabled);
+            }
+            if (expandIndicator != null) {
+                expandIndicator.setEnabled(enabled);
+            }
         }
 
 

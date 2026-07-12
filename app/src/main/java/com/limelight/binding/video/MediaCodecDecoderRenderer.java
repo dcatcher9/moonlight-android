@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jcodec.codecs.h264.H264Utils;
@@ -187,6 +188,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
+    private final AtomicBoolean firstFrameRendered = new AtomicBoolean();
+    private volatile Runnable firstFrameRenderedListener;
 
     private int numSpsIn;
     private int numPpsIn;
@@ -360,6 +363,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     public void setRenderTarget(Surface renderTarget) {
         this.renderTarget = renderTarget;
+    }
+
+    /** Called once MediaCodec confirms that the first video frame reached its output surface. */
+    public void setFirstFrameRenderedListener(Runnable listener) {
+        firstFrameRenderedListener = listener;
+        if (listener != null && firstFrameRendered.get()) {
+            listener.run();
+        }
+    }
+
+    private void notifyFirstFrameRendered() {
+        if (!firstFrameRendered.compareAndSet(false, true)) {
+            return;
+        }
+
+        Runnable listener = firstFrameRenderedListener;
+        if (listener != null) {
+            listener.run();
+        }
     }
 
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
@@ -799,10 +821,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        if (USE_FRAME_RENDER_TIME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
+                    notifyFirstFrameRendered();
                     long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
                     if (delta >= 0 && delta < 1000) {
                         if (USE_FRAME_RENDER_TIME) {

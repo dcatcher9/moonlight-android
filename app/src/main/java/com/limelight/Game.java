@@ -648,6 +648,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 shouldInvertDecoderResolution,
                 glPrefs.glRenderer,
                 this);
+        decoderRenderer.setFirstFrameRenderedListener(() -> runOnUiThread(() -> {
+            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onFirstVideoFrameRendered();
+            }
+        }));
 
 // --- Force tight thresholds (prefConfig.forceTightThresholds) ---
         try {
