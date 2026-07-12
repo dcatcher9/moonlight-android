@@ -27,14 +27,16 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass cl
     LiSendSetSbsMode((uint8_t) mode);
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsProfile(JNIEnv *env, jclass clazz,
                                                              jstring profile) {
     const char* value = (*env)->GetStringUTFChars(env, profile, NULL);
-    if (value != NULL) {
-        LiSendSetSbsProfile(value);
-        (*env)->ReleaseStringUTFChars(env, profile, value);
+    if (value == NULL) {
+        return JNI_FALSE;
     }
+    int result = LiSendSetSbsProfile(value);
+    (*env)->ReleaseStringUTFChars(env, profile, value);
+    return result == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

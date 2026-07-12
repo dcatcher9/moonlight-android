@@ -136,6 +136,7 @@ public class XrStreamPresenter {
     private PanelEntity sbsProfilePanel;
     private LinearLayout sbsProfileListView;
     private TextView hostOptionsStatusText;
+    private String hostOptionsError;
     private boolean sbsProfilePanelVisible;
     private static final float SBS_PROFILE_WIDTH_METERS = 0.90f;
     private static final float SBS_PROFILE_HEIGHT_METERS = 0.62f;
@@ -483,11 +484,6 @@ public class XrStreamPresenter {
         createAdjustPanel(videoHeightMeters);
     }
 
-    /** Request host profile state after NvConnection reports that the control stream is live. */
-    public void onConnectionStarted() {
-        MoonBridge.requestSbsProfiles();
-    }
-
     /**
      * Floating performance-stats panel above the quad, fed by {@link #setStatsText} (which
      * {@code Game.onPerfUpdate} forwards to). Hidden until the Stats tile toggles it. The 2D perf
@@ -587,10 +583,15 @@ public class XrStreamPresenter {
         if (hostOptionsStatusText == null) {
             return;
         }
-        if (sbsProfilePanelVisible && isDepthBusy()) {
+        if (sbsProfilePanelVisible && hostOptionsError != null) {
+            hostOptionsStatusText.setText(hostOptionsError);
+            hostOptionsStatusText.setBackgroundColor(0xFF8B3030);
+            hostOptionsStatusText.setVisibility(View.VISIBLE);
+        } else if (sbsProfilePanelVisible && isDepthBusy()) {
             String profile = currentSbsProfile == null ? "AI" : currentSbsProfile;
             hostOptionsStatusText.setText(activity.getString(
                     depthStatusMessage(depthStatusPhase), profile));
+            hostOptionsStatusText.setBackgroundColor(0xFF34506E);
             hostOptionsStatusText.setVisibility(View.VISIBLE);
         } else {
             hostOptionsStatusText.setVisibility(View.GONE);
@@ -621,7 +622,9 @@ public class XrStreamPresenter {
             depthStatusPanel.setEnabled(false);
         }
         updateHostOptionsStatus();
-        rebuildSbsProfileRows();
+        if (sbsProfilePanelVisible) {
+            rebuildSbsProfileRows();
+        }
     }
 
     /** Profile chooser docked directly below the Host SBS AI mode tile. */
@@ -744,6 +747,7 @@ public class XrStreamPresenter {
         }
         String[] lines = payload.split("\\n");
         currentSbsProfile = lines[0];
+        hostOptionsError = null;
         sbsProfiles.clear();
         for (int i = 1; i < lines.length; i++) {
             if (!lines[i].isEmpty() && !sbsProfiles.contains(lines[i])) {
@@ -753,7 +757,10 @@ public class XrStreamPresenter {
         if (!sbsProfiles.contains(currentSbsProfile)) {
             sbsProfiles.add(currentSbsProfile);
         }
-        rebuildSbsProfileRows();
+        if (sbsProfilePanelVisible) {
+            rebuildSbsProfileRows();
+            updateHostOptionsStatus();
+        }
     }
 
     private void toggleSbsProfilePanel() {
@@ -778,16 +785,25 @@ public class XrStreamPresenter {
             depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
         }
         updateHostOptionsStatus();
-        rebuildSbsProfileRows();
+        if (sbsProfilePanelVisible) {
+            rebuildSbsProfileRows();
+        }
     }
 
     private void selectSbsProfile(String profile) {
         if (profile.equals(currentSbsProfile) || isDepthBusy()) {
             return;
         }
+        if (!MoonBridge.sendSetSbsProfile(profile)) {
+            hostOptionsError = activity.getString(R.string.xr_sbs_profile_send_failed);
+            updateHostOptionsStatus();
+            LimeLog.warning("XR: failed to send host SBS profile request for " + profile);
+            return;
+        }
+        hostOptionsError = null;
         currentSbsProfile = profile;
         rebuildSbsProfileRows();
-        MoonBridge.sendSetSbsProfile(profile);
+        updateHostOptionsStatus();
         LimeLog.info("XR: host SBS profile -> " + profile);
     }
 

@@ -582,6 +582,7 @@
     <string name="xr_client_sbs_options_title">Client SBS AI options</string>
     <string name="xr_sbs_profile_section">PROFILE</string>
     <string name="xr_sbs_profile_current">Current</string>
+    <string name="xr_sbs_profile_send_failed">Could not send the profile change. Check the host connection.</string>
     <string name="xr_sbs_profiles_loading">Loading profiles…</string>
     <string name="xr_bar_machines">Machines</string>
     <string name="xr_bar_stats">Stats</string>

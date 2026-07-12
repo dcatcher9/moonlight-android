@@ -376,7 +376,8 @@ public class MoonBridge {
 
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
     public static native void sendSetSbsMode(int mode);
-    public static native void sendSetSbsProfile(String profile);
+    /** Returns true when the profile request was accepted by the local control stream. */
+    public static native boolean sendSetSbsProfile(String profile);
     public static native void requestSbsProfiles();
 
     // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)

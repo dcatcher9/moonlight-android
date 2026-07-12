@@ -538,21 +538,16 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
 }
 
 void BridgeClSbsProfileList(const char* profiles, int length) {
+    (void) length;
     JNIEnv* env = GetThreadEnv();
-    jbyteArray bytes = (*env)->NewByteArray(env, length);
-    if (bytes == NULL) {
+    // Apollo validates profile names as ASCII and the control callback supplies a trailing NUL.
+    // NewStringUTF avoids repeated FindClass/GetMethodID work for every profile-list push.
+    jstring value = (*env)->NewStringUTF(env, profiles);
+    if (value == NULL) {
         return;
     }
-    (*env)->SetByteArrayRegion(env, bytes, 0, length, (const jbyte*) profiles);
-    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
-    jmethodID ctor = (*env)->GetMethodID(env, stringClass, "<init>", "([BLjava/lang/String;)V");
-    jstring utf8 = (*env)->NewStringUTF(env, "UTF-8");
-    jstring value = (jstring) (*env)->NewObject(env, stringClass, ctor, bytes, utf8);
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSbsProfileListMethod, value);
     (*env)->DeleteLocalRef(env, value);
-    (*env)->DeleteLocalRef(env, utf8);
-    (*env)->DeleteLocalRef(env, stringClass);
-    (*env)->DeleteLocalRef(env, bytes);
     if ((*env)->ExceptionCheck(env)) {
         (*JVM)->DetachCurrentThread(JVM);
     }

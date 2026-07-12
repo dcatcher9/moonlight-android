@@ -3626,10 +3626,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connected = true;
                 connecting = false;
                 updatePipAutoEnter();
-                if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                    streamContainer.getXrPresenter().onConnectionStarted();
-                }
-
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
                 // when the spinner gets displayed. On Android Q, even now

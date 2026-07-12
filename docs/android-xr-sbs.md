@@ -290,14 +290,18 @@ Apollo sends the current profile followed by all available profile names on encr
 packet `0x3007`. **Host SBS AI** and **Client SBS AI** share a split-tile interaction: the main
 icon/label selects an inactive mode, then toggles its options panel on subsequent taps while active.
 A full-tile-width bottom chevron strip provides the same toggle and makes expansion discoverable
-without requiring precise gaze targeting. Each
-panel's top-left corner aligns beneath its tile's bottom-left corner. The Host panel currently
+without requiring precise gaze targeting. Each panel's top-left corner aligns beneath its tile's
+bottom-left corner. The Host panel currently
 contains large, full-width radio-card profile rows and can grow to hold more host options; selecting
 a host-advertised name sends it on `0x3005` immediately and keeps the panel open for quick A/B
 switching. No model or profile names are hard-coded in Artemis. While the panel is open, `0x3006`
 loading/device-initialization status appears inline under its title and profile rows are temporarily
 disabled; when it is closed, the existing floating status panel is the fallback. Selection is per
 stream and can be changed while Host SBS AI is live.
+
+The remaining three bytes of the four-byte `0x3003` payload are reserved and zero. Apollo performs
+aspect normalization as part of its host image-warp geometry; it does not depend on the XR panel's
+physical size or placement.
 
 ## Testing
 
