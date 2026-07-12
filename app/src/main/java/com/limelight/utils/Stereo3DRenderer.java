@@ -455,7 +455,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 if (!isMovieMode && !clientSbs) {
                     glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
                 } else {
-                    // Client SBS / movie: render on demand only. Re-rendering unchanged full-eye
+                    // Client SBS AI / legacy movie renderer: render on demand only. Re-rendering unchanged full-eye
                     // frames every vsync fills the compositor's buffer queue, so a live param change
                     // lands behind several already-queued stale frames and the 3D effect visibly
                     // trails. On-demand keeps the queue shallow (and cuts GPU/heat). New video frames

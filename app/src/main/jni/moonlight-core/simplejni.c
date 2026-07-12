@@ -28,9 +28,18 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass cl
 }
 
 JNIEXPORT void JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_sendSetDepthModel(JNIEnv *env, jclass clazz,
-                                                             jint id) {
-    LiSendSetDepthModel((uint8_t) id);
+Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsProfile(JNIEnv *env, jclass clazz,
+                                                             jstring profile) {
+    const char* value = (*env)->GetStringUTFChars(env, profile, NULL);
+    if (value != NULL) {
+        LiSendSetSbsProfile(value);
+        (*env)->ReleaseStringUTFChars(env, profile, value);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_requestSbsProfiles(JNIEnv *env, jclass clazz) {
+    LiRequestSbsProfiles();
 }
 
 JNIEXPORT void JNICALL

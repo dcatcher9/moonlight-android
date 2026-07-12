@@ -39,8 +39,11 @@ static jmethodID BridgeClRumbleTriggersMethod;
 static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
 static jmethodID BridgeClDepthStatusMethod;
+static jmethodID BridgeClSbsProfileListMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
+
+void BridgeClSbsProfileList(const char* profiles, int length);
 
 void DetachThread(void* context) {
     (*JVM)->DetachCurrentThread(JVM);
@@ -103,7 +106,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClRumbleTriggersMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClRumbleTriggers", "(SSS)V");
     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
-    BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(II)V");
+    BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(I)V");
+    BridgeClSbsProfileListMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSbsProfileList", "(Ljava/lang/String;)V");
 }
 
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
@@ -357,10 +361,10 @@ void BridgeClSetHdrMode(bool enabled) {
     }
 }
 
-void BridgeClDepthStatus(uint8_t phase, uint8_t modelId) {
+void BridgeClDepthStatus(uint8_t phase) {
     JNIEnv* env = GetThreadEnv();
 
-    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClDepthStatusMethod, (jint)phase, (jint)modelId);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClDepthStatusMethod, (jint)phase);
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
         (*JVM)->DetachCurrentThread(JVM);
@@ -439,6 +443,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .setMotionEventState = BridgeClSetMotionEventState,
         .setControllerLED = BridgeClSetControllerLED,
         .depthStatus = BridgeClDepthStatus,
+        .sbsProfileList = BridgeClSbsProfileList,
 };
 
 static bool
@@ -530,4 +535,25 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
     }
 
     return ret;
+}
+
+void BridgeClSbsProfileList(const char* profiles, int length) {
+    JNIEnv* env = GetThreadEnv();
+    jbyteArray bytes = (*env)->NewByteArray(env, length);
+    if (bytes == NULL) {
+        return;
+    }
+    (*env)->SetByteArrayRegion(env, bytes, 0, length, (const jbyte*) profiles);
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    jmethodID ctor = (*env)->GetMethodID(env, stringClass, "<init>", "([BLjava/lang/String;)V");
+    jstring utf8 = (*env)->NewStringUTF(env, "UTF-8");
+    jstring value = (jstring) (*env)->NewObject(env, stringClass, ctor, bytes, utf8);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSbsProfileListMethod, value);
+    (*env)->DeleteLocalRef(env, value);
+    (*env)->DeleteLocalRef(env, utf8);
+    (*env)->DeleteLocalRef(env, stringClass);
+    (*env)->DeleteLocalRef(env, bytes);
+    if ((*env)->ExceptionCheck(env)) {
+        (*JVM)->DetachCurrentThread(JVM);
+    }
 }

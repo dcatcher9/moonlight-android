@@ -329,9 +329,15 @@ public class MoonBridge {
     }
 
     // Host SBS depth-engine phase (Apollo extension 0x3006): 0 = idle, 1 = loading, 2 = ready.
-    public static void bridgeClDepthStatus(int phase, int modelId) {
+    public static void bridgeClDepthStatus(int phase) {
         if (connectionListener != null) {
-            connectionListener.depthStatus(phase, modelId);
+            connectionListener.depthStatus(phase);
+        }
+    }
+
+    public static void bridgeClSbsProfileList(String profiles) {
+        if (connectionListener != null) {
+            connectionListener.sbsProfileList(profiles);
         }
     }
 
@@ -365,26 +371,13 @@ public class MoonBridge {
 
     // Host-side SBS modes for sendSetSbsMode (Apollo protocol extension). Must match the
     // SBS_MODE_* values in moonlight-common-c's Limelight.h.
-    public static final int SBS_MODE_OFF = 0;   // No host depth; plain W x H frame.
-    public static final int SBS_MODE_GAME = 1;  // Async low-latency depth; 2W x H frame.
-    public static final int SBS_MODE_MOVIE = 2; // Sync high-latency depth; 2W x H frame (future).
+    public static final int SBS_MODE_OFF = 0; // No host depth; plain W x H frame.
+    public static final int SBS_MODE_AI = 1;  // Enable Apollo's selected SBS profile; 2W x H frame.
 
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
     public static native void sendSetSbsMode(int mode);
-
-    // Host depth-model registry ids for sendSetDepthModel (Apollo protocol extension). Must match
-    // the DEPTH_MODEL_* values in moonlight-common-c's Limelight.h and config::depth_model_registry().
-    public static final int DEPTH_MODEL_DA_V2_SMALL = 0;      // DA-V2 small (default, fastest).
-    public static final int DEPTH_MODEL_DA_V2_BASE = 1;       // DA-V2 base (more small-feature relief).
-    public static final int DEPTH_MODEL_DA_V3_SMALL = 2;      // DA-V3 small, fp16 (rank-5 + reciprocal).
-    public static final int DEPTH_MODEL_DA_V3_BASE = 3;       // DA-V3 base, fp16.
-    public static final int DEPTH_MODEL_DA_V3_SMALL_FP32 = 4; // DA-V3 small, fp32 (reference build).
-    public static final int DEPTH_MODEL_DA_V3_BASE_FP32 = 5;  // DA-V3 base, fp32 (reference build).
-    public static final int DEPTH_MODEL_DA3MONO_LARGE = 6;    // DA3MONO-LARGE (monocular DA-V3, 0.35B, V2-level pop).
-
-    // Ask the host (Apollo protocol extension) to switch the host-side depth model mid-stream.
-    // id is one of the DEPTH_MODEL_* values above.
-    public static native void sendSetDepthModel(int id);
+    public static native void sendSetSbsProfile(String profile);
+    public static native void requestSbsProfiles();
 
     // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)
     // to the host's configured debug dir. For diagnosing 2D->3D reprojection artifacts.

@@ -112,6 +112,8 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.preference.PreferenceManager;
 
 import android.os.Looper;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
@@ -225,6 +227,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private MediaCodecDecoderRenderer decoderRenderer;
+    // The host HDR-mode callback is authoritative. Codec bit depth is not: Main10 can carry SDR.
+    private volatile boolean streamHdrActive;
+    private volatile int streamHdrMaxContentLightLevel;
     private boolean reportedCrash;
 
     private WifiManager.WifiLock highPerfWifiLock;
@@ -422,7 +427,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             boolean portraitMode = currentOrientation == Configuration.ORIENTATION_PORTRAIT;
             shouldInvertDecoderResolution = portraitMode && prefConfig.autoInvertVideoResolution;
 
-            // Host depth SBS (Game/Movie) keeps the full requested resolution for 2D. The per-eye
+            // Host SBS AI keeps the full requested resolution for 2D. The per-eye
             // cap only applies when SBS is actually switched on: the host then caps the packed frame
             // to the encoder max (rendering the SBS directly at that target), and the client resizes
             // its decoder/XR surface for the capped frame. So no launch-time clamp here.
@@ -3621,6 +3626,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connected = true;
                 connecting = false;
                 updatePipAutoEnter();
+                if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                    streamContainer.getXrPresenter().onConnectionStarted();
+                }
 
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
@@ -3716,7 +3724,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
         LimeLog.info("Display HDR mode: " + (enabled ? "enabled" : "disabled"));
+        streamHdrActive = enabled;
+        streamHdrMaxContentLightLevel = enabled ? parseMaxContentLightLevel(hdrMetadata) : 0;
         decoderRenderer.setHdrMode(enabled, hdrMetadata);
+        runOnUiThread(() -> {
+            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onHdrModeChanged();
+            }
+        });
+    }
+
+    static int parseMaxContentLightLevel(byte[] hdrMetadata) {
+        // SS_HDR_METADATA: primaries (12 bytes), white point (4), mastering luminance (4),
+        // then MaxCLL as a little-endian uint16 at offset 20.
+        if (hdrMetadata == null || hdrMetadata.length < 22) {
+            return 0;
+        }
+        return ByteBuffer.wrap(hdrMetadata)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .getShort(20) & 0xFFFF;
     }
 
     @Override
@@ -3730,12 +3756,21 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void depthStatus(int phase, int modelId) {
+    public void depthStatus(int phase) {
         // Host SBS depth-engine phase changed; forward to the XR presenter to show/hide the
         // "loading depth model" indicator. Callback arrives off the UI thread.
         runOnUiThread(() -> {
             if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onDepthStatus(phase, modelId);
+                streamContainer.getXrPresenter().onDepthStatus(phase);
+            }
+        });
+    }
+
+    @Override
+    public void sbsProfileList(String profiles) {
+        runOnUiThread(() -> {
+            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onSbsProfileList(profiles);
             }
         });
     }
@@ -3763,10 +3798,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    /** True when the negotiated stream is actually 10-bit HDR (not just the enableHdr request). */
+    /** True when the host reports that the streamed display is currently HDR. */
     public boolean isStreamHdrActive() {
+        return streamHdrActive;
+    }
+
+    public int getStreamHdrMaxContentLightLevel() {
+        return streamHdrMaxContentLightLevel;
+    }
+
+    public int getStreamColorRange() {
         return decoderRenderer != null
-                && (decoderRenderer.getActiveVideoFormat() & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
+                ? decoderRenderer.getActualColorRange()
+                : MoonBridge.COLOR_RANGE_LIMITED;
     }
 
     @Override
@@ -3909,13 +3953,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                // XR stats panel so the "Stats" bar toggle can show it in the headset. HDR reflects
-                // the actual negotiated stream format (10-bit), not just the enableHdr request.
+                // XR stats panel so the "Stats" bar toggle can show it in the headset.
                 if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                    boolean hdrActive = decoderRenderer != null
-                            && (decoderRenderer.getActiveVideoFormat()
-                                & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
-                    streamContainer.getXrPresenter().setStatsText(text, hdrActive);
+                    streamContainer.getXrPresenter().setStatsText(text, streamHdrActive);
                 }
             }
         });

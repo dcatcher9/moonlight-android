@@ -573,16 +573,15 @@
     <string name="mouse_mode_multi_touch">Multi touch</string>
     <!-- Labels on the in-headset XR control bar below the video panel. -->
     <string name="xr_bar_normal">Normal</string>
-    <string name="xr_bar_client_sbs_game">Client SBS Game</string>
+    <string name="xr_bar_client_sbs_ai">Client SBS AI</string>
     <string name="xr_bar_host_sbs_raw">Host SBS Raw</string>
-    <string name="xr_bar_host_sbs_game">Host SBS Game</string>
-    <string name="xr_bar_host_sbs_movie">Host SBS Movie</string>
+    <string name="xr_bar_host_sbs_ai">Host SBS AI</string>
+    <string name="xr_sbs_profiles_title">SBS profile</string>
+    <string name="xr_sbs_profiles_loading">Loading profiles…</string>
     <string name="xr_bar_machines">Machines</string>
     <string name="xr_bar_stats">Stats</string>
     <string name="xr_bar_reset">Reset</string>
     <string name="xr_bar_dump">Dump 3D</string>
-    <string name="xr_bar_model">Model</string>
-    <string name="xr_toast_depth_model">Depth model: %s</string>
     <string name="xr_depth_loading">Loading %s depth…</string>
     <string name="app_view_back_to_machines">Back to machines</string>
     <string name="action_back">Back</string>

@@ -35,7 +35,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     // Streaming always uses the single XR route: XrStreamPresenter, starting in the Normal (flat 2D)
     // presentation, with modes switched from the in-headset control bar (Normal / Host SBS Raw /
-    // Host SBS Game / Host SBS Movie / Client SBS). The legacy plain-2D (SurfaceView) and standalone
+    // Host SBS AI / Client SBS AI). The legacy plain-2D (SurfaceView) and standalone
     // on-device SBS (Stereo3DRenderer) render modes are gone.
 
     private Game game;
@@ -67,7 +67,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         setFocusableInTouchMode(true);
     }
 
-    /** The XR presenter in the host-SBS presentation modes (Raw + Game/Movie), else null. Lets {@code Game} forward perf text. */
+    /** The XR presenter for Raw/AI host SBS and Client SBS AI. Lets {@code Game} forward perf text. */
     public XrStreamPresenter getXrPresenter() {
         return mXrPresenter;
     }
@@ -163,8 +163,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     public void switchToClientSbs(boolean enable) {
-        // Available in any host-SBS presentation (Raw + Game/Movie). The three presentations
-        // (Normal / Host SBS / Client SBS) are mutually exclusive: entering Client SBS runs
+        // Available in any host-SBS presentation (Raw or AI). The presentations
+        // (Normal / Host SBS / Client SBS AI) are mutually exclusive: entering Client SBS runs
         // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
         // at the same time (so host SBS stops when you switch to Client SBS).
         if (mStereoRenderer == null) return;
@@ -221,7 +221,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * Mirrors {@link #switchToClientSbs}'s dummy-surface handoff so MediaCodec never sees a
      * transient/garbage surface. The decoder's adaptive playback absorbs the host-driven
      * resolution change that accompanies the switch. Only meaningful in the host depth modes
-     * (Game/Movie, where the host doubles the width); Raw host SBS keeps a fixed-size frame.
+     * (Host SBS AI, where the host doubles the width); Raw host SBS keeps a fixed-size frame.
      */
     public void resizeHostSbsSurface(boolean sbs) {
         if (mXrPresenter == null || mDestroyed) {

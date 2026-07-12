@@ -222,7 +222,7 @@ public class PreferenceConfiguration {
     // The render-mode preference is deprecated: streaming always uses the single XR route (starts
     // in Normal/2D, modes switched from the in-headset bar). The per-variant render modes are gone.
 
-    // Max per-eye width for the host depth modes (Game/Movie): the host doubles this to 2W, which
+    // Max per-eye width for Host SBS AI: the host doubles this to 2W, which
     // must fit the encoder's max width (NVENC HEVC/AV1 = 8192). Keep 2*this <= that cap. Mirrors the
     // host's sbs_3d_max_encode_width (default 8192).
     public static final int MAX_HOST_SBS_EYE_WIDTH = 4096;
@@ -409,7 +409,7 @@ public class PreferenceConfiguration {
     }
 
     /**
-     * The XR route can switch to a host depth mode (Game/Movie) at any time via the bar, so the
+     * The XR route can switch to Host SBS AI at any time via the bar, so the
      * host may double the encoded width to a packed 2W frame; the decoder always pre-sizes for it.
      */
     public boolean isHostDoubledWidthMode() {

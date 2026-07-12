@@ -11,11 +11,11 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
+import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.xr.runtime.Config;
 import androidx.xr.runtime.DeviceTrackingMode;
@@ -54,7 +54,7 @@ import java.util.List;
 
 /**
  * Presentation owner for the single XR route ({@code MODE_XR}): starts in the Normal (flat 2D)
- * presentation and switches Host SBS Raw/Game/Movie and Client SBS from the in-headset control bar.
+ * presentation and switches Host SBS Raw/AI and Client SBS AI from the in-headset control bar.
  *
  * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
  * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR
@@ -72,7 +72,7 @@ import java.util.List;
  * <p>The quad is placed ~2 m in front, sized to one eye's aspect, and the user can move/resize it
  * (with a minimum distance clamp). A floating control bar beneath it offers single-select
  * presentation modes (Normal / Host SBS / Client SBS) plus Machines and Disconnect actions.
- * Switching presentations re-pins the surface and, in the host depth modes (Game/Movie), drives
+ * Switching presentations re-pins the surface and, in the host AI depth mode, drives
  * the host's SBS pipeline on/off. See docs/android-xr-sbs.md. Still open: session lifecycle on
  * pause/resume (see {@link #onDestroy}).
  */
@@ -127,6 +127,14 @@ public class XrStreamPresenter {
     private PanelEntity statsPanel;
     private TableLayout statsTable;
     private BarItem statsItem;
+    private final List<String> sbsProfiles = new ArrayList<>();
+    private String currentSbsProfile;
+    private PanelEntity sbsProfilePanel;
+    private LinearLayout sbsProfileListView;
+    private boolean sbsProfilePanelVisible;
+    private static final float SBS_PROFILE_WIDTH_METERS = 0.72f;
+    private static final float SBS_PROFILE_HEIGHT_METERS = 0.44f;
+    private static final float SBS_PROFILE_GAP_METERS = 0.03f;
     private boolean statsVisible;
 
     /** Small centered panel shown above the quad while the host builds/loads/warms a depth engine
@@ -155,15 +163,13 @@ public class XrStreamPresenter {
     public enum PresenterMode {
         NORMAL,
         HOST_SBS_RAW,
-        HOST_SBS_GAME,
-        HOST_SBS_MOVIE,
-        CLIENT_SBS_GAME
+        HOST_SBS_AI,
+        CLIENT_SBS_AI
     }
 
-    /** The host depth presentations (Game async / Movie sync) — both make the host emit a packed
-     *  2W' x H' side-by-side frame; they differ only in the wire mode sent (GAME vs MOVIE). */
+    /** Host SBS AI makes the host emit a packed 2W' x H' side-by-side frame. */
     private static boolean isHostDepthPresenterMode(PresenterMode mode) {
-        return mode == PresenterMode.HOST_SBS_GAME || mode == PresenterMode.HOST_SBS_MOVIE;
+        return mode == PresenterMode.HOST_SBS_AI;
     }
 
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
@@ -180,7 +186,7 @@ public class XrStreamPresenter {
 
     // Quad aspect ratios (width/height) for the presentations, so the image isn't stretched.
     //  - fullAspect = w/h: the whole frame shown to both eyes (Normal/MONO), and the per-eye view
-    //    in the host depth modes (Game/Movie) and Client SBS, whose packed frame is a
+    //    in Host SBS AI and Client SBS AI, whose packed frame is a
     //    proportionally-scaled 2D so each eye keeps the 2D aspect.
     //  - perEyeAspect: Raw host SBS only — its packed frame is a fixed 2W-wide side-by-side at the
     //    negotiated width, so each eye is half as wide, (w/2)/h. (For the depth modes this is set
@@ -243,12 +249,12 @@ public class XrStreamPresenter {
 
         // Every session starts in NORMAL (2D): the decoder feeds a plain W x H frame shown to both
         // eyes. Switching to a stereo mode changes BOTH the compositor split AND the frame the host
-        // sends — a host depth mode (Game/Movie) -> a packed 2W' x H' side-by-side frame (capped to
+        // sends — Host SBS AI -> a packed 2W' x H' side-by-side frame (capped to
         // the encoder max), Client SBS -> on-device depth packed into a 2W surface. selectMode
         // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
         //
         // Quad aspect handling differs by host-SBS flavor:
-        //  - Host depth (Game/Movie): starts 2D (W x H) and switches to a packed SBS that is a
+        //  - Host SBS AI: starts 2D (W x H) and switches to a packed SBS that is a
         //    proportionally-scaled 2D, so the per-eye aspect equals the 2D aspect (full == per-eye);
         //    the surface is re-pinned per mode (see setHostSurfaceSize).
         //  - Raw host SBS: the frame is an already-packed 2W-wide side-by-side at the negotiated
@@ -352,18 +358,15 @@ public class XrStreamPresenter {
         BarItem normal = new BarItem(
                 activity.getString(R.string.xr_bar_normal),
                 R.drawable.ic_xr_mode_normal, PresenterMode.NORMAL);
-        BarItem clientSbs = new BarItem(
-                activity.getString(R.string.xr_bar_client_sbs_game),
-                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS_GAME);
+        BarItem clientSbsAi = new BarItem(
+                activity.getString(R.string.xr_bar_client_sbs_ai),
+                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS_AI);
         BarItem hostSbsRaw = new BarItem(
                 activity.getString(R.string.xr_bar_host_sbs_raw),
                 R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_RAW);
-        BarItem hostSbs = new BarItem(
-                activity.getString(R.string.xr_bar_host_sbs_game),
-                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_GAME);
-        BarItem hostSbsMovie = new BarItem(
-                activity.getString(R.string.xr_bar_host_sbs_movie),
-                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_MOVIE);
+        BarItem hostSbsAi = new BarItem(
+                activity.getString(R.string.xr_bar_host_sbs_ai),
+                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_AI);
         BarItem stats = new BarItem(
                 activity.getString(R.string.xr_bar_stats),
                 R.drawable.ic_xr_stats, /* selectsMode= */ null);
@@ -373,9 +376,6 @@ public class XrStreamPresenter {
         BarItem dump = new BarItem(
                 activity.getString(R.string.xr_bar_dump),
                 R.drawable.ic_xr_dump, /* selectsMode= */ null);
-        BarItem model = new BarItem(
-                activity.getString(R.string.xr_bar_model),
-                R.drawable.ic_xr_model, /* selectsMode= */ null);
         BarItem machines = new BarItem(
                 activity.getString(R.string.xr_bar_machines),
                 R.drawable.ic_computer, /* selectsMode= */ null);
@@ -384,14 +384,17 @@ public class XrStreamPresenter {
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
 
         normal.onTap = () -> selectMode(normal);
-        clientSbs.onTap = () -> selectMode(clientSbs);
+        clientSbsAi.onTap = () -> selectMode(clientSbsAi);
         hostSbsRaw.onTap = () -> selectMode(hostSbsRaw);
-        hostSbs.onTap = () -> selectMode(hostSbs);
-        hostSbsMovie.onTap = () -> selectMode(hostSbsMovie);
+        hostSbsAi.onTap = () -> {
+            selectMode(hostSbsAi);
+            if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
+                toggleSbsProfilePanel();
+            }
+        };
         stats.onTap = this::toggleStats;
         reset.onTap = this::resetView;
         dump.onTap = XrStreamPresenter::requestHostDebugDump;
-        model.onTap = this::cycleDepthModel;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
@@ -399,13 +402,11 @@ public class XrStreamPresenter {
         barItems.clear();
         barItems.add(normal);
         barItems.add(hostSbsRaw);
-        barItems.add(hostSbs);
-        barItems.add(hostSbsMovie);
-        barItems.add(clientSbs);
+        barItems.add(hostSbsAi);
+        barItems.add(clientSbsAi);
         barItems.add(stats);
         barItems.add(reset);
         barItems.add(dump);
-        barItems.add(model);
         barItems.add(machines);
         barItems.add(disconnect);
 
@@ -451,7 +452,13 @@ public class XrStreamPresenter {
 
         createStatsPanel(videoHeightMeters);
         createDepthStatusPanel(videoHeightMeters);
+        createSbsProfilePanel(videoHeightMeters);
         createAdjustPanel(videoHeightMeters);
+    }
+
+    /** Request host profile state after NvConnection reports that the control stream is live. */
+    public void onConnectionStarted() {
+        MoonBridge.requestSbsProfiles();
     }
 
     /**
@@ -523,7 +530,6 @@ public class XrStreamPresenter {
     }
 
     private final android.os.Handler depthStatusHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-    private int depthStatusPendingModel = -1;
     // Method reference (not a field lambda) so the initializer doesn't read the not-yet-assigned
     // final `activity` field; the body runs later, once everything is constructed.
     private final Runnable showDepthStatusRunnable = this::showDepthStatusNow;
@@ -531,7 +537,8 @@ public class XrStreamPresenter {
     private void showDepthStatusNow() {
         if (depthStatusPanel != null && !depthStatusPanel.isDisposed()) {
             if (depthStatusText != null) {
-                depthStatusText.setText(activity.getString(R.string.xr_depth_loading, depthModelName(depthStatusPendingModel)));
+                String profile = currentSbsProfile == null ? "AI" : currentSbsProfile;
+                depthStatusText.setText(activity.getString(R.string.xr_depth_loading, profile));
             }
             depthStatusPanel.setEnabled(true);
         }
@@ -543,28 +550,129 @@ public class XrStreamPresenter {
      * delayed ~600 ms so an already-cached model (which reports loading→ready almost instantly on
      * every switch) doesn't flash the panel; only genuinely slow first-use loads surface it.
      */
-    public void onDepthStatus(int phase, int modelId) {
+    public void onDepthStatus(int phase) {
         if (depthStatusPanel == null) {
             return;
         }
         depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
         if (phase == 1) {
-            depthStatusPendingModel = modelId;
             depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
         } else {
             depthStatusPanel.setEnabled(false);
         }
     }
 
-    /** Display name for a host depth-model registry id (falls back to a generic label; the string
-     *  template is "Loading %s depth…", so the fallback reads "Loading 3D depth…"). */
-    private String depthModelName(int modelId) {
-        for (int i = 0; i < DEPTH_MODEL_CYCLE.length; i++) {
-            if (DEPTH_MODEL_CYCLE[i] == modelId) {
-                return DEPTH_MODEL_CYCLE_NAMES[i];
+    /** Profile chooser docked directly below the Host SBS AI mode tile. */
+    private void createSbsProfilePanel(float videoHeightMeters) {
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xEE101418);
+        int padding = dp(12);
+        root.setPadding(padding, padding, padding, padding);
+
+        TextView title = new TextView(activity);
+        title.setText(R.string.xr_sbs_profiles_title);
+        title.setTextColor(TILE_ACTIVE_COLOR);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        title.setPadding(dp(8), dp(4), dp(8), dp(8));
+        root.addView(title);
+
+        sbsProfileListView = new LinearLayout(activity);
+        sbsProfileListView.setOrientation(LinearLayout.VERTICAL);
+        ScrollView scroll = new ScrollView(activity);
+        scroll.addView(sbsProfileListView);
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        rebuildSbsProfileRows();
+
+        sbsProfilePanel = PanelEntity.create(
+                session, root,
+                new FloatSize2d(SBS_PROFILE_WIDTH_METERS, SBS_PROFILE_HEIGHT_METERS),
+                "xr-sbs-profiles", sbsProfilePose(videoHeightMeters), surfaceEntity);
+        sbsProfilePanel.setEnabled(false);
+    }
+
+    private void rebuildSbsProfileRows() {
+        if (sbsProfileListView == null) {
+            return;
+        }
+        sbsProfileListView.removeAllViews();
+        if (sbsProfiles.isEmpty()) {
+            TextView loading = new TextView(activity);
+            loading.setText(R.string.xr_sbs_profiles_loading);
+            loading.setTextColor(Color.LTGRAY);
+            loading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f);
+            loading.setPadding(dp(12), dp(14), dp(12), dp(14));
+            sbsProfileListView.addView(loading);
+            return;
+        }
+        for (String profile : sbsProfiles) {
+            TextView row = new TextView(activity);
+            row.setText(profile);
+            row.setTextColor(Color.WHITE);
+            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(16), dp(14), dp(16), dp(14));
+            row.setClickable(true);
+            row.setFocusable(true);
+            if (profile.equals(currentSbsProfile)) {
+                row.setBackgroundColor(TILE_ACTIVE_COLOR);
+            } else {
+                row.setBackgroundColor(TILE_IDLE_COLOR);
+            }
+            row.setOnClickListener(v -> selectSbsProfile(profile));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.setMargins(0, dp(2), 0, dp(2));
+            sbsProfileListView.addView(row, params);
+        }
+    }
+
+    /** Host-advertised profile state. First line is active; remaining lines are selectable names. */
+    public void onSbsProfileList(String payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        String[] lines = payload.split("\\n");
+        currentSbsProfile = lines[0];
+        sbsProfiles.clear();
+        for (int i = 1; i < lines.length; i++) {
+            if (!lines[i].isEmpty() && !sbsProfiles.contains(lines[i])) {
+                sbsProfiles.add(lines[i]);
             }
         }
-        return "3D";
+        if (!sbsProfiles.contains(currentSbsProfile)) {
+            sbsProfiles.add(currentSbsProfile);
+        }
+        rebuildSbsProfileRows();
+    }
+
+    private void toggleSbsProfilePanel() {
+        if (sbsProfilePanel == null) {
+            return;
+        }
+        sbsProfilePanelVisible = !sbsProfilePanelVisible;
+        sbsProfilePanel.setEnabled(sbsProfilePanelVisible);
+        if (sbsProfilePanelVisible && sbsProfiles.isEmpty()) {
+            MoonBridge.requestSbsProfiles();
+        }
+    }
+
+    private void selectSbsProfile(String profile) {
+        if (profile.equals(currentSbsProfile)) {
+            sbsProfilePanelVisible = false;
+            sbsProfilePanel.setEnabled(false);
+            return;
+        }
+        currentSbsProfile = profile;
+        rebuildSbsProfileRows();
+        MoonBridge.sendSetSbsProfile(profile);
+        LimeLog.info("XR: host SBS profile -> " + profile);
+        // Close before the host's loading panel appears in the same area.
+        sbsProfilePanelVisible = false;
+        sbsProfilePanel.setEnabled(false);
     }
 
     /** Toggle the performance-stats panel; also flips the pref so the decoder emits perf text. */
@@ -721,7 +829,7 @@ public class XrStreamPresenter {
         adjustPanel = PanelEntity.create(
                 session, root, new FloatSize2d(ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS),
                 "xr-3d-adjust", adjustPose(videoHeightMeters), surfaceEntity);
-        adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
+        adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
     }
 
     /**
@@ -841,7 +949,7 @@ public class XrStreamPresenter {
         clientSbsHalfWidth = half;
         persistBool(CLIENT_SBS_HALF_WIDTH_KEY, half);
         // Only the surface resolution changes (W <-> 2W); the quad keeps fullAspect / same size.
-        if (currentPresenterMode == PresenterMode.CLIENT_SBS_GAME
+        if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI
                 && activity instanceof com.limelight.Game) {
             ((com.limelight.Game) activity).getStreamContainer().recycleClientSbs();
         }
@@ -897,7 +1005,7 @@ public class XrStreamPresenter {
     /** Show the adjust sub-panel only in Client SBS (the only mode that synthesizes 3D on-device). */
     private void updateAdjustPanelVisibility() {
         if (adjustPanel != null) {
-            adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
+            adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
         }
     }
 
@@ -967,6 +1075,15 @@ public class XrStreamPresenter {
         return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
+    private Pose sbsProfilePose(float videoHeightMeters) {
+        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS
+                - (BAR_HEIGHT_METERS / 2.0f);
+        float y = barBottomY - SBS_PROFILE_GAP_METERS - (SBS_PROFILE_HEIGHT_METERS / 2.0f);
+        // Host SBS AI is the third tile in the nine-tile bar. Align the chooser beneath it.
+        float x = -2.0f * BAR_HEIGHT_METERS;
+        return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
+    }
+
     /** Move the bar, stats and adjust panels when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
         if (barPanel != null) {
@@ -981,11 +1098,14 @@ public class XrStreamPresenter {
         if (adjustPanel != null) {
             adjustPanel.setPose(adjustPose(videoHeightMeters));
         }
+        if (sbsProfilePanel != null) {
+            sbsProfilePanel.setPose(sbsProfilePose(videoHeightMeters));
+        }
     }
 
     /**
      * Apply a presentation chosen from the bar. Sets the compositor eye split, drives the host SBS
-     * pipeline on/off in the host depth modes (Game/Movie), re-pins the surface to the target
+     * pipeline on/off in Host SBS AI, re-pins the surface to the target
      * frame size, and reshapes the quad to the mode's aspect. The quad's height is preserved; only
      * the width changes (when the aspect changes), so the screen keeps its vertical size.
      */
@@ -1001,9 +1121,13 @@ public class XrStreamPresenter {
             return;
         }
         lastModeSwitchMs = now;
-        boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
+        boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
         currentPresenterMode = item.selectsMode;
-        boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_GAME);
+        if (currentPresenterMode != PresenterMode.HOST_SBS_AI && sbsProfilePanel != null) {
+            sbsProfilePanelVisible = false;
+            sbsProfilePanel.setEnabled(false);
+        }
+        boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
         com.limelight.utils.Stereo3DRenderer.clientSbs = isClientSbs;
         
         if (wasClientSbs != isClientSbs && activity instanceof com.limelight.Game) {
@@ -1011,33 +1135,16 @@ public class XrStreamPresenter {
         }
 
         // Host depth SBS: drive the host's depth pipeline on the fly to match the chosen tile. The
-        // host emits a 2W x H side-by-side frame for Host SBS Game (async) or Host SBS Movie (sync);
-        // Normal and Client SBS get a plain W x H frame (Normal shows it mono, Client SBS runs
-        // on-device depth on it). The TILE decides GAME vs MOVIE. Gated to the host depth render
-        // modes so the decoder is pre-sized for 2W (Raw / already-SBS input is never toggled).
+        // host emits a 2W x H side-by-side frame for Host SBS AI. Normal and Client SBS AI get a
+        // plain W x H frame (Normal shows it mono, Client SBS runs on-device depth on it). Gated
+        // to the host depth render mode so the decoder is pre-sized for 2W (Raw / already-SBS
+        // input is never toggled).
         if (prefConfig.isHostDoubledWidthMode()) {
-            int wireMode = currentPresenterMode == PresenterMode.HOST_SBS_GAME ? MoonBridge.SBS_MODE_GAME :
-                           currentPresenterMode == PresenterMode.HOST_SBS_MOVIE ? MoonBridge.SBS_MODE_MOVIE :
-                           MoonBridge.SBS_MODE_OFF;
+            int wireMode = currentPresenterMode == PresenterMode.HOST_SBS_AI
+                    ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;
             MoonBridge.sendSetSbsMode(wireMode);
-            // Bind the depth model to the mode: Game (async/low-latency) -> DA-V2 Small for speed,
-            // Movie (sync/high-quality) -> DA3MONO Large for pop. Pin the "Model" tile to match so
-            // the two never disagree (a manual Model tap afterward can still override for the mode).
-            // Sent right after the mode so the host coalesces both into one encode rebuild.
-            if (wireMode != MoonBridge.SBS_MODE_OFF) {
-                int wantModel = (wireMode == MoonBridge.SBS_MODE_MOVIE)
-                        ? MoonBridge.DEPTH_MODEL_DA3MONO_LARGE
-                        : MoonBridge.DEPTH_MODEL_DA_V2_SMALL;
-                for (int i = 0; i < DEPTH_MODEL_CYCLE.length; i++) {
-                    if (DEPTH_MODEL_CYCLE[i] == wantModel) {
-                        depthModelCycleIndex = i;
-                        break;
-                    }
-                }
-                MoonBridge.sendSetDepthModel(wantModel);
-                // The host pushes a depth-status "loading" phase (0x3006) if the engine actually
-                // needs to spin up; onDepthStatus() surfaces the indicator, so no toast is needed here.
-            }
+            // Apollo's selected sbs_3d_profile owns the model and all processing parameters. The
+            // host pushes loading status (0x3006) if that profile's engine needs to initialize.
         }
 
         // Re-pin the surface to the target frame size. Client SBS is handled by switchToClientSbs
@@ -1144,34 +1251,6 @@ public class XrStreamPresenter {
         MoonBridge.sendSbsDebugDump();
     }
 
-    // Depth-model cycle for the "Model" tile. Ids match MoonBridge.DEPTH_MODEL_* and the host's
-    // config::depth_model_registry() ordering: DA-V2 small baseline, then DA-V3 small/base (fp16).
-    // fp16 only: the fp32 reference builds are far slower and functionally identical (measured
-    // corr 0.9999+ vs fp16). To A/B a fp32 reference or DA-V2 base, add its DEPTH_MODEL_* id here.
-    // NOTE: the first switch to a model whose engine isn't built yet streams flat for a minute or
-    // few while the host builds it in the background (watch the host log for "Saved built engine").
-    private static final int[] DEPTH_MODEL_CYCLE = {
-            MoonBridge.DEPTH_MODEL_DA_V2_SMALL,
-            MoonBridge.DEPTH_MODEL_DA3MONO_LARGE,
-    };
-    private static final String[] DEPTH_MODEL_CYCLE_NAMES = {"DA-V2 Small", "DA3MONO Large"};
-    private int depthModelCycleIndex = 0;
-
-    /** Client "Model" tile: cycle the host depth model and tell the host (0x3005). Only meaningful
-     *  while a host depth-SBS mode is active; harmless otherwise. The host rebuilds the encode
-     *  session and reloads the model (building its engine in the background the first time, so the
-     *  first switch to a not-yet-built model streams flat for a bit). */
-    private void cycleDepthModel() {
-        depthModelCycleIndex = (depthModelCycleIndex + 1) % DEPTH_MODEL_CYCLE.length;
-        int id = DEPTH_MODEL_CYCLE[depthModelCycleIndex];
-        String name = DEPTH_MODEL_CYCLE_NAMES[depthModelCycleIndex];
-        LimeLog.info("XR: switching host depth model -> " + name + " (id " + id + ")");
-        MoonBridge.sendSetDepthModel(id);
-        // Brief confirmation of the tap; the host's depth-status push drives the loading indicator.
-        Toast.makeText(activity, activity.getString(R.string.xr_toast_depth_model, name),
-                Toast.LENGTH_SHORT).show();
-    }
-
     /** Current pose of a render viewpoint (eye), or null if unavailable. */
     private static Pose poseOf(RenderViewpoint vp) {
         if (vp == null || vp.getState() == null) {
@@ -1182,14 +1261,13 @@ public class XrStreamPresenter {
     }
 
     /** Quad aspect (width/height). Only the host SBS presentation uses perEyeAspect, which differs
-     *  from fullAspect for Raw (half-width per eye); for the host depth modes (Game/Movie)
+     *  from fullAspect for Raw (half-width per eye); for Host SBS AI
      *  perEyeAspect is set equal to fullAspect. Normal and Client SBS always use fullAspect (Client
      *  SBS renders the full frame per eye; half-width just squeezes it into W/2 and the compositor
      *  stretches it back), so the quad keeps its physical size — only the surface resolution changes. */
     private float aspectFor(PresenterMode mode) {
-        // Raw splits the host's single W-wide frame into two W/2 eyes -> half the aspect. Depth
-        // modes (Game/Movie) show each eye a full-width per-eye view (perEyeAspect); Normal and
-        // Client show the full frame (fullAspect).
+        // Raw splits the host's single W-wide frame into two W/2 eyes -> half the aspect. Host SBS
+        // AI shows each eye a full-width per-eye view; Normal and Client show the full frame.
         if (mode == PresenterMode.HOST_SBS_RAW) {
             return fullAspect / 2.0f;
         }
@@ -1213,6 +1291,11 @@ public class XrStreamPresenter {
      */
     private boolean isColorMetadataExplicit = false;
 
+    /** Reapply color metadata immediately after a host SDR/HDR transition. Main thread only. */
+    public void onHdrModeChanged() {
+        applyContentColorMetadata();
+    }
+
     private void applyContentColorMetadata() {
         if (surfaceEntity == null) {
             return;
@@ -1227,16 +1310,34 @@ public class XrStreamPresenter {
         // compositor treats a later "unset" as SDR and washes out the direct HDR paths -- so we must
         // NOT reset to unset when leaving Client SBS. Only a genuinely SDR stream returns to unset.
         if (hdr) {
+            int maxContentLightLevel =
+                    SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN;
+            boolean fullRange = prefConfig.fullRange;
+            if (activity instanceof com.limelight.Game) {
+                com.limelight.Game game = (com.limelight.Game) activity;
+                int reportedMaxCll = game.getStreamHdrMaxContentLightLevel();
+                if (reportedMaxCll > 0) {
+                    maxContentLightLevel = reportedMaxCll;
+                }
+                // Direct host modes use MediaCodec's reported output range. Preserve the existing
+                // Client SBS behavior until its GL color pipeline is overhauled separately.
+                if (currentPresenterMode != PresenterMode.CLIENT_SBS_AI) {
+                    fullRange = game.getStreamColorRange() == MoonBridge.COLOR_RANGE_FULL;
+                }
+            }
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,
                     SurfaceEntity.ContentColorMetadata.ColorTransfer.ST2084,
-                    prefConfig.fullRange
+                    fullRange
                             ? SurfaceEntity.ContentColorMetadata.ColorRange.FULL
                             : SurfaceEntity.ContentColorMetadata.ColorRange.LIMITED,
-                    SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN));
+                    maxContentLightLevel));
             isColorMetadataExplicit = true;
             LimeLog.info("XR: HDR ContentColorMetadata BT2020/ST2084/"
-                    + (prefConfig.fullRange ? "FULL" : "LIMITED") + " (mode " + currentPresenterMode + ")");
+                    + (fullRange ? "FULL" : "LIMITED")
+                    + "/MaxCLL=" + (maxContentLightLevel > 0
+                            ? Integer.toString(maxContentLightLevel) : "unknown")
+                    + " (mode " + currentPresenterMode + ")");
         } else if (isColorMetadataExplicit) {
             surfaceEntity.setContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.Companion
@@ -1321,6 +1422,7 @@ public class XrStreamPresenter {
             this.selectsMode = selectsMode;
         }
 
+
         /** Active mode tile gets a bright accent fill + white border so the current mode is
          *  unmistakable at a glance; everything else stays a flat dark fill. */
         void setSelected(boolean selected) {
@@ -1367,7 +1469,7 @@ public class XrStreamPresenter {
      * Resize the XR surface for the client-side SBS path. The on-device renderer packs two
      * <i>full-resolution</i> eye views side by side, so the surface must be twice as wide
      * ({@code 2W×H}) to preserve each eye's full input resolution. Every other mode presents a
-     * single input-sized ({@code W×H}) frame (flat for NORMAL, host-packed for HOST_SBS_GAME), so the
+     * single input-sized ({@code W×H}) frame (flat for NORMAL, host-packed for HOST_SBS_AI), so the
      * surface is restored to {@code W×H}. Re-fetches the entity's surface in case the resize
      * re-creates it. Main-thread only (SceneCore is Activity-bound).
      */
@@ -1387,7 +1489,7 @@ public class XrStreamPresenter {
         return clientSbsHalfWidth ? prefConfig.width : prefConfig.width * 2;
     }
 
-    /** Capped per-eye width for the host depth modes (Game/Movie): the negotiated per-eye width,
+    /** Capped per-eye width for Host SBS AI: the negotiated per-eye width,
      *  clamped to the encoder/decoder ceiling (MAX_HOST_SBS_EYE_WIDTH). */
     private int hostSbsEyeWidth() {
         return Math.min(prefConfig.width, PreferenceConfiguration.MAX_HOST_SBS_EYE_WIDTH);
@@ -1450,6 +1552,13 @@ public class XrStreamPresenter {
                 adjustPanel.dispose();
             }
             adjustPanel = null;
+        }
+        if (sbsProfilePanel != null) {
+            if (!sbsProfilePanel.isDisposed()) {
+                sbsProfilePanel.dispose();
+            }
+            sbsProfilePanel = null;
+            sbsProfileListView = null;
         }
 
         videoSurface = null;

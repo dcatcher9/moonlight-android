@@ -282,7 +282,16 @@ resolution-inverting for `renderMode != 0`.
 | `app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java` | Recognize new render mode |
 | `app/src/main/res/values/arrays.xml`, `strings.xml` | New render-mode entry + strings |
 | `app/src/main/res/xml/preferences.xml` | Surface the option (XR-gated) |
-| `app/src/main/java/com/limelight/Game.java` | Minimal: confirm `MODE_XR_SBS` handled like other non-2D modes |
+| `app/src/main/java/com/limelight/Game.java` | Forwards host depth status and advertised SBS profiles to the XR presenter |
+
+### Dynamic host profiles
+
+Apollo sends the current profile followed by all available profile names on encrypted control
+packet `0x3007`. Tapping **Host SBS AI** opens a scrollable chooser directly beneath that mode
+tile; selecting a host-advertised name sends it on `0x3005` and closes the chooser. No model or
+profile names are hard-coded in Artemis. `0x3006` independently reports only the depth-engine
+idle/loading/ready phase; the loading UI uses the selected profile name. Selection is per stream
+and can be changed while Host SBS AI is live.
 
 ## Testing
 

@@ -159,7 +159,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int codecRecoveryAttempts = 0;
 
     private MediaFormat inputFormat;
-    private MediaFormat outputFormat;
+    private volatile MediaFormat outputFormat;
     private MediaFormat configuredFormat;
 
     private boolean needsBaselineSpsHack;
@@ -520,7 +520,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    private int getActualColorRange() {
+    public int getActualColorRange() {
         if (outputFormat != null && outputFormat.containsKey(MediaFormat.KEY_COLOR_RANGE)) {
             int range = outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE);
             if (range == MediaFormat.COLOR_RANGE_FULL) {
