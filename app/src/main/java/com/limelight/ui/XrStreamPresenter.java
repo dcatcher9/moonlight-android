@@ -7,6 +7,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -122,22 +123,27 @@ public class XrStreamPresenter {
 
     /** Sub-panel under the quad with live 2D→3D effect sliders; shown only in Client SBS. */
     private PanelEntity adjustPanel;
+    private boolean adjustPanelVisible;
 
     /** Floating performance-stats panel beside the quad and its table; toggled by the Stats tile. */
     private PanelEntity statsPanel;
     private TableLayout statsTable;
     private BarItem statsItem;
+    private BarItem hostSbsAiItem;
+    private BarItem clientSbsAiItem;
     private final List<String> sbsProfiles = new ArrayList<>();
     private String currentSbsProfile;
     private PanelEntity sbsProfilePanel;
     private LinearLayout sbsProfileListView;
+    private TextView hostOptionsStatusText;
     private boolean sbsProfilePanelVisible;
-    private static final float SBS_PROFILE_WIDTH_METERS = 0.72f;
-    private static final float SBS_PROFILE_HEIGHT_METERS = 0.44f;
+    private static final float SBS_PROFILE_WIDTH_METERS = 0.90f;
+    private static final float SBS_PROFILE_HEIGHT_METERS = 0.62f;
     private static final float SBS_PROFILE_GAP_METERS = 0.03f;
     private boolean statsVisible;
 
-    /** Small centered panel shown above the quad while the host builds/loads/warms a depth engine
+    /** Small centered panel shown above the quad while the host loads an engine or initializes
+     *  the device-specific 3D pipeline
      *  (driven by the host's 0x3006 depth-status push via {@link #onDepthStatus}). */
     private PanelEntity depthStatusPanel;
     private TextView depthStatusText;
@@ -384,12 +390,31 @@ public class XrStreamPresenter {
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
 
         normal.onTap = () -> selectMode(normal);
-        clientSbsAi.onTap = () -> selectMode(clientSbsAi);
+        clientSbsAi.onTap = () -> {
+            if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
+                toggleAdjustPanel();
+            } else {
+                selectMode(clientSbsAi);
+            }
+        };
         hostSbsRaw.onTap = () -> selectMode(hostSbsRaw);
         hostSbsAi.onTap = () -> {
+            if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
+                toggleSbsProfilePanel();
+            } else {
+                selectMode(hostSbsAi);
+            }
+        };
+        hostSbsAi.onExpand = () -> {
             selectMode(hostSbsAi);
             if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
                 toggleSbsProfilePanel();
+            }
+        };
+        clientSbsAi.onExpand = () -> {
+            selectMode(clientSbsAi);
+            if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
+                toggleAdjustPanel();
             }
         };
         stats.onTap = this::toggleStats;
@@ -398,6 +423,8 @@ public class XrStreamPresenter {
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
+        hostSbsAiItem = hostSbsAi;
+        clientSbsAiItem = clientSbsAi;
 
         barItems.clear();
         barItems.add(normal);
@@ -444,7 +471,7 @@ public class XrStreamPresenter {
 
         // Width scales with the tile count so each tile stays square (tile size = bar height),
         // plus a little for the divider — adding tiles widens the bar instead of squeezing them.
-        float barWidth = barItems.size() * BAR_HEIGHT_METERS + BAR_DIVIDER_METERS;
+        float barWidth = controlBarWidthMeters();
         barPanel = PanelEntity.create(
                 session, bar, new FloatSize2d(barWidth, BAR_HEIGHT_METERS),
                 "xr-control-bar", barPose(videoHeightMeters), surfaceEntity);
@@ -530,23 +557,50 @@ public class XrStreamPresenter {
     }
 
     private final android.os.Handler depthStatusHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private int depthStatusPendingPhase;
+    private int depthStatusPhase;
     // Method reference (not a field lambda) so the initializer doesn't read the not-yet-assigned
     // final `activity` field; the body runs later, once everything is constructed.
     private final Runnable showDepthStatusRunnable = this::showDepthStatusNow;
 
     private void showDepthStatusNow() {
-        if (depthStatusPanel != null && !depthStatusPanel.isDisposed()) {
+        if (depthStatusPanel != null && !depthStatusPanel.isDisposed()
+                && !sbsProfilePanelVisible && isDepthBusy()) {
             if (depthStatusText != null) {
                 String profile = currentSbsProfile == null ? "AI" : currentSbsProfile;
-                depthStatusText.setText(activity.getString(R.string.xr_depth_loading, profile));
+                int message = depthStatusMessage(depthStatusPendingPhase);
+                depthStatusText.setText(activity.getString(message, profile));
             }
             depthStatusPanel.setEnabled(true);
         }
     }
 
+    private boolean isDepthBusy() {
+        return depthStatusPhase == 1 || depthStatusPhase == 3;
+    }
+
+    private static int depthStatusMessage(int phase) {
+        return phase == 3 ? R.string.xr_depth_initializing : R.string.xr_depth_loading;
+    }
+
+    private void updateHostOptionsStatus() {
+        if (hostOptionsStatusText == null) {
+            return;
+        }
+        if (sbsProfilePanelVisible && isDepthBusy()) {
+            String profile = currentSbsProfile == null ? "AI" : currentSbsProfile;
+            hostOptionsStatusText.setText(activity.getString(
+                    depthStatusMessage(depthStatusPhase), profile));
+            hostOptionsStatusText.setVisibility(View.VISIBLE);
+        } else {
+            hostOptionsStatusText.setVisibility(View.GONE);
+        }
+    }
+
     /**
-     * Host depth-engine phase push (Apollo 0x3006), on the UI thread: 0 = idle, 1 = loading,
-     * 2 = ready. Show the "loading" indicator on phase 1, hide it on ready/idle. The show is
+     * Host depth-engine phase push (Apollo 0x3006), on the UI thread: 0 = idle/failure,
+     * 1 = engine loading/building, 2 = ready, 3 = device-pipeline initialization. Show the
+     * matching progress indicator on phase 1/3 and hide it on ready/idle. The show is
      * delayed ~600 ms so an already-cached model (which reports loading→ready almost instantly on
      * every switch) doesn't flash the panel; only genuinely slow first-use loads surface it.
      */
@@ -554,12 +608,20 @@ public class XrStreamPresenter {
         if (depthStatusPanel == null) {
             return;
         }
+        depthStatusPhase = phase;
         depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
-        if (phase == 1) {
-            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
+        if (phase == 1 || phase == 3) {
+            depthStatusPendingPhase = phase;
+            if (sbsProfilePanelVisible) {
+                depthStatusPanel.setEnabled(false);
+            } else {
+                depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
+            }
         } else {
             depthStatusPanel.setEnabled(false);
         }
+        updateHostOptionsStatus();
+        rebuildSbsProfileRows();
     }
 
     /** Profile chooser docked directly below the Host SBS AI mode tile. */
@@ -571,12 +633,29 @@ public class XrStreamPresenter {
         root.setPadding(padding, padding, padding, padding);
 
         TextView title = new TextView(activity);
-        title.setText(R.string.xr_sbs_profiles_title);
+        title.setText(R.string.xr_host_sbs_options_title);
         title.setTextColor(TILE_ACTIVE_COLOR);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         title.setPadding(dp(8), dp(4), dp(8), dp(8));
         root.addView(title);
+
+        hostOptionsStatusText = new TextView(activity);
+        hostOptionsStatusText.setTextColor(Color.WHITE);
+        hostOptionsStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
+        hostOptionsStatusText.setBackgroundColor(0xFF34506E);
+        hostOptionsStatusText.setPadding(dp(14), dp(10), dp(14), dp(10));
+        hostOptionsStatusText.setVisibility(View.GONE);
+        root.addView(hostOptionsStatusText);
+
+        TextView profileSection = new TextView(activity);
+        profileSection.setText(R.string.xr_sbs_profile_section);
+        profileSection.setTextColor(0xFF9FB3C8);
+        profileSection.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        profileSection.setTypeface(
+                profileSection.getTypeface(), android.graphics.Typeface.BOLD);
+        profileSection.setPadding(dp(8), dp(10), dp(8), dp(4));
+        root.addView(profileSection);
 
         sbsProfileListView = new LinearLayout(activity);
         sbsProfileListView.setOrientation(LinearLayout.VERTICAL);
@@ -608,19 +687,47 @@ public class XrStreamPresenter {
             return;
         }
         for (String profile : sbsProfiles) {
-            TextView row = new TextView(activity);
-            row.setText(profile);
-            row.setTextColor(Color.WHITE);
-            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+            boolean selected = profile.equals(currentSbsProfile);
+            LinearLayout row = new LinearLayout(activity);
+            row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(16), dp(14), dp(16), dp(14));
-            row.setClickable(true);
-            row.setFocusable(true);
-            if (profile.equals(currentSbsProfile)) {
+            row.setClickable(!isDepthBusy());
+            row.setFocusable(!isDepthBusy());
+            row.setEnabled(!isDepthBusy());
+            row.setAlpha(isDepthBusy() ? 0.62f : 1.0f);
+            if (selected) {
                 row.setBackgroundColor(TILE_ACTIVE_COLOR);
             } else {
                 row.setBackgroundColor(TILE_IDLE_COLOR);
             }
+            applySelectableForeground(row);
+
+            TextView radio = new TextView(activity);
+            radio.setText(selected ? "●" : "○");
+            radio.setTextColor(Color.WHITE);
+            radio.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
+            radio.setGravity(Gravity.CENTER);
+            LinearLayout.LayoutParams radioParams = new LinearLayout.LayoutParams(
+                    dp(38), LinearLayout.LayoutParams.WRAP_CONTENT);
+            row.addView(radio, radioParams);
+
+            TextView label = new TextView(activity);
+            label.setText(profile);
+            label.setTextColor(Color.WHITE);
+            label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+            label.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(label, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView state = new TextView(activity);
+            state.setText(selected
+                    ? activity.getString(R.string.xr_sbs_profile_current) : null);
+            state.setTextColor(Color.WHITE);
+            state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f);
+            state.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+            row.addView(state);
+
             row.setOnClickListener(v -> selectSbsProfile(profile));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -655,24 +762,33 @@ public class XrStreamPresenter {
         }
         sbsProfilePanelVisible = !sbsProfilePanelVisible;
         sbsProfilePanel.setEnabled(sbsProfilePanelVisible);
+        if (hostSbsAiItem != null) {
+            hostSbsAiItem.setExpanded(sbsProfilePanelVisible);
+        }
         if (sbsProfilePanelVisible && sbsProfiles.isEmpty()) {
             MoonBridge.requestSbsProfiles();
         }
+        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
+        if (sbsProfilePanelVisible) {
+            if (depthStatusPanel != null) {
+                depthStatusPanel.setEnabled(false);
+            }
+        } else if (isDepthBusy()) {
+            depthStatusPendingPhase = depthStatusPhase;
+            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
+        }
+        updateHostOptionsStatus();
+        rebuildSbsProfileRows();
     }
 
     private void selectSbsProfile(String profile) {
-        if (profile.equals(currentSbsProfile)) {
-            sbsProfilePanelVisible = false;
-            sbsProfilePanel.setEnabled(false);
+        if (profile.equals(currentSbsProfile) || isDepthBusy()) {
             return;
         }
         currentSbsProfile = profile;
         rebuildSbsProfileRows();
         MoonBridge.sendSetSbsProfile(profile);
         LimeLog.info("XR: host SBS profile -> " + profile);
-        // Close before the host's loading panel appears in the same area.
-        sbsProfilePanelVisible = false;
-        sbsProfilePanel.setEnabled(false);
     }
 
     /** Toggle the performance-stats panel; also flips the pref so the decoder emits perf text. */
@@ -812,7 +928,7 @@ public class XrStreamPresenter {
         root.setPadding(p, p, p, p);
 
         TextView title = new TextView(activity);
-        title.setText("3D adjust");
+        title.setText(R.string.xr_client_sbs_options_title);
         title.setTextColor(TILE_ACTIVE_COLOR);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP + 2f);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
@@ -829,7 +945,7 @@ public class XrStreamPresenter {
         adjustPanel = PanelEntity.create(
                 session, root, new FloatSize2d(ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS),
                 "xr-3d-adjust", adjustPose(videoHeightMeters), surfaceEntity);
-        adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
+        adjustPanel.setEnabled(false);
     }
 
     /**
@@ -1002,10 +1118,46 @@ public class XrStreamPresenter {
         }
     }
 
-    /** Show the adjust sub-panel only in Client SBS (the only mode that synthesizes 3D on-device). */
-    private void updateAdjustPanelVisibility() {
+    private void toggleAdjustPanel() {
+        if (adjustPanel == null) {
+            return;
+        }
+        adjustPanelVisible = !adjustPanelVisible;
+        updateAdjustPanelVisibility();
+    }
+
+    private void closeModeSubpanels() {
+        sbsProfilePanelVisible = false;
+        adjustPanelVisible = false;
+        if (sbsProfilePanel != null) {
+            sbsProfilePanel.setEnabled(false);
+        }
         if (adjustPanel != null) {
-            adjustPanel.setEnabled(currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
+            adjustPanel.setEnabled(false);
+        }
+        if (hostSbsAiItem != null) {
+            hostSbsAiItem.setExpanded(false);
+        }
+        if (clientSbsAiItem != null) {
+            clientSbsAiItem.setExpanded(false);
+        }
+        updateHostOptionsStatus();
+        if (isDepthBusy()) {
+            depthStatusPendingPhase = depthStatusPhase;
+            depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
+            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
+        }
+    }
+
+    /** Show the adjust sub-panel only when expanded from the active Client SBS AI tile. */
+    private void updateAdjustPanelVisibility() {
+        boolean enabled = currentPresenterMode == PresenterMode.CLIENT_SBS_AI
+                && adjustPanelVisible;
+        if (adjustPanel != null) {
+            adjustPanel.setEnabled(enabled);
+        }
+        if (clientSbsAiItem != null) {
+            clientSbsAiItem.setExpanded(enabled);
         }
     }
 
@@ -1068,20 +1220,49 @@ public class XrStreamPresenter {
         return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
-    /** Local pose of the 3D-adjust sub-panel: centered just beneath the control bar. */
-    private Pose adjustPose(float videoHeightMeters) {
-        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS - (BAR_HEIGHT_METERS / 2.0f);
-        float y = barBottomY - ADJUST_GAP_METERS - (ADJUST_HEIGHT_METERS / 2.0f);
-        return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
+    private float controlBarWidthMeters() {
+        int dividers = 0;
+        for (int i = 1; i < barItems.size(); i++) {
+            if (barItems.get(i - 1).selectsMode != null
+                    && barItems.get(i).selectsMode == null) {
+                dividers++;
+            }
+        }
+        return barItems.size() * BAR_HEIGHT_METERS + dividers * BAR_DIVIDER_METERS;
     }
 
-    private Pose sbsProfilePose(float videoHeightMeters) {
+    /** Place a mode's sub-panel so its top-left corner starts at the tile's bottom-left corner. */
+    private Pose modeSubpanelPose(float videoHeightMeters, PresenterMode mode,
+                                  float panelWidth, float panelHeight, float gap) {
+        float tileLeft = -controlBarWidthMeters() / 2.0f;
+        for (int i = 0; i < barItems.size(); i++) {
+            if (i > 0 && barItems.get(i - 1).selectsMode != null
+                    && barItems.get(i).selectsMode == null) {
+                tileLeft += BAR_DIVIDER_METERS;
+            }
+            BarItem item = barItems.get(i);
+            if (item.selectsMode == mode) {
+                break;
+            }
+            tileLeft += BAR_HEIGHT_METERS;
+        }
         float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS
                 - (BAR_HEIGHT_METERS / 2.0f);
-        float y = barBottomY - SBS_PROFILE_GAP_METERS - (SBS_PROFILE_HEIGHT_METERS / 2.0f);
-        // Host SBS AI is the third tile in the nine-tile bar. Align the chooser beneath it.
-        float x = -2.0f * BAR_HEIGHT_METERS;
+        float x = tileLeft + panelWidth / 2.0f;
+        float y = barBottomY - gap - panelHeight / 2.0f;
         return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
+    }
+
+    /** Client SBS AI options aligned beneath that tile's left edge. */
+    private Pose adjustPose(float videoHeightMeters) {
+        return modeSubpanelPose(videoHeightMeters, PresenterMode.CLIENT_SBS_AI,
+                ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS, ADJUST_GAP_METERS);
+    }
+
+    /** Host SBS AI options aligned beneath that tile's left edge. */
+    private Pose sbsProfilePose(float videoHeightMeters) {
+        return modeSubpanelPose(videoHeightMeters, PresenterMode.HOST_SBS_AI,
+                SBS_PROFILE_WIDTH_METERS, SBS_PROFILE_HEIGHT_METERS, SBS_PROFILE_GAP_METERS);
     }
 
     /** Move the bar, stats and adjust panels when the quad height changes (mode switch). */
@@ -1122,11 +1303,8 @@ public class XrStreamPresenter {
         }
         lastModeSwitchMs = now;
         boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
+        closeModeSubpanels();
         currentPresenterMode = item.selectsMode;
-        if (currentPresenterMode != PresenterMode.HOST_SBS_AI && sbsProfilePanel != null) {
-            sbsProfilePanelVisible = false;
-            sbsProfilePanel.setEnabled(false);
-        }
         boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
         com.limelight.utils.Stereo3DRenderer.clientSbs = isClientSbs;
         
@@ -1355,30 +1533,64 @@ public class XrStreamPresenter {
         resizable.setMaximumEntitySize(new FloatSize3d(6.0f * aspect, 6.0f, 0f));
     }
 
-    /** Build one tile: a clickable vertical layout with the icon truly centered above the label.
-     *  Clickable+focusable (with a selectable foreground) so the platform draws the gaze highlight
-     *  — which works now that all tiles live in one panel. The OnClickListener handles the tap. */
+    /** Build one tile. Expandable modes use a separate bottom-center chevron, leaving the main
+     *  icon/label target responsible only for mode selection. Both targets remain ordinary hosted
+     *  views, preserving native XR gaze highlighting. */
     private View buildBarItemView(BarItem item) {
+        FrameLayout root = new FrameLayout(activity);
+        root.setBackgroundColor(TILE_IDLE_COLOR);
+
         LinearLayout col = new LinearLayout(activity);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
         col.setClickable(true);
         col.setFocusable(true);
-        col.setBackgroundColor(TILE_IDLE_COLOR);
         int pad = dp(3);
-        col.setPadding(pad, pad, pad, pad);
+        col.setPadding(pad, pad, pad, item.onExpand == null ? pad : dp(26));
         col.setOnClickListener(v -> {
             if (item.onTap != null) {
                 item.onTap.run();
             }
         });
-        // Visible press/hover feedback on top of the dark fill.
+        applySelectableForeground(col);
+        addBarItemContent(col, item);
+
+        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        root.addView(col, contentParams);
+
+        if (item.onExpand != null) {
+            TextView arrow = new TextView(activity);
+            arrow.setText("▼");
+            arrow.setTextColor(Color.WHITE);
+            arrow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f);
+            arrow.setGravity(Gravity.CENTER);
+            arrow.setClickable(true);
+            arrow.setFocusable(true);
+            arrow.setBackgroundColor(0x33000000);
+            arrow.setContentDescription(activity.getString(
+                    R.string.xr_expand_mode_options, item.label));
+            arrow.setOnClickListener(v -> item.onExpand.run());
+            applySelectableForeground(arrow);
+            FrameLayout.LayoutParams arrowParams = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, dp(36), Gravity.BOTTOM);
+            root.addView(arrow, arrowParams);
+            item.expandIndicator = arrow;
+        }
+
+        return root;
+    }
+
+    /** Visible press/hover feedback on top of the dark fill. */
+    private void applySelectableForeground(View view) {
         TypedValue fg = new TypedValue();
         if (activity.getTheme().resolveAttribute(
                 android.R.attr.selectableItemBackground, fg, true) && fg.resourceId != 0) {
-            col.setForeground(activity.getDrawable(fg.resourceId));
+            view.setForeground(activity.getDrawable(fg.resourceId));
         }
+    }
 
+    private void addBarItemContent(LinearLayout col, BarItem item) {
         ImageView icon = new ImageView(activity);
         icon.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         icon.setImageResource(item.iconRes);
@@ -1396,7 +1608,6 @@ public class XrStreamPresenter {
 
         col.addView(icon);
         col.addView(text);
-        return col;
     }
 
     private int dp(float v) {
@@ -1414,12 +1625,26 @@ public class XrStreamPresenter {
         /** Non-null for mode tiles (single-select group); null for one-shot action tiles. */
         final PresenterMode selectsMode;
         Runnable onTap;
+        Runnable onExpand;
         View root;
+        TextView expandIndicator;
 
         BarItem(String label, int iconRes, PresenterMode selectsMode) {
             this.label = label;
             this.iconRes = iconRes;
             this.selectsMode = selectsMode;
+        }
+
+        void setExpanded(boolean expanded) {
+            if (expandIndicator == null) {
+                return;
+            }
+            expandIndicator.setText(expanded ? "▲" : "▼");
+            expandIndicator.setContentDescription(activity.getString(
+                    expanded ? R.string.xr_collapse_mode_options
+                            : R.string.xr_expand_mode_options,
+                    label));
+            expandIndicator.invalidate();
         }
 
 
