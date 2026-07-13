@@ -23,5 +23,4 @@ public interface NvConnectionListener {
 
     // Host SBS depth-engine phase (Apollo extension): 0 = idle, 1 = loading, 2 = ready.
     void depthStatus(int phase);
-    void sbsProfileList(String profiles);
 }

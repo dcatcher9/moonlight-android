@@ -282,22 +282,17 @@ resolution-inverting for `renderMode != 0`.
 | `app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java` | Recognize new render mode |
 | `app/src/main/res/values/arrays.xml`, `strings.xml` | New render-mode entry + strings |
 | `app/src/main/res/xml/preferences.xml` | Surface the option (XR-gated) |
-| `app/src/main/java/com/limelight/Game.java` | Forwards host depth status and advertised SBS profiles to the XR presenter |
+| `app/src/main/java/com/limelight/Game.java` | Forwards host depth status to the XR presenter |
 
-### Dynamic host profiles
+### Mode option panels
 
-Apollo sends the current profile followed by all available profile names on encrypted control
-packet `0x3007`. **Host SBS AI** and **Client SBS AI** share a split-tile interaction: the main
-icon/label selects an inactive mode, then toggles its options panel on subsequent taps while active.
-A full-tile-width bottom chevron strip provides the same toggle and makes expansion discoverable
-without requiring precise gaze targeting. Each panel's top-left corner aligns beneath its tile's
-bottom-left corner. The Host panel currently
-contains large, full-width radio-card profile rows and can grow to hold more host options; selecting
-a host-advertised name sends it on `0x3005` immediately and keeps the panel open for quick A/B
-switching. No model or profile names are hard-coded in Artemis. While the panel is open, `0x3006`
-loading/device-initialization status appears inline under its title and profile rows are temporarily
-disabled; when it is closed, the existing floating status panel is the fallback. Selection is per
-stream and can be changed while Host SBS AI is live.
+**Client SBS AI** uses a split-tile interaction: the main icon/label selects the inactive mode,
+then toggles its options panel on subsequent taps while active. A full-tile-width bottom chevron
+strip provides the same toggle and makes expansion discoverable without requiring precise gaze
+targeting. The panel's top-left corner aligns beneath the tile's bottom-left corner. **Host SBS AI**
+has no options panel because Apollo exposes one production profile; the host owns that profile and
+all of its processing parameters. Host `0x3006` loading/device-initialization status remains visible
+in the floating status panel.
 
 The remaining three bytes of the four-byte `0x3003` payload are reserved and zero. Apollo performs
 aspect normalization as part of its host image-warp geometry; it does not depend on the XR panel's

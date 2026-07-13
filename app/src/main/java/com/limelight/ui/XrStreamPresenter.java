@@ -12,7 +12,6 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
-import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TableLayout;
 import android.widget.TableRow;
@@ -129,18 +128,7 @@ public class XrStreamPresenter {
     private PanelEntity statsPanel;
     private TableLayout statsTable;
     private BarItem statsItem;
-    private BarItem hostSbsAiItem;
     private BarItem clientSbsAiItem;
-    private final List<String> sbsProfiles = new ArrayList<>();
-    private String currentSbsProfile;
-    private PanelEntity sbsProfilePanel;
-    private LinearLayout sbsProfileListView;
-    private TextView hostOptionsStatusText;
-    private String hostOptionsError;
-    private boolean sbsProfilePanelVisible;
-    private static final float SBS_PROFILE_WIDTH_METERS = 0.90f;
-    private static final float SBS_PROFILE_HEIGHT_METERS = 0.62f;
-    private static final float SBS_PROFILE_GAP_METERS = 0.03f;
     private boolean statsVisible;
 
     /** Small centered panel shown above the quad while the host loads an engine or initializes
@@ -402,19 +390,7 @@ public class XrStreamPresenter {
             }
         };
         hostSbsRaw.onTap = () -> selectMode(hostSbsRaw);
-        hostSbsAi.onTap = () -> {
-            if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
-                toggleSbsProfilePanel();
-            } else {
-                selectMode(hostSbsAi);
-            }
-        };
-        hostSbsAi.onExpand = () -> {
-            selectMode(hostSbsAi);
-            if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
-                toggleSbsProfilePanel();
-            }
-        };
+        hostSbsAi.onTap = () -> selectMode(hostSbsAi);
         clientSbsAi.onExpand = () -> {
             selectMode(clientSbsAi);
             if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
@@ -427,7 +403,6 @@ public class XrStreamPresenter {
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
-        hostSbsAiItem = hostSbsAi;
         clientSbsAiItem = clientSbsAi;
 
         barItems.clear();
@@ -486,7 +461,6 @@ public class XrStreamPresenter {
 
         createStatsPanel(videoHeightMeters);
         createDepthStatusPanel(videoHeightMeters);
-        createSbsProfilePanel(videoHeightMeters);
         createAdjustPanel(videoHeightMeters);
     }
 
@@ -566,12 +540,10 @@ public class XrStreamPresenter {
     private final Runnable showDepthStatusRunnable = this::showDepthStatusNow;
 
     private void showDepthStatusNow() {
-        if (depthStatusPanel != null && !depthStatusPanel.isDisposed()
-                && !sbsProfilePanelVisible && isDepthBusy()) {
+        if (depthStatusPanel != null && !depthStatusPanel.isDisposed() && isDepthBusy()) {
             if (depthStatusText != null) {
-                String profile = currentSbsProfile == null ? "AI" : currentSbsProfile;
                 int message = depthStatusMessage(depthStatusPendingPhase);
-                depthStatusText.setText(activity.getString(message, profile));
+                depthStatusText.setText(activity.getString(message));
             }
             depthStatusPanel.setEnabled(true);
         }
@@ -583,25 +555,6 @@ public class XrStreamPresenter {
 
     private static int depthStatusMessage(int phase) {
         return phase == 3 ? R.string.xr_depth_initializing : R.string.xr_depth_loading;
-    }
-
-    private void updateHostOptionsStatus() {
-        if (hostOptionsStatusText == null) {
-            return;
-        }
-        if (sbsProfilePanelVisible && hostOptionsError != null) {
-            hostOptionsStatusText.setText(hostOptionsError);
-            hostOptionsStatusText.setBackgroundColor(0xFF8B3030);
-            hostOptionsStatusText.setVisibility(View.VISIBLE);
-        } else if (sbsProfilePanelVisible && isDepthBusy()) {
-            String profile = currentSbsProfile == null ? "AI" : currentSbsProfile;
-            hostOptionsStatusText.setText(activity.getString(
-                    depthStatusMessage(depthStatusPhase), profile));
-            hostOptionsStatusText.setBackgroundColor(0xFF34506E);
-            hostOptionsStatusText.setVisibility(View.VISIBLE);
-        } else {
-            hostOptionsStatusText.setVisibility(View.GONE);
-        }
     }
 
     /**
@@ -619,198 +572,10 @@ public class XrStreamPresenter {
         depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
         if (phase == 1 || phase == 3) {
             depthStatusPendingPhase = phase;
-            if (sbsProfilePanelVisible) {
-                depthStatusPanel.setEnabled(false);
-            } else {
-                depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
-            }
+            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
         } else {
             depthStatusPanel.setEnabled(false);
         }
-        updateHostOptionsStatus();
-        if (sbsProfilePanelVisible) {
-            rebuildSbsProfileRows();
-        }
-    }
-
-    /** Profile chooser docked directly below the Host SBS AI mode tile. */
-    private void createSbsProfilePanel(float videoHeightMeters) {
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xEE101418);
-        int padding = dp(12);
-        root.setPadding(padding, padding, padding, padding);
-
-        TextView title = new TextView(activity);
-        title.setText(R.string.xr_host_sbs_options_title);
-        title.setTextColor(TILE_ACTIVE_COLOR);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
-        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
-        title.setPadding(dp(8), dp(4), dp(8), dp(8));
-        root.addView(title);
-
-        hostOptionsStatusText = new TextView(activity);
-        hostOptionsStatusText.setTextColor(Color.WHITE);
-        hostOptionsStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
-        hostOptionsStatusText.setBackgroundColor(0xFF34506E);
-        hostOptionsStatusText.setPadding(dp(14), dp(10), dp(14), dp(10));
-        hostOptionsStatusText.setVisibility(View.GONE);
-        root.addView(hostOptionsStatusText);
-
-        TextView profileSection = new TextView(activity);
-        profileSection.setText(R.string.xr_sbs_profile_section);
-        profileSection.setTextColor(0xFF9FB3C8);
-        profileSection.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
-        profileSection.setTypeface(
-                profileSection.getTypeface(), android.graphics.Typeface.BOLD);
-        profileSection.setPadding(dp(8), dp(10), dp(8), dp(4));
-        root.addView(profileSection);
-
-        sbsProfileListView = new LinearLayout(activity);
-        sbsProfileListView.setOrientation(LinearLayout.VERTICAL);
-        ScrollView scroll = new ScrollView(activity);
-        scroll.addView(sbsProfileListView);
-        root.addView(scroll, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        rebuildSbsProfileRows();
-
-        sbsProfilePanel = PanelEntity.create(
-                session, root,
-                new FloatSize2d(SBS_PROFILE_WIDTH_METERS, SBS_PROFILE_HEIGHT_METERS),
-                "xr-sbs-profiles", sbsProfilePose(videoHeightMeters), surfaceEntity);
-        sbsProfilePanel.setEnabled(false);
-    }
-
-    private void rebuildSbsProfileRows() {
-        if (sbsProfileListView == null) {
-            return;
-        }
-        sbsProfileListView.removeAllViews();
-        if (sbsProfiles.isEmpty()) {
-            TextView loading = new TextView(activity);
-            loading.setText(R.string.xr_sbs_profiles_loading);
-            loading.setTextColor(Color.LTGRAY);
-            loading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f);
-            loading.setPadding(dp(12), dp(14), dp(12), dp(14));
-            sbsProfileListView.addView(loading);
-            return;
-        }
-        for (String profile : sbsProfiles) {
-            boolean selected = profile.equals(currentSbsProfile);
-            LinearLayout row = new LinearLayout(activity);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(16), dp(14), dp(16), dp(14));
-            row.setClickable(!isDepthBusy());
-            row.setFocusable(!isDepthBusy());
-            row.setEnabled(!isDepthBusy());
-            row.setAlpha(isDepthBusy() ? 0.62f : 1.0f);
-            if (selected) {
-                row.setBackgroundColor(TILE_ACTIVE_COLOR);
-            } else {
-                row.setBackgroundColor(TILE_IDLE_COLOR);
-            }
-            applySelectableForeground(row);
-
-            TextView radio = new TextView(activity);
-            radio.setText(selected ? "●" : "○");
-            radio.setTextColor(Color.WHITE);
-            radio.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
-            radio.setGravity(Gravity.CENTER);
-            LinearLayout.LayoutParams radioParams = new LinearLayout.LayoutParams(
-                    dp(38), LinearLayout.LayoutParams.WRAP_CONTENT);
-            row.addView(radio, radioParams);
-
-            TextView label = new TextView(activity);
-            label.setText(profile);
-            label.setTextColor(Color.WHITE);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
-            label.setGravity(Gravity.CENTER_VERTICAL);
-            row.addView(label, new LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-            TextView state = new TextView(activity);
-            state.setText(selected
-                    ? activity.getString(R.string.xr_sbs_profile_current) : null);
-            state.setTextColor(Color.WHITE);
-            state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f);
-            state.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-            row.addView(state);
-
-            row.setOnClickListener(v -> selectSbsProfile(profile));
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT);
-            params.setMargins(0, dp(2), 0, dp(2));
-            sbsProfileListView.addView(row, params);
-        }
-    }
-
-    /** Host-advertised profile state. First line is active; remaining lines are selectable names. */
-    public void onSbsProfileList(String payload) {
-        if (payload == null || payload.isEmpty()) {
-            return;
-        }
-        String[] lines = payload.split("\\n");
-        currentSbsProfile = lines[0];
-        hostOptionsError = null;
-        sbsProfiles.clear();
-        for (int i = 1; i < lines.length; i++) {
-            if (!lines[i].isEmpty() && !sbsProfiles.contains(lines[i])) {
-                sbsProfiles.add(lines[i]);
-            }
-        }
-        if (!sbsProfiles.contains(currentSbsProfile)) {
-            sbsProfiles.add(currentSbsProfile);
-        }
-        if (sbsProfilePanelVisible) {
-            rebuildSbsProfileRows();
-            updateHostOptionsStatus();
-        }
-    }
-
-    private void toggleSbsProfilePanel() {
-        if (sbsProfilePanel == null) {
-            return;
-        }
-        sbsProfilePanelVisible = !sbsProfilePanelVisible;
-        sbsProfilePanel.setEnabled(sbsProfilePanelVisible);
-        if (hostSbsAiItem != null) {
-            hostSbsAiItem.setExpanded(sbsProfilePanelVisible);
-        }
-        if (sbsProfilePanelVisible && sbsProfiles.isEmpty()) {
-            MoonBridge.requestSbsProfiles();
-        }
-        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
-        if (sbsProfilePanelVisible) {
-            if (depthStatusPanel != null) {
-                depthStatusPanel.setEnabled(false);
-            }
-        } else if (isDepthBusy()) {
-            depthStatusPendingPhase = depthStatusPhase;
-            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
-        }
-        updateHostOptionsStatus();
-        if (sbsProfilePanelVisible) {
-            rebuildSbsProfileRows();
-        }
-    }
-
-    private void selectSbsProfile(String profile) {
-        if (profile.equals(currentSbsProfile) || isDepthBusy()) {
-            return;
-        }
-        if (!MoonBridge.sendSetSbsProfile(profile)) {
-            hostOptionsError = activity.getString(R.string.xr_sbs_profile_send_failed);
-            updateHostOptionsStatus();
-            LimeLog.warning("XR: failed to send host SBS profile request for " + profile);
-            return;
-        }
-        hostOptionsError = null;
-        currentSbsProfile = profile;
-        rebuildSbsProfileRows();
-        updateHostOptionsStatus();
-        LimeLog.info("XR: host SBS profile -> " + profile);
     }
 
     /** Toggle the performance-stats panel; also flips the pref so the decoder emits perf text. */
@@ -1149,21 +914,13 @@ public class XrStreamPresenter {
     }
 
     private void closeModeSubpanels() {
-        sbsProfilePanelVisible = false;
         adjustPanelVisible = false;
-        if (sbsProfilePanel != null) {
-            sbsProfilePanel.setEnabled(false);
-        }
         if (adjustPanel != null) {
             adjustPanel.setEnabled(false);
-        }
-        if (hostSbsAiItem != null) {
-            hostSbsAiItem.setExpanded(false);
         }
         if (clientSbsAiItem != null) {
             clientSbsAiItem.setExpanded(false);
         }
-        updateHostOptionsStatus();
         if (isDepthBusy()) {
             depthStatusPendingPhase = depthStatusPhase;
             depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
@@ -1296,12 +1053,6 @@ public class XrStreamPresenter {
                 ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS, ADJUST_GAP_METERS);
     }
 
-    /** Host SBS AI options aligned beneath that tile's left edge. */
-    private Pose sbsProfilePose(float videoHeightMeters) {
-        return modeSubpanelPose(videoHeightMeters, PresenterMode.HOST_SBS_AI,
-                SBS_PROFILE_WIDTH_METERS, SBS_PROFILE_HEIGHT_METERS, SBS_PROFILE_GAP_METERS);
-    }
-
     /** Move the bar, stats and adjust panels when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
         if (barPanel != null) {
@@ -1315,9 +1066,6 @@ public class XrStreamPresenter {
         }
         if (adjustPanel != null) {
             adjustPanel.setPose(adjustPose(videoHeightMeters));
-        }
-        if (sbsProfilePanel != null) {
-            sbsProfilePanel.setPose(sbsProfilePose(videoHeightMeters));
         }
     }
 
@@ -1829,14 +1577,6 @@ public class XrStreamPresenter {
             }
             adjustPanel = null;
         }
-        if (sbsProfilePanel != null) {
-            if (!sbsProfilePanel.isDisposed()) {
-                sbsProfilePanel.dispose();
-            }
-            sbsProfilePanel = null;
-            sbsProfileListView = null;
-        }
-
         videoSurface = null;
         statsTable = null;
         statsItem = null;

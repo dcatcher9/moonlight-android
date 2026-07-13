@@ -39,11 +39,8 @@ static jmethodID BridgeClRumbleTriggersMethod;
 static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
 static jmethodID BridgeClDepthStatusMethod;
-static jmethodID BridgeClSbsProfileListMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
-
-void BridgeClSbsProfileList(const char* profiles, int length);
 
 void DetachThread(void* context) {
     (*JVM)->DetachCurrentThread(JVM);
@@ -107,7 +104,6 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
     BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(I)V");
-    BridgeClSbsProfileListMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSbsProfileList", "(Ljava/lang/String;)V");
 }
 
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
@@ -443,7 +439,6 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .setMotionEventState = BridgeClSetMotionEventState,
         .setControllerLED = BridgeClSetControllerLED,
         .depthStatus = BridgeClDepthStatus,
-        .sbsProfileList = BridgeClSbsProfileList,
 };
 
 static bool
@@ -535,20 +530,4 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
     }
 
     return ret;
-}
-
-void BridgeClSbsProfileList(const char* profiles, int length) {
-    (void) length;
-    JNIEnv* env = GetThreadEnv();
-    // Apollo validates profile names as ASCII and the control callback supplies a trailing NUL.
-    // NewStringUTF avoids repeated FindClass/GetMethodID work for every profile-list push.
-    jstring value = (*env)->NewStringUTF(env, profiles);
-    if (value == NULL) {
-        return;
-    }
-    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSbsProfileListMethod, value);
-    (*env)->DeleteLocalRef(env, value);
-    if ((*env)->ExceptionCheck(env)) {
-        (*JVM)->DetachCurrentThread(JVM);
-    }
 }

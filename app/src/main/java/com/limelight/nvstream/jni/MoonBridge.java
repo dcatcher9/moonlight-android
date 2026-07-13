@@ -335,12 +335,6 @@ public class MoonBridge {
         }
     }
 
-    public static void bridgeClSbsProfileList(String profiles) {
-        if (connectionListener != null) {
-            connectionListener.sbsProfileList(profiles);
-        }
-    }
-
     public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         MoonBridge.videoRenderer = videoRenderer;
         MoonBridge.audioRenderer = audioRenderer;
@@ -376,9 +370,6 @@ public class MoonBridge {
 
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
     public static native void sendSetSbsMode(int mode);
-    /** Returns true when the profile request was accepted by the local control stream. */
-    public static native boolean sendSetSbsProfile(String profile);
-    public static native void requestSbsProfiles();
 
     // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)
     // to the host's configured debug dir. For diagnosing 2D->3D reprojection artifacts.

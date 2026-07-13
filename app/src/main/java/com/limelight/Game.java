@@ -3768,15 +3768,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void sbsProfileList(String profiles) {
-        runOnUiThread(() -> {
-            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onSbsProfileList(profiles);
-            }
-        });
-    }
-
-    @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if (!surfaceCreated) {
             throw new IllegalStateException("Surface changed before creation!");
