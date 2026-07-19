@@ -159,6 +159,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int CR_FLAG_ALL = CR_FLAG_INPUT_THREAD | CR_FLAG_RENDER_THREAD | CR_FLAG_CHOREOGRAPHER;
     private int codecRecoveryThreadQuiescedFlags = 0;
     private int codecRecoveryAttempts = 0;
+    // HDR metadata arrives over the control stream after the decoder is initially configured.
+    // Track that expected reset separately so it isn't reported or counted as a codec failure.
+    private volatile boolean hdrMetadataRecoveryPending;
 
     private MediaFormat inputFormat;
     private volatile MediaFormat outputFormat;
@@ -747,6 +750,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Start the decoder
         videoDecoder.start();
 
+        // reset() recreates the native codec instance. Re-register this listener after every
+        // configure/start so the first-frame gate also works after AV1 HDR reconfiguration.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
+                @Override
+                public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs,
+                                            long renderTimeNanos) {
+                    notifyFirstFrameRendered();
+                    long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
+                    if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
+                        activeWindowVideoStats.totalTimeMs += delta;
+                    }
+                }
+            }, null);
+        }
+
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
         try {
             MediaFormat __inF = videoDecoder.getInputFormat();
@@ -886,21 +905,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
-                @Override
-                public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
-                    notifyFirstFrameRendered();
-                    long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
-                    if (delta >= 0 && delta < 1000) {
-                        if (USE_FRAME_RENDER_TIME) {
-                            activeWindowVideoStats.totalTimeMs += delta;
-                        }
-                    }
-                }
-            }, null);
-        }
-
         return 0;
     }
 
@@ -983,19 +987,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
 
-                // We don't count flushes as codec recovery attempts
-                if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+                // HDR metadata arrives after initial decoder setup and requires a clean reset on
+                // Qualcomm AV1. It is an expected reconfiguration, not a codec recovery attempt.
+                boolean applyingHdrMetadata = hdrMetadataRecoveryPending;
+
+                // We don't count flushes or expected HDR reconfiguration as codec recovery attempts.
+                if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE && !applyingHdrMetadata) {
                     codecRecoveryAttempts++;
                     LimeLog.info("Codec recovery attempt: "+codecRecoveryAttempts);
                 }
 
                 // For "recoverable" exceptions, we can just stop, reconfigure, and restart.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESTART) {
-                    LimeLog.warning("Trying to restart decoder after CodecException");
+                    if (applyingHdrMetadata) {
+                        LimeLog.info("Restarting decoder to apply HDR metadata");
+                    }
+                    else {
+                        LimeLog.warning("Trying to restart decoder after codec failure");
+                    }
                     try {
                         videoDecoder.stop();
                         configureAndStartDecoder(configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        hdrMetadataRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
 
@@ -1014,11 +1028,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // For "non-recoverable" exceptions on L+, we can call reset() to recover
                 // without having to recreate the entire decoder again.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    LimeLog.warning("Trying to reset decoder after CodecException");
+                    if (applyingHdrMetadata) {
+                        LimeLog.info("Resetting decoder to apply HDR metadata");
+                    }
+                    else {
+                        LimeLog.warning("Trying to reset decoder after codec failure");
+                    }
                     try {
                         videoDecoder.reset();
                         configureAndStartDecoder(configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        hdrMetadataRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
 
@@ -1036,7 +1056,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // If we _still_ haven't managed to recover, go for the nuclear option and just
                 // throw away the old decoder and reinitialize a new one from scratch.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET) {
-                    LimeLog.warning("Trying to recreate decoder after CodecException");
+                    LimeLog.warning("Trying to recreate decoder after failed reset");
                     videoDecoder.release();
 
                     try {
@@ -1045,6 +1065,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             throw new IllegalStateException("Decoder reset failed: " + err);
                         }
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        hdrMetadataRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
 
@@ -1106,6 +1127,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
 
             LimeLog.severe(codecExc.getDiagnosticInfo());
+            hdrMetadataRecoveryPending = false;
 
             // We can attempt a recovery or reset at this stage to try to start decoding again
             if (codecRecoveryAttempts < CR_MAX_TRIES) {
@@ -1147,6 +1169,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
         else {
+            hdrMetadataRecoveryPending = false;
             // IllegalStateException was primarily used prior to the introduction of CodecException.
             // Recovery from this requires a full decoder reset.
             //
@@ -1345,7 +1368,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 double ewmaJitterNs            = periodNs * 0.1;
 
                 BufferInfo info = new BufferInfo();
-                long lastOutputNs = System.nanoTime();
                 while (!stopping) {
                     /* LATEST_ONLY_LOW_LATENCY */
                     if (!preferLowerDelays) {
@@ -1614,23 +1636,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
                 }
-
-                /* WATCHDOG_C2_SLEEP */
-                try {
-                    final long __nowNs = System.nanoTime();
-                    if (__nowNs - lastOutputNs > 1_200_000_000L) { // ~1.2s without output → likely C2 sleep
-                        LimeLog.warning("Decoder watchdog: no output >1.2s, flushing codec to recover...");
-                        try {
-                            videoDecoder.flush();
-                        } catch (Throwable ignored) {}
-                        try {
-                            android.os.Bundle __poke = new android.os.Bundle();
-                            __poke.putInt("priority", 0);
-                            videoDecoder.setParameters(__poke);
-                        } catch (Throwable ignored) {}
-                        lastOutputNs = __nowNs;
-                    }
-                } catch (Throwable ignored) {}
             }
         };
         rendererThread.setName("Video - Renderer (MediaCodec)");
@@ -1818,12 +1823,31 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // pick up the HDR metadata change. This will happen on the next input
             // or output buffer.
 
-            // HACK: Reset codec recovery attempt counter, since this is an expected "recovery"
-            codecRecoveryAttempts = 0;
-
-            // Promote None/Flush to Restart and leave Reset alone
-            if (!codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESTART)) {
-                codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_RESTART);
+            // Qualcomm's AV1 Codec2 implementation can leave its buffer channel in a flushed
+            // state after stop()/configure()/start(), causing every subsequent work item to be
+            // ignored. Use a full reset for AV1 while retaining the established restart path for
+            // the other codecs.
+            final int recoveryType = (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0 ?
+                    CR_RECOVERY_TYPE_RESET : CR_RECOVERY_TYPE_RESTART;
+            synchronized (codecRecoveryMonitor) {
+                // A second metadata update can arrive before the already scheduled recovery.
+                // Keep that recovery marked as expected; it will consume currentHdrMetadata.
+                if (!hdrMetadataRecoveryPending) {
+                    // Publish the reason before the recovery type. Recovery reads the reason only
+                    // after taking this lock, while exception paths race safely through the CAS.
+                    hdrMetadataRecoveryPending = true;
+                    boolean scheduled = codecRecoveryType.compareAndSet(
+                            CR_RECOVERY_TYPE_NONE, recoveryType) ||
+                            codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_FLUSH, recoveryType);
+                    if (!scheduled) {
+                        // A concurrent real codec failure owns the reason and must still count.
+                        hdrMetadataRecoveryPending = false;
+                        if (recoveryType == CR_RECOVERY_TYPE_RESET) {
+                            codecRecoveryType.compareAndSet(
+                                    CR_RECOVERY_TYPE_RESTART, CR_RECOVERY_TYPE_RESET);
+                        }
+                    }
+                }
             }
         }
     }
