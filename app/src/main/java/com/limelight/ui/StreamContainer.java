@@ -37,9 +37,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         boolean handleFocusChange(boolean hasWindowFocus);
     }
 
-    // Streaming always uses the single XR route: XrStreamPresenter, starting in the Normal (flat 2D)
-    // presentation, with modes switched from the in-headset control bar (Normal / Host SBS Raw /
-    // Host SBS AI / Client SBS AI). The legacy plain-2D (SurfaceView) and standalone
+    // Streaming always uses the single XR route: XrStreamPresenter. New streams restore the last
+    // successful per-machine/app presentation preference; modes remain
+    // switchable from the in-headset control bar (Normal / Host SBS Raw / Host SBS AI /
+    // Client SBS AI). The legacy plain-2D (SurfaceView) and standalone
     // on-device SBS (Stereo3DRenderer) render modes are gone.
 
     private Game game;

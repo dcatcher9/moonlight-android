@@ -129,6 +129,10 @@
 	<string name="perf_overlay_decoder">解碼器：%1$s</string>
 	<string name="perf_overlay_incomingfps">從網路接收的影格率：%1$.2f FPS</string>
 	<string name="perf_overlay_renderingfps">渲染影格率：%1$.2f FPS</string>
+	<string name="xr_stats_stream_cap">串流幀率上限</string>
+	<string name="xr_stats_display_refresh">顯示更新率</string>
+	<string name="xr_stats_fps_value">%1$.2f FPS</string>
+	<string name="xr_stats_hz_value">%1$.2f Hz</string>
 	<string name="perf_overlay_hostprocessinglatency">主機處理延遲 最小/最大/平均：%1$.1f/%2$.1f/%3$.1f ms</string>
 	<string name="perf_overlay_netdrops">因網路連線丟失的影格：%1$.2f%%</string>
 	<string name="perf_overlay_netlatency">平均網路延遲：%1$d ms（變異：%2$d ms）</string>

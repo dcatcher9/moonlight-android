@@ -791,6 +791,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setAudioConfiguration(prefConfig.audioConfiguration)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
                 .setColorRange(decoderRenderer.getPreferredColorRange())
+                .setInitialSbsMode(streamContainer.getXrPresenter() != null
+                        ? streamContainer.getXrPresenter().getInitialHostSbsWireMode()
+                        : MoonBridge.SBS_MODE_OFF)
                 .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
                 .build();
 
@@ -3559,6 +3562,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         && isDestroyed())) {
                     return;
                 }
+                if (streamContainer.getXrPresenter() != null) {
+                    streamContainer.getXrPresenter().onStreamStartupFailed();
+                }
                 if (spinner != null) {
                     spinner.dismiss();
                     spinner = null;
@@ -3630,6 +3636,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             public void run() {
                 if (!connecting && !connected) {
                     return;
+                }
+                if (errorCode != MoonBridge.ML_ERROR_GRACEFUL_TERMINATION
+                        && streamContainer.getXrPresenter() != null) {
+                    streamContainer.getXrPresenter().onStreamStartupFailed();
                 }
                 // Let the display go to sleep now
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -3797,9 +3807,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         });
 
-        // Note: we intentionally do NOT request host SBS here. Every session starts in plain 2D
-        // (host defaults to SBS_MODE_OFF), and the user enables host SBS on the fly from the XR
-        // control bar (XrStreamPresenter.selectMode -> MoonBridge.sendSetSbsMode).
+        // Host SBS is normally switched live from the XR control bar. A saved Host SBS AI
+        // presentation preference is carried in the earlier launch/resume HTTP request, so no
+        // duplicate control message is needed after the connection starts.
     }
 
     @Override

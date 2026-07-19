@@ -40,6 +40,19 @@ clear the explicit metadata with `setContentColorMetadata(null)` before returnin
 The Artemis full-range preference remains authoritative for the decoder request and Client SBS GL
 output; full-range HDR must not be converted to limited range as a presentation workaround.
 
+### Reconnect and saved-view contract
+
+Apollo's `/serverinfo` response is the only authority for whether a stream session exists: the
+app grid shows Resume/play only while the host reports a busy session with a current app. Artemis
+does not mirror the host's disconnect grace period or infer expiry from a client timer.
+
+Panel height and the last successfully rendered presentation mode are different: they are durable
+per-machine/app user preferences. They survive activity replacement and later fresh launches so a
+reconnect restores the same view. A startup that fails before frame 1 may update the saved height,
+but an ordinary disconnect/cancellation must not overwrite the last successful mode. A confirmed
+non-graceful transport or decoder startup failure explicitly resets the preference to Normal so an
+incompatible restored route cannot fail forever.
+
 ### What the long "black quad" investigation actually was (lessons)
 This looked for a while like an emulator/codec buffer problem. It was not. The black quad had
 two real causes, both fixed above:

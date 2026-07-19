@@ -55,8 +55,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Presentation owner for the single XR route ({@code MODE_XR}): starts in the Normal (flat 2D)
- * presentation and switches Host SBS Raw/AI and Client SBS AI from the in-headset control bar.
+ * Presentation owner for the single XR route ({@code MODE_XR}): a new stream restores the last
+ * successful per-machine/app presentation preference. The user can
+ * switch Host SBS Raw/AI and Client SBS AI from the in-headset control bar.
  *
  * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
  * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR
@@ -113,6 +114,7 @@ public class XrStreamPresenter {
     private final Activity activity;
     private final PreferenceConfiguration prefConfig;
     private final OnSurfaceReadyListener listener;
+    private final XrViewStateStore viewStateStore;
 
     private Session session;
     private SurfaceEntity surfaceEntity;
@@ -153,10 +155,12 @@ public class XrStreamPresenter {
     private static final int STATS_VALUE_COLOR = 0xFFFFFFFF;  // white for values
     private static final int STATS_ON_COLOR = 0xFF5CD65C;     // green for "on"/HDR active
     private static final float STATS_TEXT_SP = 30f;
-    /** Comfortable default quad height in meters; mode switches keep this height and vary width.
-     *  Shared by the initial placement and Reset so both land at the same size. Tune by feel on
-     *  the headset (at the ~2 m default distance, 2.0 m ≈ a large cinema screen). */
-    private static final float DEFAULT_PANEL_HEIGHT_METERS = 2.0f;
+    /** Comfortable cinema-preset quad height in meters; mode switches keep this height and vary
+     *  width. Shared by the initial placement and Cinema View so both land at the same size. Tune
+     *  by feel on the headset (at the ~2 m default distance, 2.0 m ≈ a large cinema screen). */
+    private static final float DEFAULT_PANEL_HEIGHT_METERS =
+            XrViewStateStore.DEFAULT_HEIGHT_METERS;
+    private float panelHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
 
     public enum PresenterMode {
         NORMAL,
@@ -172,6 +176,9 @@ public class XrStreamPresenter {
 
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
     private PresenterMode currentPresenterMode = PresenterMode.NORMAL;
+    /** A saved Client SBS presentation to re-apply once the decoder has produced a valid Normal
+     *  frame. Restoring before then would split a still-mono startup frame. */
+    private PresenterMode deferredPresenterMode = PresenterMode.NORMAL;
 
     /** Half-width Client SBS: render each eye at W/2 into a W×H surface instead of full W into 2W×H.
      *  ~Halves GPU load and heat at slightly softer per-eye sharpness. Persisted; default off. */
@@ -203,10 +210,12 @@ public class XrStreamPresenter {
         this.activity = activity;
         this.prefConfig = prefConfig;
         this.listener = listener;
+        this.viewStateStore = new XrViewStateStore(activity, activity.getIntent());
         this.clientSbsHalfWidth = androidx.preference.PreferenceManager
                 .getDefaultSharedPreferences(activity).getBoolean(CLIENT_SBS_HALF_WIDTH_KEY, false);
-        // Every session starts in plain 2D (NORMAL); the user enables Host/Client SBS on the fly
-        // from the XR control bar. selectMode() then drives the host's depth pipeline to match.
+        restoreViewState();
+        // Restore direct Host/Raw presentation immediately. Client SBS is deferred until after
+        // frame 1 because it requires a live decoder-to-GL handoff.
     }
 
     /**
@@ -221,9 +230,9 @@ public class XrStreamPresenter {
         }
         session = ((SessionCreateSuccess) result).getSession();
 
-        // Enable device (head) tracking so the "Reset" tile can recenter the panel in front of the
-        // user's current head pose (via RenderViewpoint). The default session has it DISABLED, which
-        // is why RenderViewpoint.mono(session) was null. Head pose needs no runtime permission.
+        // Enable device (head) tracking so the "Cinema View" tile can place the panel in front of
+        // the user's current head pose (via RenderViewpoint). The default session has it DISABLED,
+        // which is why RenderViewpoint.mono(session) was null. Head pose needs no runtime permission.
         try {
             Config cfg = session.getConfig();
             SessionConfigureResult cr = session.configure(new Config.Builder(cfg)
@@ -254,9 +263,9 @@ public class XrStreamPresenter {
             return false;
         }
 
-        // Every session starts in NORMAL (2D): the decoder feeds a plain W x H frame shown to both
-        // eyes. Switching to a stereo mode changes BOTH the compositor split AND the frame the host
-        // sends — Host SBS AI -> a packed 2W' x H' side-by-side frame (capped to
+        // A saved direct Host/Raw preference can be correct from frame 1. Switching to a stereo
+        // mode changes BOTH the compositor split AND the
+        // frame the host sends — Host SBS AI -> a packed 2W' x H' side-by-side frame (capped to
         // the encoder max), Client SBS -> on-device depth packed into a 2W surface. selectMode
         // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
         //
@@ -268,7 +277,6 @@ public class XrStreamPresenter {
         //    width, so MONO shows the whole w/h frame and SBS shows each eye a half-width slot.
         fullAspect = (float) prefConfig.width / prefConfig.height;
         perEyeAspect = prefConfig.isHostDoubledWidthMode() ? fullAspect : (fullAspect / 2.0f);
-        float panelHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
         float panelWidthMeters = panelHeightMeters * aspectFor(currentPresenterMode);
         SurfaceEntity.Shape quad =
                 new SurfaceEntity.Shape.Quad(new FloatSize2d(panelWidthMeters, panelHeightMeters));
@@ -283,8 +291,15 @@ public class XrStreamPresenter {
                 quad,
                 stereoModeFor(currentPresenterMode));
 
-        // Start at the 2D frame size (W x H); selectMode re-pins to the packed SBS size on switch.
-        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(prefConfig.width, prefConfig.height));
+        // A saved Host SBS AI preference asks Apollo to start packed SBS in the launch/resume HTTP
+        // transaction, so frame 1 must already target the matching packed surface size.
+        // Raw SBS uses the negotiated W x H frame and only changes compositor interpretation.
+        if (isHostDepthPresenterMode(currentPresenterMode)) {
+            surfaceEntity.setSurfacePixelDimensions(
+                    new IntSize2d(hostSbsPackedWidth(), hostSbsPackedHeight()));
+        } else {
+            surfaceEntity.setSurfacePixelDimensions(new IntSize2d(prefConfig.width, prefConfig.height));
+        }
         // Parent to the activity space (the rendered scene root) and make visibility explicit.
         // Without the explicit parent the entity isn't attached to the rendered scene graph, so the
         // quad never appears even though its surface is being fed/consumed.
@@ -325,10 +340,14 @@ public class XrStreamPresenter {
         resizable = ResizableComponent.create(session, (ResizeEvent event) -> {
             if (event.getResizeState() == ResizeEvent.ResizeState.END) {
                 FloatSize3d ns = event.getNewSize();
+                panelHeightMeters = XrViewStateStore.clampHeight(ns.getHeight());
                 surfaceEntity.setShape(
-                        new SurfaceEntity.Shape.Quad(new FloatSize2d(ns.getWidth(), ns.getHeight())));
+                        new SurfaceEntity.Shape.Quad(new FloatSize2d(
+                                panelHeightMeters * aspectFor(currentPresenterMode),
+                                panelHeightMeters)));
                 // Keep the control bar glued beneath the (now resized) quad.
-                repositionControlBar(ns.getHeight());
+                repositionControlBar(panelHeightMeters);
+                viewStateStore.saveHeight(panelHeightMeters);
             }
         });
         resizable.setFixedAspectRatioEnabled(true);
@@ -378,8 +397,8 @@ public class XrStreamPresenter {
         BarItem stats = new BarItem(
                 activity.getString(R.string.xr_bar_stats),
                 R.drawable.ic_xr_stats, /* selectsMode= */ null);
-        BarItem reset = new BarItem(
-                activity.getString(R.string.xr_bar_reset),
+        BarItem cinemaView = new BarItem(
+                activity.getString(R.string.xr_bar_cinema_view),
                 R.drawable.ic_xr_reset, /* selectsMode= */ null);
         BarItem dump = new BarItem(
                 activity.getString(R.string.xr_bar_dump),
@@ -408,7 +427,7 @@ public class XrStreamPresenter {
             }
         };
         stats.onTap = this::toggleStats;
-        reset.onTap = this::resetView;
+        cinemaView.onTap = this::applyCinemaView;
         dump.onTap = XrStreamPresenter::requestHostDebugDump;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
@@ -421,7 +440,7 @@ public class XrStreamPresenter {
         barItems.add(hostSbsAi);
         barItems.add(clientSbsAi);
         barItems.add(stats);
-        barItems.add(reset);
+        barItems.add(cinemaView);
         barItems.add(dump);
         barItems.add(machines);
         barItems.add(disconnect);
@@ -613,6 +632,27 @@ public class XrStreamPresenter {
             return;
         }
         statsTable.removeAllViews();
+
+        // The live stream counters below are content-driven: Desktop Duplication and Apollo may
+        // encode fewer frames than the negotiated maximum when the desktop is static or the source
+        // video has a lower cadence. Show the cap and the XR display refresh separately so a 30 FPS
+        // movie is not mistaken for a failed 90 FPS stream/display negotiation.
+        addStatsRow(activity.getString(R.string.xr_stats_stream_cap),
+                activity.getString(R.string.xr_stats_fps_value, prefConfig.fps),
+                STATS_VALUE_COLOR);
+        try {
+            float refreshRate = activity.getWindowManager().getDefaultDisplay()
+                    .getMode().getRefreshRate();
+            if (refreshRate > 0.0f) {
+                addStatsRow(activity.getString(R.string.xr_stats_display_refresh),
+                        activity.getString(R.string.xr_stats_hz_value, refreshRate),
+                        STATS_VALUE_COLOR);
+            }
+        } catch (RuntimeException ignored) {
+            // The display can disappear while the activity is being torn down. The stream
+            // counters remain useful, so simply omit this optional row in that race.
+        }
+
         for (String part : text.split("[\\n\\t]+")) {
             String entry = part.trim();
             if (entry.isEmpty()) {
@@ -1039,6 +1079,24 @@ public class XrStreamPresenter {
             }
         }
         LimeLog.info("XR: first video frame rendered; presentation switching enabled");
+
+        // The initial Host/Raw mode is now proven to match a decoded frame. Mark it as the most
+        // successful presentation. Client SBS still needs its guarded GL surface handoff.
+        if (deferredPresenterMode == PresenterMode.NORMAL) {
+            persistPresentationState();
+        }
+
+        PresenterMode modeToRestore = deferredPresenterMode;
+        deferredPresenterMode = PresenterMode.NORMAL;
+        if (modeToRestore != PresenterMode.NORMAL) {
+            for (BarItem item : barItems) {
+                if (item.selectsMode == modeToRestore) {
+                    LimeLog.info("XR: restoring saved presentation mode " + modeToRestore);
+                    selectMode(item);
+                    break;
+                }
+            }
+        }
     }
 
     /** Place a mode's sub-panel so its top-left corner starts at the tile's bottom-left corner. */
@@ -1185,6 +1243,7 @@ public class XrStreamPresenter {
         updateModeSelection();
         updateAdjustPanelVisibility();
         modeSwitchInProgress = false;
+        persistPresentationState();
     }
 
     private static int wireModeFor(PresenterMode mode) {
@@ -1214,16 +1273,17 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Reset the video panel after the user has moved/resized it: back to the default distance,
-     * orientation, scale, and size for the current mode. The bar and stats panel follow.
+     * Apply the large, close cinema preset to the video panel. This intentionally does not restore
+     * the panel's stream-start transform; the bar and stats panel follow the new placement.
      */
-    private void resetView() {
+    private void applyCinemaView() {
         if (surfaceEntity == null) {
             return;
         }
         surfaceEntity.setScale(1.0f);
         float aspect = aspectFor(currentPresenterMode);
         float height = DEFAULT_PANEL_HEIGHT_METERS;
+        panelHeightMeters = height;
         surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
         applyResizeBounds(aspect);
 
@@ -1247,9 +1307,9 @@ public class XrStreamPresenter {
             }
             if (head != null) {
                 // Level the placement: keep only the head's yaw (heading), discarding pitch and
-                // roll. Otherwise clicking Reset while looking down (e.g. at the control bar below
-                // the quad) tilts the panel up to face the eyes and drops it below eye level, so it
-                // reads as "looking down at a tilted screen". Round-tripping the Y (yaw) euler
+                // roll. Otherwise clicking Cinema View while looking down (e.g. at the control bar
+                // below the quad) tilts the panel up to face the eyes and drops it below eye level,
+                // so it reads as "looking down at a tilted screen". Round-tripping the Y (yaw) euler
                 // component zeroes pitch/roll regardless of angle units, and reusing the proven
                 // compose(-2 m forward) keeps the panel facing the user at eye height, 2 m ahead.
                 Vector3 euler = head.getRotation().getEulerAngles();
@@ -1261,12 +1321,53 @@ public class XrStreamPresenter {
                 placed = inFront;
             }
         } catch (Throwable t) {
-            LimeLog.warning("XR reset: current head pose unavailable (" + t + ")");
+            LimeLog.warning("XR cinema view: current head pose unavailable (" + t + ")");
         }
         if (placed == null) {
             surfaceEntity.setPose(new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
         }
         repositionControlBar(height);
+        viewStateStore.saveHeight(panelHeightMeters);
+    }
+
+    private void restoreViewState() {
+        XrViewStateStore.State state = viewStateStore.restore();
+        panelHeightMeters = state.panelHeightMeters;
+        PresenterMode savedMode = PresenterMode.valueOf(state.presentationMode.name());
+        if (savedMode == PresenterMode.HOST_SBS_AI || savedMode == PresenterMode.HOST_SBS_RAW) {
+            // These direct-decoder modes can be correct from frame 1. Host AI is also carried in
+            // StreamConfiguration/NvHTTP so Apollo begins packed output before transport starts.
+            currentPresenterMode = savedMode;
+        } else if (savedMode == PresenterMode.CLIENT_SBS_AI) {
+            // Client SBS requires a live decoder -> dummy -> GL handoff, so restore it after the
+            // first Normal frame using the existing guarded asynchronous switch.
+            deferredPresenterMode = savedMode;
+        }
+        LimeLog.info("XR: restored panel height " + panelHeightMeters + " m; initial mode "
+                + currentPresenterMode + "; deferred mode " + deferredPresenterMode);
+    }
+
+    private void persistPresentationState() {
+        viewStateStore.savePresentation(panelHeightMeters,
+                XrViewStateStore.Mode.valueOf(currentPresenterMode.name()));
+    }
+
+    /** Host mode that must be part of launch/resume so decoder frame 1 matches the XR surface. */
+    public int getInitialHostSbsWireMode() {
+        return XrViewStateStore.desiredHostSbsWireMode(
+                XrViewStateStore.Mode.valueOf(currentPresenterMode.name()));
+    }
+
+    /** A non-graceful startup failure before frame 1 invalidates the saved mode. This is not a
+     *  session-expiry timer: it prevents a genuinely incompatible presentation route from being
+     *  retried forever while preserving the user's panel size. */
+    public void onStreamStartupFailed() {
+        if (streamPresentationReady) {
+            return;
+        }
+        deferredPresenterMode = PresenterMode.NORMAL;
+        viewStateStore.resetPresentationToNormal(panelHeightMeters);
+        LimeLog.warning("XR: reset saved presentation mode after startup failed before frame 1");
     }
 
     /** Client "Dump 3D" button: ask the host to dump one SBS debug frame (2D source / depth /
@@ -1603,6 +1704,13 @@ public class XrStreamPresenter {
      * {@code StreamContainer.onDestroy()} ordering.
      */
     public void onDestroy() {
+        if (streamPresentationReady) {
+            persistPresentationState();
+        } else {
+            // Do not replace the last successful presentation preference with a mode from a
+            // startup that never rendered frame 1. Panel size is independently durable.
+            viewStateStore.saveHeight(panelHeightMeters);
+        }
         if (surfaceEntity != null) {
             if (!surfaceEntity.isDisposed()) {
                 surfaceEntity.dispose();

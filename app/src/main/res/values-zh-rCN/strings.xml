@@ -113,6 +113,10 @@
     <string name="perf_overlay_decoder">解码器： %1$s</string>
     <string name="perf_overlay_incomingfps">网络接收帧数： %1$.2f FPS</string>
     <string name="perf_overlay_renderingfps">渲染帧数： %1$.2f FPS</string>
+    <string name="xr_stats_stream_cap">串流帧率上限</string>
+    <string name="xr_stats_display_refresh">显示刷新率</string>
+    <string name="xr_stats_fps_value">%1$.2f FPS</string>
+    <string name="xr_stats_hz_value">%1$.2f Hz</string>
     <string name="perf_overlay_netdrops">网络丢失帧： %1$.2f%%</string>
     <string name="perf_overlay_dectime">平均解码时间： %1$.2f ms</string>
     <!-- AppList activity -->

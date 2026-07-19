@@ -31,6 +31,7 @@ public class StreamConfiguration {
     private int colorSpace;
     private boolean persistGamepadsAfterDisconnect;
     private boolean enableUltraLowLatency;
+    private int initialSbsMode;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -146,6 +147,14 @@ public class StreamConfiguration {
             return this;
         }
 
+        public StreamConfiguration.Builder setInitialSbsMode(int mode) {
+            if (mode != MoonBridge.SBS_MODE_OFF && mode != MoonBridge.SBS_MODE_AI) {
+                throw new IllegalArgumentException("Unknown initial SBS mode: " + mode);
+            }
+            config.initialSbsMode = mode;
+            return this;
+        }
+
         public StreamConfiguration build() {
             return config;
         }
@@ -169,6 +178,7 @@ public class StreamConfiguration {
         this.supportedVideoFormats = MoonBridge.VIDEO_FORMAT_H264;
         this.attachedGamepadMask = 0;
         this.enableUltraLowLatency = false;
+        this.initialSbsMode = MoonBridge.SBS_MODE_OFF;
     }
     
     public int getWidth() {
@@ -257,5 +267,9 @@ public class StreamConfiguration {
 
     public boolean getEnableUltraLowLatency() {
         return enableUltraLowLatency;
+    }
+
+    public int getInitialSbsMode() {
+        return initialSbsMode;
     }
 }
