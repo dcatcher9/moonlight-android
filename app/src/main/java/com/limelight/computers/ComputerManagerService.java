@@ -181,8 +181,11 @@ public class ComputerManagerService extends Service {
                             }
                         }
 
-                        // Wait until the next polling interval
-                        Thread.sleep(SERVERINFO_POLLING_PERIOD_MS);
+                        // Wait until the next polling interval, unless an activity needs an
+                        // authoritative session-state refresh immediately (for example after
+                        // sending /cancel). Keep the request latched when it arrives during the
+                        // network poll so it cannot be lost before this wait begins.
+                        tuple.waitForNextPoll(SERVERINFO_POLLING_PERIOD_MS);
                     } catch (InterruptedException e) {
                         break;
                     }
@@ -299,6 +302,18 @@ public class ComputerManagerService extends Service {
                         synchronized (tuple.networkLock) {
                             tuple.computer.state = ComputerDetails.State.UNKNOWN;
                         }
+                    }
+                }
+            }
+        }
+
+        /** Wake the existing /serverinfo poller for this computer without starting a second request. */
+        public void pollComputerNow(String uuid) {
+            synchronized (pollingTuples) {
+                for (PollingTuple tuple : pollingTuples) {
+                    if (uuid.equals(tuple.computer.uuid)) {
+                        tuple.requestPollNow();
+                        return;
                     }
                 }
             }
@@ -949,12 +964,31 @@ class PollingTuple {
     public Thread thread;
     public final ComputerDetails computer;
     public final Object networkLock;
+    private final Object pollEvent;
+    private boolean pollNowRequested;
     public long lastSuccessfulPollMs;
 
     public PollingTuple(ComputerDetails computer, Thread thread) {
         this.computer = computer;
         this.thread = thread;
         this.networkLock = new Object();
+        this.pollEvent = new Object();
+    }
+
+    public void requestPollNow() {
+        synchronized (pollEvent) {
+            pollNowRequested = true;
+            pollEvent.notifyAll();
+        }
+    }
+
+    public void waitForNextPoll(long delayMs) throws InterruptedException {
+        synchronized (pollEvent) {
+            if (!pollNowRequested) {
+                pollEvent.wait(delayMs);
+            }
+            pollNowRequested = false;
+        }
     }
 }
 

@@ -136,6 +136,9 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private final static int GAMESTREAM_EOL_ID = 11;
     private final static int OPEN_MANAGEMENT_PAGE_ID = 20;
     private final static int PAIR_ID_OTP = 21;
+    private String contextMenuComputerUuid;
+    private int contextMenuRunningGameId;
+    private boolean contextMenuOpen;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
@@ -397,13 +400,14 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     @Override
     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
-        stopComputerUpdates(false);
-
         // Call superclass
         super.onCreateContextMenu(menu, v, menuInfo);
 
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
         ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(info.position);
+        contextMenuComputerUuid = computer.details.uuid;
+        contextMenuRunningGameId = computer.details.runningGameId;
+        contextMenuOpen = true;
 
         // Add a header with PC status details
         menu.clearHeader();
@@ -461,10 +465,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     @Override
     public void onContextMenuClosed(Menu menu) {
-        // For some reason, this gets called again _after_ onPause() is called on this activity.
-        // startComputerUpdates() manages this and won't actual start polling until the activity
-        // returns to the foreground.
-        startComputerUpdates();
+        contextMenuOpen = false;
     }
 
     private void doPair(final ComputerDetails computer, String otp, String passphrase) {
@@ -731,8 +732,10 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     @Override
     public boolean onContextItemSelected(MenuItem item) {
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(info.position);
+        final ComputerObject computer = findComputerByUuid(contextMenuComputerUuid);
+        if (computer == null) {
+            return super.onContextItemSelected(item);
+        }
         switch (item.getItemId()) {
             case PAIR_ID:
                 doPair(computer.details, null, null);
@@ -791,7 +794,12 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                     @Override
                     public void run() {
                         ServerHelper.doQuit(PcView.this, computer.details,
-                                new NvApp("app", null, 0, false), managerBinder, null);
+                                new NvApp("app", null, 0, false), managerBinder,
+                                () -> {
+                                    if (managerBinder != null) {
+                                        managerBinder.pollComputerNow(computer.details.uuid);
+                                    }
+                                });
                     }
                 }, null);
                 return true;
@@ -854,6 +862,12 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     }
 
     private void updateComputer(ComputerDetails details) {
+        if (contextMenuOpen && details.uuid.equals(contextMenuComputerUuid)
+                && details.runningGameId != contextMenuRunningGameId) {
+            // Context-menu contents are snapshots. Close stale Resume/Quit actions when Apollo's
+            // authoritative session state changes; the next open rebuilds the current actions.
+            closeContextMenu();
+        }
         ComputerObject existingEntry = null;
 
         for (int i = 0; i < pcGridAdapter.getCount(); i++) {
@@ -880,6 +894,19 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
         // Notify the view that the data has changed
         pcGridAdapter.notifyDataSetChanged();
+    }
+
+    private ComputerObject findComputerByUuid(String uuid) {
+        if (uuid == null) {
+            return null;
+        }
+        for (int i = 0; i < pcGridAdapter.getCount(); i++) {
+            ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(i);
+            if (uuid.equals(computer.details.uuid)) {
+                return computer;
+            }
+        }
+        return null;
     }
 
     @Override

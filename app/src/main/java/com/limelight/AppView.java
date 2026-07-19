@@ -65,7 +65,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private SpinnerDialog blockingLoadSpinner;
     private String lastRawApplist;
     private int lastRunningAppId;
-    private boolean suspendGridUpdates;
     private boolean inForeground;
     private boolean showHiddenApps;
     private HashSet<Integer> hiddenAppIds = new HashSet<>();
@@ -200,11 +199,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         managerBinder.startPolling(new ComputerManagerListener() {
             @Override
             public void notifyComputerUpdated(final ComputerDetails details) {
-                // Do nothing if updates are suspended
-                if (suspendGridUpdates) {
-                    return;
-                }
-
                 // Don't care about other computers
                 if (!details.uuid.equalsIgnoreCase(uuidString)) {
                     return;
@@ -248,14 +242,14 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     // Let's check if the running app ID changed
                     if (details.runningGameId != lastRunningAppId) {
                         // Update the currently running game using the app ID
-                        lastRunningAppId = details.runningGameId;
+                        updateRunningAppId(details.runningGameId);
                         updateUiWithServerinfo(details);
                     }
 
                     return;
                 }
 
-                lastRunningAppId = details.runningGameId;
+                updateRunningAppId(details.runningGameId);
                 lastRawApplist = details.rawAppList;
 
                 try {
@@ -562,15 +556,15 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
                     @Override
                     public void run() {
-                        suspendGridUpdates = true;
                         ServerHelper.doQuit(AppView.this, computer,
                                 app.app, managerBinder, new Runnable() {
                                     @Override
                                     public void run() {
-                                        // Trigger a poll immediately
-                                        suspendGridUpdates = false;
-                                        if (poller != null) {
-                                            poller.pollNow();
+                                        // Re-read authoritative /serverinfo state immediately.
+                                        // The UI must not assume /cancel succeeded or mirror the
+                                        // host's resume-grace timer locally.
+                                        if (managerBinder != null) {
+                                            managerBinder.pollComputerNow(uuidString);
                                         }
                                     }
                                 });
@@ -664,6 +658,16 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 }
             }
         });
+    }
+
+    private void updateRunningAppId(int runningGameId) {
+        boolean changed = runningGameId != lastRunningAppId;
+        lastRunningAppId = runningGameId;
+        if (changed) {
+            // Context-menu contents are snapshots. Close a stale Resume/Quit menu when the
+            // authoritative host state changes; the next open will rebuild Start-ready actions.
+            runOnUiThread(this::closeContextMenu);
+        }
     }
 
     private void updateUiWithAppList(final List<NvApp> appList) {
