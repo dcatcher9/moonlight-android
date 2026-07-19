@@ -78,7 +78,9 @@ public class ShaderUtils {
                     "    finalColor.rgb += debugTint;\n" +
                     "  }\n" +
                     "\n" +
-                    "  gl_FragColor = finalColor;\n" +
+                    // SceneCore composites this output as a SurfaceEntity. External OES video
+                    // textures may report zero alpha, so the final client-SBS image must be opaque.
+                    "  gl_FragColor = vec4(finalColor.rgb, 1.0);\n" +
                     "}\n";
 
 
@@ -99,9 +101,14 @@ public class ShaderUtils {
                     "uniform float u_parallax;\n" +
 
                     "void main() {\n" +
-                    "float blurRadius = 60.0 * u_parallax;\n" +
-                    "float blurStep = 2.0 / u_parallax;\n" +
-                    "float sigma = 50.0 * u_parallax;\n" +
+                    "float parallaxFactor = abs(u_parallax);\n" +
+                    "if (parallaxFactor < 0.0001) {\n" +
+                    "  gl_FragColor = texture2D(s_InputTexture, v_TexCoord);\n" +
+                    "  return;\n" +
+                    "}\n" +
+                    "float blurRadius = 60.0 * parallaxFactor;\n" +
+                    "float blurStep = 2.0 / parallaxFactor;\n" +
+                    "float sigma = 50.0 * parallaxFactor;\n" +
                     "  vec4 sum = vec4(0.0);\n" +
                     "  float weightSum = 0.0;\n" +
 
@@ -113,7 +120,9 @@ public class ShaderUtils {
                     "    sum += texture2D(s_InputTexture, v_TexCoord + sampleDistance * u_texelSize * u_blurDirection) * weight;\n" +
                     "    weightSum += weight;\n" +
                     "  }\n" +
-                    "  gl_FragColor = sum / weightSum;\n" +
+                    "  gl_FragColor = weightSum > 0.00001\n" +
+                    "      ? sum / weightSum\n" +
+                    "      : texture2D(s_InputTexture, v_TexCoord);\n" +
                     "}\n";
 
     public static final String SIMPLE_VERTEX_SHADER =

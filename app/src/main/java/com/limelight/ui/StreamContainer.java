@@ -25,6 +25,10 @@ import com.limelight.utils.Stereo3DRenderer;
  */
 public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback, Stereo3DRenderer.OnSurfaceReadyListener {
 
+    public interface SurfaceSwitchCallback {
+        void onComplete(boolean success);
+    }
+
     public interface InputCallbacks {
         boolean handleKeyUp(KeyEvent event);
         boolean handleKeyDown(KeyEvent event);
@@ -46,6 +50,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private SurfaceView mSurfaceView;
     private Surface mCurrentSurface;
     private Surface mClientSbsSurface;
+    private Surface mBoundDecoderSurface;
+    private SurfaceSwitchCallback mPendingClientSbsSwitch;
+    private int mClientSbsSwitchGeneration;
     private Runnable onSurfaceAvailable;
     private InputCallbacks mInputCallbacks;
     private boolean commitTextEnabled = false;
@@ -59,6 +66,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     // fires on the GL thread as the view detaches) doesn't try to rebind the decoder to an
     // already-disposed XR surface.
     private volatile boolean mDestroyed = false;
+    private boolean mStereoRendererDestroyed;
 
     public StreamContainer(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -72,9 +80,21 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mXrPresenter;
     }
 
-    public void init(Game game, PreferenceConfiguration prefConfig) {
+    public void setClientSbsActive(boolean enabled) {
+        if (mStereoRenderer != null) {
+            mStereoRenderer.setClientSbs(enabled);
+        }
+    }
+
+    public void setHdrInput(boolean enabled) {
+        if (mStereoRenderer != null) {
+            mStereoRenderer.setHdrInput(enabled);
+        }
+    }
+
+    public boolean init(Game game, PreferenceConfiguration prefConfig) {
         if (this.game != null) {
-            return;
+            return mXrPresenter != null;
         }
 
         this.game = game;
@@ -93,7 +113,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             glSurfaceView.setEGLContextClientVersion(3);
             glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
             mXrPresenter = new XrStreamPresenter(game, prefConfig, this::onStereo3DSurfaceReady);
-            mXrPresenter.init();
+            if (!mXrPresenter.init()) {
+                mXrPresenter = null;
+                return false;
+            }
 
             // Persistent dummy surface used by switchToClientSbs() to park MediaCodec while the XR
             // surface is handed between the decoder and the GL renderer (a transient/GC'd surface
@@ -114,28 +137,25 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 @Override
                 public void destroySurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLSurface surface) {
                     egl.eglDestroySurface(display, surface);
-                    // EGL has released the XR surface: in a normal mode-switch (leaving Client SBS)
-                    // hand it back to the decoder. Skip during teardown, or if the XR surface is
-                    // already gone/invalid.
-                    if (mDestroyed || com.limelight.utils.Stereo3DRenderer.clientSbs
-                            || game == null || mXrPresenter == null) {
-                        return;
-                    }
-                    Surface xrSurface = mXrPresenter.getVideoSurface();
-                    if (xrSurface != null && xrSurface.isValid()) {
-                        game.setDecoderOutputSurface(xrSurface);
-                    }
+                    // Decoder handoff is explicit in switchToClientSbs(). onPause() waits for this
+                    // callback, so rebinding here would bind MediaCodec before the XR surface is
+                    // resized for the next presentation.
                 }
             });
 
             mStereoRenderer = new Stereo3DRenderer(glSurfaceView, new Stereo3DRenderer.OnSurfaceReadyListener() {
                 @Override
                 public void onStereo3DSurfaceReady(Surface surface) {
-                    mClientSbsSurface = surface;
-                    // If we are actively in Client SBS mode, feed the decoder into the renderer.
-                    if (Stereo3DRenderer.clientSbs && game != null) {
-                        game.setDecoderOutputSurface(surface);
-                    }
+                    // Renderer callbacks arrive on the GL thread. Keep the complete switch
+                    // transaction, including its timeout, serialized on the main/UI thread.
+                    post(() -> {
+                        if (mDestroyed) return;
+                        mClientSbsSurface = surface;
+                        if (mStereoRenderer != null && mStereoRenderer.isClientSbs()
+                                && game != null) {
+                            completeClientSbsSwitch(bindDecoderSurface(surface));
+                        }
+                    });
                 }
             }, context, prefConfig, false);
             // Client SBS renders into the XR compositor surface (full-width 2W×H, or W×H in
@@ -160,15 +180,22 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             surfaceCreated(holder);
             surfaceChanged(holder, PixelFormat.RGBA_8888, mSurfaceView.getWidth(), mSurfaceView.getHeight());
         }
+        return true;
     }
 
-    public void switchToClientSbs(boolean enable) {
+    public void switchToClientSbs(boolean enable, SurfaceSwitchCallback callback) {
         // Available in any host-SBS presentation (Raw or AI). The presentations
         // (Normal / Host SBS / Client SBS AI) are mutually exclusive: entering Client SBS runs
         // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
         // at the same time (so host SBS stops when you switch to Client SBS).
-        if (mStereoRenderer == null) return;
+        if (mStereoRenderer == null || mDestroyed || mDummySurface == null
+                || !mDummySurface.isValid()) {
+            callback.onComplete(false);
+            return;
+        }
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
+        final int switchGeneration = ++mClientSbsSwitchGeneration;
+        mPendingClientSbsSwitch = callback;
 
         if (enable) {
             // Match the renderer viewport to the active Client SBS width (2W full / W half).
@@ -176,22 +203,42 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
             // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
             // null/garbage-collected surface crashes MediaCodec).
-            game.setDecoderOutputSurface(mDummySurface);
+            if (!bindDecoderSurface(mDummySurface)) {
+                completeClientSbsSwitch(false);
+                return;
+            }
 
             // Size the XR surface for Client SBS (2W×H full, or W×H half-width). Must happen before
             // onResume() so EGL creates its window surface at the new size.
             mXrPresenter.setClientSbsSurfaceSize(true);
 
-            // XR surface is now free. Resume the GLSurfaceView so EGL connects to it. When
-            // Stereo3DRenderer finishes setup it calls onStereo3DSurfaceReady, which feeds the
-            // decoder into the renderer's own surface.
+            // XR surface is now free. Resume the GLSurfaceView so EGL connects to it.
             glView.onResume();
-            if (mClientSbsSurface != null) {
-                game.setDecoderOutputSurface(mClientSbsSurface);
+
+            // With a preserved EGL context, onSurfaceCreated() is not called on the second entry.
+            // Reuse its still-valid decoder surface. First entry completes from the renderer's
+            // onStereo3DSurfaceReady callback.
+            Surface decoderSurface = mStereoRenderer.getVideoSurface();
+            if (mPendingClientSbsSwitch != null
+                    && switchGeneration == mClientSbsSwitchGeneration
+                    && decoderSurface != null && decoderSurface.isValid()) {
+                mClientSbsSurface = decoderSurface;
+                completeClientSbsSwitch(bindDecoderSurface(decoderSurface));
+            } else {
+                postDelayed(() -> {
+                    if (switchGeneration == mClientSbsSwitchGeneration
+                            && mPendingClientSbsSwitch != null) {
+                        LimeLog.severe("Timed out waiting for the Client SBS decoder surface");
+                        completeClientSbsSwitch(false);
+                    }
+                }, 2000);
             }
         } else {
             // Detach the decoder from the renderer's surface onto the persistent dummy surface.
-            game.setDecoderOutputSurface(mDummySurface);
+            if (!bindDecoderSurface(mDummySurface)) {
+                completeClientSbsSwitch(false);
+                return;
+            }
 
             // Release EGL from the XR surface. This is asynchronous; the EGLWindowSurfaceFactory's
             // destroySurface() reconnects the decoder to the XR surface once EGL is fully detached.
@@ -201,7 +248,36 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // Runs synchronously on the main thread here, ahead of the GL-thread reconnect, so the
             // decoder rebinds at W×H.
             mXrPresenter.setClientSbsSurfaceSize(false);
+            Surface xrSurface = mXrPresenter.getVideoSurface();
+            completeClientSbsSwitch(xrSurface != null && xrSurface.isValid()
+                    && bindDecoderSurface(xrSurface));
         }
+    }
+
+    private void completeClientSbsSwitch(boolean success) {
+        SurfaceSwitchCallback callback = mPendingClientSbsSwitch;
+        if (callback == null) {
+            if (!success && game != null) {
+                game.handleDecoderSurfaceSwitchFailure();
+            }
+            return;
+        }
+        mPendingClientSbsSwitch = null;
+        post(() -> callback.onComplete(success));
+    }
+
+    private boolean bindDecoderSurface(Surface surface) {
+        if (surface == null || !surface.isValid()) {
+            return false;
+        }
+        if (surface == mBoundDecoderSurface) {
+            return true;
+        }
+        boolean success = game.setDecoderOutputSurface(surface);
+        if (success) {
+            mBoundDecoderSurface = surface;
+        }
+        return success;
     }
 
     /**
@@ -212,7 +288,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     public void recycleClientSbs() {
         if (mStereoRenderer == null) return;
         ((GLSurfaceView) mSurfaceView).onPause();
-        switchToClientSbs(true);
+        switchToClientSbs(true, success -> {
+            if (!success) game.handleDecoderSurfaceSwitchFailure();
+        });
     }
 
     /**
@@ -223,17 +301,21 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * resolution change that accompanies the switch. Only meaningful in the host depth modes
      * (Host SBS AI, where the host doubles the width); Raw host SBS keeps a fixed-size frame.
      */
-    public void resizeHostSbsSurface(boolean sbs) {
-        if (mXrPresenter == null || mDestroyed) {
-            return;
+    public boolean resizeHostSbsSurface(boolean sbs) {
+        if (mXrPresenter == null || mDestroyed || mDummySurface == null
+                || !mDummySurface.isValid()) {
+            return false;
         }
         // Park the decoder on the persistent dummy surface while the XR surface is resized.
-        game.setDecoderOutputSurface(mDummySurface);
+        if (!bindDecoderSurface(mDummySurface)) {
+            return false;
+        }
         mXrPresenter.setHostSurfaceSize(sbs);
         Surface s = mXrPresenter.getVideoSurface();
         if (s != null && s.isValid()) {
-            game.setDecoderOutputSurface(s);
+            return bindDecoderSurface(s);
         }
+        return false;
     }
 
     /** Ask the stereo renderer to redraw once (e.g. after a live 2D→3D effect-param change). */
@@ -336,26 +418,45 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        if (mStereoRenderer != null) {
+        // Stop native streaming before releasing any decoder/EGL/XR surface it may still use.
+        game.surfaceDestroyed(holder);
+        game.runAfterConnectionStop(this::destroyStereoRenderer);
+    }
+
+    private void destroyStereoRenderer() {
+        if (!mStereoRendererDestroyed && mStereoRenderer != null) {
+            mStereoRendererDestroyed = true;
             mStereoRenderer.onSurfaceDestroyed();
         }
-
-        game.surfaceDestroyed(holder);
     }
 
     @Override
     public void onStereo3DSurfaceReady(Surface surface) {
         mCurrentSurface = surface;
+        mBoundDecoderSurface = surface;
         notifySurfaceReady();
     }
 
     public void onDestroy() {
         mDestroyed = true;
-        if (mStereoRenderer != null) {
-            mStereoRenderer.onSurfaceDestroyed();
-        }
+        mClientSbsSwitchGeneration++;
+        mPendingClientSbsSwitch = null;
+        setClientSbsActive(false);
+        setHdrInput(false);
+        destroyStereoRenderer();
         if (mXrPresenter != null) {
             mXrPresenter.onDestroy();
         }
+        if (mDummySurface != null) {
+            mDummySurface.release();
+            mDummySurface = null;
+        }
+        if (mDummySurfaceTexture != null) {
+            mDummySurfaceTexture.release();
+            mDummySurfaceTexture = null;
+        }
+        mClientSbsSurface = null;
+        mCurrentSurface = null;
+        mBoundDecoderSurface = null;
     }
 }

@@ -97,7 +97,7 @@ android {
         jniLibs {
             // The arcore-openxr artifact bundles both the arcore and runtime OpenXR native
             // libs, which collide with the ones from runtime-openxr. With all androidx.xr.*
-            // pinned to alpha13 (see deps below) the duplicates are the same version, so
+            // pinned to alpha16 (see deps below) the duplicates are the same version, so
             // picking either resolves the packaging merge without a version mismatch.
             pickFirsts.add('**/libandroidx.xr.*.openxr.so')
         }
@@ -111,7 +111,7 @@ android {
             resValue "string", "app_label_game", "Diana (Game)"
 
             // minifyEnabled is OFF for debug for faster builds.
-            minifyEnabled true
+            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {

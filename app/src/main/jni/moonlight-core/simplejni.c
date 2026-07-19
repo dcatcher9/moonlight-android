@@ -21,10 +21,10 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendExecServerCmd(JNIEnv *env, jclass
     LiSendExecServerCmd(cmdId);
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass clazz,
                                                           jint mode) {
-    LiSendSetSbsMode((uint8_t) mode);
+    return LiSendSetSbsMode((uint8_t) mode);
 }
 
 JNIEXPORT void JNICALL

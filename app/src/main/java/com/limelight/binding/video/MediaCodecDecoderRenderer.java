@@ -135,6 +135,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int videoFormat;
     private Surface renderTarget;
     private volatile boolean stopping;
+    private final AtomicBoolean stopPrepared = new AtomicBoolean();
     private CrashListener crashListener;
     private boolean reportedCrash;
     private int consecutiveCrashCount;
@@ -554,6 +555,68 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return getPreferredColorRange();
     }
 
+    private static String colorRangeName(MediaFormat format) {
+        if (format == null || !format.containsKey(MediaFormat.KEY_COLOR_RANGE)) {
+            return "unset";
+        }
+        int range = format.getInteger(MediaFormat.KEY_COLOR_RANGE);
+        if (range == MediaFormat.COLOR_RANGE_FULL) {
+            return "FULL";
+        }
+        if (range == MediaFormat.COLOR_RANGE_LIMITED) {
+            return "LIMITED";
+        }
+        return "unknown(" + range + ")";
+    }
+
+    private static String colorStandardName(MediaFormat format) {
+        if (format == null || !format.containsKey(MediaFormat.KEY_COLOR_STANDARD)) {
+            return "unset";
+        }
+        int standard = format.getInteger(MediaFormat.KEY_COLOR_STANDARD);
+        if (standard == MediaFormat.COLOR_STANDARD_BT709) {
+            return "BT709";
+        }
+        if (standard == MediaFormat.COLOR_STANDARD_BT2020) {
+            return "BT2020";
+        }
+        if (standard == MediaFormat.COLOR_STANDARD_BT601_NTSC) {
+            return "BT601_NTSC";
+        }
+        if (standard == MediaFormat.COLOR_STANDARD_BT601_PAL) {
+            return "BT601_PAL";
+        }
+        return "unknown(" + standard + ")";
+    }
+
+    private static String colorTransferName(MediaFormat format) {
+        if (format == null || !format.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) {
+            return "unset";
+        }
+        int transfer = format.getInteger(MediaFormat.KEY_COLOR_TRANSFER);
+        if (transfer == MediaFormat.COLOR_TRANSFER_ST2084) {
+            return "ST2084";
+        }
+        if (transfer == MediaFormat.COLOR_TRANSFER_HLG) {
+            return "HLG";
+        }
+        if (transfer == MediaFormat.COLOR_TRANSFER_LINEAR) {
+            return "LINEAR";
+        }
+        if (transfer == MediaFormat.COLOR_TRANSFER_SDR_VIDEO) {
+            return "SDR";
+        }
+        return "unknown(" + transfer + ")";
+    }
+
+    private static void logColorFormat(String label, MediaFormat format) {
+        LimeLog.info(label + ": range=" + colorRangeName(format)
+                + ", standard=" + colorStandardName(format)
+                + ", transfer=" + colorTransferName(format)
+                + ", hdr-static=" + (format != null
+                        && format.containsKey(MediaFormat.KEY_HDR_STATIC_INFO)));
+    }
+
     public void notifyVideoForeground() {
         foreground = true;
     }
@@ -614,6 +677,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
         }
+
+        logColorFormat("Requested decoder color", videoFormat);
 
         return videoFormat;
     }
@@ -853,13 +918,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Swap the decoder's output Surface live (used by the XR client-SBS path to move the decoder
     // between the XR compositor surface and the on-device renderer's surface).
     @TargetApi(Build.VERSION_CODES.M)
-    public void setOutputSurface(Surface surface) {
-        if (videoDecoder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+    public boolean setOutputSurface(Surface surface) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || surface == null || !surface.isValid()) {
+            LimeLog.warning("Refusing invalid decoder output surface");
+            return false;
+        }
+
+        // Codec recovery stops/resets the same MediaCodec instance. Serialize a live surface swap
+        // with that recovery transaction so setOutputSurface() cannot race reset()/release().
+        synchronized (codecRecoveryMonitor) {
+            if (videoDecoder == null || stopping
+                    || codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+                LimeLog.warning("Cannot switch decoder output surface while decoder is unavailable");
+                return false;
+            }
             try {
                 videoDecoder.setOutputSurface(surface);
                 renderTarget = surface;
+                return true;
             } catch (Exception e) {
-                LimeLog.warning(e.toString());
+                LimeLog.warning("Decoder output-surface switch failed: " + e);
+                return false;
             }
         }
     }
@@ -1523,6 +1602,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     LimeLog.info("Output format changed");
                                     outputFormat = videoDecoder.getOutputFormat();
                                     LimeLog.info("New output format: " + outputFormat);
+                                    logColorFormat("Actual decoder output color", outputFormat);
                                     break;
                                 default:
                                     break;
@@ -1639,6 +1719,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // !!! May be called even if setup()/start() fails !!!
     public void prepareForStop() {
+        // surfaceDestroyed() asks the decoder to stop immediately, then moonlight-common invokes
+        // stop() as part of native teardown. Only the first caller may post the Choreographer quit
+        // callback; posting it again after the looper exits produces a dead-Handler exception.
+        if (!stopPrepared.compareAndSet(false, true)) {
+            return;
+        }
+
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
 
@@ -1654,12 +1741,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // Post a quit message to the Choreographer looper (if we have one)
-        if (choreographerHandler != null) {
-            choreographerHandler.post(new Runnable() {
+        Handler handler = choreographerHandler;
+        HandlerThread handlerThread = choreographerHandlerThread;
+        if (handler != null && handlerThread != null && handlerThread.isAlive()) {
+            handler.post(new Runnable() {
                 @Override
                 public void run() {
                     // Don't allow any further messages to be queued
-                    choreographerHandlerThread.quit();
+                    handlerThread.quit();
 
                     // Deregister the frame callback (if registered)
                     Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
@@ -1674,9 +1763,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         prepareForStop();
 
         // Wait for the Choreographer looper to shut down (if we have one)
-        if (choreographerHandlerThread != null) {
+        HandlerThread handlerThread = choreographerHandlerThread;
+        if (handlerThread != null) {
             try {
-                choreographerHandlerThread.join();
+                handlerThread.join();
             } catch (InterruptedException e) {
                 e.printStackTrace();
 
@@ -1688,15 +1778,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // Wait for the renderer thread to shut down
-        try {
-            rendererThread.join();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        Thread renderThread = rendererThread;
+        if (renderThread != null) {
+            try {
+                renderThread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
 
-            // InterruptedException clears the thread's interrupt status. Since we can't
-            // handle that here, we will re-interrupt the thread to set the interrupt
-            // status back to true.
-            Thread.currentThread().interrupt();
+                // InterruptedException clears the thread's interrupt status. Since we can't
+                // handle that here, we will re-interrupt the thread to set the interrupt
+                // status back to true.
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

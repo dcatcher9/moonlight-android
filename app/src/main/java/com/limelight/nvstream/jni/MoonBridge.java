@@ -124,9 +124,22 @@ public class MoonBridge {
 
     public static final byte LI_BATTERY_PERCENTAGE_UNKNOWN = (byte)0xFF;
 
-    private static AudioRenderer audioRenderer;
-    private static VideoDecoderRenderer videoRenderer;
-    private static NvConnectionListener connectionListener;
+    private static final class BridgeSession {
+        final AudioRenderer audioRenderer;
+        final VideoDecoderRenderer videoRenderer;
+        final NvConnectionListener connectionListener;
+
+        BridgeSession(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer,
+                      NvConnectionListener connectionListener) {
+            this.audioRenderer = audioRenderer;
+            this.videoRenderer = videoRenderer;
+            this.connectionListener = connectionListener;
+        }
+    }
+
+    // Native callback threads snapshot one immutable session. This prevents cleanup/setup races
+    // from mixing a renderer from one session with a listener from another.
+    private static volatile BridgeSession bridgeSession;
 
     static {
         System.loadLibrary("moonlight-core");
@@ -189,8 +202,9 @@ public class MoonBridge {
     }
 
     public static int bridgeDrSetup(int videoFormat, int width, int height, int redrawRate) {
-        if (videoRenderer != null) {
-            return videoRenderer.setup(videoFormat, width, height, redrawRate);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            return session.videoRenderer.setup(videoFormat, width, height, redrawRate);
         }
         else {
             return -1;
@@ -198,20 +212,23 @@ public class MoonBridge {
     }
 
     public static void bridgeDrStart() {
-        if (videoRenderer != null) {
-            videoRenderer.start();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.videoRenderer.start();
         }
     }
 
     public static void bridgeDrStop() {
-        if (videoRenderer != null) {
-            videoRenderer.stop();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.videoRenderer.stop();
         }
     }
 
     public static void bridgeDrCleanup() {
-        if (videoRenderer != null) {
-            videoRenderer.cleanup();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.videoRenderer.cleanup();
         }
     }
 
@@ -219,8 +236,9 @@ public class MoonBridge {
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
                                                long receiveTimeMs, long enqueueTimeMs) {
-        if (videoRenderer != null) {
-            return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            return session.videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
                     decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
         }
         else {
@@ -229,8 +247,10 @@ public class MoonBridge {
     }
 
     public static int bridgeArInit(int audioConfiguration, int sampleRate, int samplesPerFrame) {
-        if (audioRenderer != null) {
-            return audioRenderer.setup(new AudioConfiguration(audioConfiguration), sampleRate, samplesPerFrame);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            return session.audioRenderer.setup(
+                    new AudioConfiguration(audioConfiguration), sampleRate, samplesPerFrame);
         }
         else {
             return -1;
@@ -238,113 +258,126 @@ public class MoonBridge {
     }
 
     public static void bridgeArStart() {
-        if (audioRenderer != null) {
-            audioRenderer.start();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.audioRenderer.start();
         }
     }
 
     public static void bridgeArStop() {
-        if (audioRenderer != null) {
-            audioRenderer.stop();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.audioRenderer.stop();
         }
     }
 
     public static void bridgeArCleanup() {
-        if (audioRenderer != null) {
-            audioRenderer.cleanup();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.audioRenderer.cleanup();
         }
     }
 
     //静音 todo
     public static void bridgeArPlaySample(short[] pcmData) {
-        if (audioRenderer != null) {
-            audioRenderer.playDecodedAudio(pcmData);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.audioRenderer.playDecodedAudio(pcmData);
         }
     }
 
     public static void bridgeClStageStarting(int stage) {
-        if (connectionListener != null) {
-            connectionListener.stageStarting(getStageName(stage));
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.stageStarting(getStageName(stage));
         }
     }
 
     public static void bridgeClStageComplete(int stage) {
-        if (connectionListener != null) {
-            connectionListener.stageComplete(getStageName(stage));
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.stageComplete(getStageName(stage));
         }
     }
 
     public static void bridgeClStageFailed(int stage, int errorCode) {
-        if (connectionListener != null) {
-            connectionListener.stageFailed(getStageName(stage), getPortFlagsFromStage(stage), errorCode);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.stageFailed(
+                    getStageName(stage), getPortFlagsFromStage(stage), errorCode);
         }
     }
 
     public static void bridgeClConnectionStarted() {
-        if (connectionListener != null) {
-            connectionListener.connectionStarted();
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.connectionStarted();
         }
     }
 
     public static void bridgeClConnectionTerminated(int errorCode) {
-        if (connectionListener != null) {
-            connectionListener.connectionTerminated(errorCode);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.connectionTerminated(errorCode);
         }
     }
 
     public static void bridgeClRumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
-        if (connectionListener != null) {
-            connectionListener.rumble(controllerNumber, lowFreqMotor, highFreqMotor);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.rumble(controllerNumber, lowFreqMotor, highFreqMotor);
         }
     }
 
     public static void bridgeClConnectionStatusUpdate(int connectionStatus) {
-        if (connectionListener != null) {
-            connectionListener.connectionStatusUpdate(connectionStatus);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.connectionStatusUpdate(connectionStatus);
         }
     }
 
     public static void bridgeClSetHdrMode(boolean enabled, byte[] hdrMetadata) {
-        if (connectionListener != null) {
-            connectionListener.setHdrMode(enabled, hdrMetadata);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.setHdrMode(enabled, hdrMetadata);
         }
     }
 
     public static void bridgeClRumbleTriggers(short controllerNumber, short leftTrigger, short rightTrigger) {
-        if (connectionListener != null) {
-            connectionListener.rumbleTriggers(controllerNumber, leftTrigger, rightTrigger);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.rumbleTriggers(controllerNumber, leftTrigger, rightTrigger);
         }
     }
 
     public static void bridgeClSetMotionEventState(short controllerNumber, byte eventType, short sampleRateHz) {
-        if (connectionListener != null) {
-            connectionListener.setMotionEventState(controllerNumber, eventType, sampleRateHz);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.setMotionEventState(controllerNumber, eventType, sampleRateHz);
         }
     }
 
     public static void bridgeClSetControllerLED(short controllerNumber, byte r, byte g, byte b) {
-        if (connectionListener != null) {
-            connectionListener.setControllerLED(controllerNumber, r, g, b);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.setControllerLED(controllerNumber, r, g, b);
         }
     }
 
     // Host SBS depth-engine phase (Apollo extension 0x3006): 0 = idle, 1 = loading, 2 = ready.
     public static void bridgeClDepthStatus(int phase) {
-        if (connectionListener != null) {
-            connectionListener.depthStatus(phase);
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.depthStatus(phase);
         }
     }
 
     public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
-        MoonBridge.videoRenderer = videoRenderer;
-        MoonBridge.audioRenderer = audioRenderer;
-        MoonBridge.connectionListener = connectionListener;
+        bridgeSession = new BridgeSession(videoRenderer, audioRenderer, connectionListener);
     }
 
     public static void cleanupBridge() {
-        MoonBridge.videoRenderer = null;
-        MoonBridge.audioRenderer = null;
-        MoonBridge.connectionListener = null;
+        bridgeSession = null;
     }
 
     public static native int startConnection(String address, String appVersion, String gfeVersion,
@@ -369,7 +402,8 @@ public class MoonBridge {
     public static final int SBS_MODE_AI = 1;  // Enable Apollo's selected SBS profile; 2W x H frame.
 
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
-    public static native void sendSetSbsMode(int mode);
+    /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
+    public static native int sendSetSbsMode(int mode);
 
     // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)
     // to the host's configured debug dir. For diagnosing 2D->3D reprojection artifacts.

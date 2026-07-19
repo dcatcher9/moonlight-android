@@ -134,6 +134,7 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
 
@@ -188,8 +189,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public NvConnection conn;
     private SpinnerDialog spinner;
     private boolean displayedFailureDialog = false;
-    private boolean connecting = false;
-    public boolean connected = false;
+    private volatile boolean connecting = false;
+    public volatile boolean connected = false;
+    private final Object connectionStopLock = new Object();
+    private Thread connectionStopThread;
+    private final List<Runnable> connectionStopCallbacks = new ArrayList<>();
+    private boolean connectionNativeStopped;
     private boolean autoEnterPip = false;
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
@@ -461,7 +466,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Listen for non-touch events on the game surface
         streamContainer = findViewById(R.id.streamContainer);
-        streamContainer.init(this, prefConfig);
+        if (!streamContainer.init(this, prefConfig)) {
+            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title),
+                    "Unable to initialize the XR presentation session.", true);
+            return;
+        }
         streamContainer.setOnGenericMotionListener(this);
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
@@ -852,6 +861,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (!attemptedConnection) {
                 LimeLog.info("Surface is available, starting connection...");
                 attemptedConnection = true;
+                connecting = true;
 
                 // Der Decoder erhält die jeweils aktive Oberfläche vom Container
                 decoderRenderer.setRenderTarget(streamContainer.getSurface());
@@ -1656,7 +1666,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onDestroy() {
-        super.onDestroy();
+        // Native connection teardown must complete before codec/EGL/XR resources disappear.
+        // In particular, cancellation during startup is now covered because connecting is set
+        // before NvConnection.start().
+        stopConnection();
+        runAfterConnectionStop(streamContainer::onDestroy);
 
         instance = null;
         timerHandler.removeCallbacksAndMessages(null);
@@ -1694,8 +1708,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         // Destroy the capture provider
-        inputCaptureProvider.destroy();
-        streamContainer.onDestroy();
+        if (inputCaptureProvider != null) {
+            inputCaptureProvider.destroy();
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -1818,6 +1834,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void setInputGrabState(boolean grab) {
+        if (inputCaptureProvider == null) {
+            grabbedInput = grab;
+            return;
+        }
         // Grab/ungrab the mouse cursor
         if (grab) {
             inputCaptureProvider.enableCapture();
@@ -3385,11 +3405,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (spinner != null) {
+                if (isConnectionUiActive() && spinner != null) {
                     spinner.setMessage(getResources().getString(R.string.conn_starting) + " " + stage);
                 }
             }
         });
+    }
+
+    private boolean isConnectionUiActive() {
+        return (connecting || connected) && !isFinishing()
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1 || !isDestroyed());
     }
 
     @Override
@@ -3397,7 +3422,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void stopConnection() {
-        if (connecting || connected) {
+        synchronized (connectionStopLock) {
+            if (!connecting && !connected) {
+                return;
+            }
+
             connecting = connected = false;
             updatePipAutoEnter();
 
@@ -3411,37 +3440,125 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // thread to keep things smooth for the UI. Inside moonlight-common,
             // we prevent another thread from starting a connection before and
             // during the process of stopping this one.
-            new Thread() {
+            connectionNativeStopped = false;
+            connectionStopThread = new Thread("Artemis connection stop") {
                 public void run() {
-                    conn.stop();
-                    if (httpConn != null && quitOnStop) {
-                        try {
-                            sleep(1000);
-                            httpConn.quitApp();
-                            Game.this.runOnUiThread(() -> Toast.makeText(Game.this, Game.this.getResources().getString(R.string.applist_quit_success) + " " + appName, Toast.LENGTH_LONG).show());
-                        } catch (Exception e) {
-                            Game.this.runOnUiThread(() -> Toast.makeText(Game.this, e.getMessage(), Toast.LENGTH_LONG).show());
+                    try {
+                        conn.stop(heldSessionTransaction -> {
+                            // Native decoder callbacks are finished now. Release XR/EGL resources
+                            // immediately, while the global permit still blocks a replacement host
+                            // session through the optional HTTP quit below.
+                            publishNativeStopComplete();
+                            if (heldSessionTransaction && httpConn != null && quitOnStop) {
+                                try {
+                                    sleep(1000);
+                                    httpConn.quitApp();
+                                    Game.this.runOnUiThread(() -> {
+                                        if (!isFinishing()) {
+                                            Toast.makeText(Game.this,
+                                                    Game.this.getResources().getString(
+                                                            R.string.applist_quit_success)
+                                                            + " " + appName,
+                                                    Toast.LENGTH_LONG).show();
+                                        }
+                                    });
+                                } catch (Exception e) {
+                                    Game.this.runOnUiThread(() -> {
+                                        if (!isFinishing()) {
+                                            Toast.makeText(Game.this, e.getMessage(),
+                                                    Toast.LENGTH_LONG).show();
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    } finally {
+                        synchronized (connectionStopLock) {
+                            connectionStopThread = null;
+                            connectionStopLock.notifyAll();
                         }
                     }
                 }
-            }.start();
+            };
+            connectionStopThread.start();
         }
+    }
+
+    public void runAfterConnectionStop(Runnable callback) {
+        boolean runNow;
+        synchronized (connectionStopLock) {
+            runNow = connectionStopThread == null || connectionNativeStopped;
+            if (!runNow) {
+                connectionStopCallbacks.add(callback);
+            }
+        }
+        if (runNow) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                callback.run();
+            } else {
+                runOnUiThread(callback);
+            }
+        }
+    }
+
+    private void publishNativeStopComplete() {
+        List<Runnable> callbacks;
+        synchronized (connectionStopLock) {
+            connectionNativeStopped = true;
+            callbacks = new ArrayList<>(connectionStopCallbacks);
+            connectionStopCallbacks.clear();
+        }
+        if (callbacks.isEmpty()) return;
+
+        CountDownLatch completed = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            try {
+                for (Runnable callback : callbacks) {
+                    try {
+                        callback.run();
+                    } catch (RuntimeException e) {
+                        LimeLog.severe("Post-stream resource cleanup failed: " + e.getMessage());
+                    }
+                }
+            } finally {
+                completed.countDown();
+            }
+        });
+        boolean interrupted = false;
+        while (true) {
+            try {
+                completed.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
     }
 
     @Override
     public boolean stageFailed(final String stage, final int portFlags, final int errorCode) {
-        // Perform a connection test if the failure could be due to a blocked port
-        // This does network I/O, so don't do it on the main thread.
-        final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443, portFlags);
+        if (!connecting) {
+            return false;
+        }
 
-        if (errorCode == 0 && portFlags != 0 && (portTestResult == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE || portTestResult == 0)) {
-            spinner.setMessage(getResources().getString(R.string.unlocking_or_starting));
+        if (errorCode == 0 && portFlags != 0) {
+            runOnUiThread(() -> {
+                if (connecting && spinner != null) {
+                    spinner.setMessage(getResources().getString(R.string.unlocking_or_starting));
+                }
+            });
             return true;
         }
 
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                if (!connecting || isFinishing()
+                        || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
+                        && isDestroyed())) {
+                    return;
+                }
                 if (spinner != null) {
                     spinner.dismiss();
                     spinner = null;
@@ -3478,10 +3595,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                 MoonBridge.stringifyPortFlags(portFlags, "\n");
                     }
 
-                    if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0)  {
-                        dialogText += "\n\n" + getResources().getString(R.string.nettest_text_blocked);
-                    }
-
                     Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title), dialogText, true);
                     finishSecondScreen();
                 }
@@ -3506,14 +3619,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void connectionTerminated(final int errorCode) {
-        // Perform a connection test if the failure could be due to a blocked port
-        // This does network I/O, so don't do it on the main thread.
+        if (!connecting && !connected) {
+            LimeLog.info("Ignoring connectionTerminated() after cancellation");
+            return;
+        }
         final int portFlags = MoonBridge.getPortFlagsFromTerminationErrorCode(errorCode);
-        final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER,443, portFlags);
 
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                if (!connecting && !connected) {
+                    return;
+                }
                 // Let the display go to sleep now
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
@@ -3533,13 +3650,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     // Otherwise, just finish the activity immediately.
                     if (errorCode != MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
                         String message;
-
-                        if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0) {
-                            // If we got a blocked result, that supersedes any other error message
-                            message = getResources().getString(R.string.nettest_text_blocked);
-                        }
-                        else {
-                            switch (errorCode) {
+                        switch (errorCode) {
                                 case MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC:
                                     message = getResources().getString(R.string.no_video_received_error);
                                     break;
@@ -3569,7 +3680,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                     message = getResources().getString(R.string.conn_terminated_msg) + "\n\n" +
                                             getResources().getString(R.string.error_code_prefix) + " " + errorCodeString;
                                     break;
-                            }
                         }
 
                         if (portFlags != 0) {
@@ -3593,7 +3703,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (prefConfig.disableWarnings) {
+                if (!isConnectionUiActive() || prefConfig.disableWarnings) {
                     return;
                 }
 
@@ -3623,6 +3733,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                if (!connecting || isFinishing()
+                        || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
+                        && isDestroyed())) {
+                    LimeLog.warning("Ignoring connectionStarted() after connection cancellation");
+                    return;
+                }
                 if (spinner != null) {
                     spinner.dismiss();
                     spinner = null;
@@ -3639,7 +3755,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 timerHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        setInputGrabState(true);
+                        if (connected) setInputGrabState(true);
                     }
                 }, 500);
 
@@ -3660,25 +3776,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (prefConfig.preventPacketLoss) {
                     timerHandler.postDelayed(backgroundPing, 1000);
                 }
+
+                if (prefConfig.usbDriver) {
+                    bindService(new Intent(Game.this, UsbDriverService.class),
+                            usbDriverServiceConnection, Service.BIND_AUTO_CREATE);
+                }
+
+                // Shortcut/channel APIs can do disk or provider work. Start them only after the
+                // UI-thread cancellation guard above, then keep that work off the UI thread.
+                new Thread(() -> {
+                    ComputerDetails computer = new ComputerDetails();
+                    computer.name = pcName;
+                    computer.uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);
+                    ShortcutHelper shortcutHelper = new ShortcutHelper(Game.this);
+                    shortcutHelper.reportComputerShortcutUsed(computer);
+                    if (appName != null) {
+                        shortcutHelper.reportGameLaunched(computer, app);
+                    }
+                }, "Artemis shortcut reporting").start();
             }
         });
-
-        if (prefConfig.usbDriver) {
-            // Start the USB driver
-            bindService(new Intent(this, UsbDriverService.class),
-                    usbDriverServiceConnection, Service.BIND_AUTO_CREATE);
-        }
-
-        // Report this shortcut being used (off the main thread to prevent ANRs)
-        ComputerDetails computer = new ComputerDetails();
-        computer.name = pcName;
-        computer.uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);
-        ShortcutHelper shortcutHelper = new ShortcutHelper(this);
-        shortcutHelper.reportComputerShortcutUsed(computer);
-        if (appName != null) {
-            // This may be null if launched from the "Resume Session" PC context menu item
-            shortcutHelper.reportGameLaunched(computer, app);
-        }
 
         // Note: we intentionally do NOT request host SBS here. Every session starts in plain 2D
         // (host defaults to SBS_MODE_OFF), and the user enables host SBS on the fly from the XR
@@ -3690,7 +3807,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                if (isConnectionUiActive()) {
+                    Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                }
             }
         });
     }
@@ -3701,7 +3820,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                    if (isConnectionUiActive()) {
+                        Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                    }
                 }
             });
         }
@@ -3709,7 +3830,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void rumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
-        if (prefConfig.enableRumble) {
+        if (connected && prefConfig.enableRumble) {
             LimeLog.info(String.format((Locale)null, "Rumble on gamepad %d: %04x %04x", controllerNumber, lowFreqMotor, highFreqMotor));
             controllerHandler.handleRumble(controllerNumber, lowFreqMotor, highFreqMotor);
         }
@@ -3717,6 +3838,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void rumbleTriggers(short controllerNumber, short leftTrigger, short rightTrigger) {
+        if (!connected) return;
         LimeLog.info(String.format((Locale)null, "Rumble on gamepad triggers %d: %04x %04x", controllerNumber, leftTrigger, rightTrigger));
 
         controllerHandler.handleRumbleTriggers(controllerNumber, leftTrigger, rightTrigger);
@@ -3724,12 +3846,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
+        if (!connecting && !connected) return;
         LimeLog.info("Display HDR mode: " + (enabled ? "enabled" : "disabled"));
         streamHdrActive = enabled;
         streamHdrMaxContentLightLevel = enabled ? parseMaxContentLightLevel(hdrMetadata) : 0;
         decoderRenderer.setHdrMode(enabled, hdrMetadata);
         runOnUiThread(() -> {
-            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+            if (isConnectionUiActive() && streamContainer != null
+                    && streamContainer.getXrPresenter() != null) {
                 streamContainer.getXrPresenter().onHdrModeChanged();
             }
         });
@@ -3748,12 +3872,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void setMotionEventState(short controllerNumber, byte motionType, short reportRateHz) {
-        controllerHandler.handleSetMotionEventState(controllerNumber, motionType, reportRateHz);
+        if (connected) {
+            controllerHandler.handleSetMotionEventState(controllerNumber, motionType, reportRateHz);
+        }
     }
 
     @Override
     public void setControllerLED(short controllerNumber, byte r, byte g, byte b) {
-        controllerHandler.handleSetControllerLED(controllerNumber, r, g, b);
+        if (connected) {
+            controllerHandler.handleSetControllerLED(controllerNumber, r, g, b);
+        }
     }
 
     @Override
@@ -3761,7 +3889,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Host SBS depth-engine phase changed; forward to the XR presenter to show/hide the
         // "loading depth model" indicator. Callback arrives off the UI thread.
         runOnUiThread(() -> {
-            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+            if (isConnectionUiActive() && streamContainer != null
+                    && streamContainer.getXrPresenter() != null) {
                 streamContainer.getXrPresenter().onDepthStatus(phase);
             }
         });
@@ -3784,10 +3913,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    public void setDecoderOutputSurface(Surface surface) {
-        if (decoderRenderer != null) {
-            decoderRenderer.setOutputSurface(surface);
-        }
+    public boolean setDecoderOutputSurface(Surface surface) {
+        return decoderRenderer != null && decoderRenderer.setOutputSurface(surface);
+    }
+
+    public void handleDecoderSurfaceSwitchFailure() {
+        LimeLog.severe("Decoder output-surface switch failed; terminating the stream safely");
+        runOnUiThread(() -> {
+            if (isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1
+                    && isDestroyed())) {
+                return;
+            }
+            decoderRenderer.prepareForStop();
+            stopConnection();
+            Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title),
+                    "The video decoder could not switch presentation surfaces.", true);
+        });
     }
 
     /** True when the host reports that the streamed display is currently HDR. */
@@ -3850,10 +3991,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (attemptedConnection) {
             // Let the decoder know immediately that the surface is gone
             decoderRenderer.prepareForStop();
-
-            if (connected) {
-                stopConnection();
-            }
+            stopConnection();
         }
     }
 

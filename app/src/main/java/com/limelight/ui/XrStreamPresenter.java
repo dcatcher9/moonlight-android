@@ -1,5 +1,6 @@
 package com.limelight.ui;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
@@ -17,6 +18,7 @@ import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
 import androidx.xr.runtime.Config;
 import androidx.xr.runtime.DeviceTrackingMode;
 import androidx.xr.runtime.Session;
@@ -76,6 +78,7 @@ import java.util.List;
  * the host's SBS pipeline on/off. See docs/android-xr-sbs.md. Still open: session lifecycle on
  * pause/resume (see {@link #onDestroy}).
  */
+@SuppressLint({"RestrictedApi", "UnsafeOptInUsageError"})
 public class XrStreamPresenter {
 
     /** Nearest the user may drag the panel toward the eyes, in meters from the activity-space origin. */
@@ -178,6 +181,7 @@ public class XrStreamPresenter {
      *  second tap that lands within this window (double-tap / impatient re-tap). */
     private static final long MODE_SWITCH_DEBOUNCE_MS = 600L;
     private long lastModeSwitchMs;
+    private boolean modeSwitchInProgress;
     /** Mode changes resize or hand off the decoder surface, so they remain disabled until the
      *  decoder confirms that the initial stream frame has reached the XR surface. */
     private boolean streamPresentationReady;
@@ -209,13 +213,11 @@ public class XrStreamPresenter {
      * Create the XR session and SBS surface entity, then notify the listener with the surface.
      * Must be called on the main thread (SceneCore session creation is Activity-bound).
      */
-    public void init() {
+    public boolean init() {
         SessionCreateResult result = Session.create(activity);
         if (!(result instanceof SessionCreateSuccess)) {
-            // TODO: surface this to the user (dialog / fall back to a 2D panel). For the
-            //  scaffold we just log; the stream simply won't get a render target.
             LimeLog.severe("XR session creation failed: " + result.getClass().getSimpleName());
-            return;
+            return false;
         }
         session = ((SessionCreateSuccess) result).getSession();
 
@@ -243,6 +245,13 @@ public class XrStreamPresenter {
         if (!has3d) {
             LimeLog.warning("XR: SPATIAL_3D_CONTENT capability missing — SBS will not render "
                     + "stereoscopically (activity likely not in Full Space mode).");
+        }
+
+        // This app has no non-spatial rendering route. Continuing would hide the main panel and
+        // start decoding into a SurfaceEntity that cannot be shown correctly.
+        if (!has3d) {
+            session = null;
+            return false;
         }
 
         // Every session starts in NORMAL (2D): the decoder feeds a plain W x H frame shown to both
@@ -294,7 +303,7 @@ public class XrStreamPresenter {
         // pulled right up against the eyes. We apply the proposed pose ourselves, pushing it back
         // out to MIN_PANEL_DISTANCE_METERS from the activity-space origin (~the initial head pose).
         MovableComponent movable = MovableComponent.createCustomMovable(
-                session, /* scaleInZ= */ false, activity.getMainExecutor(),
+                session, /* scaleInZ= */ false, ContextCompat.getMainExecutor(activity),
                 new EntityMoveListener() {
                     @Override
                     public void onMoveUpdate(Entity entity, Ray currentRay, Pose proposedPose,
@@ -343,6 +352,7 @@ public class XrStreamPresenter {
         if (listener != null) {
             listener.onSurfaceReady(videoSurface);
         }
+        return true;
     }
 
     /**
@@ -827,7 +837,13 @@ public class XrStreamPresenter {
 
         Switch sw = new Switch(activity);
         sw.setChecked(clientSbsHalfWidth);
-        sw.setOnCheckedChangeListener((b, checked) -> setClientSbsHalfWidth(checked));
+        sw.setOnCheckedChangeListener((button, checked) -> {
+            if (modeSwitchInProgress) {
+                button.setChecked(clientSbsHalfWidth);
+                return;
+            }
+            setClientSbsHalfWidth(checked);
+        });
 
         header.addView(lbl);
         header.addView(sw);
@@ -846,7 +862,7 @@ public class XrStreamPresenter {
     /** Apply the half-width toggle: persist it, and — if currently in Client SBS — re-cycle the GL
      *  surface at the new width and reshape the quad to the matching aspect. */
     private void setClientSbsHalfWidth(boolean half) {
-        if (clientSbsHalfWidth == half) {
+        if (modeSwitchInProgress || clientSbsHalfWidth == half) {
             return;
         }
         clientSbsHalfWidth = half;
@@ -1077,7 +1093,7 @@ public class XrStreamPresenter {
      */
     private void selectMode(BarItem item) {
         if (!streamPresentationReady || item.selectsMode == null || surfaceEntity == null
-                || item.selectsMode == currentPresenterMode) {
+                || item.selectsMode == currentPresenterMode || modeSwitchInProgress) {
             return;
         }
         // A switch kicks off an async surface handoff (GL pause/resume + resize); ignore a second
@@ -1087,39 +1103,72 @@ public class XrStreamPresenter {
             return;
         }
         lastModeSwitchMs = now;
-        boolean wasClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
+        modeSwitchInProgress = true;
+        PresenterMode previousMode = currentPresenterMode;
+        PresenterMode nextMode = item.selectsMode;
+        boolean wasClientSbs = (previousMode == PresenterMode.CLIENT_SBS_AI);
+        boolean isClientSbs = (nextMode == PresenterMode.CLIENT_SBS_AI);
+
+        // Honor the native send result before committing the UI. Otherwise a failed reliable
+        // control send leaves the client stereo interpretation out of sync with the host layout.
+        int previousWireMode = wireModeFor(previousMode);
+        int nextWireMode = wireModeFor(nextMode);
+        if (prefConfig.isHostDoubledWidthMode() && nextWireMode != previousWireMode
+                && MoonBridge.sendSetSbsMode(nextWireMode) <= 0) {
+            lastModeSwitchMs = 0;
+            modeSwitchInProgress = false;
+            reportModeSwitchFailure("host request could not be queued");
+            return;
+        }
+
+        StreamContainer streamContainer = activity instanceof com.limelight.Game
+                ? ((com.limelight.Game) activity).getStreamContainer() : null;
+        if (streamContainer != null) {
+            streamContainer.setClientSbsActive(isClientSbs);
+        }
+        if (wasClientSbs != isClientSbs) {
+            if (streamContainer == null) {
+                finishModeSwitch(item, previousMode, nextMode, previousWireMode, nextWireMode,
+                        wasClientSbs, isClientSbs, null, false);
+            } else {
+                streamContainer.switchToClientSbs(isClientSbs, success -> finishModeSwitch(item,
+                        previousMode, nextMode, previousWireMode, nextWireMode, wasClientSbs,
+                        isClientSbs, streamContainer, success));
+            }
+            return;
+        }
+
+        finishModeSwitch(item, previousMode, nextMode, previousWireMode, nextWireMode,
+                wasClientSbs, isClientSbs, streamContainer, true);
+    }
+
+    private void finishModeSwitch(BarItem item, PresenterMode previousMode, PresenterMode nextMode,
+                                  int previousWireMode, int nextWireMode, boolean wasClientSbs,
+                                  boolean isClientSbs, StreamContainer streamContainer,
+                                  boolean surfaceSwitchSucceeded) {
+        if (surfaceSwitchSucceeded && !isClientSbs && prefConfig.isHostDoubledWidthMode()) {
+            surfaceSwitchSucceeded = streamContainer != null && streamContainer
+                    .resizeHostSbsSurface(isHostDepthPresenterMode(nextMode));
+        }
+
+        if (!surfaceSwitchSucceeded || surfaceEntity == null) {
+            modeSwitchInProgress = false;
+            if (streamContainer != null) {
+                streamContainer.setClientSbsActive(wasClientSbs);
+            }
+            if (prefConfig.isHostDoubledWidthMode() && nextWireMode != previousWireMode
+                    && MoonBridge.sendSetSbsMode(previousWireMode) <= 0) {
+                LimeLog.severe("XR mode rollback could not restore the host SBS mode");
+            }
+            lastModeSwitchMs = 0;
+            if (surfaceEntity != null && activity instanceof com.limelight.Game) {
+                ((com.limelight.Game) activity).handleDecoderSurfaceSwitchFailure();
+            }
+            return;
+        }
+
         closeModeSubpanels();
-        currentPresenterMode = item.selectsMode;
-        boolean isClientSbs = (currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
-        com.limelight.utils.Stereo3DRenderer.clientSbs = isClientSbs;
-        
-        if (wasClientSbs != isClientSbs && activity instanceof com.limelight.Game) {
-            ((com.limelight.Game) activity).getStreamContainer().switchToClientSbs(isClientSbs);
-        }
-
-        // Host depth SBS: drive the host's depth pipeline on the fly to match the chosen tile. The
-        // host emits a 2W x H side-by-side frame for Host SBS AI. Normal and Client SBS AI get a
-        // plain W x H frame (Normal shows it mono, Client SBS runs on-device depth on it). Gated
-        // to the host depth render mode so the decoder is pre-sized for 2W (Raw / already-SBS
-        // input is never toggled).
-        if (prefConfig.isHostDoubledWidthMode()) {
-            int wireMode = currentPresenterMode == PresenterMode.HOST_SBS_AI
-                    ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;
-            MoonBridge.sendSetSbsMode(wireMode);
-            // Apollo's selected sbs_3d_profile owns the model and all processing parameters. The
-            // host pushes loading status (0x3006) if that profile's engine needs to initialize.
-        }
-
-        // Re-pin the surface to the target frame size. Client SBS is handled by switchToClientSbs
-        // above; the direct-decoder host presentations resize between the 2D frame (W x H) and the
-        // packed SBS frame (2W' x H') and rebind the decoder. The decoder's adaptive playback
-        // absorbs the matching host-driven resolution change.
-        if (!isClientSbs && prefConfig.isHostDoubledWidthMode()
-                && activity instanceof com.limelight.Game) {
-            ((com.limelight.Game) activity).getStreamContainer()
-                    .resizeHostSbsSurface(isHostDepthPresenterMode(currentPresenterMode));
-        }
-
+        currentPresenterMode = nextMode;
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         applyContentColorMetadata();
         LimeLog.info("XR: stereo mode -> " + item.label);
@@ -1135,6 +1184,20 @@ public class XrStreamPresenter {
         repositionControlBar(height);
         updateModeSelection();
         updateAdjustPanelVisibility();
+        modeSwitchInProgress = false;
+    }
+
+    private static int wireModeFor(PresenterMode mode) {
+        return mode == PresenterMode.HOST_SBS_AI
+                ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;
+    }
+
+    private void reportModeSwitchFailure(String reason) {
+        LimeLog.severe("XR mode switch failed: " + reason);
+        if (activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).displayMessage(
+                    "Unable to switch 3D presentation mode. The previous mode is still active.");
+        }
     }
 
     /**
@@ -1242,15 +1305,10 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Color metadata for the XR surface. The stream's HDR-ness is the same in every presentation
-     * mode, so when the negotiated stream is 10-bit HDR we tag the surface as HDR10 (BT2020
-     * primaries + ST2084/PQ transfer, range per the full-range pref) in ALL modes:
-     *  - Client SBS NEEDS it: its GL output buffers don't carry the decoder's HDR dataspace, so
-     *    without the tag the compositor treats 10-bit PQ as SDR and washes it out.
-     *  - Normal/Host SBS render the decoder's HDR buffers directly; tagging matches their dataspace.
-     * Crucially we must NOT reset to the unset default when leaving Client SBS on an HDR stream:
-     * once explicit metadata has been set, an unset default makes the compositor treat the direct
-     * HDR paths as SDR and wash them out too. Only a genuinely SDR stream uses the unset default.
+     * Client SBS renders through GL, so its output buffers do not inherit MediaCodec's HDR
+     * dataspace and need an explicit SceneCore color description. Normal and Host SBS render
+     * MediaCodec buffers directly; their HardwareBuffer metadata is authoritative for transfer,
+     * range, and HDR state and must not be overridden at the SurfaceEntity level.
      */
     private boolean isColorMetadataExplicit = false;
 
@@ -1266,13 +1324,10 @@ public class XrStreamPresenter {
         boolean hdr = (activity instanceof com.limelight.Game)
                 && ((com.limelight.Game) activity).isStreamHdrActive();
         // Tell the AI-input shader to tonemap PQ->SDR for MiDaS when the stream is HDR.
-        com.limelight.utils.Stereo3DRenderer.hdrInput = hdr;
-        // Tag HDR10 for EVERY mode on an HDR stream, not just Client SBS. Client SBS *needs* it (its
-        // GL buffers carry no dataspace); Normal/Host render the decoder's HDR buffers directly, so
-        // the tag simply matches their dataspace. Crucially, once explicit metadata has been set the
-        // compositor treats a later "unset" as SDR and washes out the direct HDR paths -- so we must
-        // NOT reset to unset when leaving Client SBS. Only a genuinely SDR stream returns to unset.
-        if (hdr) {
+        if (activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).getStreamContainer().setHdrInput(hdr);
+        }
+        if (hdr && currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
             int maxContentLightLevel =
                     SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN;
             boolean fullRange = prefConfig.fullRange;
@@ -1281,11 +1336,6 @@ public class XrStreamPresenter {
                 int reportedMaxCll = game.getStreamHdrMaxContentLightLevel();
                 if (reportedMaxCll > 0) {
                     maxContentLightLevel = reportedMaxCll;
-                }
-                // Direct host modes use MediaCodec's reported output range. Preserve the existing
-                // Client SBS behavior until its GL color pipeline is overhauled separately.
-                if (currentPresenterMode != PresenterMode.CLIENT_SBS_AI) {
-                    fullRange = game.getStreamColorRange() == MoonBridge.COLOR_RANGE_FULL;
                 }
             }
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
@@ -1302,10 +1352,17 @@ public class XrStreamPresenter {
                             ? Integer.toString(maxContentLightLevel) : "unknown")
                     + " (mode " + currentPresenterMode + ")");
         } else if (isColorMetadataExplicit) {
-            surfaceEntity.setContentColorMetadata(
-                    SurfaceEntity.ContentColorMetadata.Companion
-                            .getDEFAULT_UNSET_CONTENT_COLOR_METADATA());
+            // null calls SceneCore's resetContentColorMetadata(), allowing the decoder's
+            // HardwareBuffer dataspace (including full-range HDR) to drive composition again.
+            surfaceEntity.setContentColorMetadata(null);
             isColorMetadataExplicit = false;
+            LimeLog.info("XR: ContentColorMetadata reset to MediaCodec buffer metadata"
+                    + " (mode " + currentPresenterMode + ", HDR " + hdr + ")");
+        } else if (currentPresenterMode != PresenterMode.CLIENT_SBS_AI) {
+            LimeLog.info("XR: using MediaCodec buffer color metadata"
+                    + " (mode " + currentPresenterMode + ", HDR " + hdr
+                    + ", requested range " + (prefConfig.fullRange
+                            ? "FULL" : "LIMITED") + ")");
         }
     }
 

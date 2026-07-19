@@ -29,7 +29,13 @@ public class PerformanceDataTracker {
     private static final String FIELD_FRAME_PACING = "Frame Pacing";
     private static final String FIELD_DATETIME = "Date/Time";
 
-    private final ExecutorService executorService = Executors.newSingleThreadExecutor();
+    // Trackers are short-lived call-site helpers. A per-instance executor leaked one thread per
+    // saved sample, so all instances share a single serialized background writer instead.
+    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "Artemis performance log");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public void savePerformanceStatistics(
             Context context,
@@ -46,7 +52,8 @@ public class PerformanceDataTracker {
             String framePacing,
             String dateTime) {
 
-        executorService.execute(() -> saveToPreferences(context, device, osVersion, appVersion, codec,
+        Context appContext = context.getApplicationContext();
+        EXECUTOR.execute(() -> saveToPreferences(appContext, device, osVersion, appVersion, codec,
                 decodingTimeMs, stats, bitrateMbps, resolution, frameRateFps, average, framePacing, dateTime));
     }
 

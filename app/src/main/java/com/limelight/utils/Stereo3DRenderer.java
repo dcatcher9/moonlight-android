@@ -33,7 +33,6 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -71,10 +70,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     public static Boolean isDebugMode = false;
     public static Boolean isActive = false;
     public static String renderer = "CPU";
-    public static volatile boolean clientSbs = false;
+    private volatile boolean clientSbs;
     /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
      *  PQ frame to SDR before feeding MiDaS (which expects SDR). Set by the presenter. */
-    public static volatile boolean hdrInput = false;
+    private volatile boolean hdrInput;
 
     // Private Static Fields
     private static float calcFps = 0;
@@ -89,9 +88,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final FloatBuffer quadVertexBuffer;
     private final FloatBuffer textureVertexBuffer;
     private final AtomicBoolean frameAvailable = new AtomicBoolean(false);
-    private final AtomicBoolean gpuDelegateFailed = new AtomicBoolean(false);
-    private final AtomicBoolean isAiResultHandlingRunning = new AtomicBoolean(false);
-    private final AtomicBoolean isAiRunning = new AtomicBoolean(false);
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     // OpenGL Handles
     private int bilateralBlurProgram;
@@ -110,9 +107,17 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     // AI & TFLite Variables
     private GpuDelegate gpuDelegate;
-    private Interpreter tflite;
+    private volatile Interpreter tflite;
     private NnApiDelegate nnApiDelegate;
     private ByteBuffer tfliteInputBuffer;
+    private InferenceBackend inferenceBackend = InferenceBackend.NONE;
+
+    private enum InferenceBackend {
+        NONE,
+        GPU,
+        NNAPI,
+        CPU
+    }
 
     // Other Member Variables
     private long totalDrawTime = 0;
@@ -127,7 +132,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private BlockingQueue<RenderResult> inferenceInputQueue = new ArrayBlockingQueue<>(1);
     private PreferenceConfiguration prefConfig;
     private ByteBuffer previousPixelBuffer;
-    private Surface videoSurface;
+    private volatile Surface videoSurface;
     private SurfaceTexture videoSurfaceTexture;
 
     private float ON_DRAW_CHANGE_TRESHOLD = 2.0f;
@@ -172,29 +177,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     public void onSurfaceDestroyed() {
         LimeLog.info("Quit called. Shutting down 3dRenderer.");
-        if (executorService != null) {
-            executorService.shutdownNow();
-            try {
-                if (!executorService.awaitTermination(500, TimeUnit.MILLISECONDS)) {
-                    LimeLog.warning("Thread pool did not terminate in time.");
-                }
-            } catch (InterruptedException e) {
-                executorService.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-        }
-        if (tflite != null) {
-            tflite.close();
-            tflite = null;
-        }
-        if (gpuDelegate != null) {
-            gpuDelegate.close();
-            gpuDelegate = null;
-        }
-        if (nnApiDelegate != null) {
-            nnApiDelegate.close();
-            nnApiDelegate = null;
-        }
+        stopAiWorkers();
+
+        // The interpreter and delegates are created, invoked, and closed by AiTask. In
+        // particular, the GPU delegate is thread-affine and must never be closed here.
+        latestDepthMap.set(null);
+        currentlyRenderingMap = null;
         if (videoSurface != null) {
             videoSurface.release();
             videoSurface = null;
@@ -204,27 +192,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             videoSurfaceTexture = null;
         }
 
-        glSurfaceView.queueEvent(() -> {
-            GLES20.glDeleteProgram(simple3dProgram);
-            GLES20.glDeleteProgram(bilateralBlurProgram);
-            GLES20.glDeleteProgram(dibr3dProgram);
-
-            int[] textures = {
-                    videoTextureId,
-                    depthMapTextureId,
-                    filteredDepthMapTextureId,
-                    fboTextureId,
-                    intermediateTextureId
-            };
-            GLES20.glDeleteTextures(textures.length, textures, 0);
-
-            int[] fbos = {fboHandle, intermediateFboHandle, filterFboHandle};
-            GLES20.glDeleteFramebuffers(fbos.length, fbos, 0);
-        });
+        // This final callback runs after GLSurfaceView has lost its window surface. queueEvent()
+        // may still execute, but no EGL context is current by then, so explicit glDelete* calls
+        // are invalid. EGL releases all of these context-owned objects when its GL thread exits.
+        // Context-loss reinitialization is handled separately in onSurfaceCreated().
 
         if (filledOutputBuffers != null) filledOutputBuffers.clear();
         previousPixelBuffer = null;
-        currentlyRenderingMap = null;
         prefConfig = null;
         drawDelay = 0.0f;
         calcFps = 0;
@@ -233,8 +207,43 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         isActive = false;
     }
 
+    private boolean stopAiWorkers() {
+        shuttingDown.set(true);
+        frameAvailable.set(false);
+        ExecutorService workers = executorService;
+        executorService = null;
+        if (workers == null) {
+            return true;
+        }
+
+        workers.shutdownNow();
+        try {
+            if (!workers.awaitTermination(5, TimeUnit.SECONDS)) {
+                LimeLog.severe("AI worker pool did not terminate; refusing to start a second generation");
+                return false;
+            }
+            return true;
+        } catch (InterruptedException e) {
+            workers.shutdownNow();
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     public Surface getVideoSurface() {
         return videoSurface;
+    }
+
+    public void setClientSbs(boolean enabled) {
+        clientSbs = enabled;
+    }
+
+    public boolean isClientSbs() {
+        return clientSbs;
+    }
+
+    public void setHdrInput(boolean enabled) {
+        hdrInput = enabled;
     }
 
     /** Force a single redraw — used to reflect a live 2D→3D param change while in on-demand
@@ -263,6 +272,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+        // onSurfaceCreated() can run again after EGL context loss without the owner calling
+        // onSurfaceDestroyed(). Stop and join the old TFLite generation before replacing any of
+        // its queues or buffers; otherwise stale workers consume the new generation's state.
+        if (!stopAiWorkers()) {
+            return;
+        }
+        if (videoSurface != null) {
+            videoSurface.release();
+            videoSurface = null;
+        }
+        if (videoSurfaceTexture != null) {
+            videoSurfaceTexture.release();
+            videoSurfaceTexture = null;
+        }
+        shuttingDown.set(false);
         videoTextureId = createExternalOESTexture();
         videoSurfaceTexture = new SurfaceTexture(videoTextureId);
         videoSurfaceTexture.setOnFrameAvailableListener(this);
@@ -276,7 +300,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         initializeFilterFbo();
         initializeIntermediateFbo();
-        initializeTfLite();
         initializeFbo();
         initBuffer();
         initializePBOs();
@@ -302,14 +325,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (onSurfaceReadyListener != null) {
             onSurfaceReadyListener.onStereo3DSurfaceReady(videoSurface);
         }
-        if (!isAiResultHandlingRunning.get()) {
-            isAiResultHandlingRunning.set(true);
-            executorService.submit(new AiResultHandling());
-        }
-        if (!isAiRunning.get()) {
-            isAiRunning.set(true);
-            executorService.submit(new AiTask());
-        }
+        executorService.submit(new AiResultHandling());
+        executorService.submit(new AiTask());
         isActive = true;
     }
 
@@ -430,15 +447,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void initBuffer() {
-        if (tflite != null) {
-            int inputSize = modelInputHeight * modelInputWidth * 3;
-            tfliteInputBuffer = ByteBuffer.allocateDirect(inputSize).order(ByteOrder.nativeOrder());
-            int outputSize = modelInputHeight * modelInputWidth;
-            freeOutputBuffers = new ArrayBlockingQueue<>(NUM_BUFFERS);
-            filledOutputBuffers = new ArrayBlockingQueue<>(NUM_BUFFERS);
-            for (int i = 0; i < NUM_BUFFERS; i++) {
-                freeOutputBuffers.offer(ByteBuffer.allocateDirect(outputSize).order(ByteOrder.nativeOrder()));
-            }
+        int inputSize = modelInputHeight * modelInputWidth * 3;
+        tfliteInputBuffer = ByteBuffer.allocateDirect(inputSize).order(ByteOrder.nativeOrder());
+        int outputSize = modelInputHeight * modelInputWidth;
+        freeOutputBuffers = new ArrayBlockingQueue<>(NUM_BUFFERS);
+        filledOutputBuffers = new ArrayBlockingQueue<>(NUM_BUFFERS);
+        for (int i = 0; i < NUM_BUFFERS; i++) {
+            freeOutputBuffers.offer(ByteBuffer.allocateDirect(outputSize).order(ByteOrder.nativeOrder()));
         }
     }
 
@@ -446,6 +461,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     @Override
     public void onDrawFrame(GL10 gl) {
+        if (shuttingDown.get()) {
+            return;
+        }
+
         long startTime = System.nanoTime();
 
         boolean hasNewFrame = false;
@@ -478,10 +497,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
         }
 
-        if (currentlyRenderingMap != null) {
-            freeSmoothedBuffers.offer(currentlyRenderingMap);
-        }
-
         long startTimeAi = System.nanoTime();
         long endTimeAi = System.nanoTime();
         if (tflite != null) {
@@ -506,10 +521,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 }
                 ByteBuffer newMap = null;
                 if (block && isMovieMode) {
-                    while ((newMap = latestDepthMap.getAndSet(null)) == null) {
+                    while (!shuttingDown.get() && (newMap = latestDepthMap.getAndSet(null)) == null) {
                         try {
                             Thread.sleep(1);
                         } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
                         }
                     }
                 } else {
@@ -517,7 +534,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 }
                 if (newMap != null) {
                     block = false;
+                    ByteBuffer oldMap = currentlyRenderingMap;
                     currentlyRenderingMap = newMap;
+                    recycleSmoothedBuffer(oldMap);
                     depthMapResultCount++;
                     endTimeAi = System.nanoTime();
                     Log.d("Stereo3DRenderer", "DepthMap OutputSpeed " + (endTimeAi - startTimeAi) / 1_000_000 + " ms");
@@ -567,20 +586,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    private ByteBuffer createFlatDepthMap() {
-        int mapSize = modelInputWidth * modelInputHeight;
-        byte[] flatData = new byte[mapSize];
-        Arrays.fill(flatData, (byte) 128);
-
-        ByteBuffer flatMap = ByteBuffer.allocateDirect(mapSize).order(ByteOrder.nativeOrder());
-
-        flatMap.put(flatData);
-        flatMap.rewind();
-        return flatMap;
-    }
-
     private void uploadLatestDepthMapToGpu(ByteBuffer depthMap) {
         if (depthMap != null) {
+            depthMap.rewind();
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthMapTextureId);
             GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, modelInputWidth, modelInputHeight, GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, depthMap);
@@ -732,70 +740,187 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         return success;
     }
 
-    private void initializeTfLite() {
-        Interpreter.Options options = new Interpreter.Options();
+    /**
+     * Initializes TFLite on the inference worker. The GPU delegate requires creation,
+     * invocation, and destruction on the same thread, so this must never run on the GL thread.
+     */
+    private boolean initializeTfLite() {
+        closeTfLiteOnInferenceThread();
 
+        if (tryInitializeGpuTfLite()) {
+            return true;
+        }
+        if (tryInitializeNnApiTfLite()) {
+            return true;
+        }
+        return initializeTfLiteOnCpu();
+    }
+
+    private boolean tryInitializeGpuTfLite() {
+        GpuDelegate candidateDelegate = null;
+        Interpreter candidateInterpreter = null;
         try {
             GpuDelegate.Options gpuOptions = new GpuDelegate.Options();
             gpuOptions.setQuantizedModelsAllowed(true);
             gpuOptions.setPrecisionLossAllowed(true);
             gpuOptions.setInferencePreference(GpuDelegateFactory.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED);
-            gpuDelegate = new GpuDelegate(gpuOptions);
-            options.addDelegate(gpuDelegate);
-            LimeLog.info("GPU Delegate aktiviert");
+            candidateDelegate = new GpuDelegate(gpuOptions);
+
+            Interpreter.Options options = new Interpreter.Options();
+            options.addDelegate(candidateDelegate);
+            candidateInterpreter = new Interpreter(loadModelFile(context, AI_MODEL), options);
+
+            gpuDelegate = candidateDelegate;
+            candidateDelegate = null;
+            tflite = candidateInterpreter;
+            candidateInterpreter = null;
+            inferenceBackend = InferenceBackend.GPU;
             renderer = "GPU";
-            tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
+            LimeLog.info("GPU Delegate aktiviert");
+            return true;
         } catch (Exception e) {
             LimeLog.info("GPU Delegate nicht verfügbar: " + e.getMessage());
-            gpuDelegate.close();
+            closeInterpreter(candidateInterpreter);
+            closeGpuDelegate(candidateDelegate);
+            return false;
+        }
+    }
+
+    private void recycleInputBuffer(ByteBuffer buffer) {
+        if (buffer != null && freeInputBuffers != null) {
+            freeInputBuffers.offer(buffer);
+        }
+    }
+
+    private void recycleOutputBuffer(ByteBuffer buffer) {
+        if (buffer != null && freeOutputBuffers != null) {
+            freeOutputBuffers.offer(buffer);
+        }
+    }
+
+    private void recycleSmoothedBuffer(ByteBuffer buffer) {
+        if (buffer != null && freeSmoothedBuffers != null) {
+            freeSmoothedBuffers.offer(buffer);
+        }
+    }
+
+    private void recycleInferenceResult(InferenceResult result) {
+        if (result != null) {
+            recycleInputBuffer(result.pixelBuffer);
+            recycleOutputBuffer(result.rawDepthBuffer);
+        }
+    }
+
+    private void publishDepthMap(ByteBuffer depthMap) {
+        // Ownership transfers to the mailbox. A displaced unpublished map is no longer visible
+        // to the GL thread and can return to the pool immediately.
+        ByteBuffer displacedMap = latestDepthMap.getAndSet(depthMap);
+        recycleSmoothedBuffer(displacedMap);
+    }
+
+    private static void releaseMat(Mat mat) {
+        if (mat != null) {
+            mat.release();
+        }
+    }
+
+    private boolean tryInitializeNnApiTfLite() {
+        NnApiDelegate candidateDelegate = null;
+        Interpreter candidateInterpreter = null;
+        try {
+            candidateDelegate = new NnApiDelegate();
+            Interpreter.Options options = new Interpreter.Options();
+            options.addDelegate(candidateDelegate);
+            candidateInterpreter = new Interpreter(loadModelFile(context, AI_MODEL), options);
+
+            nnApiDelegate = candidateDelegate;
+            candidateDelegate = null;
+            tflite = candidateInterpreter;
+            candidateInterpreter = null;
+            inferenceBackend = InferenceBackend.NNAPI;
+            renderer = "NNAPI";
+            LimeLog.info("NNAPI Delegate aktiviert");
+            return true;
+        } catch (Exception e) {
+            LimeLog.info("NNAPI Delegate nicht verfügbar: " + e.getMessage());
+            closeInterpreter(candidateInterpreter);
+            closeNnApiDelegate(candidateDelegate);
+            return false;
+        }
+    }
+
+    private boolean initializeTfLiteOnCpu() {
+        closeTfLiteOnInferenceThread();
+        try {
+            Interpreter.Options options = new Interpreter.Options();
+            options.setNumThreads(4);
+            tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
+            inferenceBackend = InferenceBackend.CPU;
+            renderer = "CPU";
+            LimeLog.info("TFLite CPU fallback aktiviert");
+            return true;
+        } catch (Exception e) {
+            LimeLog.severe("TFLite CPU initialization failed: " + e.getMessage());
+            tflite = null;
+            inferenceBackend = InferenceBackend.NONE;
+            renderer = "Unavailable";
+            return false;
+        }
+    }
+
+    private void closeTfLiteOnInferenceThread() {
+        Interpreter interpreter = tflite;
+        tflite = null;
+        closeInterpreter(interpreter);
+
+        GpuDelegate oldGpuDelegate = gpuDelegate;
+        gpuDelegate = null;
+        closeGpuDelegate(oldGpuDelegate);
+
+        NnApiDelegate oldNnApiDelegate = nnApiDelegate;
+        nnApiDelegate = null;
+        closeNnApiDelegate(oldNnApiDelegate);
+        inferenceBackend = InferenceBackend.NONE;
+    }
+
+    private static void closeInterpreter(Interpreter interpreter) {
+        if (interpreter != null) {
             try {
-                nnApiDelegate = new NnApiDelegate();
-                options.addDelegate(nnApiDelegate);
-                tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
-                LimeLog.info("NNAPI Delegate aktiviert");
-                renderer = "NNAPI";
-            } catch (Exception exception) {
-                LimeLog.info("NNAPI Delegate nicht verfügbar: " + e.getMessage());
-                nnApiDelegate.close();
-                try {
-                    LimeLog.info("Fallback: CPU");
-                    tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
-                    renderer = "CPU";
-                } catch (Exception ex) {
-                    reinitializeTfLiteOnCpu();
-                }
+                interpreter.close();
+            } catch (RuntimeException e) {
+                LimeLog.warning("TFLite interpreter close failed: " + e.getMessage());
             }
         }
     }
 
-    private void reinitializeTfLiteOnCpu() {
-        if (tflite != null) {
-            tflite.close();
-            tflite = null;
+    private static void closeGpuDelegate(GpuDelegate delegate) {
+        if (delegate != null) {
+            try {
+                delegate.close();
+            } catch (RuntimeException e) {
+                LimeLog.warning("GPU delegate close failed: " + e.getMessage());
+            }
         }
-        if (gpuDelegate != null) {
-            gpuDelegate.close();
-            gpuDelegate = null;
-        }
+    }
 
-        try {
-            Interpreter.Options options = new Interpreter.Options();
-            options.setUseNNAPI(true);
-            options.setNumThreads(4);
-            tflite = new Interpreter(loadModelFile(context, AI_MODEL), options);
-            LimeLog.info("Successfully re-initialized TFLite interpreter on CPU.");
-        } catch (IOException e) {
-            LimeLog.severe("Failed to re-initialize TFLite model on CPU: " + e.getMessage());
+    private static void closeNnApiDelegate(NnApiDelegate delegate) {
+        if (delegate != null) {
+            try {
+                delegate.close();
+            } catch (RuntimeException e) {
+                LimeLog.warning("NNAPI delegate close failed: " + e.getMessage());
+            }
         }
     }
 
     private MappedByteBuffer loadModelFile(Context context, String modelPath) throws IOException {
-        AssetFileDescriptor fileDescriptor = context.getAssets().openFd(modelPath);
-        FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
-        FileChannel fileChannel = inputStream.getChannel();
-        long startOffset = fileDescriptor.getStartOffset();
-        long declaredLength = fileDescriptor.getDeclaredLength();
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
+        try (AssetFileDescriptor fileDescriptor = context.getAssets().openFd(modelPath);
+             FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
+             FileChannel fileChannel = inputStream.getChannel()) {
+            long startOffset = fileDescriptor.getStartOffset();
+            long declaredLength = fileDescriptor.getDeclaredLength();
+            return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
+        }
     }
 
     @Override
@@ -917,6 +1042,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         Mat edges1 = null, edges2 = null;
         Mat histGray1 = null, histGray2 = null;
         Mat histEdge1 = null, histEdge2 = null;
+        Mat gradX1 = null, gradY1 = null;
+        Mat gradX2 = null, gradY2 = null;
+        Mat histogramMask = null;
+        MatOfInt histogramChannels = null;
+        MatOfInt histogramSize = null;
+        MatOfFloat histogramRange = null;
 
         try {
             mat1 = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC4, newPixelBuffer);
@@ -931,8 +1062,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             // Kanten (Sobel)
             edges1 = new Mat();
             edges2 = new Mat();
-            Mat gradX1 = new Mat(), gradY1 = new Mat();
-            Mat gradX2 = new Mat(), gradY2 = new Mat();
+            gradX1 = new Mat();
+            gradY1 = new Mat();
+            gradX2 = new Mat();
+            gradY2 = new Mat();
             Imgproc.Sobel(gray1, gradX1, CvType.CV_16S, 1, 0);
             Imgproc.Sobel(gray1, gradY1, CvType.CV_16S, 0, 1);
             Core.convertScaleAbs(gradX1, gradX1);
@@ -945,22 +1078,25 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             Core.convertScaleAbs(gradY2, gradY2);
             Core.addWeighted(gradX2, 0.5, gradY2, 0.5, 0, edges2);
 
-            gradX1.release();
-            gradY1.release();
-            gradX2.release();
-            gradY2.release();
-
             // Histogramme Graustufen
             histGray1 = new Mat();
             histGray2 = new Mat();
-            Imgproc.calcHist(Collections.singletonList(gray1), new MatOfInt(0), new Mat(), histGray1, new MatOfInt(256), new MatOfFloat(0f, 256f));
-            Imgproc.calcHist(Collections.singletonList(gray2), new MatOfInt(0), new Mat(), histGray2, new MatOfInt(256), new MatOfFloat(0f, 256f));
+            histogramChannels = new MatOfInt(0);
+            histogramMask = new Mat();
+            histogramSize = new MatOfInt(256);
+            histogramRange = new MatOfFloat(0f, 256f);
+            Imgproc.calcHist(Collections.singletonList(gray1), histogramChannels, histogramMask,
+                    histGray1, histogramSize, histogramRange);
+            Imgproc.calcHist(Collections.singletonList(gray2), histogramChannels, histogramMask,
+                    histGray2, histogramSize, histogramRange);
 
             // Histogramme Kanten
             histEdge1 = new Mat();
             histEdge2 = new Mat();
-            Imgproc.calcHist(Collections.singletonList(edges1), new MatOfInt(0), new Mat(), histEdge1, new MatOfInt(256), new MatOfFloat(0f, 256f));
-            Imgproc.calcHist(Collections.singletonList(edges2), new MatOfInt(0), new Mat(), histEdge2, new MatOfInt(256), new MatOfFloat(0f, 256f));
+            Imgproc.calcHist(Collections.singletonList(edges1), histogramChannels, histogramMask,
+                    histEdge1, histogramSize, histogramRange);
+            Imgproc.calcHist(Collections.singletonList(edges2), histogramChannels, histogramMask,
+                    histEdge2, histogramSize, histogramRange);
 
             // Vergleich: Graustufen + Kanten
             double grayDiff = 1.0 - Imgproc.compareHist(histGray1, histGray2, Imgproc.HISTCMP_CORREL);
@@ -981,6 +1117,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             if (histGray2 != null) histGray2.release();
             if (histEdge1 != null) histEdge1.release();
             if (histEdge2 != null) histEdge2.release();
+            releaseMat(gradX1);
+            releaseMat(gradY1);
+            releaseMat(gradX2);
+            releaseMat(gradY2);
+            releaseMat(histogramMask);
+            releaseMat(histogramChannels);
+            releaseMat(histogramSize);
+            releaseMat(histogramRange);
         }
     }
 
@@ -1027,65 +1171,81 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         @Override
         public void run() {
-            ByteBuffer pixelBuffer = null;
-            double difference = 0.0f;
-            while (!Thread.currentThread().isInterrupted()) {
-                long startTime = System.nanoTime();
-                long waitTime = System.nanoTime();
-                long aiTime = System.nanoTime();
-                long aiTime_end = System.nanoTime();
-                try {
-                    if (tflite == null) return;
-                    RenderResult result = inferenceInputQueue.take();
-                    pixelBuffer = result.pixelBuffer;
-                    difference = result.imageDifference;
-                    ByteBuffer outputBuffer = freeOutputBuffers.take();
-                    waitTime = System.nanoTime();
-                    outputBuffer.rewind();
-
-                    if (difference > ON_DRAW_CHANGE_TRESHOLD || previousRawMap == null) {
-                        tfliteInputBuffer.rewind();
-                        pixelBuffer.rewind();
-
-                        convertRgbaToRgb(pixelBuffer, tfliteInputBuffer, modelInputWidth, modelInputHeight);
-
-                        aiTime = System.nanoTime();
-                        ReflectivePaddingInt8Minimal.applyReflectedPadding(tfliteInputBuffer);
-                        tflite.run(tfliteInputBuffer, outputBuffer);
-                        if (previousRawMap == null) {
-                            previousRawMap = ByteBuffer.allocateDirect(outputBuffer.capacity());
-                        }
-                        previousRawMap.clear();
-                        outputBuffer.rewind();
-                        previousRawMap.put(outputBuffer);
-                        previousRawMap.rewind();
-                    } else {
-                        outputBuffer.clear();
-                        previousRawMap.rewind();
-                        outputBuffer.put(previousRawMap);
-                        outputBuffer.rewind();
-                    }
-                    calcThreeDFps++;
-                    aiTime_end = System.nanoTime();
-                    filledOutputBuffers.put(new InferenceResult(pixelBuffer, outputBuffer));
-                    pixelBuffer = null;
-                } catch (InterruptedException e) {
-                    LimeLog.severe("AI inference failed: " + e.getMessage());
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    LimeLog.severe("AI inference failed: " + e.getMessage());
-                    gpuDelegateFailed.set(true);
-                } finally {
-                    long duration = (System.nanoTime() - startTime) / 1_000_000;
-                    long waitTimeText = (waitTime - startTime) / 1_000_000;
-                    long aitimeText = (aiTime_end - aiTime) / 1_000_000;
-                    if (pixelBuffer != null) {
-                        freeInputBuffers.offer(pixelBuffer);
-                    }
-                    Log.d("Stereo3DRenderer", "CalculateTime AiDepthMap: " + duration + " ms " + filledOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms" + "aitime: " + aitimeText);
+            try {
+                if (!initializeTfLite()) {
+                    return;
                 }
+
+                while (!Thread.currentThread().isInterrupted() && !shuttingDown.get()) {
+                    ByteBuffer pixelBuffer = null;
+                    ByteBuffer outputBuffer = null;
+                    long startTime = System.nanoTime();
+                    long waitTime = startTime;
+                    long aiTime = startTime;
+                    long aiTimeEnd = startTime;
+                    try {
+                        RenderResult result = inferenceInputQueue.take();
+                        pixelBuffer = result.pixelBuffer;
+                        double difference = result.imageDifference;
+                        outputBuffer = freeOutputBuffers.take();
+                        waitTime = System.nanoTime();
+                        outputBuffer.rewind();
+
+                        if (difference > ON_DRAW_CHANGE_TRESHOLD || previousRawMap == null) {
+                            tfliteInputBuffer.rewind();
+                            pixelBuffer.rewind();
+                            convertRgbaToRgb(pixelBuffer, tfliteInputBuffer, modelInputWidth, modelInputHeight);
+
+                            aiTime = System.nanoTime();
+                            ReflectivePaddingInt8Minimal.applyReflectedPadding(tfliteInputBuffer);
+                            Interpreter interpreter = tflite;
+                            if (interpreter == null) {
+                                break;
+                            }
+                            interpreter.run(tfliteInputBuffer, outputBuffer);
+                            if (previousRawMap == null) {
+                                previousRawMap = ByteBuffer.allocateDirect(outputBuffer.capacity());
+                            }
+                            previousRawMap.clear();
+                            outputBuffer.rewind();
+                            previousRawMap.put(outputBuffer);
+                            previousRawMap.rewind();
+                        } else {
+                            outputBuffer.clear();
+                            previousRawMap.rewind();
+                            outputBuffer.put(previousRawMap);
+                            outputBuffer.rewind();
+                        }
+
+                        calcThreeDFps++;
+                        aiTimeEnd = System.nanoTime();
+                        filledOutputBuffers.put(new InferenceResult(pixelBuffer, outputBuffer));
+                        pixelBuffer = null;
+                        outputBuffer = null;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        LimeLog.severe("AI inference failed on " + inferenceBackend + ": " + e.getMessage());
+                        if (inferenceBackend == InferenceBackend.CPU || shuttingDown.get()
+                                || !initializeTfLiteOnCpu()) {
+                            break;
+                        }
+                        LimeLog.warning("AI inference switched to CPU after delegate failure");
+                    } finally {
+                        recycleInputBuffer(pixelBuffer);
+                        recycleOutputBuffer(outputBuffer);
+                        long duration = (System.nanoTime() - startTime) / 1_000_000;
+                        long waitTimeText = (waitTime - startTime) / 1_000_000;
+                        long aiTimeText = (aiTimeEnd - aiTime) / 1_000_000;
+                        Log.d("Stereo3DRenderer", "CalculateTime AiDepthMap: " + duration + " ms "
+                                + filledOutputBuffers.remainingCapacity() + " " + waitTimeText
+                                + " ms aitime: " + aiTimeText);
+                    }
+                }
+            } finally {
+                closeTfLiteOnInferenceThread();
             }
-            isAiRunning.set(false);
         }
     }
 
@@ -1103,95 +1263,97 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         @Override
         public void run() {
-            ByteBuffer resultBuffer = createFlatDepthMap();
-            InferenceResult result = null;
+            try {
+                while (!Thread.currentThread().isInterrupted() && !shuttingDown.get()) {
+                    ByteBuffer resultBuffer = null;
+                    InferenceResult result = null;
+                    long startTime = System.nanoTime();
+                    long waitTime = startTime;
+                    Mat rawMat = null;
+                    Mat processedMat = null;
+                    Mat diff = null;
+                    Mat validMask = null;
+                    Mat blended = null;
+                    Mat inverseMask = null;
+                    try {
+                        result = filledOutputBuffers.take();
+                        resultBuffer = freeSmoothedBuffers.take();
+                        waitTime = System.nanoTime();
 
-            while (!Thread.currentThread().isInterrupted()) {
-                long startTime = System.nanoTime();
-                long waitTime = System.nanoTime();
-                Mat rawMat = null;
-                Mat processedMat = null;
-                try {
-                    result = filledOutputBuffers.take();
-                    resultBuffer = freeSmoothedBuffers.take();
-                    waitTime = System.nanoTime();
+                        InferenceResult intermediate;
+                        while ((intermediate = filledOutputBuffers.poll()) != null) {
+                            recycleInferenceResult(result);
+                            result = intermediate;
+                        }
+                        ByteBuffer rawDepthBuffer = result.rawDepthBuffer;
+                        ByteBuffer currentPixelBuffer = result.pixelBuffer;
 
-                    InferenceResult intermediate;
-                    while ((intermediate = filledOutputBuffers.poll()) != null) {
-                        freeInputBuffers.offer(result.pixelBuffer);
-                        freeOutputBuffers.offer(result.rawDepthBuffer);
-                        result = intermediate;
+                        currentPixelBuffer.rewind();
+                        double imageDifference = hasFrameChangedSignificantlyOCV(
+                                currentPixelBuffer, previousPixelBuffer) * IMAGE_DIFFERENCE_MULTIPLIER;
+
+                        rawDepthBuffer.rewind();
+                        rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
+                        processedMat = new Mat();
+                        Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
+
+                        if (isFirstFrame) {
+                            previousSmoothedMat = processedMat.clone();
+                            isFirstFrame = false;
+                        }
+
+                        double smoothing = (imageDifference * 10) / (threeDFps * 3);
+                        smoothing = Math.min(smoothing, MAX_SMOOTHING_FACTOR);
+                        smoothing = Math.max(smoothing, MIN_SMOOTHING_FACTOR);
+                        diff = new Mat();
+                        Core.absdiff(processedMat, previousSmoothedMat, diff);
+                        Core.MinMaxLocResult mmr = Core.minMaxLoc(diff);
+                        double thresholdValue = Math.max(1, mmr.maxVal * (1.0 - smoothing) * 0.1);
+                        validMask = new Mat();
+                        Imgproc.threshold(diff, validMask, thresholdValue, 255, Imgproc.THRESH_BINARY_INV);
+                        processedMat.copyTo(previousSmoothedMat, validMask);
+                        blended = new Mat();
+                        Core.addWeighted(processedMat, smoothing, previousSmoothedMat,
+                                1.0 - smoothing, 0.0, blended);
+                        inverseMask = new Mat();
+                        Core.bitwise_not(validMask, inverseMask);
+                        blended.copyTo(previousSmoothedMat, inverseMask);
+
+                        previousSmoothedMat.get(0, 0, processedDataArray);
+                        resultBuffer.clear();
+                        resultBuffer.put(processedDataArray);
+                        resultBuffer.rewind();
+                        publishDepthMap(resultBuffer);
+                        resultBuffer = null;
+
+                        currentPixelBuffer.rewind();
+                        previousPixelBuffer.clear();
+                        previousPixelBuffer.put(currentPixelBuffer);
+                        previousPixelBuffer.rewind();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        LimeLog.severe("AI result processing failed: " + e.getMessage());
+                    } finally {
+                        releaseMat(rawMat);
+                        releaseMat(processedMat);
+                        releaseMat(diff);
+                        releaseMat(validMask);
+                        releaseMat(blended);
+                        releaseMat(inverseMask);
+                        recycleSmoothedBuffer(resultBuffer);
+                        recycleInferenceResult(result);
+                        long duration = (System.nanoTime() - startTime) / 1_000_000;
+                        long waitTimeText = (waitTime - startTime) / 1_000_000;
+                        Log.d("Stereo3DRenderer", "CalculateTime AiResult: " + duration + " ms "
+                                + freeOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms");
                     }
-                    ByteBuffer rawDepthBuffer = result.rawDepthBuffer;
-                    ByteBuffer currentPixelBuffer = result.pixelBuffer;
-
-                    currentPixelBuffer.rewind();
-                    double imageDifference = hasFrameChangedSignificantlyOCV(currentPixelBuffer, previousPixelBuffer) * IMAGE_DIFFERENCE_MULTIPLIER;
-
-                    rawMat = new Mat(modelInputHeight, modelInputWidth, CvType.CV_8UC1, rawDepthBuffer);
-                    processedMat = new Mat();
-                    Core.normalize(rawMat, processedMat, 0, 255, Core.NORM_MINMAX);
-
-                    if (isFirstFrame) {
-                        previousSmoothedMat = processedMat.clone();
-                        isFirstFrame = false;
-                    }
-
-                    double smoothing = (imageDifference * 10) / (threeDFps * 3);
-                    smoothing = Math.min(smoothing, MAX_SMOOTHING_FACTOR);
-                    smoothing = Math.max(smoothing, MIN_SMOOTHING_FACTOR);
-                    Mat diff = new Mat();
-                    Core.absdiff(processedMat, previousSmoothedMat, diff);
-                    Core.MinMaxLocResult mmr = Core.minMaxLoc(diff);
-                    double thresholdValue = Math.max(1, mmr.maxVal * ((1.0 - smoothing)) * 0.1);
-                    Mat validMask = new Mat();
-                    Imgproc.threshold(diff, validMask, thresholdValue, 255, Imgproc.THRESH_BINARY_INV);
-                    processedMat.copyTo(previousSmoothedMat, validMask);
-                    Mat blended = new Mat();
-                    Core.addWeighted(processedMat, smoothing, previousSmoothedMat, 1.0 - smoothing, 0.0, blended);
-                    Mat inverseMask = new Mat();
-                    Core.bitwise_not(validMask, inverseMask);
-                    blended.copyTo(previousSmoothedMat, inverseMask);
-                    diff.release();
-                    validMask.release();
-                    inverseMask.release();
-                    blended.release();
-                    previousSmoothedMat.get(0, 0, processedDataArray);
-                    rawDepthBuffer.rewind();
-                    rawDepthBuffer.put(processedDataArray);
-
-                    rawDepthBuffer.rewind();
-                    resultBuffer.rewind();
-                    resultBuffer.put(rawDepthBuffer);
-
-                    rawDepthBuffer.rewind();
-                    resultBuffer.rewind();
-                    latestDepthMap.set(resultBuffer);
-
-                    previousPixelBuffer.rewind();
-                    previousPixelBuffer.put(currentPixelBuffer);
-                } catch (Exception e) {
-                    LimeLog.severe("AI exception " + e.getMessage());
-                } finally {
-                    if (rawMat != null) {
-                        rawMat.release();
-                    }
-                    if (processedMat != null) {
-                        processedMat.release();
-                    }
-                    if (resultBuffer != null) {
-                        freeSmoothedBuffers.offer(resultBuffer);
-                    }
-                    if (result != null) {
-                        freeInputBuffers.offer(result.pixelBuffer);
-                        freeOutputBuffers.offer(result.rawDepthBuffer);
-                    }
-                    long duration = (System.nanoTime() - startTime) / 1_000_000;
-                    long waitTimeText = (waitTime - startTime) / 1_000_000;
-                    Log.d("Stereo3DRenderer", "CalculateTime AiResult:    " + duration + " ms" + " " + freeOutputBuffers.remainingCapacity() + " " + waitTimeText + " ms ");
                 }
+            } finally {
+                releaseMat(previousSmoothedMat);
+                previousSmoothedMat = null;
             }
-            isAiResultHandlingRunning.set(false);
         }
     }
 }

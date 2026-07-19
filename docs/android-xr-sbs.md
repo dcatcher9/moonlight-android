@@ -30,6 +30,16 @@ The working sequence in `XrStreamPresenter.init()`:
 4. **`scene.getMainPanelEntity().setEnabled(false)`** to hide the activity's 2D panel.
 5. Hand `surfaceEntity.getSurface()` straight to `decoderRenderer.setRenderTarget(...)`.
 
+### HDR and color-range contract
+
+Normal and Host SBS are direct MediaCodec presentation paths. Leave the `SurfaceEntity` content
+color metadata unset in those modes so SceneCore uses the decoded `HardwareBuffer` dataspace,
+including its HDR transfer and full/limited-range flag. Client SBS renders through an intermediate
+GL surface, so only that mode supplies explicit BT.2020/ST2084 metadata. When leaving Client SBS,
+clear the explicit metadata with `setContentColorMetadata(null)` before returning to a direct mode.
+The Artemis full-range preference remains authoritative for the decoder request and Client SBS GL
+output; full-range HDR must not be converted to limited range as a presentation workaround.
+
 ### What the long "black quad" investigation actually was (lessons)
 This looked for a while like an emulator/codec buffer problem. It was not. The black quad had
 two real causes, both fixed above:
@@ -61,12 +71,11 @@ sampled via `samplerExternalOES` yields alpha 0, which composites transparent/bl
 > see above. (The emulator may still have its own codec/GPU limitations, but the black quad on
 > both emulator and hardware was the parenting + panel occlusion.)
 
-### Jetpack XR dependency version matrix (do not "align" them)
-The `androidx.xr.*` modules version **independently**. The matched set is **scenecore family
-= alpha15** and **runtime + arcore family = alpha14** (scenecore:alpha15 `requires`
-runtime:alpha14 / arcore:alpha14; runtime alpha15 dropped `XrExtensionsHolder`, which
-scenecore-spatial-core:alpha15 loads via a provider). Declare those exact versions in
-`app/build.gradle`; do **not** add a blanket `resolutionStrategy` force to one version.
+### Jetpack XR dependency version matrix
+The Android XR DP4 stack used here aligns SceneCore, runtime, runtime-openxr, ARCore, and
+arcore-openxr on **1.0.0-alpha16**. Keep the five declarations pinned together in
+`app/build.gradle`; mixing their Java/Kotlin and native OpenXR artifacts can crash during
+`ViewCameraState` construction.
 
 ### Minification (R8) — debug currently builds with minify OFF
 The XR libraries use JNI/ServiceLoader/reflection R8 can't trace. `app/proguard-rules.pro` keeps
@@ -231,7 +240,7 @@ Each tile handles its own tap through its `View.OnClickListener`; there is **no 
 > profiles, and settings (`StreamSettings`) screens therefore each carry an explicit in-app back
 > button (a FAB) — without them you can enter a screen and have no way back on the headset.
 
-#### Spatial UI learnings (Galaxy XR, scenecore alpha15)
+#### Spatial UI learnings (Galaxy XR, scenecore alpha16)
 
 Hard-won, verified on hardware — read before building any in-headset UI here:
 

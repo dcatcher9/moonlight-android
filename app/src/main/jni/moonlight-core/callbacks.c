@@ -341,6 +341,15 @@ void BridgeClConnectionStatusUpdate(int connectionStatus) {
 void BridgeClSetHdrMode(bool enabled) {
     JNIEnv* env = GetThreadEnv();
 
+    // This callback may run on a long-lived native control thread. Give its temporary metadata
+    // array an explicit JNI frame so every HDR transition releases it without relying on the
+    // enclosing LiStartConnection() native frame. PopLocalFrame() is also valid for both
+    // Java-owned and AttachCurrentThread() callers, unlike deleting a transition reference
+    // directly on some ART builds.
+    if ((*env)->PushLocalFrame(env, 1) < 0) {
+        return;
+    }
+
     jbyteArray hdrMetadataByteArray = NULL;
     SS_HDR_METADATA hdrMetadata;
 
@@ -351,6 +360,7 @@ void BridgeClSetHdrMode(bool enabled) {
     }
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSetHdrModeMethod, enabled, hdrMetadataByteArray);
+    (*env)->PopLocalFrame(env, NULL);
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
         (*JVM)->DetachCurrentThread(JVM);

@@ -8,7 +8,6 @@ import android.os.Build;
 import android.view.Display;
 import android.widget.Toast;
 
-import androidx.annotation.RequiresApi;
 
 import com.limelight.AppView;
 import com.limelight.Game;
@@ -137,7 +136,6 @@ public class ServerHelper {
         return gameIntent;
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.O)
     public static void doStart(
             Activity parent,
             NvApp app,
