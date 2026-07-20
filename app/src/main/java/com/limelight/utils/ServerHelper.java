@@ -34,6 +34,27 @@ import java.util.ArrayList;
 public class ServerHelper {
     public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
 
+    /**
+     * Returns whether the host's latest serverinfo says this exact app is still running.
+     * The host owns session lifetime (including Apollo's grace period), so this deliberately has
+     * no client-side timer or remembered "recent disconnect" state.
+     */
+    static boolean isResumeOfSameHostApp(ComputerDetails computer, NvApp app) {
+        if (computer == null || app == null) {
+            return false;
+        }
+
+        if (computer.runningGameId != 0 && computer.runningGameId == app.getAppId()) {
+            return true;
+        }
+
+        String runningUuid = computer.runningGameUUID;
+        String appUuid = app.getAppUUID();
+        return runningUuid != null && !runningUuid.isEmpty()
+                && appUuid != null && !appUuid.isEmpty()
+                && runningUuid.equalsIgnoreCase(appUuid);
+    }
+
     public static ComputerDetails.AddressTuple getCurrentAddressFromComputer(ComputerDetails computer) throws IOException {
         if (computer.activeAddress == null) {
             throw new IOException("No active address for "+computer.name);
@@ -105,9 +126,20 @@ public class ServerHelper {
         gameIntent.putExtra(Game.EXTRA_PORT, computer.activeAddress.port);
         gameIntent.putExtra(Game.EXTRA_HTTPS_PORT, computer.httpsPort);
         gameIntent.putExtra(Game.EXTRA_APP_NAME, app.getAppName());
-        gameIntent.putExtra(Game.EXTRA_APP_UUID, app.getAppUUID());
+        boolean resumeExistingSession = isResumeOfSameHostApp(computer, app);
+        String appUuid = app.getAppUUID();
+        if (resumeExistingSession && (appUuid == null || appUuid.isEmpty())
+                && computer.runningGameUUID != null && !computer.runningGameUUID.isEmpty()) {
+            // PcView's direct Resume path only has the numeric app ID. Preserve the same durable
+            // per-app preference scope as AppView by carrying the host's running-app UUID too.
+            appUuid = computer.runningGameUUID;
+        }
+        gameIntent.putExtra(Game.EXTRA_APP_UUID, appUuid);
         gameIntent.putExtra(Game.EXTRA_APP_ID, app.getAppId());
         gameIntent.putExtra(Game.EXTRA_APP_HDR, app.isHdrSupported());
+        // Gate XR presentation restoration on the host's authoritative running-app state. Any
+        // Game intent constructed elsewhere omits this extra and therefore defaults to fresh.
+        gameIntent.putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, resumeExistingSession);
         gameIntent.putExtra(Game.EXTRA_UNIQUEID, managerBinder.getUniqueId());
         gameIntent.putExtra(Game.EXTRA_PC_UUID, computer.uuid);
         gameIntent.putExtra(Game.EXTRA_PC_NAME, computer.name);

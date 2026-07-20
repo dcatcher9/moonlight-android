@@ -9,10 +9,10 @@ import com.limelight.Game;
 import com.limelight.nvstream.jni.MoonBridge;
 
 /**
- * Small SceneCore-independent store for the XR panel state that survives replacement Game
- * activities. The physical height and last successful presentation mode are durable
- * per-machine/app preferences. Whether a host session can be resumed is deliberately not stored
- * here; that state comes exclusively from the host's serverinfo response.
+ * Small SceneCore-independent store for XR panel state. Physical height and the last successful
+ * presentation mode are durable per-machine/app preferences, but the mode is returned only for a
+ * host-confirmed resume of that same app. Whether a session is resumable is never inferred or
+ * timed here; the launch intent carries the host's authoritative serverinfo decision.
  */
 final class XrViewStateStore {
     static final String PREFS_NAME = "xr_stream_view_state";
@@ -41,10 +41,13 @@ final class XrViewStateStore {
 
     private final SharedPreferences preferences;
     private final String key;
+    private final boolean restorePresentationMode;
 
     XrViewStateStore(Context context, Intent intent) {
         preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         key = buildKey(intent);
+        restorePresentationMode = intent != null
+                && intent.getBooleanExtra(Game.EXTRA_RESUME_EXISTING_SESSION, false);
     }
 
     State restore() {
@@ -56,11 +59,13 @@ final class XrViewStateStore {
         }
 
         Mode mode = Mode.NORMAL;
-        try {
-            mode = Mode.valueOf(preferences.getString(
-                    key + MODE_SUFFIX, Mode.NORMAL.name()));
-        } catch (ClassCastException | IllegalArgumentException ignored) {
-            mode = Mode.NORMAL;
+        if (restorePresentationMode) {
+            try {
+                mode = Mode.valueOf(preferences.getString(
+                        key + MODE_SUFFIX, Mode.NORMAL.name()));
+            } catch (ClassCastException | IllegalArgumentException ignored) {
+                mode = Mode.NORMAL;
+            }
         }
         return new State(clampHeight(height), mode);
     }

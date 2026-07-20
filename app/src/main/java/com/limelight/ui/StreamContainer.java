@@ -18,11 +18,7 @@ import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 
-/**
- * A container that manages different stream display modes and now correctly
- * handles all input callbacks, aspect ratio scaling, and a robust surface lifecycle.
- * It uses SurfaceView for 2D and GLSurfaceView for both 3D modes.
- */
+/** Owns the single XR presentation route, guarded decoder/GL surface handoffs, and input bridge. */
 public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback, Stereo3DRenderer.OnSurfaceReadyListener {
 
     public interface SurfaceSwitchCallback {
@@ -37,9 +33,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         boolean handleFocusChange(boolean hasWindowFocus);
     }
 
-    // Streaming always uses the single XR route: XrStreamPresenter. New streams restore the last
-    // successful per-machine/app presentation preference; modes remain
-    // switchable from the in-headset control bar (Normal / Host SBS Raw / Host SBS AI /
+    // Streaming always uses the single XR route: XrStreamPresenter. Fresh host connections start
+    // in Normal; a host-confirmed resume restores the last successful per-machine/app presentation.
+    // Modes remain switchable from the in-headset control bar (Normal / Host SBS Raw / Host SBS AI /
     // Client SBS AI). The legacy plain-2D (SurfaceView) and standalone
     // on-device SBS (Stereo3DRenderer) render modes are gone.
 
@@ -87,6 +83,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
     }
 
+    /** Drain one coherent Client-SBS performance window for the XR stats panel. */
+    public Stereo3DRenderer.ClientSbsPerformanceSnapshot sampleClientSbsPerformance() {
+        return mStereoRenderer != null ? mStereoRenderer.sampleClientSbsPerformance() : null;
+    }
+
     public void setHdrInput(boolean enabled) {
         if (mStereoRenderer != null) {
             mStereoRenderer.setHdrInput(enabled);
@@ -112,7 +113,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
             glSurfaceView.setEGLContextClientVersion(3);
-            glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0);
+            // The SBS renderer never uses depth or stencil attachments. Request a zero-depth
+            // config and log the actual default-framebuffer bits for the Galaxy XR test pass.
+            glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 0, 0);
             mXrPresenter = new XrStreamPresenter(game, prefConfig, this::onStereo3DSurfaceReady);
             if (!mXrPresenter.init()) {
                 mXrPresenter = null;
@@ -158,10 +161,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                         }
                     });
                 }
-            }, context, prefConfig, false);
-            // Client SBS renders into the XR compositor surface (full-width 2W×H, or W×H in
-            // half-width mode), which is not this view's on-screen size — tell the renderer explicitly.
-            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(), prefConfig.height);
+            }, context, prefConfig);
+            // Client SBS renders into a capped packed XR compositor surface, which is unrelated
+            // to this view's on-screen size. Tell the renderer both dimensions explicitly.
+            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
+                    mXrPresenter.getClientSbsSurfaceHeight());
             glSurfaceView.setRenderer(mStereoRenderer);
             glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
             glSurfaceView.setPreserveEGLContextOnPause(true);
@@ -199,8 +203,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mPendingClientSbsSwitch = callback;
 
         if (enable) {
-            // Match the renderer viewport to the active Client SBS width (2W full / W half).
-            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(), prefConfig.height);
+            // Match the renderer viewport to the capped Client SBS surface.
+            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
+                    mXrPresenter.getClientSbsSurfaceHeight());
 
             // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
             // null/garbage-collected surface crashes MediaCodec).
@@ -209,7 +214,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 return;
             }
 
-            // Size the XR surface for Client SBS (2W×H full, or W×H half-width). Must happen before
+            // Size the XR surface for capped packed Client SBS. Must happen before
             // onResume() so EGL creates its window surface at the new size.
             mXrPresenter.setClientSbsSurfaceSize(true);
 
@@ -282,19 +287,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     /**
-     * Re-cycle the Client SBS GL surface at the presenter's current width (used by the half-width
-     * toggle). {@code GLSurfaceView.onPause()} blocks until the GL thread tears down the EGL window
-     * surface, so the subsequent re-enter rebuilds it at the new XR-surface size.
-     */
-    public void recycleClientSbs() {
-        if (mStereoRenderer == null) return;
-        ((GLSurfaceView) mSurfaceView).onPause();
-        switchToClientSbs(true, success -> {
-            if (!success) game.handleDecoderSurfaceSwitchFailure();
-        });
-    }
-
-    /**
      * Re-pin the XR surface to the target host depth-mode frame size — the plain 2D frame
      * ({@code W x H}) or the packed SBS frame ({@code 2W' x H'}) — and rebind the decoder to it.
      * Mirrors {@link #switchToClientSbs}'s dummy-surface handoff so MediaCodec never sees a
@@ -317,13 +309,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             return bindDecoderSurface(s);
         }
         return false;
-    }
-
-    /** Ask the stereo renderer to redraw once (e.g. after a live 2D→3D effect-param change). */
-    public void requestStereoRender() {
-        if (mStereoRenderer != null) {
-            mStereoRenderer.requestRender();
-        }
     }
 
     @Override

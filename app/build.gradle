@@ -11,6 +11,8 @@ android {
         minSdk 24
         targetSdk 34
 
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
         versionName "20.2.6"
         versionCode = 57
 
@@ -25,6 +27,11 @@ android {
         // AGP 9 disables custom resource values by default; this build uses
         // resValue in buildTypes/productFlavors (e.g. app_label), so enable it.
         resValues = true
+    }
+
+    androidResources {
+        // ClientSbsGpuInferenceEngine maps the model with AssetManager.openFd().
+        noCompress += 'tflite'
     }
 
     productFlavors {
@@ -52,6 +59,9 @@ android {
             externalNativeBuild {
                 ndkBuild {
                     arguments "PRODUCT_FLAVOR=nonRoot"
+                    // The GPU bridge is intentionally a separate, lazily loaded module so
+                    // libLiteRt is not a hard dependency of the always-loaded streaming core.
+                    targets "moonlight-core", "client-sbs-gpu"
                 }
             }
 
@@ -95,6 +105,9 @@ android {
             pickFirsts.add('META-INF/versions/9/OSGI-INF/MANIFEST.MF')
         }
         jniLibs {
+            // The optional native LiteRT bridge resolves its accelerator libraries from
+            // ApplicationInfo.nativeLibraryDir, which must be a real filesystem directory.
+            useLegacyPackaging = true
             // The arcore-openxr artifact bundles both the arcore and runtime OpenXR native
             // libs, which collide with the ones from runtime-openxr. With all androidx.xr.*
             // pinned to alpha16 (see deps below) the duplicates are the same version, so
@@ -193,10 +206,6 @@ dependencies {
     implementation 'com.google.android.material:material:1.13.0'
     implementation 'com.github.ByteHamster:SearchPreference:v2.5.1'
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
-    implementation 'com.google.ai.edge.litert:litert:1.4.0'
-    implementation 'com.google.ai.edge.litert:litert-gpu:1.4.0'
-    implementation 'org.opencv:opencv:4.12.0'
-
     // Android XR (Jetpack XR / SceneCore) — used to display PC-side SBS streams
     // stereoscopically on Galaxy XR via SurfaceEntity StereoMode.SIDE_BY_SIDE.
     // These libraries declare minSdk 23/24, which is satisfied now that the app's
@@ -220,4 +229,8 @@ dependencies {
     testImplementation 'androidx.test:core:1.7.0'
     testImplementation 'org.robolectric:robolectric:4.16'
     testImplementation 'org.mockito:mockito-core:5.19.0'
+
+    // On-device native LiteRT GL smoke test (no Espresso/UI dependency required).
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
 }

@@ -20,21 +20,18 @@ Android XR devices (Samsung Galaxy XR)**, not phones/tablets/TV. The manifest de
 which restricts Play Store distribution/install to XR devices. `minSdk = 24` (the Jetpack XR
 floor per Google's guidance — do NOT raise to 34).
 
-The goal: display a **side-by-side (SBS) stereo stream produced on the PC** stereoscopically
-on the headset. See [docs/android-xr-sbs.md](docs/android-xr-sbs.md) for the design and
-implementation plan. Read that document before touching any rendering / surface / stereo code —
+The goal: present either a **side-by-side (SBS) stereo stream produced on the PC** or Artemis'
+on-device Client SBS AI output stereoscopically on the headset. See
+[docs/android-xr-sbs.md](docs/android-xr-sbs.md) for the design history and current contracts.
+Read that document before touching any rendering / surface / stereo code —
 and its **"Spatial UI learnings"** section before building any in-headset UI (key rule: put
 controls as ordinary clickable `View`s in a *single* `PanelEntity`, like a toolbar, not one panel
 per control — that's what gives the gaze highlight and native taps).
 
-Implication: since every device running this build is an XR device, the XR SBS path should be
-the **primary** experience. Non-XR code paths (the legacy phone/tablet OSC, the AI-depth
-modes) still exist but are no longer the target; don't invest in non-XR regressions.
-
-> Note: there is already an *unrelated* "SBS 3D" feature that uses an on-device AI
-> depth model (MiDaS) to synthesize 3D from a flat 2D stream. The XR work is different:
-> the PC sends a **real** SBS frame and the XR compositor presents it to each eye.
-> Do not confuse the two. See "Existing stereo pipeline" below.
+Implication: since every device running this build is an XR device, the XR route is the
+**primary** experience. Non-XR phone/tablet paths are no longer the target. Keep the two SBS
+producers distinct: Host SBS is decoded directly into SceneCore, while Client SBS runs the
+MiDaS/depth/reprojection pipeline on the headset before SceneCore splits the packed result.
 
 ## Build & test
 
@@ -49,7 +46,16 @@ modes) still exist but are no longer the target; don't invest in non-XR regressi
 - Build: `JAVA_HOME=<jdk> ./gradlew :app:assembleNonRoot_gameDebug` (Windows: `gradlew.bat`).
   The Bash tool here runs Git Bash; the `gradlew` shell script works from it.
 - Install/run on a connected device: `./gradlew :app:installNonRoot_gameDebug`. The launcher
-  activity is `com.limelight.PcView`. (The XR control bar only appears inside an active stream.)
+  activity is `com.limelight.PcView`. This is an update-install of
+  `com.limelight.noirdebug` and preserves its preferences, certificates, pairings, and profiles.
+  (The XR control bar only appears inside an active stream.)
+- **Physical-headset data safety:** never run `connectedNonRoot_gameDebugAndroidTest`,
+  `uninstallNonRoot_gameDebug`, `adb uninstall com.limelight.noirdebug`, or
+  `pm clear com.limelight.noirdebug` on the user's Galaxy XR.
+  Gradle's connected-test task uninstalls the target package after testing and erases all app
+  data. Follow the update-install/manual-instrumentation procedure in
+  [docs/client-sbs-evaluation.md](docs/client-sbs-evaluation.md), then uninstall only the
+  `.test` package.
 - Unit tests (JVM/Robolectric, no emulator): `./gradlew test` aggregates all `*UnitTest` tasks.
   Per flavor: `:app:testNonRoot_gameDebugUnitTest` / `:app:testRootDebugUnitTest`. Single test:
   `./gradlew :app:testNonRoot_gameDebugUnitTest --tests "com.limelight.<pkg>.<Class>"`. Tests live
@@ -69,6 +75,9 @@ Native streaming core (C) lives under `app/src/main/jni/`:
 - `moonlight-core/moonlight-common-c` — git submodule, the shared Moonlight protocol/RTSP/
   decoder-feed engine. Built via `Android.mk` (ndkBuild).
 - `evdev_reader` — raw input for the rooted flavor.
+- `client_sbs_gpu` - lazily loaded native LiteRT 2.x GL/OpenCL bridge for Client SBS. It is
+  deliberately separate from `moonlight-core`, so a depth-runtime failure cannot prevent normal
+  streaming or app startup.
 - Bridged into Java through `com.limelight.nvstream.jni.MoonBridge` (JNI).
 
 Java/Android client under `app/src/main/java/com/limelight/`:
@@ -89,30 +98,32 @@ Java/Android client under `app/src/main/java/com/limelight/`:
 - `PcView.java` / `AppView.java` / `grid/` — host list and app grid (pre-stream UI).
 - `computers/`, `discovery/` — host pairing, mDNS discovery.
 
-Assets: `app/src/main/assets/midas-midas-v2-w8a8.tflite` (depth model),
+Assets: `app/src/main/assets/midas-midas-v2-float.tflite` (Client SBS depth model),
 `app/src/main/assets/config/`.
 
-## Existing stereo pipeline (read before changing rendering)
+## Current XR stereo pipeline (read before changing rendering)
 
-The video surface flow:
-1. `Game` creates `StreamContainer` and calls `streamContainer.init(this, prefConfig)`.
-2. `StreamContainer` branches on `prefConfig.renderMode`
-   (`render_mode_list` pref, values `0/1/2`):
-   - `MODE_2D` (0): a plain `SurfaceView`; the decoder renders directly to its surface.
-   - `MODE_AI_3D` (1) / `MODE_AI_3D_MOVIE` (2): a `GLSurfaceView` with `Stereo3DRenderer`.
-     The decoder renders into an internal `Surface` backed by a `SurfaceTexture`
-     (external OES texture); the renderer runs MiDaS depth inference and DIBR to draw a
-     synthesized left/right SBS image onto the GLSurfaceView.
-3. When the surface is ready, `StreamContainer` calls back and `Game` does
-   `decoderRenderer.setRenderTarget(streamContainer.getSurface())` then starts `conn`.
+`Game` creates one `StreamContainer`/`XrStreamPresenter` route. Presentation mode is selected from
+the in-headset control bar and persisted per machine/app:
 
-Key contract: **whoever owns the on-screen presentation provides a `Surface` to
-`MediaCodecDecoderRenderer.setRenderTarget()`.** The XR feature plugs in here by
-providing an XR-compositor-backed surface instead of a `SurfaceView`/`GLSurfaceView`.
+- **Normal**, **Host SBS Raw**, and **Host SBS AI** render MediaCodec directly into the SceneCore
+  `SurfaceEntity`; the latter two use `StereoMode.SIDE_BY_SIDE`.
+- **Client SBS AI** temporarily parks MediaCodec on a persistent dummy surface, hands the decoded
+  stream to `Stereo3DRenderer` through an external-OES `SurfaceTexture`, and presents its packed
+  `2W x H` output on the same XR entity.
 
-Stereo-related preferences: `renderMode`, `parallax_depth`, `convergence_ratio`,
-`balance_shift` (see `PreferenceConfiguration.java`). Render-mode strings/arrays in
-`res/values/arrays.xml` (`render_mode_names`/`render_mode_values`) and `res/values/strings.xml`.
+Client SBS mirrors Apollo's fixed production depth/profile math. It has no user-facing strength,
+convergence, balance, or movie-mode parameters; normalization, convergence, and pop compensation
+are adaptive GPU state in `ClientSbsGpuDepthProcessor`. Production Client SBS is a single native
+LiteRT path: packed Float32 GL tensors at the model boundary, OpenCL FP16 inference internally, and
+GLES depth/profile/reprojection. There is no managed Java LiteRT, QNN, CPU, PBO-readback, or
+result-worker fallback. If native GPU depth is unavailable, depth fails closed and presentation
+remains usable as flat output; Normal and Host SBS modes remain independent. Do not reintroduce the
+deleted legacy preference keys, shader uniforms, or managed fallback path.
+
+Key contract: **whoever owns presentation provides the current `Surface` to
+`MediaCodecDecoderRenderer.setRenderTarget()`.** Mode switches are guarded asynchronous surface
+handoffs; keep the decoder target, SceneCore surface size, and renderer generation synchronized.
 
 ## Conventions
 

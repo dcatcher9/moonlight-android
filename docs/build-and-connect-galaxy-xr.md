@@ -84,8 +84,8 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   ```bash
   "$ADB" shell am start -n com.limelight.noirdebug/com.limelight.PcView
   ```
-- **Render mode** is chosen by the pref `render_mode_list` in
-  `shared_prefs/com.limelight.noirdebug_preferences.xml` (`3` = XR SBS). Read/write it via
-  `run-as com.limelight.noirdebug`. The XR control bar only appears **inside an active stream**.
+- **Presentation mode** is chosen from the XR control bar inside an active stream (Normal,
+  Host SBS Raw, Host SBS AI, or Client SBS AI) and is restored per machine/app. The old
+  `render_mode_list` and client depth-parameter preferences are no longer used.
 - From **Git Bash**, prefix adb commands that pass Unix-style paths (e.g. `run-as`, `/data/...`)
   with `MSYS_NO_PATHCONV=1` so MSYS doesn't mangle the paths.

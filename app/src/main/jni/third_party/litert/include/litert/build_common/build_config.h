@@ -1,0 +1,8 @@
+// Generated locally for the prebuilt LiteRT 2.1.6 Android C API headers.
+#ifndef LITERT_BUILD_COMMON_BUILD_CONFIG_H_
+#define LITERT_BUILD_COMMON_BUILD_CONFIG_H_
+
+#define LITERT_BUILD_CONFIG_DISABLE_GPU 0
+#define LITERT_BUILD_CONFIG_DISABLE_NPU 0
+
+#endif  // LITERT_BUILD_COMMON_BUILD_CONFIG_H_

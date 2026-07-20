@@ -165,39 +165,6 @@
             app:iconSpaceReserved="false" />
         <!-- SBS render-mode selection removed: the stream always uses the XR route (starts in the
              Normal/2D presentation) and modes are switched from the in-headset control bar. -->
-        <com.limelight.preferences.SeekBarPreference
-            android:key="parallax_depth"
-            android:dialogMessage=""
-            android:text="%"
-            android:title="@string/title_render_mode_strength_title"
-            android:summary="@string/title_render_mode_strength_description"
-            android:defaultValue="50"
-            android:max="100"
-            seekbar:min="1"
-            seekbar:step="1"
-            app:iconSpaceReserved="false" />
-        <com.limelight.preferences.SeekBarPreference
-            android:key="convergence_ratio"
-            android:dialogMessage=""
-            android:text="%"
-            android:title="@string/title_render_mode_convergence_title"
-            android:summary="@string/title_render_mode_convergence_description"
-            android:defaultValue="50"
-            android:max="100"
-            seekbar:min="0"
-            seekbar:step="1"
-            app:iconSpaceReserved="false" />
-        <com.limelight.preferences.SeekBarPreference
-            android:key="balance_shift"
-            android:dialogMessage=""
-            android:text="%"
-            android:title="@string/title_render_mode_balance_shift_title"
-            android:summary="@string/title_render_mode_balance_shift_description"
-            android:defaultValue="50"
-            android:max="100"
-            seekbar:min="-0"
-            seekbar:step="1"
-            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_enable_hdr"

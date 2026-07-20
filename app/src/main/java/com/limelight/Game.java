@@ -28,6 +28,7 @@ import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
+import com.limelight.binding.video.StreamPerformanceSnapshot;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.StreamConfiguration;
@@ -51,6 +52,7 @@ import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
+import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
@@ -267,6 +269,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public static final String EXTRA_PC_UUID = "UUID";
     public static final String EXTRA_PC_NAME = "PcName";
     public static final String EXTRA_APP_HDR = "HDR";
+    /** True only when the host reported this same app as its currently resumable session. */
+    public static final String EXTRA_RESUME_EXISTING_SESSION = "ResumeExistingSession";
     public static final String EXTRA_SERVER_CERT = "ServerCert";
     public static final String EXTRA_VDISPLAY = "VirtualDisplay";
     public static final String EXTRA_SERVER_COMMANDS = "ServerCommands";
@@ -3807,9 +3811,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         });
 
-        // Host SBS is normally switched live from the XR control bar. A saved Host SBS AI
-        // presentation preference is carried in the earlier launch/resume HTTP request, so no
-        // duplicate control message is needed after the connection starts.
+        // Host SBS is normally switched live from the XR control bar. On a host-confirmed resume,
+        // a saved Host SBS AI presentation preference is carried in the earlier HTTP request, so
+        // no duplicate control message is needed after the connection starts. Fresh launches
+        // always request the Normal presentation.
     }
 
     @Override
@@ -4090,12 +4095,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void onPerfUpdate(final String text) {
+        onPerfUpdate(null, text);
+    }
+
+    @Override
+    public void onPerfUpdate(final StreamPerformanceSnapshot snapshot, final String text) {
+        // Drain the SBS window on this same performance callback, before UI scheduling can skew
+        // its boundary relative to the immutable stream snapshot.
+        final StreamContainer sampledContainer = streamContainer;
+        final Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbsSnapshot =
+                sampledContainer != null
+                        ? sampledContainer.sampleClientSbsPerformance() : null;
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 // XR stats panel so the "Stats" bar toggle can show it in the headset.
-                if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                    streamContainer.getXrPresenter().setStatsText(text, streamHdrActive);
+                if (sampledContainer == streamContainer && sampledContainer != null
+                        && sampledContainer.getXrPresenter() != null) {
+                    sampledContainer.getXrPresenter().setStats(
+                            snapshot, clientSbsSnapshot, text, streamHdrActive);
                 }
             }
         });

@@ -30,9 +30,9 @@ public class XrViewStateStoreTest {
 
     @Test
     public void stateIsIsolatedByMachineAndApp() {
-        Intent firstIntent = intent("machine-a", "app-a");
-        Intent secondIntent = intent("machine-a", "app-b");
-        Intent thirdIntent = intent("machine-b", "app-a");
+        Intent firstIntent = resumeIntent("machine-a", "app-a");
+        Intent secondIntent = resumeIntent("machine-a", "app-b");
+        Intent thirdIntent = resumeIntent("machine-b", "app-a");
         XrViewStateStore first = new XrViewStateStore(context, firstIntent);
         XrViewStateStore second = new XrViewStateStore(context, secondIntent);
         XrViewStateStore third = new XrViewStateStore(context, thirdIntent);
@@ -54,7 +54,7 @@ public class XrViewStateStoreTest {
 
     @Test
     public void corruptModeFailsClosedToNormal() {
-        Intent intent = intent("machine-a", "app-a");
+        Intent intent = resumeIntent("machine-a", "app-a");
         String key = XrViewStateStore.buildKey(intent);
         SharedPreferences preferences = context.getSharedPreferences(
                 XrViewStateStore.PREFS_NAME, Context.MODE_PRIVATE);
@@ -70,6 +70,24 @@ public class XrViewStateStoreTest {
     }
 
     @Test
+    public void freshConnectionStartsNormalButKeepsHeightAndSavedModeForResume() {
+        Intent freshIntent = intent("machine-a", "app-a");
+        XrViewStateStore freshStore = new XrViewStateStore(context, freshIntent);
+        freshStore.savePresentation(1.8f, XrViewStateStore.Mode.CLIENT_SBS_AI);
+
+        XrViewStateStore.State freshState = freshStore.restore();
+
+        assertEquals(1.8f, freshState.panelHeightMeters, 0.0001f);
+        assertEquals(XrViewStateStore.Mode.NORMAL, freshState.presentationMode);
+
+        XrViewStateStore.State resumedState = new XrViewStateStore(
+                context, resumeIntent("machine-a", "app-a")).restore();
+
+        assertEquals(1.8f, resumedState.panelHeightMeters, 0.0001f);
+        assertEquals(XrViewStateStore.Mode.CLIENT_SBS_AI, resumedState.presentationMode);
+    }
+
+    @Test
     public void onlyHostAiRequestsPackedHostOutput() {
         assertEquals(0, XrViewStateStore.desiredHostSbsWireMode(XrViewStateStore.Mode.NORMAL));
         assertEquals(0, XrViewStateStore.desiredHostSbsWireMode(XrViewStateStore.Mode.HOST_SBS_RAW));
@@ -80,7 +98,7 @@ public class XrViewStateStoreTest {
 
     @Test
     public void panelResizeDoesNotOverwriteDurablePresentationMode() {
-        XrViewStateStore store = new XrViewStateStore(context, intent("machine-a", "app-a"));
+        XrViewStateStore store = new XrViewStateStore(context, resumeIntent("machine-a", "app-a"));
         store.savePresentation(1.75f, XrViewStateStore.Mode.HOST_SBS_AI);
 
         store.saveHeight(2.25f);
@@ -92,7 +110,7 @@ public class XrViewStateStoreTest {
 
     @Test
     public void explicitStartupFailureResetPreservesHeight() {
-        XrViewStateStore store = new XrViewStateStore(context, intent("machine-a", "app-a"));
+        XrViewStateStore store = new XrViewStateStore(context, resumeIntent("machine-a", "app-a"));
         store.savePresentation(1.75f, XrViewStateStore.Mode.HOST_SBS_AI);
 
         store.resetPresentationToNormal(1.75f);
@@ -118,5 +136,10 @@ public class XrViewStateStoreTest {
         return new Intent()
                 .putExtra(Game.EXTRA_PC_UUID, machine)
                 .putExtra(Game.EXTRA_APP_UUID, app);
+    }
+
+    private static Intent resumeIntent(String machine, String app) {
+        return intent(machine, app)
+                .putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, true);
     }
 }

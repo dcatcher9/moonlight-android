@@ -4,7 +4,9 @@ import android.os.SystemClock;
 
 class VideoStats {
 
-    long decoderTimeMs;
+    long decoderTimeNs;
+    long maxDecoderTimeNs;
+    int decoderLatencySamples;
     long totalTimeMs;
     int totalFrames;
     int totalFramesReceived;
@@ -18,7 +20,9 @@ class VideoStats {
     long measurementStartTimestamp;
 
     void add(VideoStats other) {
-        this.decoderTimeMs += other.decoderTimeMs;
+        this.decoderTimeNs += other.decoderTimeNs;
+        this.maxDecoderTimeNs = Math.max(this.maxDecoderTimeNs, other.maxDecoderTimeNs);
+        this.decoderLatencySamples += other.decoderLatencySamples;
         this.totalTimeMs += other.totalTimeMs;
         this.totalFrames += other.totalFrames;
         this.totalFramesReceived += other.totalFramesReceived;
@@ -43,7 +47,9 @@ class VideoStats {
     }
 
     void copy(VideoStats other) {
-        this.decoderTimeMs = other.decoderTimeMs;
+        this.decoderTimeNs = other.decoderTimeNs;
+        this.maxDecoderTimeNs = other.maxDecoderTimeNs;
+        this.decoderLatencySamples = other.decoderLatencySamples;
         this.totalTimeMs = other.totalTimeMs;
         this.totalFrames = other.totalFrames;
         this.totalFramesReceived = other.totalFramesReceived;
@@ -58,7 +64,9 @@ class VideoStats {
     }
 
     void clear() {
-        this.decoderTimeMs = 0;
+        this.decoderTimeNs = 0;
+        this.maxDecoderTimeNs = 0;
+        this.decoderLatencySamples = 0;
         this.totalTimeMs = 0;
         this.totalFrames = 0;
         this.totalFramesReceived = 0;

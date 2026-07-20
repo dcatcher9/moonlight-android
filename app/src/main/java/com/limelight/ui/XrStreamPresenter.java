@@ -12,8 +12,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.SeekBar;
-import android.widget.Switch;
+import android.widget.ScrollView;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
@@ -48,16 +47,21 @@ import androidx.xr.scenecore.SurfaceEntity;
 import com.limelight.LimeLog;
 import com.limelight.PcView;
 import com.limelight.R;
+import com.limelight.Game;
+import com.limelight.binding.video.StreamPerformanceSnapshot;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.utils.Stereo3DRenderer;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * Presentation owner for the single XR route ({@code MODE_XR}): a new stream restores the last
- * successful per-machine/app presentation preference. The user can
- * switch Host SBS Raw/AI and Client SBS AI from the in-headset control bar.
+ * Presentation owner for the single XR route ({@code MODE_XR}). Fresh host connections start in
+ * Normal; only a host-confirmed resume of the same app restores its last successful per-machine/app
+ * presentation preference. The user can switch Host SBS Raw/AI and Client SBS AI from the
+ * in-headset control bar.
  *
  * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
  * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR
@@ -94,18 +98,19 @@ public class XrStreamPresenter {
     private static final int TILE_IDLE_COLOR = 0xCC1E2630;    // resting tile fill
     private static final int TILE_ACTIVE_COLOR = 0xFF2C72E0;  // active (selected) mode tile fill
     private static final int TILE_ACTIVE_BORDER_COLOR = 0xFFFFFFFF;  // border on the active mode tile
-    private static final float STATS_WIDTH_METERS = 0.95f;    // performance-stats panel beside quad
-    private static final float STATS_HEIGHT_METERS = 1.1f;
-    private static final float STATS_GAP_METERS = 0.10f;      // gap between quad edge and stats panel
-    // 2D→3D adjustment sub-panel (Client SBS only), docked under the control bar.
-    private static final float ADJUST_WIDTH_METERS = 1.7f;
-    private static final float ADJUST_HEIGHT_METERS = 0.9f;
-    private static final float ADJUST_GAP_METERS = 0.06f;     // gap between bar bottom and sub-panel
-    private static final String CLIENT_SBS_HALF_WIDTH_KEY = "xr_client_sbs_half_width";
-    // Effect-parameter ids (map to the shared prefConfig fields the renderer reads every frame).
-    private static final int PARAM_DEPTH = 0;
-    private static final int PARAM_CONVERGENCE = 1;
-    private static final int PARAM_BALANCE = 2;
+    // The stats panel sits below the unchanged control bar. Match the cinema panel's landscape
+    // shape so both metric columns remain in the user's central field of view instead of extending
+    // off to the far right.
+    private static final float STATS_WIDTH_METERS = 3.40f;
+    private static final float STATS_HEIGHT_METERS = 0.90f;
+    private static final float STATS_GAP_METERS = 0.10f;
+
+    // SceneCore must copy every pixel submitted to the packed SBS surface. Rendering two native
+    // 4K eye images would create a 7680x2160 swapchain and make the mobile GPU move more than
+    // 60 MiB for every decoder-driven draw, even when the matched depth/color pair is unchanged.
+    // A 1920-wide eye still exceeds the useful angular resolution of the virtual cinema panel and
+    // cuts reprojection, cache, blit, and compositor work by 4x for a 4K stream.
+    private static final int MAX_CLIENT_SBS_EYE_WIDTH = 1920;
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -125,16 +130,19 @@ public class XrStreamPresenter {
     /** The control-bar items (one clickable tile each, all hosted in {@link #barPanel}). */
     private final List<BarItem> barItems = new ArrayList<>();
 
-    /** Sub-panel under the quad with live 2D→3D effect sliders; shown only in Client SBS. */
-    private PanelEntity adjustPanel;
-    private boolean adjustPanelVisible;
-
-    /** Floating performance-stats panel beside the quad and its table; toggled by the Stats tile. */
+    /** Wide performance-stats panel below the control bar; toggled by the Stats tile. */
     private PanelEntity statsPanel;
+    private TextView statsTitle;
     private TableLayout statsTable;
+    private TableLayout statsTableSecondary;
+    private TableLayout activeStatsTable;
+    private boolean reuseStatsRows;
+    private int primaryStatsRowCursor;
+    private int secondaryStatsRowCursor;
     private BarItem statsItem;
-    private BarItem clientSbsAiItem;
     private boolean statsVisible;
+    private final DevicePerformanceSampler devicePerformanceSampler =
+            new DevicePerformanceSampler();
 
     /** Small centered panel shown above the quad while the host loads an engine or initializes
      *  the device-specific 3D pipeline
@@ -154,7 +162,10 @@ public class XrStreamPresenter {
     private static final int STATS_LABEL_COLOR = 0xFF9FB3C8;  // muted blue-grey for row labels
     private static final int STATS_VALUE_COLOR = 0xFFFFFFFF;  // white for values
     private static final int STATS_ON_COLOR = 0xFF5CD65C;     // green for "on"/HDR active
-    private static final float STATS_TEXT_SP = 30f;
+    private static final int STATS_WARN_COLOR = 0xFFE0B020;
+    private static final int STATS_ERROR_COLOR = 0xFFE05A5A;
+    private static final int STATS_UNAVAILABLE_COLOR = 0xFF71808F;
+    private static final float STATS_TEXT_SP = 21f;
     /** Comfortable cinema-preset quad height in meters; mode switches keep this height and vary
      *  width. Shared by the initial placement and Cinema View so both land at the same size. Tune
      *  by feel on the headset (at the ~2 m default distance, 2.0 m ≈ a large cinema screen). */
@@ -179,10 +190,6 @@ public class XrStreamPresenter {
     /** A saved Client SBS presentation to re-apply once the decoder has produced a valid Normal
      *  frame. Restoring before then would split a still-mono startup frame. */
     private PresenterMode deferredPresenterMode = PresenterMode.NORMAL;
-
-    /** Half-width Client SBS: render each eye at W/2 into a W×H surface instead of full W into 2W×H.
-     *  ~Halves GPU load and heat at slightly softer per-eye sharpness. Persisted; default off. */
-    private boolean clientSbsHalfWidth;
 
     /** Debounce window for mode-tile taps: a switch starts an async surface handoff, so ignore a
      *  second tap that lands within this window (double-tap / impatient re-tap). */
@@ -211,11 +218,10 @@ public class XrStreamPresenter {
         this.prefConfig = prefConfig;
         this.listener = listener;
         this.viewStateStore = new XrViewStateStore(activity, activity.getIntent());
-        this.clientSbsHalfWidth = androidx.preference.PreferenceManager
-                .getDefaultSharedPreferences(activity).getBoolean(CLIENT_SBS_HALF_WIDTH_KEY, false);
         restoreViewState();
-        // Restore direct Host/Raw presentation immediately. Client SBS is deferred until after
-        // frame 1 because it requires a live decoder-to-GL handoff.
+        // On a host-confirmed resume, restore direct Host/Raw presentation immediately. Client SBS
+        // is deferred until after frame 1 because it requires a live decoder-to-GL handoff. A
+        // fresh connection's state store returns Normal regardless of any older saved mode.
     }
 
     /**
@@ -266,7 +272,7 @@ public class XrStreamPresenter {
         // A saved direct Host/Raw preference can be correct from frame 1. Switching to a stereo
         // mode changes BOTH the compositor split AND the
         // frame the host sends — Host SBS AI -> a packed 2W' x H' side-by-side frame (capped to
-        // the encoder max), Client SBS -> on-device depth packed into a 2W surface. selectMode
+        // the encoder max), Client SBS -> on-device depth packed into its capped surface. selectMode
         // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
         //
         // Quad aspect handling differs by host-SBS flavor:
@@ -411,28 +417,15 @@ public class XrStreamPresenter {
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
 
         normal.onTap = () -> selectMode(normal);
-        clientSbsAi.onTap = () -> {
-            if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
-                toggleAdjustPanel();
-            } else {
-                selectMode(clientSbsAi);
-            }
-        };
+        clientSbsAi.onTap = () -> selectMode(clientSbsAi);
         hostSbsRaw.onTap = () -> selectMode(hostSbsRaw);
         hostSbsAi.onTap = () -> selectMode(hostSbsAi);
-        clientSbsAi.onExpand = () -> {
-            selectMode(clientSbsAi);
-            if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
-                toggleAdjustPanel();
-            }
-        };
         stats.onTap = this::toggleStats;
         cinemaView.onTap = this::applyCinemaView;
         dump.onTap = XrStreamPresenter::requestHostDebugDump;
         machines.onTap = this::returnToMachineSelection;
         disconnect.onTap = activity::finish;
         statsItem = stats;
-        clientSbsAiItem = clientSbsAi;
 
         barItems.clear();
         barItems.add(normal);
@@ -490,13 +483,12 @@ public class XrStreamPresenter {
 
         createStatsPanel(videoHeightMeters);
         createDepthStatusPanel(videoHeightMeters);
-        createAdjustPanel(videoHeightMeters);
     }
 
     /**
-     * Floating performance-stats panel above the quad, fed by {@link #setStatsText} (which
-     * {@code Game.onPerfUpdate} forwards to). Hidden until the Stats tile toggles it. The 2D perf
-     * overlay can't be used in XR because the activity's main panel is hidden.
+     * Wide performance panel below the unchanged control bar. Unlike the legacy 2D overlay, this consumes
+     * typed stream and Client-SBS snapshots so every rate and latency keeps its real unit and
+     * stage meaning. Hidden until the Stats tile toggles it.
      */
     private void createStatsPanel(float videoHeightMeters) {
         LinearLayout root = new LinearLayout(activity);
@@ -505,22 +497,46 @@ public class XrStreamPresenter {
         int p = dp(14);
         root.setPadding(p, p, p, p);
 
-        TextView title = new TextView(activity);
-        title.setText("Performance");
-        title.setTextColor(TILE_ACTIVE_COLOR);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP + 2f);
-        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
-        title.setPadding(0, 0, 0, dp(8));
-        root.addView(title);
+        statsTitle = new TextView(activity);
+        statsTitle.setText("Performance");
+        statsTitle.setTextColor(TILE_ACTIVE_COLOR);
+        statsTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP + 3f);
+        statsTitle.setTypeface(statsTitle.getTypeface(), android.graphics.Typeface.BOLD);
+        statsTitle.setPadding(0, 0, 0, dp(6));
+        root.addView(statsTitle);
 
-        statsTable = new TableLayout(activity);
-        statsTable.setColumnShrinkable(1, true);
-        root.addView(statsTable);
+        LinearLayout columns = new LinearLayout(activity);
+        columns.setOrientation(LinearLayout.HORIZONTAL);
+
+        statsTable = createStatsTable();
+        statsTableSecondary = createStatsTable();
+        activeStatsTable = statsTable;
+        LinearLayout.LayoutParams leftColumn = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        leftColumn.setMarginEnd(dp(18));
+        columns.addView(statsTable, leftColumn);
+        columns.addView(statsTableSecondary, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+        ScrollView scroll = new ScrollView(activity);
+        scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(true);
+        scroll.addView(columns, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
         statsPanel = PanelEntity.create(
                 session, root, new FloatSize2d(STATS_WIDTH_METERS, STATS_HEIGHT_METERS),
                 "xr-stats", statsPose(videoHeightMeters), surfaceEntity);
         statsPanel.setEnabled(statsVisible);
+    }
+
+    private TableLayout createStatsTable() {
+        TableLayout table = new TableLayout(activity);
+        table.setColumnShrinkable(0, true);
+        table.setColumnShrinkable(1, true);
+        table.setColumnStretchable(1, true);
+        return table;
     }
 
     /**
@@ -554,10 +570,11 @@ public class XrStreamPresenter {
         depthStatusPanel.setEnabled(false);  // hidden until the host reports a loading phase
     }
 
-    /** Local pose of the depth-status panel: centered just below the control bar. */
+    /** Keep transient depth-engine status above the video so it cannot cover the control bar or
+     *  the performance panel stacked beneath it. */
     private Pose depthStatusPose(float videoHeightMeters) {
-        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS - (BAR_HEIGHT_METERS / 2.0f);
-        float y = barBottomY - BAR_GAP_METERS - (DEPTH_STATUS_HEIGHT_METERS / 2.0f);
+        float y = (videoHeightMeters / 2.0f) + BAR_GAP_METERS
+                + (DEPTH_STATUS_HEIGHT_METERS / 2.0f);
         return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
@@ -611,6 +628,17 @@ public class XrStreamPresenter {
     public void toggleStats() {
         statsVisible = !statsVisible;
         prefConfig.enablePerfOverlay = statsVisible;
+        if (statsVisible) {
+            // Start CPU and Client-SBS windows at the moment the panel opens. Otherwise the first
+            // value would average all work performed while the panel was hidden.
+            devicePerformanceSampler.resetCpuBaseline();
+            if (activity instanceof Game) {
+                StreamContainer container = ((Game) activity).getStreamContainer();
+                if (container != null) {
+                    container.sampleClientSbsPerformance();
+                }
+            }
+        }
         if (statsPanel != null) {
             statsPanel.setEnabled(statsVisible);
         }
@@ -627,11 +655,248 @@ public class XrStreamPresenter {
      * @param hdrActive whether the <i>negotiated stream</i> is actually HDR (10-bit) — this reflects
      *                  what the host is really sending, not just the {@code enableHdr} request setting.
      */
+    /**
+     * Rebuilds the XR table from typed snapshots captured on the same decoder tick. Rates are
+     * completed work per second; latency rows are average / maximum for that sampling window.
+     * GPU command-submit timings are explicitly named because SceneCore does not expose actual
+     * compositor presentation timestamps.
+     */
+    public void setStats(StreamPerformanceSnapshot stream,
+                         Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbs,
+                         String legacyText, boolean hdrActive) {
+        if (statsTable == null) {
+            return;
+        }
+        DevicePerformanceSampler.Snapshot device = devicePerformanceSampler.sample();
+
+        beginStatsRows();
+        float windowSeconds = stream != null ? stream.getElapsedMs() / 1000.0f
+                : clientSbs != null ? clientSbs.windowSeconds : 0.0f;
+        if (statsTitle != null) {
+            statsTitle.setText(windowSeconds > 0.0f
+                    ? String.format(Locale.US, "Performance | %s | %.2f s",
+                    presenterModeName(currentPresenterMode), windowSeconds)
+                    : "Performance | " + presenterModeName(currentPresenterMode));
+        }
+
+        addStatsSection("DEVICE LOAD");
+        if (device.appCpuAvailable) {
+            addStatsRow("App CPU",
+                    String.format(Locale.US, "%.2f cores | %.1f%% of %d",
+                            device.appCpuCoreEquivalent, device.appCpuPercentOfCapacity,
+                            device.cpuCapacityCores),
+                    utilizationColor(device.appCpuPercentOfCapacity));
+        } else {
+            addStatsRow("App CPU", "Warming up", STATS_UNAVAILABLE_COLOR);
+        }
+        if (device.deviceGpuUtilizationAvailable) {
+            addStatsRow("GPU busy (device)",
+                    String.format(Locale.US, "%.1f%%", device.deviceGpuUtilizationPercent),
+                    utilizationColor(device.deviceGpuUtilizationPercent));
+        } else {
+            addStatsRow("GPU busy (device)", "No readable utilization metric",
+                    STATS_UNAVAILABLE_COLOR);
+        }
+        if (device.gpuFrequencyAvailable) {
+            addStatsRow("GPU clock",
+                    String.format(Locale.US, "%.0f MHz", device.gpuFrequencyHz / 1_000_000.0),
+                    STATS_LABEL_COLOR);
+        }
+
+        String backend = clientSbs != null ? clientSbs.backend
+                : currentPresenterMode == PresenterMode.CLIENT_SBS_AI ? "Initializing" : "Inactive";
+        if (device.deviceNpuUtilizationAvailable) {
+            addStatsRow("NPU busy (device)",
+                    String.format(Locale.US, "%.1f%% global (not app-attributed)",
+                            device.deviceNpuUtilizationPercent),
+                    utilizationColor(device.deviceNpuUtilizationPercent));
+        } else {
+            addStatsRow("NPU busy (device)", "No readable utilization metric",
+                    STATS_UNAVAILABLE_COLOR);
+        }
+        addStatsRow("Depth backend", depthBackendName(backend), backendColor(backend));
+        if (clientSbs != null && clientSbs.active && clientSbs.inferenceCompleteFps > 0.0f) {
+            double inferenceDuty = clientSbs.inferenceCompleteFps
+                    * clientSbs.averageInferenceMs / 10.0;
+            addStatsRow("LiteRT run wall duty",
+                    String.format(Locale.US, "%.1f%% worker wall incl. GL dependencies",
+                            Math.max(0.0, Math.min(100.0, inferenceDuty))),
+                    utilizationColor(inferenceDuty));
+        }
+
+        ensureThermalScanned();
+        int cpuTemp = maxThermalC(cpuThermalFiles);
+        int gpuTemp = maxThermalC(gpuThermalFiles);
+        if (cpuTemp != TEMP_UNKNOWN) {
+            addStatsRow("CPU temperature", cpuTemp + "\u00B0C", tempColor(cpuTemp));
+        }
+        if (gpuTemp != TEMP_UNKNOWN) {
+            addStatsRow("GPU temperature", gpuTemp + "\u00B0C", tempColor(gpuTemp));
+        }
+
+        addStatsSection("STREAM / NETWORK");
+        addStatsRow("Mode", presenterModeName(currentPresenterMode), STATS_VALUE_COLOR);
+        addStatsRow("Negotiated ceiling",
+                    String.format(Locale.US, "%.0f fps | %.1f Mbps max",
+                            prefConfig.fps, prefConfig.bitrate / 1000.0f),
+                STATS_VALUE_COLOR);
+        float refreshRate = displayRefreshRate();
+        if (refreshRate > 0.0f) {
+            addStatsRow("Display refresh",
+                    String.format(Locale.US, "%.1f Hz (not present FPS)", refreshRate),
+                    STATS_VALUE_COLOR);
+        }
+
+        if (stream != null) {
+            addStatsRow("Sample windows",
+                    clientSbs != null
+                            ? String.format(Locale.US, "stream %.2f s | SBS %.2f s",
+                                    stream.getElapsedMs() / 1000.0f,
+                                    clientSbs.windowSeconds)
+                            : String.format(Locale.US, "stream %.2f s",
+                                    stream.getElapsedMs() / 1000.0f),
+                    STATS_LABEL_COLOR);
+            addStatsRow("Source",
+                    String.format(Locale.US, "%d x %d | %s | %s range",
+                            stream.getSourceWidth(), stream.getSourceHeight(),
+                            hdrActive ? "HDR" : "SDR", stream.getVideoRange()),
+                    hdrActive ? STATS_ON_COLOR : STATS_VALUE_COLOR);
+            addStatsRow("Decoder", stream.getDecoderName(), STATS_VALUE_COLOR);
+            addStatsRow("App network throughput",
+                    stream.hasBandwidth()
+                            ? String.format(Locale.US, "%.2f Mbps RX+TX",
+                                    stream.getBandwidthMbps())
+                            : "Warming up",
+                    stream.hasBandwidth() ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR);
+            addStatsRow("Network frame loss",
+                    String.format(Locale.US, "%.3f%%", stream.getNetworkLossPercent()),
+                    lossColor(stream.getNetworkLossPercent()));
+            addStatsRow("Network RTT",
+                    stream.hasEstimatedRtt()
+                            ? String.format(Locale.US, "%d ms | variance %d ms",
+                                    stream.getEstimatedRttMs(),
+                                    stream.getEstimatedRttVarianceMs())
+                            : "Unavailable",
+                    stream.hasEstimatedRtt() ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR);
+        } else {
+            addStatsRow("Decoder metrics", "Warming up", STATS_UNAVAILABLE_COLOR);
+            appendLegacyStatsFallback(legacyText);
+        }
+
+        addStatsSection("PIPELINE EVENTS / SECOND");
+        if (stream != null) {
+            addRateRow("Sender sequence (includes loss)", stream.getStreamSequenceFps());
+            addRateRow("Network receive", stream.getReceivedFps());
+            addRateRow("MediaCodec release (not present)", stream.getDecoderReleaseFps());
+        }
+        if (clientSbs != null && clientSbs.active) {
+            addRateRow("Surface callback", clientSbs.surfaceCallbackFps);
+            addRateRow("GL video latch", clientSbs.glLatchFps);
+            addRateRow("Matched color capture", clientSbs.captureSubmitFps);
+            addRateRow("LiteRT worker start", clientSbs.inferenceInputStartFps);
+            addRateRow("GPU input-pack submit", clientSbs.preprocessCompleteFps);
+            addRateRow("LiteRT worker complete", clientSbs.inferenceCompleteFps);
+            addRateRow("GL output-fence consume", clientSbs.postprocessStartFps);
+            addRateRow("GPU depth/profile dispatch", clientSbs.postprocessCompleteFps);
+            addRateRow("Depth pair adopt", clientSbs.depthAdoptFps);
+            addRateRow("New SBS compose", clientSbs.newSbsComposeFps);
+            addRateRow("GL output submit", clientSbs.glOutputSubmitFps);
+        } else {
+            addStatsRow("Client SBS stages", "Inactive", STATS_UNAVAILABLE_COLOR);
+        }
+
+        if (clientSbs != null && clientSbs.active) {
+            addStatsSection("CLIENT SBS DEPTH / WARP");
+            if (clientSbs.depthRenderingActive) {
+                addStatsRow("Depth profile",
+                        "GPU-resident and active | no synchronous numeric readback",
+                        STATS_ON_COLOR);
+            } else {
+                addStatsRow("Depth profile", "Not ready; duplicated mono output",
+                        STATS_UNAVAILABLE_COLOR);
+            }
+        }
+
+        activeStatsTable = statsTableSecondary;
+        addStatsSection("STAGE LATENCY (AVERAGE / MAXIMUM)");
+        if (stream != null) {
+            if (stream.hasHostProcessingLatency()) {
+                addStatsRow("Host processing",
+                        String.format(Locale.US, "%.2f / %.2f ms | min %.2f",
+                                stream.getHostProcessingAverageMs(),
+                                stream.getHostProcessingMaxMs(),
+                                stream.getHostProcessingMinMs()),
+                        STATS_VALUE_COLOR);
+            } else {
+                addStatsRow("Host processing", "Unavailable", STATS_UNAVAILABLE_COLOR);
+            }
+            addStatsRow("MediaCodec enqueue -> output",
+                    stream.hasDecodeLatency()
+                            ? String.format(Locale.US, "%.2f / %.2f ms",
+                                    stream.getDecodeAverageMs(), stream.getDecodeMaxMs())
+                            : "No samples",
+                    stream.hasDecodeLatency()
+                            ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR);
+        }
+        if (clientSbs != null && clientSbs.active) {
+            addLatencyRow("Surface callback -> GL latch",
+                    clientSbs.averageCallbackToGlLatchMs,
+                    clientSbs.maxCallbackToGlLatchMs,
+                    clientSbs.glLatchFps);
+            addLatencyRow("Matched color capture (CPU submit)",
+                    clientSbs.averageCaptureSubmitMs,
+                    clientSbs.maxCaptureSubmitMs, clientSbs.captureSubmitFps);
+            addLatencyRow("LiteRT worker queue", clientSbs.averageInferenceQueueMs,
+                    clientSbs.maxInferenceQueueMs, clientSbs.inferenceInputStartFps);
+            addLatencyRow("GPU model-input pack (CPU submit)",
+                    clientSbs.averagePreprocessMs,
+                    clientSbs.maxPreprocessMs, clientSbs.preprocessCompleteFps);
+            addLatencyRow("LiteRT worker wall (incl. GL dependencies)",
+                    clientSbs.averageInferenceMs,
+                    clientSbs.maxInferenceMs, clientSbs.inferenceCompleteFps);
+            addLatencyRow("Inference -> GL fence consume",
+                    clientSbs.averageResultQueueWaitMs,
+                    clientSbs.maxResultQueueWaitMs,
+                    clientSbs.postprocessStartFps);
+            addLatencyRow("GPU depth/profile dispatch (CPU submit)",
+                    clientSbs.averagePostprocessMs,
+                    clientSbs.maxPostprocessMs, clientSbs.postprocessCompleteFps);
+            addLatencyRow("Capture -> depth dispatch/adopt", clientSbs.averageDepthResultAgeMs,
+                    clientSbs.maxDepthResultAgeMs, clientSbs.depthAdoptFps);
+            addLatencyRow("SBS compose (CPU submit)", clientSbs.averageComposeMs,
+                    clientSbs.maxComposeMs, clientSbs.newSbsComposeFps);
+            addLatencyRow("GL output (CPU submit)", clientSbs.averageGlCpuSubmitMs,
+                    clientSbs.maxGlCpuSubmitMs, clientSbs.glOutputSubmitFps);
+            addStatsRow("EGL / SceneCore present", "Not exposed by XR API",
+                    STATS_UNAVAILABLE_COLOR);
+
+            addStatsSection("BACKPRESSURE / REUSE (THIS WINDOW)");
+            addCountRow("Surface callbacks coalesced", clientSbs.surfaceCallbacksCoalesced,
+                    clientSbs.windowSeconds);
+            addCountRow("AI-busy capture skips", clientSbs.aiBusySkips,
+                    clientSbs.windowSeconds);
+            addCountRow("Color-slot busy skips", clientSbs.colorSlotBusySkips,
+                    clientSbs.windowSeconds);
+            addStatsRow("SBS output cache reuse",
+                    String.format(Locale.US, "%d | %.1f%% of output submits",
+                            clientSbs.reusedSbsOutputs, clientSbs.reusedSbsOutputPercent),
+                    STATS_VALUE_COLOR);
+            addCountRow("Flat outputs (depth not ready)", clientSbs.flatSbsOutputs,
+                    clientSbs.windowSeconds);
+        }
+        finishStatsRows();
+    }
+
     public void setStatsText(String text, boolean hdrActive) {
         if (statsTable == null) {
             return;
         }
         statsTable.removeAllViews();
+        if (statsTableSecondary != null) {
+            statsTableSecondary.removeAllViews();
+        }
+        reuseStatsRows = false;
+        activeStatsTable = statsTable;
 
         // The live stream counters below are content-driven: Desktop Duplication and Apollo may
         // encode fewer frames than the negotiated maximum when the desktop is static or the source
@@ -682,6 +947,194 @@ public class XrStreamPresenter {
 
         addStatsRow("HDR", hdrActive ? "On" : "Off",
                 hdrActive ? STATS_ON_COLOR : STATS_LABEL_COLOR);
+    }
+
+    /** Only used while a caller is warming up the new typed decoder snapshot. */
+    private void appendLegacyStatsFallback(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        for (String part : text.split("[\\n\\t]+")) {
+            String entry = part.trim();
+            if (entry.isEmpty()) {
+                continue;
+            }
+            int separator = entry.indexOf(':');
+            if (separator >= 0) {
+                addStatsRow(entry.substring(0, separator).trim(),
+                        entry.substring(separator + 1).trim(), STATS_VALUE_COLOR);
+            }
+        }
+    }
+
+    private float displayRefreshRate() {
+        try {
+            return activity.getWindowManager().getDefaultDisplay().getMode().getRefreshRate();
+        } catch (RuntimeException ignored) {
+            // The display can disappear during Activity teardown.
+            return 0.0f;
+        }
+    }
+
+    private static String presenterModeName(PresenterMode mode) {
+        switch (mode) {
+            case HOST_SBS_RAW:
+                return "Host SBS Raw";
+            case HOST_SBS_AI:
+                return "Host SBS AI";
+            case CLIENT_SBS_AI:
+                return "Client SBS AI";
+            case NORMAL:
+            default:
+                return "Normal";
+        }
+    }
+
+    private int utilizationColor(double percent) {
+        if (percent >= 95.0) {
+            return STATS_ERROR_COLOR;
+        }
+        if (percent >= 80.0) {
+            return STATS_WARN_COLOR;
+        }
+        return STATS_ON_COLOR;
+    }
+
+    private int lossColor(float percent) {
+        if (percent >= 1.0f) {
+            return STATS_ERROR_COLOR;
+        }
+        if (percent >= 0.1f) {
+            return STATS_WARN_COLOR;
+        }
+        return STATS_ON_COLOR;
+    }
+
+    private int backendColor(String backend) {
+        if (backend != null && backend.startsWith("LITERT_GPU_GL")) {
+            return STATS_ON_COLOR;
+        }
+        if ("Unavailable".equals(backend) || "Failed".equals(backend)) {
+            return STATS_WARN_COLOR;
+        }
+        if ("Inactive".equals(backend) || "Initializing".equals(backend)) {
+            return STATS_UNAVAILABLE_COLOR;
+        }
+        return STATS_VALUE_COLOR;
+    }
+
+    private String depthBackendName(String backend) {
+        if (backend != null && backend.startsWith("LITERT_GPU_GL")) {
+            return "LiteRT GPU | OpenCL FP16 | packed GL";
+        }
+        return backend == null || backend.isEmpty() ? "Unavailable" : backend;
+    }
+
+    private void addRateRow(String label, float fps) {
+        addStatsRow(label, String.format(Locale.US, "%.1f fps", fps), STATS_VALUE_COLOR);
+    }
+
+    private void addLatencyRow(String label, float averageMs, float maximumMs,
+                               float completedFps) {
+        addStatsRow(label, completedFps > 0.0f
+                        ? String.format(Locale.US, "%.2f / %.2f ms", averageMs, maximumMs)
+                        : "No samples",
+                completedFps > 0.0f ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR);
+    }
+
+    private void addCountRow(String label, long count, float windowSeconds) {
+        float rate = windowSeconds > 0.0f ? count / windowSeconds : 0.0f;
+        addStatsRow(label, String.format(Locale.US, "%d | %.1f/s", count, rate),
+                count > 0L ? STATS_WARN_COLOR : STATS_VALUE_COLOR);
+    }
+
+    private static final String STATS_ROW_METRIC = "stats-metric";
+    private static final String STATS_ROW_SECTION = "stats-section";
+
+    private void beginStatsRows() {
+        reuseStatsRows = true;
+        primaryStatsRowCursor = 0;
+        secondaryStatsRowCursor = 0;
+        activeStatsTable = statsTable;
+    }
+
+    private void finishStatsRows() {
+        trimStatsTable(statsTable, primaryStatsRowCursor);
+        trimStatsTable(statsTableSecondary, secondaryStatsRowCursor);
+        reuseStatsRows = false;
+    }
+
+    private static void trimStatsTable(TableLayout table, int rowsToKeep) {
+        if (table == null) {
+            return;
+        }
+        while (table.getChildCount() > rowsToKeep) {
+            table.removeViewAt(table.getChildCount() - 1);
+        }
+    }
+
+    private TableRow obtainStatsRow(boolean section) {
+        TableLayout table = activeStatsTable != null ? activeStatsTable : statsTable;
+        String expectedTag = section ? STATS_ROW_SECTION : STATS_ROW_METRIC;
+        if (!reuseStatsRows) {
+            TableRow row = createStatsRow(section);
+            table.addView(row);
+            return row;
+        }
+
+        int index;
+        if (table == statsTableSecondary) {
+            index = secondaryStatsRowCursor++;
+        } else {
+            index = primaryStatsRowCursor++;
+        }
+        View existing = index < table.getChildCount() ? table.getChildAt(index) : null;
+        if (existing instanceof TableRow && expectedTag.equals(existing.getTag())) {
+            return (TableRow) existing;
+        }
+
+        TableRow replacement = createStatsRow(section);
+        if (existing != null) {
+            table.removeViewAt(index);
+        }
+        table.addView(replacement, index);
+        return replacement;
+    }
+
+    private TableRow createStatsRow(boolean section) {
+        TableRow row = new TableRow(activity);
+        row.setTag(section ? STATS_ROW_SECTION : STATS_ROW_METRIC);
+        if (section) {
+            TextView heading = new TextView(activity);
+            heading.setTextColor(TILE_ACTIVE_COLOR);
+            heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP - 1f);
+            heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+            heading.setPadding(0, dp(7), 0, dp(2));
+            TableRow.LayoutParams params = new TableRow.LayoutParams();
+            params.span = 2;
+            heading.setLayoutParams(params);
+            row.addView(heading);
+            return row;
+        }
+
+        TextView label = new TextView(activity);
+        label.setTextColor(STATS_LABEL_COLOR);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        label.setPadding(0, dp(1), dp(16), dp(1));
+
+        TextView value = new TextView(activity);
+        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
+        value.setPadding(0, dp(1), 0, dp(1));
+
+        row.addView(label);
+        row.addView(value);
+        return row;
+    }
+
+    private void addStatsSection(String label) {
+        TableRow row = obtainStatsRow(true);
+        TextView heading = (TextView) row.getChildAt(0);
+        heading.setText(label);
     }
 
     /** Lazily scan /sys/class/thermal once, bucketing each zone's temp file by type (CPU vs GPU). */
@@ -751,269 +1204,13 @@ public class XrStreamPresenter {
         return STATS_ON_COLOR;  // cool
     }
 
-    /**
-     * Sub-panel docked under the control bar with live 2D→3D effect controls (Depth / Convergence /
-     * Balance), each a −/value/+ stepper. Steps mutate the shared {@code prefConfig} fields that
-     * {@code Stereo3DRenderer} reads every frame, so the effect updates in real time; the new value
-     * is also persisted. Shown only in Client SBS (hidden in Normal/Host SBS, which do no synthesis).
-     */
-    private void createAdjustPanel(float videoHeightMeters) {
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xCC101418);
-        int p = dp(14);
-        root.setPadding(p, p, p, p);
-
-        TextView title = new TextView(activity);
-        title.setText(R.string.xr_client_sbs_options_title);
-        title.setTextColor(TILE_ACTIVE_COLOR);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP + 2f);
-        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
-        title.setPadding(0, 0, 0, dp(6));
-        root.addView(title);
-
-        addParamRow(root, "Strength",
-                "Overall 3D intensity. Higher = stronger pop-out, but more eye strain.", PARAM_DEPTH);
-        addParamRow(root, "Convergence",
-                "Screen plane for the whole scene. Lower = pops in front, higher = sits behind.",
-                PARAM_CONVERGENCE);
-        addHalfWidthToggle(root);
-
-        adjustPanel = PanelEntity.create(
-                session, root, new FloatSize2d(ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS),
-                "xr-3d-adjust", adjustPose(videoHeightMeters), surfaceEntity);
-        adjustPanel.setEnabled(false);
-    }
-
-    /**
-     * One effect block: a header (bold label + live value%), a one-line description, and a
-     * full-width slider. Each block is generously padded so the sliders are easy to target by gaze.
-     * Dragging updates the shared {@code prefConfig} on every change (renderer reads it next frame),
-     * so the effect changes live; the value is persisted on release. The value label is fixed-width
-     * so changing it mid-drag doesn't trigger a row re-layout (which made the drag feel laggy).
-     */
-    private void addParamRow(LinearLayout parent, String label, String desc, int paramId) {
-        LinearLayout block = new LinearLayout(activity);
-        block.setOrientation(LinearLayout.VERTICAL);
-        block.setPadding(0, dp(22), 0, dp(22));
-
-        LinearLayout header = new LinearLayout(activity);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView lbl = new TextView(activity);
-        lbl.setText(label);
-        lbl.setTextColor(STATS_VALUE_COLOR);
-        lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
-        lbl.setTypeface(lbl.getTypeface(), android.graphics.Typeface.BOLD);
-        lbl.setLayoutParams(new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView value = new TextView(activity);
-        value.setText(pct(getParam(paramId)));
-        value.setTextColor(TILE_ACTIVE_COLOR);
-        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
-        value.setGravity(Gravity.END);
-        value.setWidth(dp(96));
-
-        header.addView(lbl);
-        header.addView(value);
-
-        TextView description = new TextView(activity);
-        description.setText(desc);
-        description.setTextColor(STATS_LABEL_COLOR);
-        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP - 8f);
-        description.setPadding(0, dp(2), 0, dp(4));
-
-        SeekBar slider = new SeekBar(activity);
-        slider.setMax(100);
-        slider.setProgress(Math.round(getParam(paramId) * 100f));
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        slp.setMargins(0, dp(8), 0, dp(8));
-        slider.setLayoutParams(slp);
-        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-                float v = progress / 100f;
-                setParam(paramId, v);          // live: shared prefConfig -> renderer next frame
-                value.setText(pct(v));
-                // Client SBS now renders on demand, so nudge a redraw to show the change even when
-                // no new video frame is arriving (e.g. paused stream).
-                if (activity instanceof com.limelight.Game) {
-                    ((com.limelight.Game) activity).getStreamContainer().requestStereoRender();
-                }
-            }
-            @Override public void onStartTrackingTouch(SeekBar sb) { }
-            @Override public void onStopTrackingTouch(SeekBar sb) {
-                persistParam(paramKey(paramId), sb.getProgress() / 100f);
-            }
-        });
-
-        block.addView(header);
-        block.addView(description);
-        block.addView(slider);
-        parent.addView(block);
-    }
-
-    /** Toggle row for half-width Client SBS (performance/thermal). A Switch in the same panel gets
-     *  the gaze highlight + native tap like the bar tiles. */
-    private void addHalfWidthToggle(LinearLayout parent) {
-        LinearLayout block = new LinearLayout(activity);
-        block.setOrientation(LinearLayout.VERTICAL);
-        block.setPadding(0, dp(18), 0, dp(8));
-
-        LinearLayout header = new LinearLayout(activity);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView lbl = new TextView(activity);
-        lbl.setText("Half-width (performance)");
-        lbl.setTextColor(STATS_VALUE_COLOR);
-        lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
-        lbl.setTypeface(lbl.getTypeface(), android.graphics.Typeface.BOLD);
-        lbl.setLayoutParams(new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        Switch sw = new Switch(activity);
-        sw.setChecked(clientSbsHalfWidth);
-        sw.setOnCheckedChangeListener((button, checked) -> {
-            if (modeSwitchInProgress) {
-                button.setChecked(clientSbsHalfWidth);
-                return;
-            }
-            setClientSbsHalfWidth(checked);
-        });
-
-        header.addView(lbl);
-        header.addView(sw);
-
-        TextView description = new TextView(activity);
-        description.setText("Renders each eye at half width — much cooler and smoother, slightly softer.");
-        description.setTextColor(STATS_LABEL_COLOR);
-        description.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP - 8f);
-        description.setPadding(0, dp(2), 0, dp(2));
-
-        block.addView(header);
-        block.addView(description);
-        parent.addView(block);
-    }
-
-    /** Apply the half-width toggle: persist it, and — if currently in Client SBS — re-cycle the GL
-     *  surface at the new width and reshape the quad to the matching aspect. */
-    private void setClientSbsHalfWidth(boolean half) {
-        if (modeSwitchInProgress || clientSbsHalfWidth == half) {
-            return;
-        }
-        clientSbsHalfWidth = half;
-        persistBool(CLIENT_SBS_HALF_WIDTH_KEY, half);
-        // Only the surface resolution changes (W <-> 2W); the quad keeps fullAspect / same size.
-        if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI
-                && activity instanceof com.limelight.Game) {
-            ((com.limelight.Game) activity).getStreamContainer().recycleClientSbs();
-        }
-    }
-
-    private void persistBool(String key, boolean value) {
-        try {
-            androidx.preference.PreferenceManager.getDefaultSharedPreferences(activity)
-                    .edit().putBoolean(key, value).apply();
-        } catch (Throwable t) {
-            LimeLog.warning("XR: persist failed: " + t);
-        }
-    }
-
-    private float getParam(int paramId) {
-        switch (paramId) {
-            case PARAM_DEPTH: return prefConfig.parallax_depth;
-            case PARAM_CONVERGENCE: return prefConfig.convergence_ratio;
-            default: return prefConfig.balance_shift;
-        }
-    }
-
-    private void setParam(int paramId, float v) {
-        switch (paramId) {
-            case PARAM_DEPTH: prefConfig.parallax_depth = v; break;
-            case PARAM_CONVERGENCE: prefConfig.convergence_ratio = v; break;
-            default: prefConfig.balance_shift = v; break;
-        }
-    }
-
-    private static String paramKey(int paramId) {
-        switch (paramId) {
-            case PARAM_DEPTH: return "parallax_depth";
-            case PARAM_CONVERGENCE: return "convergence_ratio";
-            default: return "balance_shift";
-        }
-    }
-
-    private static String pct(float v) {
-        return Math.round(v * 100f) + "%";
-    }
-
-    /** Persist a 0..1 effect param back to the int (0–100) pref the settings UI / loader use. */
-    private void persistParam(String key, float value01) {
-        try {
-            androidx.preference.PreferenceManager.getDefaultSharedPreferences(activity)
-                    .edit().putInt(key, Math.round(value01 * 100f)).apply();
-        } catch (Throwable t) {
-            LimeLog.warning("XR 3D-adjust: persist failed: " + t);
-        }
-    }
-
-    private void toggleAdjustPanel() {
-        if (adjustPanel == null) {
-            return;
-        }
-        adjustPanelVisible = !adjustPanelVisible;
-        updateAdjustPanelVisibility();
-    }
-
-    private void closeModeSubpanels() {
-        adjustPanelVisible = false;
-        if (adjustPanel != null) {
-            adjustPanel.setEnabled(false);
-        }
-        if (clientSbsAiItem != null) {
-            clientSbsAiItem.setExpanded(false);
-        }
-        if (isDepthBusy()) {
-            depthStatusPendingPhase = depthStatusPhase;
-            depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
-            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
-        }
-    }
-
-    /** Show the adjust sub-panel only when expanded from the active Client SBS AI tile. */
-    private void updateAdjustPanelVisibility() {
-        boolean enabled = currentPresenterMode == PresenterMode.CLIENT_SBS_AI
-                && adjustPanelVisible;
-        if (adjustPanel != null) {
-            adjustPanel.setEnabled(enabled);
-        }
-        if (clientSbsAiItem != null) {
-            clientSbsAiItem.setExpanded(enabled);
-        }
-    }
-
     private void addStatsRow(String label, String value, int valueColor) {
-        TableRow row = new TableRow(activity);
-
-        TextView l = new TextView(activity);
-        l.setText(label);
-        l.setTextColor(STATS_LABEL_COLOR);
-        l.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
-        l.setPadding(0, dp(1), dp(16), dp(1));
-
-        TextView v = new TextView(activity);
-        v.setText(value);
-        v.setTextColor(valueColor);
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP);
-        v.setPadding(0, dp(1), 0, dp(1));
-
-        row.addView(l);
-        row.addView(v);
-        statsTable.addView(row);
+        TableRow row = obtainStatsRow(false);
+        TextView labelView = (TextView) row.getChildAt(0);
+        TextView valueView = (TextView) row.getChildAt(1);
+        labelView.setText(label);
+        valueView.setText(value);
+        valueView.setTextColor(valueColor);
     }
 
     /** A thin vertical separator between button groups. */
@@ -1046,13 +1243,12 @@ public class XrStreamPresenter {
         return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
-    /** Local pose of the stats panel: just off the quad's right edge, top-aligned, so it doesn't
-     *  cover the video. */
+    /** Local pose of the stats panel: centered below the unchanged control bar. */
     private Pose statsPose(float videoHeightMeters) {
-        float quadWidth = videoHeightMeters * aspectFor(currentPresenterMode);
-        float x = (quadWidth / 2.0f) + STATS_GAP_METERS + (STATS_WIDTH_METERS / 2.0f);
-        float y = (videoHeightMeters / 2.0f) - (STATS_HEIGHT_METERS / 2.0f);
-        return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
+        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS
+                - (BAR_HEIGHT_METERS / 2.0f);
+        float y = barBottomY - STATS_GAP_METERS - (STATS_HEIGHT_METERS / 2.0f);
+        return new Pose(new Vector3(0.0f, y, BAR_Z_METERS), Quaternion.Identity);
     }
 
     private float controlBarWidthMeters() {
@@ -1099,35 +1295,7 @@ public class XrStreamPresenter {
         }
     }
 
-    /** Place a mode's sub-panel so its top-left corner starts at the tile's bottom-left corner. */
-    private Pose modeSubpanelPose(float videoHeightMeters, PresenterMode mode,
-                                  float panelWidth, float panelHeight, float gap) {
-        float tileLeft = -controlBarWidthMeters() / 2.0f;
-        for (int i = 0; i < barItems.size(); i++) {
-            if (i > 0 && barItems.get(i - 1).selectsMode != null
-                    && barItems.get(i).selectsMode == null) {
-                tileLeft += BAR_DIVIDER_METERS;
-            }
-            BarItem item = barItems.get(i);
-            if (item.selectsMode == mode) {
-                break;
-            }
-            tileLeft += BAR_HEIGHT_METERS;
-        }
-        float barBottomY = -(videoHeightMeters / 2.0f) - BAR_GAP_METERS
-                - (BAR_HEIGHT_METERS / 2.0f);
-        float x = tileLeft + panelWidth / 2.0f;
-        float y = barBottomY - gap - panelHeight / 2.0f;
-        return new Pose(new Vector3(x, y, BAR_Z_METERS), Quaternion.Identity);
-    }
-
-    /** Client SBS AI options aligned beneath that tile's left edge. */
-    private Pose adjustPose(float videoHeightMeters) {
-        return modeSubpanelPose(videoHeightMeters, PresenterMode.CLIENT_SBS_AI,
-                ADJUST_WIDTH_METERS, ADJUST_HEIGHT_METERS, ADJUST_GAP_METERS);
-    }
-
-    /** Move the bar, stats and adjust panels when the quad height changes (mode switch). */
+    /** Move the bar and stats panels when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
         if (barPanel != null) {
             barPanel.setPose(barPose(videoHeightMeters));
@@ -1137,9 +1305,6 @@ public class XrStreamPresenter {
         }
         if (depthStatusPanel != null) {
             depthStatusPanel.setPose(depthStatusPose(videoHeightMeters));
-        }
-        if (adjustPanel != null) {
-            adjustPanel.setPose(adjustPose(videoHeightMeters));
         }
     }
 
@@ -1225,7 +1390,6 @@ public class XrStreamPresenter {
             return;
         }
 
-        closeModeSubpanels();
         currentPresenterMode = nextMode;
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         applyContentColorMetadata();
@@ -1241,7 +1405,6 @@ public class XrStreamPresenter {
         applyResizeBounds(aspect);
         repositionControlBar(height);
         updateModeSelection();
-        updateAdjustPanelVisibility();
         modeSwitchInProgress = false;
         persistPresentationState();
     }
@@ -1389,9 +1552,8 @@ public class XrStreamPresenter {
 
     /** Quad aspect (width/height). Only the host SBS presentation uses perEyeAspect, which differs
      *  from fullAspect for Raw (half-width per eye); for Host SBS AI
-     *  perEyeAspect is set equal to fullAspect. Normal and Client SBS always use fullAspect (Client
-     *  SBS renders the full frame per eye; half-width just squeezes it into W/2 and the compositor
-     *  stretches it back), so the quad keeps its physical size — only the surface resolution changes. */
+     *  perEyeAspect is set equal to fullAspect. Normal and Client SBS always use fullAspect, so the
+     *  quad keeps its physical size — only the surface resolution changes. */
     private float aspectFor(PresenterMode mode) {
         // Raw splits the host's single W-wide frame into two W/2 eyes -> half the aspect. Host SBS
         // AI shows each eye a full-width per-eye view; Normal and Client show the full frame.
@@ -1431,7 +1593,6 @@ public class XrStreamPresenter {
         if (hdr && currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
             int maxContentLightLevel =
                     SurfaceEntity.ContentColorMetadata.MAX_CONTENT_LIGHT_LEVEL_UNKNOWN;
-            boolean fullRange = prefConfig.fullRange;
             if (activity instanceof com.limelight.Game) {
                 com.limelight.Game game = (com.limelight.Game) activity;
                 int reportedMaxCll = game.getStreamHdrMaxContentLightLevel();
@@ -1442,13 +1603,13 @@ public class XrStreamPresenter {
             surfaceEntity.setContentColorMetadata(new SurfaceEntity.ContentColorMetadata(
                     SurfaceEntity.ContentColorMetadata.ColorSpace.BT2020,
                     SurfaceEntity.ContentColorMetadata.ColorTransfer.ST2084,
-                    fullRange
-                            ? SurfaceEntity.ContentColorMetadata.ColorRange.FULL
-                            : SurfaceEntity.ContentColorMetadata.ColorRange.LIMITED,
+                    // OES sampling has already converted the decoded YUV frame to normalized RGB.
+                    // Advertising the decoder's input range here would make SceneCore apply a
+                    // second limited-range interpretation to Artemis' GL-produced surface.
+                    SurfaceEntity.ContentColorMetadata.ColorRange.FULL,
                     maxContentLightLevel));
             isColorMetadataExplicit = true;
-            LimeLog.info("XR: HDR ContentColorMetadata BT2020/ST2084/"
-                    + (fullRange ? "FULL" : "LIMITED")
+            LimeLog.info("XR: HDR ContentColorMetadata BT2020/ST2084/FULL"
                     + "/MaxCLL=" + (maxContentLightLevel > 0
                             ? Integer.toString(maxContentLightLevel) : "unknown")
                     + " (mode " + currentPresenterMode + ")");
@@ -1476,9 +1637,7 @@ public class XrStreamPresenter {
         resizable.setMaximumEntitySize(new FloatSize3d(6.0f * aspect, 6.0f, 0f));
     }
 
-    /** Build one tile. Expandable modes use a separate bottom-center chevron, leaving the main
-     *  icon/label target responsible only for mode selection. Both targets remain ordinary hosted
-     *  views, preserving native XR gaze highlighting. */
+    /** Build one control-bar tile. */
     private View buildBarItemView(BarItem item) {
         FrameLayout root = new FrameLayout(activity);
         root.setBackgroundColor(TILE_IDLE_COLOR);
@@ -1489,7 +1648,7 @@ public class XrStreamPresenter {
         col.setClickable(true);
         col.setFocusable(true);
         int pad = dp(3);
-        col.setPadding(pad, pad, pad, item.onExpand == null ? pad : dp(26));
+        col.setPadding(pad, pad, pad, pad);
         col.setOnClickListener(v -> {
             if (item.onTap != null) {
                 item.onTap.run();
@@ -1502,25 +1661,6 @@ public class XrStreamPresenter {
         FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
         root.addView(col, contentParams);
-
-        if (item.onExpand != null) {
-            TextView arrow = new TextView(activity);
-            arrow.setText("▼");
-            arrow.setTextColor(Color.WHITE);
-            arrow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f);
-            arrow.setGravity(Gravity.CENTER);
-            arrow.setClickable(true);
-            arrow.setFocusable(true);
-            arrow.setBackgroundColor(0x33000000);
-            arrow.setContentDescription(activity.getString(
-                    R.string.xr_expand_mode_options, item.label));
-            arrow.setOnClickListener(v -> item.onExpand.run());
-            applySelectableForeground(arrow);
-            FrameLayout.LayoutParams arrowParams = new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT, dp(36), Gravity.BOTTOM);
-            root.addView(arrow, arrowParams);
-            item.expandIndicator = arrow;
-        }
 
         return root;
     }
@@ -1569,27 +1709,13 @@ public class XrStreamPresenter {
         /** Non-null for mode tiles (single-select group); null for one-shot action tiles. */
         final PresenterMode selectsMode;
         Runnable onTap;
-        Runnable onExpand;
         View root;
         View tapTarget;
-        TextView expandIndicator;
 
         BarItem(String label, int iconRes, PresenterMode selectsMode) {
             this.label = label;
             this.iconRes = iconRes;
             this.selectsMode = selectsMode;
-        }
-
-        void setExpanded(boolean expanded) {
-            if (expandIndicator == null) {
-                return;
-            }
-            expandIndicator.setText(expanded ? "▲" : "▼");
-            expandIndicator.setContentDescription(activity.getString(
-                    expanded ? R.string.xr_collapse_mode_options
-                            : R.string.xr_expand_mode_options,
-                    label));
-            expandIndicator.invalidate();
         }
 
         void setEnabled(boolean enabled) {
@@ -1598,9 +1724,6 @@ public class XrStreamPresenter {
             }
             if (tapTarget != null) {
                 tapTarget.setEnabled(enabled);
-            }
-            if (expandIndicator != null) {
-                expandIndicator.setEnabled(enabled);
             }
         }
 
@@ -1649,26 +1772,34 @@ public class XrStreamPresenter {
 
     /**
      * Resize the XR surface for the client-side SBS path. The on-device renderer packs two
-     * <i>full-resolution</i> eye views side by side, so the surface must be twice as wide
-     * ({@code 2W×H}) to preserve each eye's full input resolution. Every other mode presents a
-     * single input-sized ({@code W×H}) frame (flat for NORMAL, host-packed for HOST_SBS_AI), so the
-     * surface is restored to {@code W×H}. Re-fetches the entity's surface in case the resize
-     * re-creates it. Main-thread only (SceneCore is Activity-bound).
+     * aspect-preserved eye views side by side. Client rendering is capped independently from the
+     * decoded source size so a 4K stream does not create an 8K-wide mobile swapchain. Every other
+     * mode presents a single input-sized frame, so the surface is restored to {@code W×H}.
+     * Re-fetches the entity's surface in case the resize re-creates it. Main-thread only.
      */
     public void setClientSbsSurfaceSize(boolean fullStereo) {
         if (surfaceEntity == null) {
             return;
         }
         int width = fullStereo ? getClientSbsSurfaceWidth() : prefConfig.width;
-        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(width, prefConfig.height));
+        int height = fullStereo ? getClientSbsSurfaceHeight() : prefConfig.height;
+        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(width, height));
         videoSurface = surfaceEntity.getSurface();
     }
 
-    /** XR surface / render width for Client SBS: 2W for full per-eye resolution (default), or W in
-     *  half-width mode (≈half the GPU/heat). Used by {@link StreamContainer} for the renderer's
-     *  output viewport and by {@link #setClientSbsSurfaceSize}. */
+    private int clientSbsEyeWidth() {
+        return Math.min(prefConfig.width, MAX_CLIENT_SBS_EYE_WIDTH);
+    }
+
+    /** XR surface/render width for Client SBS: two capped eye views side by side. */
     public int getClientSbsSurfaceWidth() {
-        return clientSbsHalfWidth ? prefConfig.width : prefConfig.width * 2;
+        return (clientSbsEyeWidth() * 2) & ~1;
+    }
+
+    /** Aspect-preserved XR surface/render height corresponding to the capped per-eye width. */
+    public int getClientSbsSurfaceHeight() {
+        return Math.max(2, Math.round(prefConfig.height
+                * (clientSbsEyeWidth() / (float) prefConfig.width)) & ~1);
     }
 
     /** Capped per-eye width for Host SBS AI: the negotiated per-eye width,
@@ -1735,12 +1866,6 @@ public class XrStreamPresenter {
                 depthStatusPanel.dispose();
             }
             depthStatusPanel = null;
-        }
-        if (adjustPanel != null) {
-            if (!adjustPanel.isDisposed()) {
-                adjustPanel.dispose();
-            }
-            adjustPanel = null;
         }
         videoSurface = null;
         statsTable = null;

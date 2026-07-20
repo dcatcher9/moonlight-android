@@ -380,7 +380,6 @@
     <string name="title_custom_refresh_rate">Пользовательская частота обновления</string>
     <string name="summary_custom_refresh_rate">Введите частоту вручную. Поддерживается только Apollo.</string>
     <string name="dialog_custom_refresh_rate">Введите частоту в Гц. Может быть дробной.</string>
-    <string name="title_render_mode_strength_description">Справка: 50 - Выше значение: эффект выраженнее, но возможна нагрузка на глаза и неестественное изображение. Ниже значение: комфорт для глаз и более плавное восприятие.</string>
     <string name="title_touchscreen_mode">Режим сенсора</string>
     <string name="summary_touchscreen_mode">Выберите режим Мультитач / Одиночное касание / Трекпад / Выключено.\nПеро/стилус остаются работоспособны при Выключено.\nНа внешнем дисплее принудительно Трекпад (Natural).</string>
     <string name="title_checkbox_mouse_local_cursor">Использовать локальный курсор мыши</string>
@@ -653,11 +652,6 @@
     <string name="category_perf_monitor_settings">Монитор производительности</string>
     <string name="title_low_latency_frame_balance">LFR (эксперементально)</string>
     <string name="title_checkbox_forceTightThresholds">Агрессивная вертикальная синхронизация (эксперементально)</string>
-    <string name="title_render_mode_convergence_title">3D конвергенция</string>
-    <string name="title_render_mode_convergence_description">Справка: 50 - Сбалансировано / 0: Перед экраном / 100 - За экраном</string>
-    <string name="title_render_mode_balance_shift_title">Баланс глаз 3D</string>
-    <string name="title_render_mode_balance_shift_description" formatted="false">Справка: 50 - Оба глаза делят эффект глубины 50/50 (объём/удаление) / 0: Левый (100% Объём) - Правый (100% Удаление) / 100: Левый Удаление - Правый Объём // Значения 100 или 0 обеспечивают максимальную чёткость, так как один пиксель остаётся неизменным для другого глаза</string>
-    <string name="title_render_mode_strength_title">Сила 3D-эффекта</string>
     <string name="title_checkbox_full_screen">Включить полноэкранный режим</string>
     <string name="summary_checkbox_full_screen">Скрывать системные панели в режиме погружения</string>
 </resources>
