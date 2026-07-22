@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.jcodec.codecs.h264.H264Utils;
 import org.jcodec.codecs.h264.io.model.SeqParameterSet;
@@ -20,7 +21,6 @@ import com.limelight.R;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
-import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.TrafficStatsHelper;
 
 import android.annotation.SuppressLint;
@@ -38,6 +38,7 @@ import android.net.TrafficStats;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Range;
@@ -45,52 +46,69 @@ import android.view.Choreographer;
 import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
-    // Latency profile: favor minimal end-to-end delay over absolute smoothness.
-    // Set true to enable a 'latest-only' fast path in the render loop.
-    private boolean preferLowerDelays = false;
-
-
     // Force tight thresholds regardless of device refresh (use vsyncPeriodNs always)
     private volatile boolean forceTightThresholds = false;
     /** Toggle tight frame pacing thresholds globally. */
     public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
     // Toggle at runtime if needed
+    // Expensive per-frame timing is opt-in. The Stats panel and explicit performance logging are
+    // diagnostic tools; normal streaming must not pay for timestamp maps or their cross-thread
+    // lock contention.
+    private volatile boolean performanceTelemetryEnabled;
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
-    // When preferLowerDelays=true we use this configurable timeout (µs) for output dequeue.
-// When preferLowerDelays=false we force 0µs (non-blocking, latest-frame rendering).
-    private volatile int preferLowerDelaysTimeoutUs = 2000;
-    public void setPreferLowerDelaysTimeoutUs(int us) { this.preferLowerDelaysTimeoutUs = Math.max(0, us); }
+    private static final int OUTPUT_DEQUEUE_TIMEOUT_US = 2000;
+    private static final String MEDIA_FORMAT_KEY_CROP_LEFT = "crop-left";
+    private static final String MEDIA_FORMAT_KEY_CROP_TOP = "crop-top";
+    private static final String MEDIA_FORMAT_KEY_CROP_RIGHT = "crop-right";
+    private static final String MEDIA_FORMAT_KEY_CROP_BOTTOM = "crop-bottom";
 
+    private boolean isMinimumLatencyMode() {
+        return prefs != null
+                && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
+    }
 
-    // Helper: release with low-latency policy (immediate only when very near to now)
-    private boolean releaseWithPolicy(int bufferIndex, long frameTimeNanos) {
+    private int getOutputDequeueTimeoutUs() {
+        return isMinimumLatencyMode() ? 0 : OUTPUT_DEQUEUE_TIMEOUT_US;
+    }
+
+    private void handleOutputFormatChanged() {
+        LimeLog.info("Output format changed");
+        outputFormat = videoDecoder.getOutputFormat();
+        DecodedVideoDimensions previousDimensions = currentOutputDimensions.get();
+        currentOutputDimensions.set(DecodedVideoDimensions.resolve(
+                previousDimensions,
+                getOptionalFormatInteger(outputFormat, MediaFormat.KEY_WIDTH),
+                getOptionalFormatInteger(outputFormat, MediaFormat.KEY_HEIGHT),
+                getOptionalFormatInteger(outputFormat, MEDIA_FORMAT_KEY_CROP_LEFT),
+                getOptionalFormatInteger(outputFormat, MEDIA_FORMAT_KEY_CROP_TOP),
+                getOptionalFormatInteger(outputFormat, MEDIA_FORMAT_KEY_CROP_RIGHT),
+                getOptionalFormatInteger(outputFormat, MEDIA_FORMAT_KEY_CROP_BOTTOM)));
+        LimeLog.info("New output format: " + outputFormat);
+        logColorFormat("Actual decoder output color", outputFormat);
+    }
+
+    private static Integer getOptionalFormatInteger(MediaFormat format, String key) {
+        if (format == null || !format.containsKey(key)) {
+            return null;
+        }
         try {
-            long now = System.nanoTime();
-            boolean immediate = preferLowerDelays && (frameTimeNanos <= now + 300_000L);
-            if (immediate) {
-                videoDecoder.releaseOutputBuffer(bufferIndex, true);
-            } else {
-                videoDecoder.releaseOutputBuffer(bufferIndex, frameTimeNanos);
-            }
-            return true;
-        } catch (Throwable t) {
-            try {
-                // Fallback to immediate if timestamped release fails for any reason
-                videoDecoder.releaseOutputBuffer(bufferIndex, true);
-                return true;
-            } catch (Throwable ignored) {
-                return false;
-            }
+            return format.getInteger(key);
+        }
+        catch (RuntimeException e) {
+            return null;
         }
     }
-    private int getOutputDequeueTimeoutUs(){ return preferLowerDelays ? Math.max(250, preferLowerDelaysTimeoutUs) : preferLowerDelaysTimeoutUs; }
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
+        if (!performanceTelemetryEnabled) {
+            return;
+        }
         long nowNs = System.nanoTime();
         synchronized (videoStatsLock) {
+            activeWindowVideoStats.totalFramesDecoded++;
             Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
             if (enqNs == null) {
                 return;
@@ -111,9 +129,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void recordFrameReleasedForRender() {
+        if (!performanceTelemetryEnabled) {
+            return;
+        }
         synchronized (videoStatsLock) {
             activeWindowVideoStats.totalFramesRendered++;
         }
+    }
+
+    private void recordFramePresented() {
+        if (!performanceTelemetryEnabled) {
+            return;
+        }
+        synchronized (videoStatsLock) {
+            activeWindowVideoStats.totalFramesPresented++;
+        }
+    }
+
+    private void releaseOutputBufferForRender(int bufferIndex, long renderTimestampNs) {
+        videoDecoder.releaseOutputBuffer(bufferIndex, renderTimestampNs);
+        acknowledgePresentationTransitionRendered();
+        recordFrameReleasedForRender();
+    }
+
+    private void releaseOutputBufferForRender(int bufferIndex) {
+        videoDecoder.releaseOutputBuffer(bufferIndex, true);
+        acknowledgePresentationTransitionRendered();
+        recordFrameReleasedForRender();
     }
 
     /** Removes inputs for which MediaCodec never produced an output buffer. Lock must be held. */
@@ -126,9 +168,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
     }
-
-    public void setPreferLowerDelays(boolean v) { this.preferLowerDelays = v; }
-
 
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
@@ -148,6 +187,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
+    // Decoder input is single-threaded. These two fields feed one preallocated commit callback so
+    // the atomic transition-admission path does not allocate a capturing lambda for every frame.
+    private long pendingInputCommitTimestampUs;
+    private int pendingInputCommitCodecFlags;
+    private final DecoderModeTransitionGate.InputCommitter inputCommitter =
+            this::commitPendingInputBuffer;
 
     private Context context;
     private Activity activity;
@@ -160,6 +205,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private byte optimalSlicesPerFrame;
     private boolean refFrameInvalidationActive;
     private int initialWidth, initialHeight;
+    private final AtomicReference<DecodedVideoDimensions> currentOutputDimensions =
+            new AtomicReference<>(new DecodedVideoDimensions(0, 0));
     private boolean invertResolution;
     private int videoFormat;
     private Surface renderTarget;
@@ -179,6 +226,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int CR_RECOVERY_TYPE_RESET = 3;
     private AtomicInteger codecRecoveryType = new AtomicInteger(CR_RECOVERY_TYPE_NONE);
     private final Object codecRecoveryMonitor = new Object();
+    private final DecoderModeTransitionGate modeTransitionFrameGate =
+            new DecoderModeTransitionGate();
+    private static final long MODE_TRANSITION_IDR_RETRY_MS = 500L;
+    private static final long MODE_TRANSITION_TIMEOUT_MS = 2_500L;
+    private final Object modeTransitionStateLock = new Object();
+    private final Handler modeTransitionHandler;
+    private int modeTransitionWatchdogGeneration;
+    private boolean modeTransitionWatchdogActive;
+    private long modeTransitionWatchdogDeadlineMs;
+    private volatile Runnable modeTransitionOpenedListener;
+    private volatile Runnable modeTransitionTimedOutListener;
+    // Guarded by codecRecoveryMonitor. Presentation-mode recovery is expected and must not consume
+    // the limited codec-error recovery budget.
+    private boolean presentationModeRecoveryPending;
 
     // Each thread that touches the MediaCodec object or any associated buffers must have a flag
     // here and must call doCodecRecoveryIfRequired() on a regular basis.
@@ -209,7 +270,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final Object videoStatsLock = new Object();
 
     private long lastTimestampUs;
-    private int lastFrameNumber;
+    private volatile int lastFrameNumber;
+    /** Newest frame observed at submitDecodeUnit() entry, before any transition-gate decision. */
+    private volatile int latestInputFrameNumber;
+    /** Input-thread-only: the next accepted serial gap was intentionally gated by a mode switch. */
+    private boolean intentionalInputDiscontinuityPending;
     private int refreshRate;
     private PreferenceConfiguration prefs;
 
@@ -219,7 +284,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastNetDataNum;
     private long lastNetDataSampleTimestampMs;
     private boolean hasLastNetDataSample;
-    private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
+    private static final class DecodedOutputBuffer {
+        final int index;
+        final long presentationTimeUs;
+
+        DecodedOutputBuffer(int index, long presentationTimeUs) {
+            this.index = index;
+            this.presentationTimeUs = presentationTimeUs;
+        }
+    }
+
+    private enum InputQueueResult {
+        QUEUED,
+        FAILED,
+        TRANSITION_DROPPED
+    }
+
+    private LinkedBlockingQueue<DecodedOutputBuffer> outputBufferQueue = new LinkedBlockingQueue<>();
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
@@ -371,7 +452,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return null;
         }
 
-        MediaCodecInfo decoderInfo = MediaCodecHelper.findProbableSafeDecoder("video/av01", -1);
+        MediaCodecInfo decoderInfo = MediaCodecHelper.findProbableSafeRegularDecoder(
+                "video/av01", -1);
         if (decoderInfo != null) {
             if (!MediaCodecHelper.isDecoderWhitelistedForAv1(decoderInfo)) {
                 LimeLog.info("Found AV1 decoder, but it's not whitelisted - "+decoderInfo.getName());
@@ -407,6 +489,46 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (listener != null && firstFrameRendered.get()) {
             listener.run();
         }
+    }
+
+    /** Completion callbacks for the decoder side of an XR presentation-mode transaction. */
+    public void setPresentationModeTransitionListeners(Runnable opened, Runnable timedOut) {
+        modeTransitionOpenedListener = opened;
+        modeTransitionTimedOutListener = timedOut;
+    }
+
+    /** Enables per-frame timing only for the visible Stats panel or explicit perf logging. */
+    public void setPerformanceTelemetryEnabled(boolean enabled) {
+        synchronized (videoStatsLock) {
+            if (performanceTelemetryEnabled == enabled) {
+                return;
+            }
+
+            // Samples captured under the old state must not leak into a later visible window.
+            enqueueNsByPtsUs.clear();
+            if (enabled) {
+                restartPerformanceTelemetryWindow(
+                        activeWindowVideoStats, lastWindowVideoStats, globalVideoStats,
+                        SystemClock.uptimeMillis());
+            }
+
+            // Publish the new state only after the new window and timestamp map are coherent.
+            performanceTelemetryEnabled = enabled;
+        }
+    }
+
+    static void restartPerformanceTelemetryWindow(VideoStats activeWindow,
+                                                  VideoStats lastWindow,
+                                                  VideoStats globalStats,
+                                                  long nowMs) {
+        if (activeWindow.measurementStartTimestamp != 0) {
+            // Preserve aggregate stream/loss accounting from the partial window that is ending.
+            globalStats.add(activeWindow);
+        }
+        activeWindow.clear();
+        activeWindow.measurementStartTimestamp = nowMs;
+        // The first enabled sample must not average against a telemetry-disabled window.
+        lastWindow.clear();
     }
 
     /** Samples this process's combined RX+TX throughput using the exact interval between reads. */
@@ -451,9 +573,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                      String glRenderer, PerfOverlayListener perfListener) {
         //dumpDecoders();
 
+        this.modeTransitionHandler = new Handler(Looper.getMainLooper());
         this.context = activity;
         this.activity = activity;
         this.prefs = prefs;
+        this.performanceTelemetryEnabled = shouldDispatchPerformanceSnapshot(
+                prefs.enablePerfOverlay, prefs.enablePerfLogging);
         this.crashListener = crashListener;
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
@@ -807,14 +932,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Start the decoder
         videoDecoder.start();
 
-        // reset() recreates the native codec instance. Re-register this listener after every
-        // configure/start so the first-frame gate also works after AV1 HDR reconfiguration.
+        // Recovery can recreate the native codec instance. Re-register this listener after every
+        // configure/start so the first-frame gate remains valid.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs,
                                             long renderTimeNanos) {
+                    if (mediaCodec != videoDecoder) {
+                        return;
+                    }
                     notifyFirstFrameRendered();
+                    recordFramePresented();
                     long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
                     if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
                         synchronized (videoStatsLock) {
@@ -945,7 +1074,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
             MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
             // This will try low latency options until we find one that works (or we give up).
-            boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
+            boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(
+                    mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
             //todo 色彩格式
 //            MediaCodecInfo.CodecCapabilities codecCapabilities = selectedDecoderInfo.getCapabilitiesForType(mimeType);
 //            int[] colorFormats=codecCapabilities.colorFormats;
@@ -972,6 +1102,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.targetFps = (redrawRate > 0 ? redrawRate : 60);
         this.initialWidth = invertResolution ? height : width;
         this.initialHeight = invertResolution ? width : height;
+        currentOutputDimensions.set(
+                new DecodedVideoDimensions(this.initialWidth, this.initialHeight));
         this.videoFormat = format;
         this.refreshRate = redrawRate;
 
@@ -990,6 +1122,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Codec recovery stops/resets the same MediaCodec instance. Serialize a live surface swap
         // with that recovery transaction so setOutputSurface() cannot race reset()/release().
         synchronized (codecRecoveryMonitor) {
+            // A genuine codec-error recovery can overlap a UI mode request. Wait for that recovery
+            // rather than racing setOutputSurface() against reset/release.
+            long recoveryDeadlineMs = SystemClock.uptimeMillis() + 2000;
+            while (!stopping && codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+                long remainingMs = recoveryDeadlineMs - SystemClock.uptimeMillis();
+                if (remainingMs <= 0) {
+                    LimeLog.warning("Timed out waiting to switch decoder output surface during recovery");
+                    return false;
+                }
+
+                try {
+                    codecRecoveryMonitor.wait(remainingMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    LimeLog.warning("Interrupted while waiting to switch decoder output surface");
+                    return false;
+                }
+            }
+
             if (videoDecoder == null || stopping
                     || codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                 LimeLog.warning("Cannot switch decoder output surface while decoder is unavailable");
@@ -998,11 +1149,179 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             try {
                 videoDecoder.setOutputSurface(surface);
                 renderTarget = surface;
+                // SceneCore may return a replacement Surface after a resize or an EGL handoff.
+                // Frame-rate metadata belongs to the Surface, so restore it after every live swap.
+                applySurfaceFrameRate(surface, targetFps);
                 return true;
             } catch (Exception e) {
                 LimeLog.warning("Decoder output-surface switch failed: " + e);
                 return false;
             }
+        }
+    }
+
+    static boolean shouldRecoverCodecForPresentationModeTransition(int videoFormat) {
+        return (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) == 0;
+    }
+
+    static boolean hdrMetadataUsesInPlaceReset(int videoFormat) {
+        return (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0;
+    }
+
+    static boolean shouldRecreateAv1Decoder(int videoFormat, boolean applyingHdrMetadata) {
+        return (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0
+                && !applyingHdrMetadata;
+    }
+
+    static boolean shouldDispatchPerformanceSnapshot(boolean overlayEnabled,
+                                                     boolean loggingEnabled) {
+        return overlayEnabled || loggingEnabled;
+    }
+
+    static int countMissingFrames(int previousFrameNumber, int frameNumber,
+                                  boolean intentionalDiscontinuity) {
+        if (intentionalDiscontinuity || previousFrameNumber == 0) {
+            return 0;
+        }
+        int serialDelta = frameNumber - previousFrameNumber;
+        return serialDelta > 1 ? serialDelta - 1 : 0;
+    }
+
+    static boolean consumesIntentionalDiscontinuity(int previousFrameNumber,
+                                                     int frameNumber) {
+        return previousFrameNumber == 0 || frameNumber != previousFrameNumber;
+    }
+
+    /**
+     * Begin an XR presentation-mode transaction. Compressed frames are gated immediately and the
+     * output is PTS-gated until the transition IDR emerges. AVC/HEVC also use the existing
+     * all-thread flush barrier. Qualcomm AV1 must not be flushed, restarted, reset, or recreated:
+     * live lifecycle changes can leave its Codec2 buffer channel discarding every completed work.
+     */
+    public boolean beginPresentationModeTransition() {
+        synchronized (codecRecoveryMonitor) {
+            if (videoDecoder == null || stopping) {
+                LimeLog.warning("Cannot prepare decoder for presentation-mode transition");
+                return false;
+            }
+
+            synchronized (modeTransitionStateLock) {
+                modeTransitionWatchdogGeneration++;
+                modeTransitionWatchdogActive = false;
+                modeTransitionFrameGate.begin(latestInputFrameNumber);
+            }
+            if (!shouldRecoverCodecForPresentationModeTransition(videoFormat)) {
+                LimeLog.info("XR mode transition: gating AV1 input/output without codec recovery");
+            }
+            else if (codecRecoveryType.compareAndSet(
+                    CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_FLUSH)) {
+                presentationModeRecoveryPending = true;
+                LimeLog.info("XR mode transition: gating compressed frames and flushing decoder");
+            }
+            else {
+                // A stronger HDR/error recovery already invalidates every queued codec buffer.
+                LimeLog.info("XR mode transition: gating compressed frames; decoder recovery "
+                        + codecRecoveryType.get() + " already pending");
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Open the transition gate far enough to accept a new IDR, after the target Surface is bound.
+     * P-frames and any IDR that was already in flight when the transition began remain discarded.
+     */
+    public void completePresentationModeTransition() {
+        int watchdogGeneration = 0;
+        synchronized (modeTransitionStateLock) {
+            if (modeTransitionFrameGate.markTargetSurfaceReady()) {
+                watchdogGeneration = ++modeTransitionWatchdogGeneration;
+                modeTransitionWatchdogActive = true;
+                modeTransitionWatchdogDeadlineMs = SystemClock.uptimeMillis()
+                        + MODE_TRANSITION_TIMEOUT_MS;
+            }
+        }
+        if (watchdogGeneration != 0) {
+            LimeLog.info("XR mode transition: target surface ready; requesting fresh IDR");
+            MoonBridge.requestIdrFrame();
+            final int scheduledGeneration = watchdogGeneration;
+            modeTransitionHandler.postDelayed(
+                    () -> runPresentationModeTransitionWatchdog(scheduledGeneration),
+                    MODE_TRANSITION_IDR_RETRY_MS);
+        }
+    }
+
+    /** Release the compressed-frame gate when the enclosing mode transaction is being aborted. */
+    public void cancelPresentationModeTransition() {
+        if (cancelPresentationModeTransitionInternal()) {
+            LimeLog.warning("XR mode transition aborted; compressed-frame gate released");
+        }
+    }
+
+    private boolean cancelPresentationModeTransitionInternal() {
+        synchronized (modeTransitionStateLock) {
+            modeTransitionWatchdogGeneration++;
+            modeTransitionWatchdogActive = false;
+            return modeTransitionFrameGate.cancel();
+        }
+    }
+
+    private void runPresentationModeTransitionWatchdog(int generation) {
+        Runnable timedOut = null;
+        boolean timeoutTriggered = false;
+        boolean retry = false;
+        synchronized (modeTransitionStateLock) {
+            if (!modeTransitionWatchdogActive
+                    || generation != modeTransitionWatchdogGeneration) {
+                return;
+            }
+            if (SystemClock.uptimeMillis() >= modeTransitionWatchdogDeadlineMs) {
+                modeTransitionWatchdogActive = false;
+                modeTransitionWatchdogGeneration++;
+                if (modeTransitionFrameGate.cancel()) {
+                    timeoutTriggered = true;
+                    timedOut = modeTransitionTimedOutListener;
+                }
+            } else {
+                retry = true;
+            }
+        }
+
+        if (timeoutTriggered) {
+            LimeLog.severe("XR mode transition timed out waiting for the fresh IDR output");
+            if (timedOut != null) {
+                timedOut.run();
+            }
+            return;
+        }
+        if (retry) {
+            MoonBridge.requestIdrFrame();
+            modeTransitionHandler.postDelayed(
+                    () -> runPresentationModeTransitionWatchdog(generation),
+                    MODE_TRANSITION_IDR_RETRY_MS);
+        }
+    }
+
+    private DecoderModeTransitionGate.OutputDecision evaluatePresentationTransitionOutput(
+            long presentationTimeUs) {
+        synchronized (modeTransitionStateLock) {
+            return modeTransitionFrameGate.evaluateOutput(presentationTimeUs);
+        }
+    }
+
+    /** Publish transition completion only after MediaCodec accepts a render release. */
+    private void acknowledgePresentationTransitionRendered() {
+        Runnable opened = null;
+        synchronized (modeTransitionStateLock) {
+            modeTransitionFrameGate.acknowledgeRenderedOutput();
+            if (modeTransitionFrameGate.consumeCompletedTransition()) {
+                modeTransitionWatchdogActive = false;
+                modeTransitionWatchdogGeneration++;
+                opened = modeTransitionOpenedListener;
+            }
+        }
+        if (opened != null) {
+            opened.run();
         }
     }
 
@@ -1030,6 +1349,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
                 outputBufferQueue.clear();
+                synchronized (videoStatsLock) {
+                    // These outputs were invalidated by the recovery transaction and can never
+                    // produce a matching dequeue callback.
+                    enqueueNsByPtsUs.clear();
+                }
+
+                // Snapshot expected recovery reasons before any operation changes the token.
+                boolean applyingHdrMetadata = hdrMetadataRecoveryPending;
+                boolean applyingPresentationModeTransition = presentationModeRecoveryPending;
 
                 // If we just need a flush, do so now with all threads quiesced.
                 if (codecRecoveryType.get() == CR_RECOVERY_TYPE_FLUSH) {
@@ -1037,6 +1365,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     try {
                         videoDecoder.flush();
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        presentationModeRecoveryPending = false;
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
 
@@ -1046,20 +1375,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
 
-                // HDR metadata arrives after initial decoder setup and requires a clean reset on
-                // Qualcomm AV1. It is an expected reconfiguration, not a codec recovery attempt.
-                boolean applyingHdrMetadata = hdrMetadataRecoveryPending;
-
-                // We don't count flushes or expected HDR reconfiguration as codec recovery attempts.
-                if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE && !applyingHdrMetadata) {
+                // Flushes, HDR setup, and requested presentation transitions are not codec errors.
+                if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE
+                        && !applyingHdrMetadata
+                        && !applyingPresentationModeTransition) {
                     codecRecoveryAttempts++;
                     LimeLog.info("Codec recovery attempt: "+codecRecoveryAttempts);
                 }
 
-                // For "recoverable" exceptions, we can just stop, reconfigure, and restart.
-                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESTART) {
+                // Keep the committed late-HDR path on an in-place reset. Full AV1 recreation is
+                // reserved for an actual codec failure; it must not turn an expected metadata
+                // update into a heavier lifecycle transaction.
+                boolean recreateAv1Decoder = shouldRecreateAv1Decoder(
+                        videoFormat, applyingHdrMetadata)
+                        && (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESTART
+                        || codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET);
+
+                // For recoverable H.264/HEVC exceptions, stop, reconfigure, and restart.
+                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESTART && !recreateAv1Decoder) {
                     if (applyingHdrMetadata) {
                         LimeLog.info("Restarting decoder to apply HDR metadata");
+                    }
+                    else if (applyingPresentationModeTransition) {
+                        LimeLog.info("Restarting decoder for presentation-mode transition");
                     }
                     else {
                         LimeLog.warning("Trying to restart decoder after codec failure");
@@ -1069,12 +1407,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         configureAndStartDecoder(configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                         hdrMetadataRecoveryPending = false;
+                        presentationModeRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
 
                         // Our Surface is probably invalid, so just stop
                         stopping = true;
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        presentationModeRecoveryPending = false;
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
 
@@ -1084,11 +1424,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
 
-                // For "non-recoverable" exceptions on L+, we can call reset() to recover
-                // without having to recreate the entire decoder again.
-                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                // For other non-recoverable exceptions on L+, call reset() before escalating to
+                // recreation. This retains the established, less expensive recovery path.
+                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET
+                        && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                        && !recreateAv1Decoder) {
                     if (applyingHdrMetadata) {
                         LimeLog.info("Resetting decoder to apply HDR metadata");
+                    }
+                    else if (applyingPresentationModeTransition) {
+                        LimeLog.info("Resetting decoder for presentation-mode transition");
                     }
                     else {
                         LimeLog.warning("Trying to reset decoder after codec failure");
@@ -1098,12 +1443,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         configureAndStartDecoder(configuredFormat);
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                         hdrMetadataRecoveryPending = false;
+                        presentationModeRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
 
                         // Our Surface is probably invalid, so just stop
                         stopping = true;
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        presentationModeRecoveryPending = false;
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
 
@@ -1114,25 +1461,56 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                 // If we _still_ haven't managed to recover, go for the nuclear option and just
                 // throw away the old decoder and reinitialize a new one from scratch.
-                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET) {
-                    LimeLog.warning("Trying to recreate decoder after failed reset");
-                    videoDecoder.release();
+                if (recreateAv1Decoder || codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET) {
+                    if (recreateAv1Decoder && applyingHdrMetadata) {
+                        LimeLog.info("Recreating AV1 decoder to apply HDR metadata");
+                    }
+                    else if (recreateAv1Decoder && applyingPresentationModeTransition) {
+                        LimeLog.info("Recreating AV1 decoder for presentation-mode transition");
+                    }
+                    else if (recreateAv1Decoder) {
+                        LimeLog.warning("Recreating AV1 decoder after codec failure");
+                    }
+                    else {
+                        LimeLog.warning("Trying to recreate decoder after failed reset");
+                    }
 
                     try {
+                        // Detach the old codec before release. If creation of the replacement fails,
+                        // tryConfigureDecoder() must never release this stale object a second time.
+                        MediaCodec oldDecoder = videoDecoder;
+                        videoDecoder = null;
+                        if (oldDecoder != null) {
+                            try {
+                                oldDecoder.release();
+                            } catch (RuntimeException e) {
+                                LimeLog.warning("Failed to release old decoder during recreation: " + e);
+                            }
+                        }
+
                         int err = initializeDecoder(true);
                         if (err != 0) {
-                            throw new IllegalStateException("Decoder reset failed: " + err);
+                            throw new IllegalStateException("Decoder recreation failed: " + err);
                         }
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
                         hdrMetadataRecoveryPending = false;
+                        presentationModeRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
                         e.printStackTrace();
 
                         // Our Surface is probably invalid, so just stop
                         stopping = true;
                         codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-                    } catch (IllegalStateException e) {
+                        presentationModeRecoveryPending = false;
+                        hdrMetadataRecoveryPending = false;
+                    } catch (RuntimeException e) {
                         // If we failed to recover after all of these attempts, just crash
+                        stopping = true;
+                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        hdrMetadataRecoveryPending = false;
+                        presentationModeRecoveryPending = false;
+                        codecRecoveryThreadQuiescedFlags = 0;
+                        codecRecoveryMonitor.notifyAll();
                         if (!reportedCrash) {
                             reportedCrash = true;
                             crashListener.notifyCrash(e);
@@ -1306,33 +1684,41 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
             // by holding onto them for too long. This also ensures we will have that 1 extra
             // frame of buffer to smooth over network/rendering jitter.
-            Integer nextOutputBuffer = outputBufferQueue.poll();
+            DecodedOutputBuffer nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != null) {
                 try {
-                    boolean releasedForRender;
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        if (preferLowerDelays) {
-                            // ULL: present at next VSYNC (no scheduling)
-                            releasedForRender = releaseWithPolicy(
-                                    nextOutputBuffer, System.nanoTime());
-                        } else {
-                            // Smooth/Balanced: keep timestamp scheduling
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                            releasedForRender = true;
-                        }
-                    } else {
-                        releasedForRender = releaseWithPolicy(
-                                nextOutputBuffer, frameTimeNanos);
+                    DecoderModeTransitionGate.OutputDecision outputDecision =
+                            evaluatePresentationTransitionOutput(
+                                    nextOutputBuffer.presentationTimeUs);
+                    if (outputDecision == DecoderModeTransitionGate.OutputDecision.DROP) {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer.index, false);
+                        nextOutputBuffer = null;
+                    }
+                    else if (outputDecision
+                            == DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN) {
+                        LimeLog.info("XR mode transition: fresh IDR output reached render gate");
                     }
 
-                    if (releasedForRender) {
-                        lastRenderedFrameTimeNanos = frameTimeNanos;
-                        recordFrameReleasedForRender();
+                    if (nextOutputBuffer != null) {
+                        boolean releasedForRender;
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            releaseOutputBufferForRender(nextOutputBuffer.index, frameTimeNanos);
+                            releasedForRender = true;
+                        } else {
+                            releaseOutputBufferForRender(nextOutputBuffer.index);
+                            releasedForRender = true;
+                        }
+
+                        if (releasedForRender) {
+                            lastRenderedFrameTimeNanos = frameTimeNanos;
+                        }
                     }
                 } catch (IllegalStateException ignored) {
                     try {
                         // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                        if (nextOutputBuffer != null) {
+                            videoDecoder.releaseOutputBuffer(nextOutputBuffer.index, false);
+                        }
                     } catch (IllegalStateException e) {
                         // This will leak nextOutputBuffer, but there's really nothing else we can do
                         e.printStackTrace();
@@ -1370,114 +1756,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         });
     }
 
-    private void startRendererThread()
-    {
+    private void startRendererThread() {
         rendererThread = new Thread() {
             @Override
             public void run() {
                 // Boost thread priority to reduce decoding latency
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
 
-                // Compute display refresh and vsync period once (fallback 60 Hz if unavailable)
-                long vsyncPeriodNs;
-                float displayHz = 60f;
-                try {
-                    if (Build.VERSION.SDK_INT >= 17 && context != null) {
-                        android.view.Display d = ((android.view.WindowManager) context.getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay();
-                        if (d != null) displayHz = d.getRefreshRate();
-                    }
-                } catch (Throwable ignored) {}
-                if (displayHz <= 0f) displayHz = 60f;
-                vsyncPeriodNs = (long) (1_000_000_000L / displayHz);
-
-                // Stream cadence (targetFps set in setup(...))
-                final int tfps = (targetFps > 0 ? targetFps : 60);
-                final long streamPeriodNs = (long) (1_000_000_000L / Math.max(1, tfps));
-
-
-                // Adaptive period selection to avoid added latency on high-refresh devices
-                final boolean highRefresh = displayHz >= 90f;
-                final boolean managedMode = (prefs != null && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED);
-                // Use stream-aligned thresholds only on lower-refresh screens while in Balanced.
-                final long periodNs = (preferLowerDelays ? vsyncPeriodNs : Math.max(vsyncPeriodNs, streamPeriodNs));
-                boolean isC2Decoder = false;
-                try {
-                    String decName = videoDecoder.getName();
-                    if (decName != null) {
-                        isC2Decoder = decName.toLowerCase(java.util.Locale.US).startsWith("c2.");
-                    }
-                } catch (Throwable ignored) {}
-
-                // Aggressive/adaptive state
-                final double EWMA_ALPHA = 0.25;
-                final double MIN_FACTOR = 1.00;
-                final double MAX_FACTOR = 1.20;
-
-                long   lastDecoderPtsUs        = 0L;
-                long   lastPresentNs           = 0L;
-                long   lastDropNs              = 0L;
-                int    lateStreak              = 0;
-                int    tryAgainStreak          = 0;
-                int    recentDrops             = 0;
-
-                double ewmaInterArrivalNs      = (1_000_000_000.0 / Math.max(1, tfps));
-                double ewmaDecodeToPresentNs   = periodNs * 0.7;
-                double ewmaJitterNs            = periodNs * 0.1;
-
+                int tryAgainStreak = 0;
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
-                    /* LATEST_ONLY_LOW_LATENCY */
-                    if (!preferLowerDelays) {
-                        try {
-                            android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
-                            int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            int __last = -1;
-                            long __lastPtsUs = -1L;
-
-                            // Drain non-blocking; keep only the newest buffer
-                            while (__idx >= 0) {
-                                // Measure decode completion at dequeue time, including buffers that
-                                // are subsequently discarded by the latest-frame policy.
-                                updateDecodeLatencyStats(__tmpInfo.presentationTimeUs);
-                                if (__last >= 0) {
-                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                }
-                                __last = __idx;
-                                __lastPtsUs = __tmpInfo.presentationTimeUs;
-                                __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            }
-
-                            if (__last >= 0) {
-                                long __nowNs = System.nanoTime();
-                                boolean releasedForRender = releaseWithPolicy(
-                                        __last, System.nanoTime());
-                                if (releasedForRender) {
-                                    recordFrameReleasedForRender();
-                                }
-
-                                // Update decode->present EWMA if we have a valid PTS. Decode latency
-                                // was captured above at the actual dequeue point.
-                                if (__lastPtsUs >= 0) {
-                                    long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (__d2pNs - ewmaDecodeToPresentNs);
-                                }
-
-                                continue; // handled this iteration
-                            }
-                        } catch (Throwable ignored) {}
-                    }
-                    /* /LATEST_ONLY_LOW_LATENCY */
-
-
                     try {
                         // Try to output a frame
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
 
                         if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                            // reduced backoff 0–500 µs
+                            // Avoid a hot spin while keeping the minimum-latency retry sub-millisecond.
                             tryAgainStreak++;
                             int backoffUs = (tryAgainStreak <= 2) ? 250 : 500;
                             outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
+                            if (outIndex != MediaCodec.INFO_TRY_AGAIN_LATER) {
+                                tryAgainStreak = 0;
+                            }
                         } else {
                             tryAgainStreak = 0;
                         }
@@ -1493,20 +1793,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                             numFramesOut++;
 
-                            // aggiorna inter-arrival
-                            if (lastDecoderPtsUs != 0L) {
-                                long interUs = presentationTimeUs - lastDecoderPtsUs;
-                                if (interUs > 0) {
-                                    double sample = interUs * 1000.0;
-                                    ewmaInterArrivalNs += EWMA_ALPHA * (sample - ewmaInterArrivalNs);
-                                }
+                            DecoderModeTransitionGate.OutputDecision outputDecision =
+                                    evaluatePresentationTransitionOutput(presentationTimeUs);
+                            if (outputDecision == DecoderModeTransitionGate.OutputDecision.DROP) {
+                                videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                continue;
                             }
-                            lastDecoderPtsUs = presentationTimeUs;
+                            if (outputDecision
+                                    == DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN) {
+                                LimeLog.info("XR mode transition: fresh IDR output reached render gate");
+                            }
 
-                            // Render the latest frame now if frame pacing isn't in balanced mode
+                            // Direct pacing modes keep only the newest output already waiting.
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-                                // Get the last output buffer in the queue
-                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs())) >= 0) {
+                                while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
 
                                     numFramesOut++;
@@ -1515,124 +1815,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     updateDecodeLatencyStats(presentationTimeUs);
                                 }
 
+                                if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                                    handleOutputFormatChanged();
+                                }
+
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-                                    // In max smoothness or cap FPS mode, we want to never drop frames
+                                    // A timestamp of zero asks SurfaceFlinger not to discard this frame.
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        // Smoothness: tighter threshold 1.05..1.2×
-                                        double pressure = Math.min(1.0, (ewmaJitterNs / vsyncPeriodNs) + (recentDrops * 0.1));
-                                        double factorSmooth = 1.2 - 0.15 * (1.0 - pressure);
-                                        factorSmooth = Math.max(1.05, Math.min(1.2, factorSmooth));
-
-                                        long dropThresholdSmoothNs = (long)(periodNs * factorSmooth);
-
-                                        if (frameAgeNs >= dropThresholdSmoothNs) {
-                                            if (preferLowerDelays) {
-                                                // ULL: present at next VSYNC (no scheduling)
-                                                if (releaseWithPolicy(lastIndex, System.nanoTime())) {
-                                                    recordFrameReleasedForRender();
-                                                }
-                                            } else {
-                                                // Smooth/Balanced: keep timestamp scheduling
-                                                videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
-                                            }
-
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue;
-                                        }
-
-                                        if (preferLowerDelays) {
-                                            // ULL: present at next VSYNC (no scheduling)
-                                            releasedForRender = releaseWithPolicy(
-                                                    lastIndex, System.nanoTime());
-                                        } else {
-                                            // Smooth/Balanced: keep timestamp scheduling
-                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                            releasedForRender = true;
-                                        }
-
-                                        lastPresentNs = nowNs;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
+                                        releaseOutputBufferForRender(lastIndex, 0);
+                                        releasedForRender = true;
                                     } else {
-                                        releasedForRender = releaseWithPolicy(
-                                                lastIndex, System.nanoTime());
+                                        releaseOutputBufferForRender(lastIndex);
+                                        releasedForRender = true;
                                     }
+                                } else {
+                                    // Minimum latency renders immediately. Timestamp scheduling is
+                                    // reserved for the pacing modes above and Choreographer path.
+                                    releaseOutputBufferForRender(lastIndex);
+                                    releasedForRender = true;
                                 }
-                                else {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        final long nowNs = System.nanoTime();
-                                        final long frameAgeNs = nowNs - (presentationTimeUs * 1000L);
-
-                                        // Latency: 1.0..1.15×, debounce = 1, cooldown = 0.5×
-                                        double backPressure = Math.min(1.0, (double)tryAgainStreak / 6.0);
-                                        double streamHz = Math.max(1.0, (double)tfps);
-                                        double mismatch = Math.abs((1_000_000_000.0 / streamHz) - (1_000_000_000.0 / Math.max(1.0, displayHz))) / vsyncPeriodNs;
-                                        mismatch = Math.min(2.0, mismatch);
-
-                                        double factorLatency = 1.02 + 0.13 * (0.5 * (ewmaJitterNs / vsyncPeriodNs)
-                                                + 0.3 * backPressure
-                                                + 0.2 * mismatch);
-                                        factorLatency = Math.max(MIN_FACTOR, Math.min(1.15, factorLatency));
-
-                                        long dropThresholdNs = (long)(periodNs * factorLatency);
-
-                                        final long sinceLastPresent = (lastPresentNs == 0L) ? Long.MAX_VALUE : (nowNs - lastPresentNs);
-                                        final boolean dropCooldownOk = (nowNs - lastDropNs) >= (periodNs / 2);
-                                        final boolean isLate = frameAgeNs > dropThresholdNs;
-                                        lateStreak = isLate ? (lateStreak + 1) : 0;
-
-                                        final boolean shouldDrop =
-                                                isLate &&
-                                                        (lateStreak >= 1) &&
-                                                        (sinceLastPresent < (long)(periodNs * 0.5)) &&
-                                                        dropCooldownOk;
-
-                                        if (shouldDrop) {
-                                            if (preferLowerDelays) {
-                                                // ULL: present at next VSYNC (no scheduling)
-                                                if (releaseWithPolicy(lastIndex, System.nanoTime())) {
-                                                    recordFrameReleasedForRender();
-                                                }
-                                            } else {
-                                                // Smooth/Balanced: keep timestamp scheduling
-                                                videoDecoder.releaseOutputBuffer(lastIndex, /* render */ false);
-                                            }
-
-                                            lastDropNs = nowNs;
-                                            recentDrops = Math.min(10, recentDrops + 1);
-                                            continue; // niente stats sui frame droppati
-                                        }
-
-                                        if (preferLowerDelays) {
-                                            // ULL: present at next VSYNC (no scheduling)
-                                            releasedForRender = releaseWithPolicy(
-                                                    lastIndex, System.nanoTime());
-                                        } else {
-                                            // Smooth/Balanced: keep timestamp scheduling
-                                            videoDecoder.releaseOutputBuffer(lastIndex, nowNs);
-                                            releasedForRender = true;
-                                        }
-
-                                        lastPresentNs = nowNs;
-                                        if (!isLate) lateStreak = 0;
-                                        recentDrops = Math.max(0, recentDrops - 1);
-
-                                    } else {
-                                        releasedForRender = releaseWithPolicy(
-                                                lastIndex, System.nanoTime());
-                                    }
-                                }
-
-                                if (releasedForRender) {
-                                    recordFrameReleasedForRender();
-                                }
-                            }
-                            else {
+                            } else {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
                                 // We just put all frames into the output buffer queue and let it handle things.
 
@@ -1643,15 +1846,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // refresh rate).
                                 if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
                                     try {
-                                        videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
+                                        videoDecoder.releaseOutputBuffer(
+                                                outputBufferQueue.take().index, false);
                                     } catch (InterruptedException e) {
                                         return;
                                     }
                                 }
 
                                 // Add this buffer
-                                outputBufferQueue.add(lastIndex);
-                                // NB: in BALANCED non presentiamo qui; lasciamo il fallback stats sotto
+                                outputBufferQueue.add(new DecodedOutputBuffer(
+                                        lastIndex, presentationTimeUs));
                             }
 
                         } else {
@@ -1659,10 +1863,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
                                     break;
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
-                                    LimeLog.info("Output format changed");
-                                    outputFormat = videoDecoder.getOutputFormat();
-                                    LimeLog.info("New output format: " + outputFormat);
-                                    logColorFormat("Actual decoder output color", outputFormat);
+                                    handleOutputFormatChanged();
                                     break;
                                 default:
                                     break;
@@ -1680,6 +1881,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread.setPriority(Thread.NORM_PRIORITY + 2);
         rendererThread.start();
     }
+
     private boolean fetchNextInputBuffer() {
         long startTime;
         boolean codecRecovered;
@@ -1771,6 +1973,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
+        cancelPresentationModeTransitionInternal();
 
         // Halt the rendering thread
         if (rendererThread != null) {
@@ -1838,7 +2041,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void cleanup() {
-        videoDecoder.release();
+        MediaCodec decoderToRelease;
+        synchronized (codecRecoveryMonitor) {
+            decoderToRelease = videoDecoder;
+            videoDecoder = null;
+        }
+        if (decoderToRelease != null) {
+            try {
+                decoderToRelease.release();
+            } catch (RuntimeException e) {
+                LimeLog.warning("Failed to release decoder during cleanup: " + e);
+            }
+        }
     }
 
     @Override
@@ -1865,7 +2079,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // state after stop()/configure()/start(), causing every subsequent work item to be
             // ignored. Use a full reset for AV1 while retaining the established restart path for
             // the other codecs.
-            final int recoveryType = (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0 ?
+            final int recoveryType = hdrMetadataUsesInPlaceReset(videoFormat) ?
                     CR_RECOVERY_TYPE_RESET : CR_RECOVERY_TYPE_RESTART;
             synchronized (codecRecoveryMonitor) {
                 // A second metadata update can arrive before the already scheduled recovery.
@@ -1890,27 +2104,52 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    private boolean queueNextInputBuffer(long timestampUs, int codecFlags) {
+    private InputQueueResult queueNextInputBufferForAdmission(
+            long timestampUs, int codecFlags, long admissionGeneration,
+            int frameNumber, boolean idrFrame, boolean prepareTransitionIdr) {
         boolean codecRecovered;
-        boolean trackDecodeLatency = (codecFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
-        long enqueueNs = System.nanoTime();
+        boolean trackDecodeLatency = performanceTelemetryEnabled
+                && (codecFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
+        long enqueueNs = trackDecodeLatency ? System.nanoTime() : 0L;
 
         // Publish the timestamp before queueing. A very fast decoder can return the output on the
         // renderer thread before queueInputBuffer() returns to this thread.
         if (trackDecodeLatency) {
             synchronized (videoStatsLock) {
-                enqueueNsByPtsUs.put(timestampUs, enqueueNs);
+                // Recheck under the lock so disabling telemetry cannot race a stale insertion.
+                if (performanceTelemetryEnabled) {
+                    enqueueNsByPtsUs.put(timestampUs, enqueueNs);
+                } else {
+                    trackDecodeLatency = false;
+                }
             }
         }
 
         try {
-            videoDecoder.queueInputBuffer(nextInputBufferIndex,
-                    0, nextInputBuffer.position(),
-                    timestampUs, codecFlags);
-
-            // We need a new buffer now
-            nextInputBufferIndex = -1;
-            nextInputBuffer = null;
+            pendingInputCommitTimestampUs = timestampUs;
+            pendingInputCommitCodecFlags = codecFlags;
+            DecoderModeTransitionGate.InputCommitDecision commitDecision =
+                    modeTransitionFrameGate.commitInput(
+                            admissionGeneration, frameNumber, idrFrame, timestampUs,
+                            prepareTransitionIdr, inputCommitter);
+            if (commitDecision
+                    == DecoderModeTransitionGate.InputCommitDecision.STALE_ADMISSION) {
+                if (trackDecodeLatency) {
+                    synchronized (videoStatsLock) {
+                        Long trackedEnqueueNs = enqueueNsByPtsUs.get(timestampUs);
+                        if (trackedEnqueueNs != null && trackedEnqueueNs == enqueueNs) {
+                            enqueueNsByPtsUs.delete(timestampUs);
+                        }
+                    }
+                }
+                nextInputBuffer.clear();
+                return InputQueueResult.TRANSITION_DROPPED;
+            }
+            if (commitDecision
+                    == DecoderModeTransitionGate.InputCommitDecision.COMMITTED_TRANSITION_IDR) {
+                LimeLog.info("XR mode transition: fresh IDR " + frameNumber
+                        + " accepted; compressed-frame gate opened");
+            }
         } catch (IllegalStateException e) {
             if (trackDecodeLatency) {
                 synchronized (videoStatsLock) {
@@ -1932,7 +2171,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 nextInputBufferIndex = -1;
                 nextInputBuffer = null;
             }
-            return false;
+            return InputQueueResult.FAILED;
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
@@ -1940,7 +2179,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // If codec recovery is required, always return false to ensure the caller will request
         // an IDR frame to complete the codec recovery.
         if (codecRecovered) {
-            return false;
+            return InputQueueResult.FAILED;
         }
 
         // Fetch a new input buffer now while we have some time between frames
@@ -1949,7 +2188,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // We must propagate the return value here in order to properly handle
         // codec recovery happening in fetchNextInputBuffer(). If we don't, we'll
         // never get an IDR frame to complete the recovery process.
-        return fetchNextInputBuffer();
+        return fetchNextInputBuffer()
+                ? InputQueueResult.QUEUED : InputQueueResult.FAILED;
+    }
+
+    /** Runs only under DecoderModeTransitionGate's admission monitor on the input thread. */
+    private void commitPendingInputBuffer() {
+        videoDecoder.queueInputBuffer(nextInputBufferIndex,
+                0, nextInputBuffer.position(),
+                pendingInputCommitTimestampUs, pendingInputCommitCodecFlags);
+        nextInputBufferIndex = -1;
+        nextInputBuffer = null;
     }
 
     private void doProfileSpecificSpsPatching(SeqParameterSet sps) {
@@ -1979,19 +2228,47 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return MoonBridge.DR_OK;
         }
 
+        // Publish the boundary before consulting the transition gate. If beginTransition() races
+        // immediately after this write, it snapshots this frame and therefore cannot later admit
+        // the same already-in-flight IDR as a fresh post-transition frame.
+        latestInputFrameNumber = frameNumber;
+        boolean idrFrame = frameType == MoonBridge.FRAME_TYPE_IDR;
+        final long transitionInputAdmission;
+        final DecoderModeTransitionGate.InputDecision transitionInputDecision;
+        synchronized (modeTransitionStateLock) {
+            transitionInputAdmission = modeTransitionFrameGate.getInputAdmissionGeneration();
+            transitionInputDecision = modeTransitionFrameGate.evaluateInput(
+                    frameNumber, idrFrame);
+        }
+        if (transitionInputDecision != DecoderModeTransitionGate.InputDecision.ACCEPT) {
+            intentionalInputDiscontinuityPending = true;
+            // Transition recovery still needs the native input/callback thread to enter the codec
+            // recovery barrier. Do that while dropping the compressed frame so setOutputSurface()
+            // cannot wait behind an idle input thread. DR_OK deliberately avoids an early IDR
+            // storm; completePresentationModeTransition() requests one after the target is bound.
+            doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+            return transitionInputDecision == DecoderModeTransitionGate.InputDecision.NEED_IDR
+                    ? MoonBridge.DR_NEED_IDR : MoonBridge.DR_OK;
+        }
+
         long statsNowMs = SystemClock.uptimeMillis();
         VideoStats completedWindowVideoStats = null;
         VideoStats lastTwo = null;
-        boolean collectPerformance = prefs.enablePerfOverlay || prefs.enablePerfLogging;
+        boolean collectPerformance = performanceTelemetryEnabled;
         synchronized (videoStatsLock) {
+            int missingFrames = countMissingFrames(lastFrameNumber, frameNumber,
+                    intentionalInputDiscontinuityPending);
             if (lastFrameNumber == 0) {
                 activeWindowVideoStats.measurementStartTimestamp = statsNowMs;
-            } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
+            } else if (missingFrames > 0) {
                 // We can receive the same "frame" multiple times if it's an IDR frame.
                 // In that case, each frame start NALU is submitted independently.
-                activeWindowVideoStats.framesLost += frameNumber - lastFrameNumber - 1;
-                activeWindowVideoStats.totalFrames += frameNumber - lastFrameNumber - 1;
+                activeWindowVideoStats.framesLost += missingFrames;
+                activeWindowVideoStats.totalFrames += missingFrames;
                 activeWindowVideoStats.frameLossEvents++;
+            }
+            if (consumesIntentionalDiscontinuity(lastFrameNumber, frameNumber)) {
+                intentionalInputDiscontinuityPending = false;
             }
 
             if (statsNowMs >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
@@ -2021,11 +2298,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         lastFrameNumber = frameNumber;
 
-        // Format the completed window after releasing the stats lock. Rendering and decoding
-        // continue while strings and the UI snapshot are built.
+        // Build the immutable completed-window snapshot after releasing the stats lock. Rendering
+        // and decoding continue while the listener consumes it.
         if (completedWindowVideoStats != null) {
             if (collectPerformance) {
-                VideoStatsFps fps = lastTwo.getFps();
+                float smoothedFps = lastTwo.getFps().totalFps;
                 String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
@@ -2042,20 +2319,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         ? (float) (lastTwo.decoderTimeNs / 1_000_000.0)
                         / lastTwo.decoderLatencySamples
                         : Float.NaN;
-                float legacyNetworkLossPercent = lastTwo.totalFrames > 0
-                        ? (float) lastTwo.framesLost / lastTwo.totalFrames * 100.0f
-                        : Float.NaN;
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
                 int estimatedRttMs = rttInfo == -1L
                         ? StreamPerformanceSnapshot.INT_UNAVAILABLE
                         : (int) (rttInfo >>> 32);
-                int estimatedRttVarianceMs = rttInfo == -1L
-                        ? StreamPerformanceSnapshot.INT_UNAVAILABLE
-                        : (int) rttInfo;
                 float bandwidthMbps = sampleAppNetworkThroughputMbps(statsNowMs);
 
-                // The XR panel consumes the just-completed active window. The legacy text below
-                // intentionally retains its overlapping two-window smoothing.
+                // The XR panel consumes the just-completed active window. The overlapping
+                // two-window average above remains only for selecting a stable best-latency sample.
                 long activeElapsedMs = Math.max(0L,
                         statsNowMs - completedWindowVideoStats.measurementStartTimestamp);
                 float activeSeconds = activeElapsedMs > 0
@@ -2064,8 +2335,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         ? completedWindowVideoStats.totalFrames / activeSeconds : Float.NaN;
                 float activeReceivedFps = Float.isFinite(activeSeconds)
                         ? completedWindowVideoStats.totalFramesReceived / activeSeconds : Float.NaN;
+                float activeDecoderOutputFps = Float.isFinite(activeSeconds)
+                        ? completedWindowVideoStats.totalFramesDecoded / activeSeconds : Float.NaN;
                 float activeDecoderReleaseFps = Float.isFinite(activeSeconds)
                         ? completedWindowVideoStats.totalFramesRendered / activeSeconds : Float.NaN;
+                float activeDecoderPresentedFps = Float.isFinite(activeSeconds)
+                        ? completedWindowVideoStats.totalFramesPresented / activeSeconds : Float.NaN;
                 float activeDecodeAverageMs = completedWindowVideoStats.decoderLatencySamples > 0
                         ? (float) (completedWindowVideoStats.decoderTimeNs / 1_000_000.0)
                         / completedWindowVideoStats.decoderLatencySamples
@@ -2076,11 +2351,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         ? (float) completedWindowVideoStats.framesLost
                         / completedWindowVideoStats.totalFrames * 100.0f
                         : Float.NaN;
-                float hostProcessingMinMs = Float.NaN;
                 float hostProcessingAverageMs = Float.NaN;
                 float hostProcessingMaxMs = Float.NaN;
                 if (completedWindowVideoStats.framesWithHostProcessingLatency > 0) {
-                    hostProcessingMinMs = completedWindowVideoStats.minHostProcessingLatency / 10.0f;
                     hostProcessingAverageMs = completedWindowVideoStats.totalHostProcessingLatency
                             / 10.0f / completedWindowVideoStats.framesWithHostProcessingLatency;
                     hostProcessingMaxMs = completedWindowVideoStats.maxHostProcessingLatency / 10.0f;
@@ -2088,25 +2361,37 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 String actualVideoRange = context.getString(
                         getActualColorRange() == MoonBridge.COLOR_RANGE_FULL
                                 ? R.string.video_range_full : R.string.video_range_limited);
+                DecodedVideoDimensions outputDimensions = currentOutputDimensions.get();
                 StreamPerformanceSnapshot performanceSnapshot = new StreamPerformanceSnapshot(
                         activeElapsedMs,
-                        initialWidth,
-                        initialHeight,
+                        outputDimensions.width,
+                        outputDimensions.height,
                         activeStreamSequenceFps,
                         activeReceivedFps,
+                        activeDecoderOutputFps,
                         activeDecoderReleaseFps,
+                        activeDecoderPresentedFps,
                         activeDecodeAverageMs,
                         activeDecodeMaxMs,
                         activeNetworkLossPercent,
                         bandwidthMbps,
                         estimatedRttMs,
-                        estimatedRttVarianceMs,
-                        hostProcessingMinMs,
                         hostProcessingAverageMs,
                         hostProcessingMaxMs,
                         decoder,
                         actualVideoRange);
-                StringBuilder sb = new StringBuilder();
+                boolean targetFpsMatched = ((int) smoothedFps == (int) prefs.fps);
+                boolean newBestDecodeSample = minDecodeTime > decodeTimeMs && targetFpsMatched;
+                String fullLog = "";
+                if (newBestDecodeSample) {
+                    VideoStatsFps fps = lastTwo.getFps();
+                    float legacyNetworkLossPercent = lastTwo.totalFrames > 0
+                            ? (float) lastTwo.framesLost / lastTwo.totalFrames * 100.0f
+                            : Float.NaN;
+                    int estimatedRttVarianceMs = rttInfo == -1L
+                            ? StreamPerformanceSnapshot.INT_UNAVAILABLE
+                            : (int) rttInfo;
+                    StringBuilder sb = new StringBuilder();
                 if(prefs.enablePerfOverlayLite){
                     if (Float.isFinite(bandwidthMbps)) {
                         sb.append(context.getString(R.string.perf_overlay_lite_bandwidth))
@@ -2128,36 +2413,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append("\t Range: ");
                     sb.append(context.getString(getActualColorRange() == MoonBridge.COLOR_RANGE_FULL ?
                             R.string.video_range_full : R.string.video_range_limited));
-                    if(Stereo3DRenderer.isActive) {
-                        sb.append(" ");
-                        sb.append(context.getString(R.string.perf_overlay_ai_fps));
-                        sb.append(" ");
-                        sb.append(Stereo3DRenderer.threeDFps);
-                        sb.append(" ");
-                        sb.append(context.getString(R.string.perf_overlay_ai_delegate));
-                        sb.append(" ");
-                        sb.append(Stereo3DRenderer.renderer);
-                        sb.append(" ");
-                        sb.append(context.getString(R.string.perf_overlay_drawdelay, Stereo3DRenderer.drawDelay));
-                    }
                 }else{
-                    if(Stereo3DRenderer.isActive) {
-                        sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps));
-                        sb.append('\n');
-                        sb.append(" ");
-                        sb.append(context.getString(R.string.perf_overlay_ai_fps));
-                        sb.append(" ");
-                        sb.append(Stereo3DRenderer.threeDFps);
-                        sb.append(" ");
-                        sb.append(context.getString(R.string.perf_overlay_ai_delegate));
-                        sb.append(" ");
-                        sb.append(Stereo3DRenderer.renderer);
-                        sb.append(" ");
-                        sb.append(context.getString(R.string.perf_overlay_drawdelay, Stereo3DRenderer.drawDelay));
-                    } else {
-                        // If GPU renders the frames, the render FPS is the actual drawn and visible fps for the user
-                        sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps));
-                    }
+                    sb.append(context.getString(R.string.perf_overlay_streamdetails,
+                            initialWidth + "x" + initialHeight, fps.totalFps));
                     sb.append('\n');
                     sb.append(context.getString(R.string.perf_overlay_video_range, 
                             context.getString(getActualColorRange() == MoonBridge.COLOR_RANGE_FULL ? 
@@ -2184,13 +2442,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
                 }
-                String fullLog = sb.toString();
-                if(prefs.enablePerfOverlay) {
-                    perfListener.onPerfUpdate(performanceSnapshot, fullLog);
+                    fullLog = sb.toString();
+                }
+                if (performanceTelemetryEnabled) {
+                    perfListener.onPerfUpdate(performanceSnapshot, "");
                 }
                 // Best latency is only met at requested highest fps, rest can be ignored
-                Boolean targetFpsMatched = ((int) fps.totalFps == (int) prefs.fps);
-                if(minDecodeTime > decodeTimeMs && targetFpsMatched) {
+                if (newBestDecodeSample) {
                     minDecodeTime = decodeTimeMs;
                     minDecodeTimeFullLog = fullLog;
                 }
@@ -2383,7 +2641,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         nextInputBuffer.put(ppsBuffer);
                     }
 
-                    if (!queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) {
+                    InputQueueResult csdQueueResult = queueNextInputBufferForAdmission(
+                            0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
+                            transitionInputAdmission, frameNumber, idrFrame, false);
+                    if (csdQueueResult != InputQueueResult.QUEUED) {
+                        if (csdQueueResult == InputQueueResult.TRANSITION_DROPPED) {
+                            intentionalInputDiscontinuityPending = true;
+                            return MoonBridge.DR_OK;
+                        }
                         return MoonBridge.DR_NEED_IDR;
                     }
 
@@ -2395,11 +2660,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     submittedCsd = true;
 
                     if (needsBaselineSpsHack) {
-                        needsBaselineSpsHack = false;
-
-                        if (!replaySps()) {
+                        InputQueueResult replayResult = replaySps(
+                                transitionInputAdmission, frameNumber, idrFrame);
+                        if (replayResult == InputQueueResult.TRANSITION_DROPPED) {
+                            intentionalInputDiscontinuityPending = true;
+                            return MoonBridge.DR_OK;
+                        }
+                        if (replayResult != InputQueueResult.QUEUED) {
                             return MoonBridge.DR_NEED_IDR;
                         }
+                        needsBaselineSpsHack = false;
 
                         LimeLog.info("SPS replay complete");
                     }
@@ -2463,6 +2733,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             timestampUs = lastTimestampUs + 1;
         }
         lastTimestampUs = timestampUs;
+        final long queuedTimestampUs = timestampUs;
 
         numFramesIn++;
 
@@ -2479,16 +2750,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Copy data from our buffer list into the input buffer
         nextInputBuffer.put(decodeUnitData, 0, decodeUnitLength);
 
-        if (!queueNextInputBuffer(timestampUs, codecFlags)) {
+        InputQueueResult frameQueueResult = queueNextInputBufferForAdmission(
+                queuedTimestampUs, codecFlags, transitionInputAdmission,
+                frameNumber, idrFrame, true);
+        if (frameQueueResult == InputQueueResult.TRANSITION_DROPPED) {
+            intentionalInputDiscontinuityPending = true;
+            return MoonBridge.DR_OK;
+        }
+        if (frameQueueResult != InputQueueResult.QUEUED) {
             return MoonBridge.DR_NEED_IDR;
         }
 
         return MoonBridge.DR_OK;
     }
 
-    private boolean replaySps() {
+    private InputQueueResult replaySps(long admissionGeneration,
+                                       int frameNumber, boolean idrFrame) {
         if (!fetchNextInputBuffer()) {
-            return false;
+            return InputQueueResult.FAILED;
         }
 
         // Write the Annex B header
@@ -2505,11 +2784,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         ByteBuffer escapedNalu = H264Utils.writeSPS(savedSps, 128);
         nextInputBuffer.put(escapedNalu);
 
-        // No need for the SPS anymore
-        savedSps = null;
-
         // Queue the new SPS
-        return queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG);
+        InputQueueResult result = queueNextInputBufferForAdmission(
+                0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
+                admissionGeneration, frameNumber, idrFrame, false);
+        if (result == InputQueueResult.QUEUED) {
+            savedSps = null;
+        }
+        return result;
     }
 
     @Override

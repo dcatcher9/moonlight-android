@@ -7,5 +7,13 @@
     <application android:label="@string/app_label"
         android:isGame="true"
         android:appCategory="game"
-        tools:targetApi="o" />
+        tools:targetApi="o">
+
+        <!-- Android 12+ isolates vendor native libraries unless the app declares them.
+             Galaxy XR publishes libOpenCL.so in /vendor/etc/public.libraries.txt; LiteRT's
+             Cl/GL accelerator needs it in the app linker namespace for GPU inference. -->
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+    </application>
 </manifest>

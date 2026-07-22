@@ -1,4 +1,4 @@
-# Build & deploy to Galaxy XR (SM-I610)
+# Build & update-deploy to Galaxy XR (SM-I610)
 
 Quick reference for building this app and deploying it to the **Samsung Galaxy XR
 (SM-I610, Android 14 / API 34, arm64-v8a)** over wireless adb. Written to avoid the two
@@ -28,6 +28,19 @@ JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-25.0.3.9-hotspot" \
   - `:app:compileNonRoot_gameDebugJavaWithJavac` — fast compile-only sanity check.
 - Installed application id: **`com.limelight.noirdebug`**
 - Launcher activity: **`com.limelight.PcView`**
+
+`installNonRoot_gameDebug` performs an update install of that existing debug application and
+preserves preferences, certificates, host pairings, and profiles. `assembleNonRoot_gameDebug` only
+creates APKs; it does not deploy anything. Do not substitute `assembleNonRoot`, which is neither a
+complete variant name nor an install task.
+
+> **Physical-headset data safety:** never run `connectedNonRoot_gameDebugAndroidTest`, an
+> `uninstall*` task, `adb uninstall com.limelight.noirdebug`, or
+> `pm clear com.limelight.noirdebug` on the user's Galaxy XR. The connected Android-test workflow
+> can uninstall the target package and erase all Artemis data. If update-install reports a signing
+> or downgrade conflict, stop instead of uninstalling the existing app. See
+> [client-sbs-evaluation.md](client-sbs-evaluation.md) for the data-preserving manual
+> instrumentation procedure.
 
 ## 2. adb path
 
@@ -85,7 +98,25 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   "$ADB" shell am start -n com.limelight.noirdebug/com.limelight.PcView
   ```
 - **Presentation mode** is chosen from the XR control bar inside an active stream (Normal,
-  Host SBS Raw, Host SBS AI, or Client SBS AI) and is restored per machine/app. The old
-  `render_mode_list` and client depth-parameter preferences are no longer used.
+  Host SBS Raw, Host SBS AI, or Client SBS AI). A fresh host connection starts in Normal; only a
+  host-confirmed resume of the same session/app restores the last successful mode. Client SBS has
+  no strength/convergence/balance/movie-mode parameter panel; the old `render_mode_list` and client
+  depth-parameter preferences are not part of the current path.
 - From **Git Bash**, prefix adb commands that pass Unix-style paths (e.g. `run-as`, `/data/...`)
   with `MSYS_NO_PATHCONV=1` so MSYS doesn't mangle the paths.
+
+## 6. Client SBS PC checks and headset evaluation
+
+Run the focused Client SBS PC contract suite without touching a device:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+    -File .\tools\client-sbs-eval.ps1
+```
+
+Add `-Assemble` to produce the supported debug APK splits after the tests. PC/JVM tests verify the
+model manifest and aspect-bucket selection, the process-wide single-model lifecycle, two-slot
+scheduling, decoder/presenter transitions, shader contracts, scene-cut state and GPU sources, and
+disjoint timer logic, but cannot execute the Galaxy XR Adreno OpenCL/OpenGL interop path. Follow
+[client-sbs-evaluation.md](client-sbs-evaluation.md) for the safe manual native smoke test, stats
+interpretation, HDR/SDR checks, and sustained live-stream comparison.

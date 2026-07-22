@@ -58,12 +58,6 @@
             android:summary="@string/summary_frame_pacing"
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
-    <CheckBoxPreference
-        android:defaultValue="false"
-        android:key="pref_low_latency_frame_balance"
-        android:title="@string/title_low_latency_frame_balance"
-        android:summary="@string/summary_low_latency_frame_balance"
-        app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
             android:defaultValue="false"
@@ -877,8 +871,7 @@
             app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
-            android:defaultValue="false"
-            android:dependency="checkbox_enable_perf_overlay"
+            android:defaultValue="true"
             android:key="checkbox_enable_perf_logging"
             android:summary="@string/summary_checkbox_enable_perf_logging"
             android:title="@string/title_checkbox_enable_perf_logging"
@@ -900,7 +893,7 @@
     <PreferenceCategory
         android:key="category_advanced_settings"
         android:title="@string/category_advanced_settings"
-        app:initialExpandedChildrenCount="1"
+        app:initialExpandedChildrenCount="2"
         app:iconSpaceReserved="false">
         <ListPreference
             android:defaultValue="auto"
@@ -909,6 +902,14 @@
             android:key="video_format"
             android:summary="@string/summary_video_format"
             android:title="@string/title_video_format"
+            app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue="depth-anything-v2-small-static-performance"
+            android:entries="@array/client_sbs_depth_model_names"
+            android:entryValues="@array/client_sbs_depth_model_values"
+            android:key="list_client_sbs_depth_model"
+            android:summary="@string/summary_client_sbs_depth_model"
+            android:title="@string/title_client_sbs_depth_model"
             app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"

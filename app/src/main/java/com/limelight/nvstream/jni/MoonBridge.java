@@ -405,6 +405,9 @@ public class MoonBridge {
     /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
     public static native int sendSetSbsMode(int mode);
 
+    /** Request a fresh video IDR after a client-side decoder/surface transition. */
+    public static native void requestIdrFrame();
+
     // Ask the host (Apollo protocol extension) to dump one SBS debug frame (source/depth/SBS)
     // to the host's configured debug dir. For diagnosing 2D->3D reprojection artifacts.
     public static native void sendSbsDebugDump();

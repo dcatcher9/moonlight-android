@@ -62,6 +62,8 @@ public class PreferenceConfiguration {
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     private static final String VIDEO_FORMAT_PREF_STRING = "video_format";
+    private static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
+            "list_client_sbs_depth_model";
     private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
     private static final String CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD = "checkbox_hide_osc_when_has_gamepad";
     private static final String ONLY_L3_R3_PREF_STRING = "checkbox_only_show_L3R3";
@@ -84,7 +86,6 @@ public class PreferenceConfiguration {
 //    static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
-    private static final String LOW_LATENCY_FRAME_BALANCE_PREF_STRING = "pref_low_latency_frame_balance";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
@@ -156,6 +157,17 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
+    public static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC =
+            "depth-anything-v2-small-static-performance";
+    private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY =
+            "depth-anything-v2-small-static-buckets";
+    private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC =
+            "depth-anything-v2-small-dynamic";
+    private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350 =
+            "depth-anything-v2-small-static-350";
+    public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
+    private static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
+            CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
 
     private static final boolean DEFAULT_ONSCREEN_CONTROLLER = false;
     private static final boolean DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD = true;
@@ -165,7 +177,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ENABLE_PIP = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_PERF_OVERLAY_BOTTOM = false;
-    private static final boolean DEFAULT_ENABLE_PERF_LOGGING = false;
+    private static final boolean DEFAULT_ENABLE_PERF_LOGGING = true;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
     private static final boolean DEFAULT_REMEMBER_MOUSE_MODE = false;
@@ -244,6 +256,8 @@ public class PreferenceConfiguration {
     public String customRefreshRate;
     public int meteredBitrate;
     public FormatOption videoFormat;
+    /** Experimental categorical A/B choice, captured once when a stream starts. */
+    public String clientSbsDepthModelId;
     public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
     public int oscOpacity;
@@ -361,7 +375,6 @@ public class PreferenceConfiguration {
     public boolean mouseNavButtons;
     public boolean rememberMouseMode;
     public boolean unlockFps;
-    public boolean preferLowerDelays;
 
     public boolean vibrateOsc;
     public boolean vibrateFallbackToDevice;
@@ -645,11 +658,6 @@ public class PreferenceConfiguration {
     }
 
     
-    public static boolean getPreferLowerDelays(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
-        // default true: favor lower delay unless user opts out
-        return prefs.getBoolean(LOW_LATENCY_FRAME_BALANCE_PREF_STRING, false);
-    }
 private static int getFramePacingValue(Context context) {
         SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
 
@@ -730,8 +738,10 @@ private static int getFramePacingValue(Context context) {
     }
 
     public static PreferenceConfiguration readPreferences(Context context, SharedPreferences prefs) {
+        boolean usingProfileOverlay = prefs == null;
+        ProfilesManager profilesManager = ProfilesManager.getInstance();
         if (prefs == null) {
-            prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+            prefs = profilesManager.getOverlayingSharedPreferences(context);
         }
         PreferenceConfiguration config = new PreferenceConfiguration();
 
@@ -872,8 +882,34 @@ private static int getFramePacingValue(Context context) {
         config.videoScaleMode = getVideoScaleMode(context);
 
         config.videoFormat = getVideoFormatValue(context);
+        String clientSbsDepthModel;
+        try {
+            clientSbsDepthModel = prefs.getString(
+                    CLIENT_SBS_DEPTH_MODEL_PREF_STRING, DEFAULT_CLIENT_SBS_DEPTH_MODEL);
+        } catch (ClassCastException invalidStoredType) {
+            clientSbsDepthModel = DEFAULT_CLIENT_SBS_DEPTH_MODEL;
+        }
+        if (CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY.equals(clientSbsDepthModel)
+                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(clientSbsDepthModel)
+                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350.equals(
+                clientSbsDepthModel)) {
+            String legacyModel = clientSbsDepthModel;
+            clientSbsDepthModel = CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
+            boolean migratedActiveProfile = usingProfileOverlay
+                    && profilesManager.replaceActiveOptionValue(
+                            CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                            legacyModel, clientSbsDepthModel);
+            if (!migratedActiveProfile) {
+                prefs.edit().putString(CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                        clientSbsDepthModel).apply();
+            }
+        }
+        if (!CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(clientSbsDepthModel)
+                && !CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(clientSbsDepthModel)) {
+            clientSbsDepthModel = DEFAULT_CLIENT_SBS_DEPTH_MODEL;
+        }
+        config.clientSbsDepthModelId = clientSbsDepthModel;
         config.framePacing = getFramePacingValue(context);
-        config.preferLowerDelays = getPreferLowerDelays(context);
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");

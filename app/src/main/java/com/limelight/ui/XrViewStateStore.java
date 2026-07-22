@@ -83,10 +83,6 @@ final class XrViewStateStore {
                 .apply();
     }
 
-    void resetPresentationToNormal(float panelHeightMeters) {
-        savePresentation(panelHeightMeters, Mode.NORMAL);
-    }
-
     static int desiredHostSbsWireMode(Mode mode) {
         // These are compile-time int constants, so this does not initialize MoonBridge/JNI.
         return mode == Mode.HOST_SBS_AI ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;

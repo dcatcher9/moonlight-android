@@ -44,6 +44,7 @@ import com.limelight.profiles.ProfilesManager;
 import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
+import com.limelight.ui.XrStreamPresenter;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
 import com.limelight.utils.MouseModeOption;
@@ -234,6 +235,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private MediaCodecDecoderRenderer decoderRenderer;
+    private static final long XR_STATS_UPDATE_INTERVAL_MS = 1_800L;
+    private volatile long lastXrStatsDispatchMs;
+    private static volatile boolean semMetaKeyCaptureUnsupported;
     // The host HDR-mode callback is authoritative. Codec bit depth is not: Main10 can carry SDR.
     private volatile boolean streamHdrActive;
     private volatile int streamHdrMaxContentLightLevel;
@@ -434,7 +438,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             boolean portraitMode = currentOrientation == Configuration.ORIENTATION_PORTRAIT;
-            shouldInvertDecoderResolution = portraitMode && prefConfig.autoInvertVideoResolution;
+            shouldInvertDecoderResolution = !prefConfig.isStereoMode()
+                    && portraitMode && prefConfig.autoInvertVideoResolution;
 
             // Host SBS AI keeps the full requested resolution for 2D. The per-eye
             // cap only applies when SBS is actually switched on: the host then caps the packed frame
@@ -666,6 +671,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 streamContainer.getXrPresenter().onFirstVideoFrameRendered();
             }
         }));
+        decoderRenderer.setPresentationModeTransitionListeners(
+                () -> runOnUiThread(() -> {
+                    if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                        streamContainer.getXrPresenter()
+                                .onDecoderPresentationModeTransitionOpened();
+                    }
+                }),
+                () -> runOnUiThread(() -> {
+                    if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                        streamContainer.getXrPresenter()
+                                .onDecoderPresentationModeTransitionTimedOut();
+                    }
+                    handleDecoderSurfaceSwitchFailure();
+                }));
 
 // --- Force tight thresholds (prefConfig.forceTightThresholds) ---
         try {
@@ -681,23 +700,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             try { decoderRenderer.setForceTightThresholds(forceTight); } catch (Throwable ignored) {}
             if (forceTight) {
                 LimeLog.info("ForceTightThresholds enabled: using vsync-based thresholds on all devices");
-            }
-        } catch (Throwable ignored) {}
-
-// --- latency profile selection ---
-        try {
-            if (prefConfig != null && prefConfig.preferLowerDelays) {
-                // Intermediate: more responsive than Balanced but not 0 µs
-                decoderRenderer.setPreferLowerDelays(true);
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(500);  // 0.5 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("PreferLowerDelays: preferLowerDelays=true, timeout=500us, pacing=BALANCED");
-            } else {
-                // Balanced default
-                decoderRenderer.setPreferLowerDelays(false);
-                decoderRenderer.setPreferLowerDelaysTimeoutUs(2000); // 2 ms
-                prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                LimeLog.info("Balanced: preferLowerDelays=false, timeout=2000us, pacing=BALANCED");
             }
         } catch (Throwable ignored) {}
 
@@ -1347,6 +1349,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void setMetaKeyCaptureState(boolean enabled) {
         // This uses custom APIs present on some Samsung devices to allow capture of
         // meta key events while streaming.
+        if (semMetaKeyCaptureUnsupported) {
+            return;
+        }
         try {
             Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
             Method getInstanceMethod = semWindowManager.getMethod("getInstance");
@@ -1362,9 +1367,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             else {
                 LimeLog.warning("SemWindowManager.getInstance() returned null");
             }
-        } catch (ClassNotFoundException | NoSuchMethodException | InvocationTargetException |
-                 IllegalAccessException e) {
-            e.printStackTrace();
+        } catch (ClassNotFoundException | NoSuchMethodException e) {
+            // Galaxy XR firmware does not expose this optional Samsung API. Cache that result so
+            // every pause/resume does not repeat reflection and print a stack trace.
+            semMetaKeyCaptureUnsupported = true;
+            LimeLog.info("Samsung meta-key capture API unavailable on this firmware");
+        } catch (InvocationTargetException | IllegalAccessException e) {
+            LimeLog.warning("Samsung meta-key capture request failed: "
+                    + e.getClass().getSimpleName());
         }
     }
 
@@ -3566,9 +3576,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         && isDestroyed())) {
                     return;
                 }
-                if (streamContainer.getXrPresenter() != null) {
-                    streamContainer.getXrPresenter().onStreamStartupFailed();
-                }
                 if (spinner != null) {
                     spinner.dismiss();
                     spinner = null;
@@ -3640,10 +3647,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             public void run() {
                 if (!connecting && !connected) {
                     return;
-                }
-                if (errorCode != MoonBridge.ML_ERROR_GRACEFUL_TERMINATION
-                        && streamContainer.getXrPresenter() != null) {
-                    streamContainer.getXrPresenter().onStreamStartupFailed();
                 }
                 // Let the display go to sleep now
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -3823,7 +3826,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void run() {
                 if (isConnectionUiActive()) {
-                    Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                    showCenteredStreamMessage(message, Toast.LENGTH_LONG);
                 }
             }
         });
@@ -3836,11 +3839,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 @Override
                 public void run() {
                     if (isConnectionUiActive()) {
-                        Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                        showCenteredStreamMessage(message, Toast.LENGTH_LONG);
                     }
                 }
             });
         }
+    }
+
+    private void showCenteredStreamMessage(CharSequence message, int toastDuration) {
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        long durationMs = toastDuration == Toast.LENGTH_LONG ? 3_500L : 2_000L;
+        if (presenter != null && presenter.showTransientMessage(message, durationMs)) {
+            return;
+        }
+        // Session startup can report an error before SceneCore creates its message panel.
+        Toast.makeText(this, message, toastDuration).show();
     }
 
     @Override
@@ -3901,8 +3915,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void depthStatus(int phase) {
-        // Host SBS depth-engine phase changed; forward to the XR presenter to show/hide the
-        // "loading depth model" indicator. Callback arrives off the UI thread.
+        // Host SBS preparation phase changed; forward it to the XR presenter. Model-engine
+        // preparation and per-stream GPU-resource setup are intentionally distinct messages.
+        // Callback arrives off the UI thread.
         runOnUiThread(() -> {
             if (isConnectionUiActive() && streamContainer != null
                     && streamContainer.getXrPresenter() != null) {
@@ -3930,6 +3945,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     public boolean setDecoderOutputSurface(Surface surface) {
         return decoderRenderer != null && decoderRenderer.setOutputSurface(surface);
+    }
+
+    public boolean beginDecoderPresentationModeTransition() {
+        return decoderRenderer != null
+                && decoderRenderer.beginPresentationModeTransition();
+    }
+
+    public void completeDecoderPresentationModeTransition() {
+        if (decoderRenderer != null) {
+            decoderRenderer.completePresentationModeTransition();
+        }
+    }
+
+    public void cancelDecoderPresentationModeTransition() {
+        if (decoderRenderer != null) {
+            decoderRenderer.cancelPresentationModeTransition();
+        }
     }
 
     public void handleDecoderSurfaceSwitchFailure() {
@@ -4100,9 +4132,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void onPerfUpdate(final StreamPerformanceSnapshot snapshot, final String text) {
+        final StreamContainer currentContainer = streamContainer;
+        final XrStreamPresenter currentPresenter = currentContainer != null
+                ? currentContainer.getXrPresenter() : null;
+        boolean diagnosticsEnabled = currentPresenter != null
+                && (currentPresenter.isStatsVisible() || prefConfig.enablePerfLogging);
+        if (!diagnosticsEnabled) {
+            return;
+        }
+        long nowMs = android.os.SystemClock.uptimeMillis();
+        if (lastXrStatsDispatchMs != 0L
+                && nowMs - lastXrStatsDispatchMs < XR_STATS_UPDATE_INTERVAL_MS) {
+            return;
+        }
+        lastXrStatsDispatchMs = nowMs;
         // Drain the SBS window on this same performance callback, before UI scheduling can skew
         // its boundary relative to the immutable stream snapshot.
-        final StreamContainer sampledContainer = streamContainer;
+        final StreamContainer sampledContainer = currentContainer;
         final Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbsSnapshot =
                 sampledContainer != null
                         ? sampledContainer.sampleClientSbsPerformance() : null;
@@ -4113,10 +4159,21 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (sampledContainer == streamContainer && sampledContainer != null
                         && sampledContainer.getXrPresenter() != null) {
                     sampledContainer.getXrPresenter().setStats(
-                            snapshot, clientSbsSnapshot, text, streamHdrActive);
+                            snapshot, clientSbsSnapshot, streamHdrActive);
                 }
             }
         });
+    }
+
+    /** Synchronizes decoder timing with the XR Stats toggle; explicit logging stays independent. */
+    public void setPerformanceTelemetryEnabled(boolean statsVisible) {
+        if (statsVisible) {
+            lastXrStatsDispatchMs = 0L;
+        }
+        if (decoderRenderer != null) {
+            decoderRenderer.setPerformanceTelemetryEnabled(
+                    statsVisible || prefConfig.enablePerfLogging);
+        }
     }
 
     @Override

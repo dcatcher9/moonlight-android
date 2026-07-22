@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -163,6 +164,25 @@ public class ProfilesManager {
 
     public SettingsProfile getActive() {
         return activeProfileId == null ? null : profiles.get(activeProfileId);
+    }
+
+    /**
+     * Replaces an exact value in the active profile, if that profile is the layer which supplied
+     * it. This lets preference-schema migrations remain durable instead of writing a base value
+     * which the overlay continues to shadow.
+     */
+    public synchronized boolean replaceActiveOptionValue(
+            String key, Object expectedValue, Object replacementValue) {
+        SettingsProfile active = getActive();
+        Map<String, Object> options = active != null ? active.getOptions() : null;
+        if (options == null || !options.containsKey(key)
+                || !Objects.equals(options.get(key), expectedValue)) {
+            return false;
+        }
+        options.put(key, replacementValue);
+        active.setModifiedUtc(System.currentTimeMillis());
+        update(active);
+        return true;
     }
 
     @NonNull

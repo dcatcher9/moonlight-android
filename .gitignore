@@ -16,6 +16,9 @@ baselineProfiles/
 # generated files
 bin/
 gen/
+/temp/
+__pycache__/
+*.py[cod]
 
 # Local configuration file (sdk path, etc)
 local.properties
@@ -40,13 +43,14 @@ build/
 
 # Compiled JNI libraries folder
 **/jniLibs
-!app/src/main/jniLibs/
-!app/src/main/jniLibs/arm64-v8a/
-!app/src/main/jniLibs/x86_64/
-!app/src/main/jniLibs/arm64-v8a/libLiteRt.so
-!app/src/main/jniLibs/arm64-v8a/libLiteRtClGlAccelerator.so
-!app/src/main/jniLibs/x86_64/libLiteRt.so
-!app/src/main/jniLibs/x86_64/libLiteRtClGlAccelerator.so
+!app/src/nonRoot_game/jniLibs/
+!app/src/nonRoot_game/jniLibs/README.md
+!app/src/nonRoot_game/jniLibs/arm64-v8a/
+!app/src/nonRoot_game/jniLibs/x86_64/
+!app/src/nonRoot_game/jniLibs/arm64-v8a/libLiteRt.so
+!app/src/nonRoot_game/jniLibs/arm64-v8a/libLiteRtClGlAccelerator.so
+!app/src/nonRoot_game/jniLibs/x86_64/libLiteRt.so
+!app/src/nonRoot_game/jniLibs/x86_64/libLiteRtClGlAccelerator.so
 app/.externalNativeBuild/
 
 # NDK stuff

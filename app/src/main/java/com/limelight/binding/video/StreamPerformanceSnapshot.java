@@ -15,14 +15,14 @@ public final class StreamPerformanceSnapshot {
     private final int sourceHeight;
     private final float streamSequenceFps;
     private final float receivedFps;
+    private final float decoderOutputFps;
     private final float decoderReleaseFps;
+    private final float decoderPresentedFps;
     private final float decodeAverageMs;
     private final float decodeMaxMs;
     private final float networkLossPercent;
     private final float bandwidthMbps;
     private final int estimatedRttMs;
-    private final int estimatedRttVarianceMs;
-    private final float hostProcessingMinMs;
     private final float hostProcessingAverageMs;
     private final float hostProcessingMaxMs;
     private final String decoderName;
@@ -33,14 +33,14 @@ public final class StreamPerformanceSnapshot {
                                      int sourceHeight,
                                      float streamSequenceFps,
                                      float receivedFps,
+                                     float decoderOutputFps,
                                      float decoderReleaseFps,
+                                     float decoderPresentedFps,
                                      float decodeAverageMs,
                                      float decodeMaxMs,
                                      float networkLossPercent,
                                      float bandwidthMbps,
                                      int estimatedRttMs,
-                                     int estimatedRttVarianceMs,
-                                     float hostProcessingMinMs,
                                      float hostProcessingAverageMs,
                                      float hostProcessingMaxMs,
                                      String decoderName,
@@ -50,14 +50,14 @@ public final class StreamPerformanceSnapshot {
         this.sourceHeight = sourceHeight;
         this.streamSequenceFps = streamSequenceFps;
         this.receivedFps = receivedFps;
+        this.decoderOutputFps = decoderOutputFps;
         this.decoderReleaseFps = decoderReleaseFps;
+        this.decoderPresentedFps = decoderPresentedFps;
         this.decodeAverageMs = decodeAverageMs;
         this.decodeMaxMs = decodeMaxMs;
         this.networkLossPercent = networkLossPercent;
         this.bandwidthMbps = bandwidthMbps;
         this.estimatedRttMs = estimatedRttMs;
-        this.estimatedRttVarianceMs = estimatedRttVarianceMs;
-        this.hostProcessingMinMs = hostProcessingMinMs;
         this.hostProcessingAverageMs = hostProcessingAverageMs;
         this.hostProcessingMaxMs = hostProcessingMaxMs;
         this.decoderName = decoderName;
@@ -91,6 +91,16 @@ public final class StreamPerformanceSnapshot {
         return decoderReleaseFps;
     }
 
+    /** Output buffers dequeued from MediaCodec before the latest-only release policy. */
+    public float getDecoderOutputFps() {
+        return decoderOutputFps;
+    }
+
+    /** MediaCodec callbacks confirming that released output reached its output Surface. */
+    public float getDecoderPresentedFps() {
+        return decoderPresentedFps;
+    }
+
     public float getDecodeAverageMs() {
         return decodeAverageMs;
     }
@@ -121,17 +131,8 @@ public final class StreamPerformanceSnapshot {
         return estimatedRttMs;
     }
 
-    public int getEstimatedRttVarianceMs() {
-        return estimatedRttVarianceMs;
-    }
-
     public boolean hasEstimatedRtt() {
-        return estimatedRttMs != INT_UNAVAILABLE
-                && estimatedRttVarianceMs != INT_UNAVAILABLE;
-    }
-
-    public float getHostProcessingMinMs() {
-        return hostProcessingMinMs;
+        return estimatedRttMs != INT_UNAVAILABLE;
     }
 
     public float getHostProcessingAverageMs() {
@@ -143,8 +144,7 @@ public final class StreamPerformanceSnapshot {
     }
 
     public boolean hasHostProcessingLatency() {
-        return Float.isFinite(hostProcessingMinMs)
-                && Float.isFinite(hostProcessingAverageMs)
+        return Float.isFinite(hostProcessingAverageMs)
                 && Float.isFinite(hostProcessingMaxMs);
     }
 

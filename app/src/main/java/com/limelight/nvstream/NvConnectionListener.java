@@ -21,6 +21,7 @@ public interface NvConnectionListener {
 
     void setControllerLED(short controllerNumber, byte r, byte g, byte b);
 
-    // Host SBS depth-engine phase (Apollo extension): 0 = idle, 1 = loading, 2 = ready.
+    // Host SBS preparation phase (Apollo extension): 0 = idle/failure,
+    // 1 = process-wide depth-engine preparation, 2 = ready, 3 = per-stream GPU pipeline setup.
     void depthStatus(int phase);
 }

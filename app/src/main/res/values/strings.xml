@@ -136,6 +136,7 @@
     <string name="perf_overlay_drawdelay"> Delay: %1$.2f ms</string>
     <string name="perf_overlay_video_range">Video range: %1$s</string>
     <string name="xr_stats_stream_cap">Stream cap</string>
+    <string name="xr_stats_title">Performance</string>
     <string name="xr_stats_display_refresh">Display refresh</string>
     <string name="xr_stats_fps_value">%1$.2f FPS</string>
     <string name="xr_stats_hz_value">%1$.2f Hz</string>
@@ -565,6 +566,10 @@
     <string name="summary_checkbox_use_virtual_display">Use Virtual Display by default.\nVirtual Display can automatically match your client side resolution and frame rate settings, giving you a seamless streaming experience.\nRequires Apollo as host streaming software.</string>
     <string name="title_checkbox_resume_without_confirm">Quick Resume</string>
     <string name="summary_checkbox_resume_without_confirm">Do not show resume menu when clicking resume button, resume the app immediately.</string>
+    <string name="title_client_sbs_depth_model">Client SBS depth model</string>
+    <string name="summary_client_sbs_depth_model">Depth Anything V2 Small and MiDaS 2.1 select the nearest static OpenCL bucket for 16:9, 21:9, and 32:9 content.</string>
+    <string name="client_sbs_depth_model_da_v2_static">Depth Anything V2 Small — aspect buckets (OpenCL)</string>
+    <string name="client_sbs_depth_model_midas_v2">MiDaS 2.1 — aspect buckets (OpenCL)</string>
     <string name="title_checkbox_enable_sticky_modifier_key_virtual_keyboard">Sticky modifier keys</string>
     <string name="summary_checkbox_enable_sticky_modifier_key_virtual_keyboard">Use sticky modifier keys on virtual full keyboard and custom onscreen keyboard.</string>
     <string name="virtual_keyboard_hide">Hide\nKBD</string>
@@ -578,8 +583,8 @@
     <string name="xr_bar_stats">Stats</string>
     <string name="xr_bar_cinema_view">Cinema View</string>
     <string name="xr_bar_dump">Dump 3D</string>
-    <string name="xr_depth_loading">Loading host depth…</string>
-    <string name="xr_depth_initializing">Initializing host 3D pipeline…</string>
+    <string name="xr_depth_loading">Preparing host depth engine…</string>
+    <string name="xr_depth_initializing">Preparing Host SBS for this stream…</string>
     <string name="app_view_back_to_machines">Back to machines</string>
     <string name="action_back">Back</string>
     <string name="xr_bar_disconnect">Disconnect</string>
@@ -733,8 +738,6 @@
     <string name="profile_manager_active_profile">Active profile: %s</string>
     <string name="rename">Rename</string>
     <string name="save">Save</string>
-    <string name="title_low_latency_frame_balance">LFR (Experimental)</string>
-    <string name="summary_low_latency_frame_balance">Minimizes delay by dropping queued frames.</string>
     <string name="category_perf_monitor_settings">Performance Monitor</string>
 
     <string name="title_checkbox_full_screen">Enable Full Screen</string>

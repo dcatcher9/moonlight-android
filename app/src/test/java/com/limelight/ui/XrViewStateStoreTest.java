@@ -109,18 +109,6 @@ public class XrViewStateStoreTest {
     }
 
     @Test
-    public void explicitStartupFailureResetPreservesHeight() {
-        XrViewStateStore store = new XrViewStateStore(context, resumeIntent("machine-a", "app-a"));
-        store.savePresentation(1.75f, XrViewStateStore.Mode.HOST_SBS_AI);
-
-        store.resetPresentationToNormal(1.75f);
-        XrViewStateStore.State restored = store.restore();
-
-        assertEquals(1.75f, restored.panelHeightMeters, 0.0001f);
-        assertEquals(XrViewStateStore.Mode.NORMAL, restored.presentationMode);
-    }
-
-    @Test
     public void legacyStringAppIdBuildsAStableScope() {
         Intent legacy = new Intent()
                 .putExtra(Game.EXTRA_PC_UUID, "machine-a")

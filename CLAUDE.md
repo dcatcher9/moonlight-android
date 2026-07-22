@@ -31,7 +31,7 @@ per control — that's what gives the gaze highlight and native taps).
 Implication: since every device running this build is an XR device, the XR route is the
 **primary** experience. Non-XR phone/tablet paths are no longer the target. Keep the two SBS
 producers distinct: Host SBS is decoded directly into SceneCore, while Client SBS runs the
-MiDaS/depth/reprojection pipeline on the headset before SceneCore splits the packed result.
+selected depth/reprojection pipeline on the headset before SceneCore splits the packed result.
 
 ## Build & test
 
@@ -98,8 +98,19 @@ Java/Android client under `app/src/main/java/com/limelight/`:
 - `PcView.java` / `AppView.java` / `grid/` — host list and app grid (pre-stream UI).
 - `computers/`, `discovery/` — host pairing, mDNS discovery.
 
-Assets: `app/src/main/assets/midas-midas-v2-float.tflite` (Client SBS depth model),
-`app/src/main/assets/config/`.
+Client SBS model assets live only in the `nonRoot_game` flavor under
+`app/src/nonRoot_game/assets/`: one solid XZ-compressed TAR per model family. The DA-V2 archive
+contains three performance graphs (`322x182`, `350x154`, and `434x126`); the MiDaS v2.1 Small
+archive contains three aspect buckets (`352x192`, `384x160`, and `448x128`). DA-V2 dimensions are
+divisible by its 14-pixel patch size; MiDaS dimensions are divisible by 32 so its EfficientNet-Lite3
+encoder and decoder skip pyramid remain aligned. Both
+families directly resize the complete frame into the selected rectangle and use the same native
+LiteRT/OpenCL pipeline with packed Float32 GL input/output. Inference streams, verifies, and stages
+only the selected archive entry into code cache. At most one selected Client SBS model is compiled
+at a time; it remains GPU-resident across mode switches until stream teardown. The matching LiteRT
+runtime is likewise flavor-scoped under
+`app/src/nonRoot_game/jniLibs/`; root APKs contain neither the models nor LiteRT. Other application
+assets live under `app/src/main/assets/config/`.
 
 ## Current XR stereo pipeline (read before changing rendering)
 
@@ -120,6 +131,10 @@ GLES depth/profile/reprojection. There is no managed Java LiteRT, QNN, CPU, PBO-
 result-worker fallback. If native GPU depth is unavailable, depth fails closed and presentation
 remains usable as flat output; Normal and Host SBS modes remain independent. Do not reintroduce the
 deleted legacy preference keys, shader uniforms, or managed fallback path.
+
+Depth inference is readiness-driven and uncapped: no target FPS, thermal cadence reduction, or
+forced completion idle is allowed. Keep the atomic single-flight claim and latest-frame coalescing;
+they bound the queue to one exact color/depth transaction without imposing a time-based cap.
 
 Key contract: **whoever owns presentation provides the current `Surface` to
 `MediaCodecDecoderRenderer.setRenderTarget()`.** Mode switches are guarded asynchronous surface

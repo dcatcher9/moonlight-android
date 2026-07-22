@@ -29,13 +29,33 @@ if (-not (Test-Path -LiteralPath $gradleWrapper -PathType Leaf)) {
 
 Push-Location $repoRoot
 try {
-    Write-Host "Running four focused native-GPU Client SBS JVM tests (no device changes)..."
+    Write-Host "Running focused native-GPU Client SBS JVM tests (no device changes)..."
     & $gradleWrapper `
         ":app:testNonRoot_gameDebugUnitTest" `
         "--tests" "com.limelight.sbs.ClientSbsFrameSlotsTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuDepthShadersTest" `
+        "--tests" "com.limelight.sbs.ClientSbsGpuSceneCutDetectorTest" `
+        "--tests" "com.limelight.sbs.ClientSbsGpuSceneCutShadersTest" `
+        "--tests" "com.limelight.sbs.ClientSbsGpuTimerTest" `
+        "--tests" "com.limelight.sbs.ClientSbsTemporalTuningTest" `
+        "--tests" "com.limelight.binding.video.DecodedVideoDimensionsTest" `
+        "--tests" "com.limelight.binding.video.DecoderModeTransitionGateTest" `
+        "--tests" "com.limelight.binding.video.MediaCodecDecoderRendererTelemetryTest" `
+        "--tests" "com.limelight.binding.video.MediaCodecDecoderRendererTransitionTest" `
+        "--tests" "com.limelight.binding.video.MediaCodecHelperRegularDecoderTest" `
+        "--tests" "com.limelight.preferences.PreferenceConfigurationClientSbsModelMigrationTest" `
+        "--tests" "com.limelight.preferences.PreferenceConfigurationPerformanceLoggingTest" `
+        "--tests" "com.limelight.utils.ClientSbsDepthInputShapeTest" `
+        "--tests" "com.limelight.utils.ClientSbsGpuInferenceEngineTest" `
+        "--tests" "com.limelight.utils.ClientSbsModelArchiveTest" `
+        "--tests" "com.limelight.utils.ClientSbsPackagedModelArchiveTest" `
+        "--tests" "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
         "--tests" "com.limelight.utils.ClientSbsModelManifestTest" `
+        "--tests" "com.limelight.utils.Stereo3DRendererSchedulingTest" `
         "--tests" "com.limelight.utils.ShaderUtilsTest" `
+        "--tests" "com.limelight.ui.XrStreamPresenterLayoutTest" `
+        "--tests" "com.limelight.ui.XrStreamPresenterTransitionTest" `
+        "--tests" "com.limelight.ui.XrViewStateStoreTest" `
         "--console=plain"
     if ($LASTEXITCODE -ne 0) {
         throw "Client SBS JVM tests failed with exit code $LASTEXITCODE"

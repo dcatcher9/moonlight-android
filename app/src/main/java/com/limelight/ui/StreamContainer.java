@@ -18,8 +18,92 @@ import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 
+import javax.microedition.khronos.egl.EGL10;
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.egl.EGLDisplay;
+
 /** Owns the single XR presentation route, guarded decoder/GL surface handoffs, and input bridge. */
-public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback, Stereo3DRenderer.OnSurfaceReadyListener {
+public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback {
+
+    /**
+     * Prefer a 10-bit window for Client SBS so PQ values survive the final EGL surface. Some XR
+     * runtimes expose only the baseline 8-bit config, so selection must remain a preference rather
+     * than a hard requirement. The renderer verifies the actual default-framebuffer precision
+     * before it advertises HDR output to SceneCore.
+     */
+    private static final class ClientSbsEglConfigChooser implements GLSurfaceView.EGLConfigChooser {
+        private static final int EGL_OPENGL_ES3_BIT_KHR = 0x0040;
+
+        @Override
+        public EGLConfig chooseConfig(EGL10 egl, EGLDisplay display) {
+            int[] attributes = {
+                    EGL10.EGL_SURFACE_TYPE, EGL10.EGL_WINDOW_BIT,
+                    EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
+                    EGL10.EGL_NONE
+            };
+            int[] count = new int[1];
+            if (!egl.eglChooseConfig(display, attributes, null, 0, count)
+                    || count[0] <= 0) {
+                throw new IllegalArgumentException("No window-capable GLES EGL configs");
+            }
+
+            EGLConfig[] configs = new EGLConfig[count[0]];
+            if (!egl.eglChooseConfig(display, attributes, configs, configs.length, count)) {
+                throw new IllegalArgumentException("Unable to enumerate GLES EGL configs");
+            }
+
+            EGLConfig hdrConfig = null;
+            EGLConfig sdrConfig = null;
+            int hdrScore = Integer.MAX_VALUE;
+            int sdrScore = Integer.MAX_VALUE;
+            for (int i = 0; i < count[0]; i++) {
+                EGLConfig config = configs[i];
+                int red = getConfigAttribute(egl, display, config, EGL10.EGL_RED_SIZE);
+                int green = getConfigAttribute(egl, display, config, EGL10.EGL_GREEN_SIZE);
+                int blue = getConfigAttribute(egl, display, config, EGL10.EGL_BLUE_SIZE);
+                int alpha = getConfigAttribute(egl, display, config, EGL10.EGL_ALPHA_SIZE);
+                int depth = getConfigAttribute(egl, display, config, EGL10.EGL_DEPTH_SIZE);
+                int stencil = getConfigAttribute(egl, display, config, EGL10.EGL_STENCIL_SIZE);
+
+                if (red >= 10 && green >= 10 && blue >= 10 && alpha >= 2) {
+                    int score = colorDistance(red, green, blue, alpha, 10, 2)
+                            + depth + stencil;
+                    if (score < hdrScore) {
+                        hdrScore = score;
+                        hdrConfig = config;
+                    }
+                }
+                if (red >= 8 && green >= 8 && blue >= 8 && alpha >= 8) {
+                    int score = colorDistance(red, green, blue, alpha, 8, 8)
+                            + depth + stencil;
+                    if (score < sdrScore) {
+                        sdrScore = score;
+                        sdrConfig = config;
+                    }
+                }
+            }
+
+            EGLConfig selected = hdrConfig != null ? hdrConfig : sdrConfig;
+            if (selected == null) {
+                throw new IllegalArgumentException("No RGBA EGL config for Client SBS");
+            }
+            LimeLog.info("Client SBS EGL config preference: "
+                    + (hdrConfig != null ? "RGB10_A2" : "RGBA8 fallback"));
+            return selected;
+        }
+
+        private static int colorDistance(int red, int green, int blue, int alpha,
+                                         int rgbTarget, int alphaTarget) {
+            return Math.abs(red - rgbTarget) + Math.abs(green - rgbTarget)
+                    + Math.abs(blue - rgbTarget) + Math.abs(alpha - alphaTarget);
+        }
+
+        private static int getConfigAttribute(EGL10 egl, EGLDisplay display, EGLConfig config,
+                                              int attribute) {
+            int[] value = new int[1];
+            return egl.eglGetConfigAttrib(display, config, attribute, value) ? value[0] : 0;
+        }
+    }
 
     public interface SurfaceSwitchCallback {
         void onComplete(boolean success);
@@ -43,13 +127,24 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private PreferenceConfiguration prefConfig;
     private Stereo3DRenderer mStereoRenderer;
     private XrStreamPresenter mXrPresenter;
+    /** UI preference mirrored into the renderer's cross-thread diagnostic gate. */
+    private volatile boolean mClientSbsStatsVisible;
 
     private SurfaceView mSurfaceView;
     private Surface mCurrentSurface;
     private Surface mClientSbsSurface;
-    private Surface mBoundDecoderSurface;
+    private volatile Surface mBoundDecoderSurface;
     private SurfaceSwitchCallback mPendingClientSbsSwitch;
-    private int mClientSbsSwitchGeneration;
+    private volatile int mClientSbsSwitchGeneration;
+    private boolean mPendingClientSbsEnable;
+    private boolean mPendingHostSbsTarget;
+    /** UI-thread request read by GLSurfaceView's EGL thread. */
+    private volatile int mRequestedEglAttachGeneration;
+    /** Exact generation whose XR window surface was created successfully on the EGL thread. */
+    private volatile int mCreatedEglAttachGeneration;
+    /** UI-thread pause request acknowledged only after eglDestroySurface() returns successfully. */
+    private volatile int mRequestedEglDetachGeneration;
+    private volatile Surface mExpectedEglOutputSurface;
     private Runnable onSurfaceAvailable;
     private InputCallbacks mInputCallbacks;
     private boolean commitTextEnabled = false;
@@ -64,6 +159,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     // already-disposed XR surface.
     private volatile boolean mDestroyed = false;
     private boolean mStereoRendererDestroyed;
+    private boolean mRendererDestroyRetryScheduled;
+    private boolean mContainerCleanupPending;
+    private boolean mContainerCleanupComplete;
 
     public StreamContainer(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -80,18 +178,48 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     public void setClientSbsActive(boolean enabled) {
         if (mStereoRenderer != null) {
             mStereoRenderer.setClientSbs(enabled);
+            updateClientSbsPerformanceSampling();
         }
+    }
+
+    public void setClientSbsStatsVisible(boolean visible) {
+        mClientSbsStatsVisible = visible;
+        updateClientSbsPerformanceSampling();
+        if (game != null) {
+            game.setPerformanceTelemetryEnabled(visible);
+        }
+    }
+
+    private void updateClientSbsPerformanceSampling() {
+        if (mStereoRenderer != null) {
+            // Normal and Host SBS don't execute this pipeline, so their Stats panel must not
+            // create GL timer queries, depth-health readbacks, or per-stage counter contention.
+            mStereoRenderer.setPerformanceSamplingEnabled(
+                    clientSbsDiagnosticsEnabled() && mStereoRenderer.isClientSbs());
+        }
+    }
+
+    private boolean clientSbsDiagnosticsEnabled() {
+        return mClientSbsStatsVisible
+                || (prefConfig != null && prefConfig.enablePerfLogging);
     }
 
     /** Drain one coherent Client-SBS performance window for the XR stats panel. */
     public Stereo3DRenderer.ClientSbsPerformanceSnapshot sampleClientSbsPerformance() {
-        return mStereoRenderer != null ? mStereoRenderer.sampleClientSbsPerformance() : null;
+        return clientSbsDiagnosticsEnabled()
+                && mStereoRenderer != null && mStereoRenderer.isClientSbs()
+                ? mStereoRenderer.sampleClientSbsPerformance() : null;
     }
 
     public void setHdrInput(boolean enabled) {
         if (mStereoRenderer != null) {
             mStereoRenderer.setHdrInput(enabled);
         }
+    }
+
+    /** True only when Client SBS preserves HDR precision through both its GL targets and window. */
+    public boolean isClientSbsHdrOutputCapable() {
+        return mStereoRenderer != null && mStereoRenderer.isHdrOutputCapable();
     }
 
     public boolean init(Game game, PreferenceConfiguration prefConfig) {
@@ -101,6 +229,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         this.game = game;
         this.prefConfig = prefConfig;
+        mClientSbsStatsVisible = prefConfig.enablePerfOverlay;
 
         isSurfaceReady = false;
         mCurrentSurface = null;
@@ -113,14 +242,17 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
             GLSurfaceView glSurfaceView = new GLSurfaceView(context);
             glSurfaceView.setEGLContextClientVersion(3);
-            // The SBS renderer never uses depth or stencil attachments. Request a zero-depth
-            // config and log the actual default-framebuffer bits for the Galaxy XR test pass.
-            glSurfaceView.setEGLConfigChooser(8, 8, 8, 8, 0, 0);
-            mXrPresenter = new XrStreamPresenter(game, prefConfig, this::onStereo3DSurfaceReady);
+            // Prefer an HDR-capable window, but retain an RGBA8 config fallback for runtimes that
+            // cannot expose one. Stereo3DRenderer verifies the selected default framebuffer and
+            // keeps SceneCore metadata consistent with the end-to-end precision.
+            glSurfaceView.setEGLConfigChooser(new ClientSbsEglConfigChooser());
+            mXrPresenter = new XrStreamPresenter(game, prefConfig,
+                    this::onStereo3DSurfaceReady, this::setClientSbsStatsVisible);
             if (!mXrPresenter.init()) {
                 mXrPresenter = null;
                 return false;
             }
+            mClientSbsStatsVisible = mXrPresenter.isStatsVisible();
 
             // Persistent dummy surface used by switchToClientSbs() to park MediaCodec while the XR
             // surface is handed between the decoder and the GL renderer (a transient/GC'd surface
@@ -134,36 +266,75 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 public javax.microedition.khronos.egl.EGLSurface createWindowSurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLConfig config, Object nativeWindow) {
                     // Render into the XR compositor surface. If XR init failed (no surface yet),
                     // fall back to the view's own window so EGL still gets a valid target.
-                    Object target = (mXrPresenter != null && mXrPresenter.getVideoSurface() != null)
-                            ? mXrPresenter.getVideoSurface() : nativeWindow;
-                    return egl.eglCreateWindowSurface(display, config, target, null);
+                    Surface xrTarget = mXrPresenter != null
+                            ? mXrPresenter.getVideoSurface() : null;
+                    Object target = xrTarget != null ? xrTarget : nativeWindow;
+                    int attachGeneration = mRequestedEglAttachGeneration;
+                    javax.microedition.khronos.egl.EGLSurface created =
+                            egl.eglCreateWindowSurface(display, config, target, null);
+                    mCreatedEglAttachGeneration = created != EGL10.EGL_NO_SURFACE
+                            && attachGeneration > 0 && xrTarget == mExpectedEglOutputSurface
+                            ? attachGeneration : 0;
+                    return created;
                 }
                 @Override
                 public void destroySurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLSurface surface) {
-                    egl.eglDestroySurface(display, surface);
-                    // Decoder handoff is explicit in switchToClientSbs(). onPause() waits for this
-                    // callback, so rebinding here would bind MediaCodec before the XR surface is
-                    // resized for the next presentation.
+                    boolean detached = egl.eglDestroySurface(display, surface);
+                    int detachGeneration = mRequestedEglDetachGeneration;
+                    if (detached && detachGeneration > 0) {
+                        // eglDestroySurface() is the only authoritative point at which SceneCore's
+                        // producer is no longer owned by EGL. Finish the decoder handoff on UI.
+                        post(() -> onClientSbsEglDetached(detachGeneration));
+                    }
                 }
             });
 
             mStereoRenderer = new Stereo3DRenderer(glSurfaceView, new Stereo3DRenderer.OnSurfaceReadyListener() {
                 @Override
-                public void onStereo3DSurfaceReady(Surface surface) {
+                public void onStereo3DSurfaceReady(Surface surface, int surfaceGeneration) {
+                    // This value was written by createWindowSurface() earlier on this same GL
+                    // thread. Pairing both generations prevents a stale renderer Surface from
+                    // being rebound while a replacement EGL context is still being established.
+                    int eglAttachGeneration = mCreatedEglAttachGeneration;
                     // Renderer callbacks arrive on the GL thread. Keep the complete switch
                     // transaction, including its timeout, serialized on the main/UI thread.
-                    post(() -> {
-                        if (mDestroyed) return;
-                        mClientSbsSurface = surface;
-                        if (mStereoRenderer != null && mStereoRenderer.isClientSbs()
-                                && game != null) {
-                            completeClientSbsSwitch(bindDecoderSurface(surface));
-                        }
-                    });
+                    post(() -> onClientSbsRendererSurfaceReady(surface,
+                            surfaceGeneration, eglAttachGeneration));
                 }
-            }, context, prefConfig);
-            // Client SBS renders into a capped packed XR compositor surface, which is unrelated
-            // to this view's on-screen size. Tell the renderer both dimensions explicitly.
+
+                @Override
+                public boolean onStereo3DContextRecoveryParkRequested(
+                        Surface oldSurface, int surfaceGeneration) {
+                    boolean parked = parkDecoderForClientSbsContextRecovery(
+                            oldSurface, surfaceGeneration);
+                    if (!parked && game != null) {
+                        post(game::handleDecoderSurfaceSwitchFailure);
+                    }
+                    return parked;
+                }
+
+                @Override
+                public void onStereo3DContextRecoveryFailed(int surfaceGeneration,
+                                                             String reason) {
+                    LimeLog.severe("Client SBS context recovery failed for generation "
+                            + surfaceGeneration + ": " + reason);
+                    if (game != null) {
+                        post(game::handleDecoderSurfaceSwitchFailure);
+                    }
+                }
+
+                @Override
+                public void onStereo3DOutputSurfaceValidationFailed(
+                        int surfaceGeneration, String reason) {
+                    // Pair the renderer generation with the EGL attachment written earlier on
+                    // this same GL thread, exactly like the success callback.
+                    int eglAttachGeneration = mCreatedEglAttachGeneration;
+                    post(() -> onClientSbsRendererSurfaceValidationFailed(
+                            surfaceGeneration, eglAttachGeneration, reason));
+                }
+            }, context, prefConfig, false);
+            // Client SBS renders into a negotiated-size packed XR compositor surface, which is
+            // unrelated to this view's on-screen size. Tell the renderer both dimensions explicitly.
             mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
                     mXrPresenter.getClientSbsSurfaceHeight());
             glSurfaceView.setRenderer(mStereoRenderer);
@@ -188,7 +359,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return true;
     }
 
-    public void switchToClientSbs(boolean enable, SurfaceSwitchCallback callback) {
+    public void switchToClientSbs(boolean enable, boolean hostSbsTarget,
+                                  SurfaceSwitchCallback callback) {
         // Available in any host-SBS presentation (Raw or AI). The presentations
         // (Normal / Host SBS / Client SBS AI) are mutually exclusive: entering Client SBS runs
         // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
@@ -201,66 +373,165 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
         final int switchGeneration = ++mClientSbsSwitchGeneration;
         mPendingClientSbsSwitch = callback;
+        mPendingClientSbsEnable = enable;
+        mPendingHostSbsTarget = hostSbsTarget;
 
         if (enable) {
-            // Match the renderer viewport to the capped Client SBS surface.
+            // Match the renderer viewport to the negotiated-size Client SBS surface.
             mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
                     mXrPresenter.getClientSbsSurfaceHeight());
 
             // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
             // null/garbage-collected surface crashes MediaCodec).
             if (!bindDecoderSurface(mDummySurface)) {
-                completeClientSbsSwitch(false);
+                completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
 
-            // Size the XR surface for capped packed Client SBS. Must happen before
+            // Size the XR surface for full negotiated-resolution packed Client SBS. Must happen before
             // onResume() so EGL creates its window surface at the new size.
             mXrPresenter.setClientSbsSurfaceSize(true);
+            mExpectedEglOutputSurface = mXrPresenter.getVideoSurface();
+            mCreatedEglAttachGeneration = 0;
+            mRequestedEglAttachGeneration = switchGeneration;
+            mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
 
             // XR surface is now free. Resume the GLSurfaceView so EGL connects to it.
             glView.onResume();
 
-            // With a preserved EGL context, onSurfaceCreated() is not called on the second entry.
-            // Reuse its still-valid decoder surface. First entry completes from the renderer's
-            // onStereo3DSurfaceReady callback.
-            Surface decoderSurface = mStereoRenderer.getVideoSurface();
-            if (mPendingClientSbsSwitch != null
-                    && switchGeneration == mClientSbsSwitchGeneration
-                    && decoderSurface != null && decoderSurface.isValid()) {
-                mClientSbsSurface = decoderSurface;
-                completeClientSbsSwitch(bindDecoderSurface(decoderSurface));
-            } else {
-                postDelayed(() -> {
-                    if (switchGeneration == mClientSbsSwitchGeneration
-                            && mPendingClientSbsSwitch != null) {
-                        LimeLog.severe("Timed out waiting for the Client SBS decoder surface");
-                        completeClientSbsSwitch(false);
-                    }
-                }, 2000);
-            }
         } else {
             // Detach the decoder from the renderer's surface onto the persistent dummy surface.
             if (!bindDecoderSurface(mDummySurface)) {
-                completeClientSbsSwitch(false);
+                completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
 
-            // Release EGL from the XR surface. This is asynchronous; the EGLWindowSurfaceFactory's
-            // destroySurface() reconnects the decoder to the XR surface once EGL is fully detached.
+            // onPause() only requests a pause. Wait for the EGL factory to acknowledge this exact
+            // generation after eglDestroySurface() releases the XR producer.
+            mRequestedEglDetachGeneration = switchGeneration;
             glView.onPause();
+        }
 
-            // Restore the XR surface to a single input frame (W×H) for the direct decoder path.
-            // Runs synchronously on the main thread here, ahead of the GL-thread reconnect, so the
-            // decoder rebinds at W×H.
-            mXrPresenter.setClientSbsSurfaceSize(false);
-            Surface xrSurface = mXrPresenter.getVideoSurface();
-            completeClientSbsSwitch(xrSurface != null && xrSurface.isValid()
-                    && bindDecoderSurface(xrSurface));
+        postDelayed(() -> {
+            if (switchGeneration == mClientSbsSwitchGeneration
+                    && mPendingClientSbsSwitch != null) {
+                LimeLog.severe(enable
+                        ? "Timed out waiting for generation-acknowledged Client SBS surfaces"
+                        : "Timed out waiting for Client SBS EGL detachment");
+                completeClientSbsSwitch(switchGeneration, false);
+            }
+        }, 2000);
+    }
+
+    private void onClientSbsRendererSurfaceReady(Surface surface, int surfaceGeneration,
+                                                  int eglAttachGeneration) {
+        if (mDestroyed || surface == null || !surface.isValid()
+                || surfaceGeneration <= 0 || surfaceGeneration != eglAttachGeneration
+                || surfaceGeneration != mRequestedEglAttachGeneration
+                || mXrPresenter == null
+                || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
+            return;
+        }
+
+        boolean pendingEnable = mPendingClientSbsSwitch != null
+                && mPendingClientSbsEnable
+                && surfaceGeneration == mClientSbsSwitchGeneration;
+        boolean contextRecovery = mPendingClientSbsSwitch == null
+                && mStereoRenderer != null && mStereoRenderer.isClientSbs();
+        if (!pendingEnable && !contextRecovery) {
+            return;
+        }
+
+        mClientSbsSurface = surface;
+        mXrPresenter.onClientSbsOutputCapabilityChanged();
+        boolean success = game != null && bindDecoderSurface(surface);
+        if (pendingEnable) {
+            completeClientSbsSwitch(surfaceGeneration, success);
+        } else if (!success && game != null) {
+            game.handleDecoderSurfaceSwitchFailure();
         }
     }
 
-    private void completeClientSbsSwitch(boolean success) {
+    private void onClientSbsRendererSurfaceValidationFailed(
+            int surfaceGeneration, int eglAttachGeneration, String reason) {
+        if (mDestroyed || surfaceGeneration <= 0
+                || surfaceGeneration != eglAttachGeneration
+                || surfaceGeneration != mRequestedEglAttachGeneration
+                || mXrPresenter == null
+                || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
+            return;
+        }
+
+        boolean pendingEnable = mPendingClientSbsSwitch != null
+                && mPendingClientSbsEnable
+                && surfaceGeneration == mClientSbsSwitchGeneration;
+        boolean contextRecovery = mPendingClientSbsSwitch == null
+                && surfaceGeneration == mClientSbsSwitchGeneration
+                && mStereoRenderer != null && mStereoRenderer.isClientSbs();
+        if (!pendingEnable && !contextRecovery) {
+            return;
+        }
+        LimeLog.severe("Client SBS EGL output validation failed for generation "
+                + surfaceGeneration + ": " + reason);
+        if (pendingEnable) {
+            completeClientSbsSwitch(surfaceGeneration, false);
+        } else if (contextRecovery && game != null) {
+            game.handleDecoderSurfaceSwitchFailure();
+        }
+    }
+
+    /**
+     * Synchronous GL-thread acknowledgement for unexpected EGL context replacement. MediaCodec's
+     * output switch is internally serialized with codec recovery, so it is safe to perform here;
+     * returning only after the switch prevents the renderer from releasing a live BufferQueue.
+     */
+    private boolean parkDecoderForClientSbsContextRecovery(Surface oldSurface,
+                                                            int surfaceGeneration) {
+        if (mDestroyed || oldSurface == null || surfaceGeneration <= 0
+                || mStereoRenderer == null || !mStereoRenderer.isClientSbs()
+                || mDummySurface == null || !mDummySurface.isValid()) {
+            return false;
+        }
+        synchronized (this) {
+            // Re-entry may create a new EGL context after the current mode switch already parked
+            // MediaCodec and advanced the requested generation. The persistent dummy itself is
+            // the required acknowledgement, independent of the retired SurfaceTexture's tag.
+            if (mBoundDecoderSurface == mDummySurface) {
+                return true;
+            }
+            if (surfaceGeneration != mRequestedEglAttachGeneration) {
+                return false;
+            }
+            if (mBoundDecoderSurface != oldSurface || mClientSbsSurface != oldSurface) {
+                return false;
+            }
+            return bindDecoderSurface(mDummySurface);
+        }
+    }
+
+    private void onClientSbsEglDetached(int detachGeneration) {
+        if (mDestroyed || detachGeneration != mClientSbsSwitchGeneration
+                || detachGeneration != mRequestedEglDetachGeneration
+                || mPendingClientSbsSwitch == null || mPendingClientSbsEnable
+                || mXrPresenter == null) {
+            return;
+        }
+
+        mRequestedEglDetachGeneration = 0;
+        mCreatedEglAttachGeneration = 0;
+        mExpectedEglOutputSurface = null;
+        // Client -> Normal/Raw goes directly to W x H; Client -> Host SBS AI goes directly to its
+        // packed target. There is no intermediate direct-decoder bind and second resize/handoff.
+        mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
+        Surface target = mXrPresenter.getVideoSurface();
+        completeClientSbsSwitch(detachGeneration,
+                target != null && target.isValid() && bindDecoderSurface(target));
+    }
+
+    private void completeClientSbsSwitch(int generation, boolean success) {
+        if (generation != mClientSbsSwitchGeneration) {
+            return;
+        }
         SurfaceSwitchCallback callback = mPendingClientSbsSwitch;
         if (callback == null) {
             if (!success && game != null) {
@@ -272,7 +543,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         post(() -> callback.onComplete(success));
     }
 
-    private boolean bindDecoderSurface(Surface surface) {
+    private synchronized boolean bindDecoderSurface(Surface surface) {
         if (surface == null || !surface.isValid()) {
             return false;
         }
@@ -406,17 +677,33 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     public void surfaceDestroyed(SurfaceHolder holder) {
         // Stop native streaming before releasing any decoder/EGL/XR surface it may still use.
         game.surfaceDestroyed(holder);
-        game.runAfterConnectionStop(this::destroyStereoRenderer);
+        game.runAfterConnectionStop(() -> destroyStereoRenderer());
     }
 
-    private void destroyStereoRenderer() {
+    private boolean destroyStereoRenderer() {
         if (!mStereoRendererDestroyed && mStereoRenderer != null) {
+            if (!mStereoRenderer.onSurfaceDestroyed()) {
+                scheduleRendererDestroyRetry();
+                return false;
+            }
             mStereoRendererDestroyed = true;
-            mStereoRenderer.onSurfaceDestroyed();
         }
+        return true;
     }
 
-    @Override
+    private void scheduleRendererDestroyRetry() {
+        if (mRendererDestroyRetryScheduled) {
+            return;
+        }
+        mRendererDestroyRetryScheduled = true;
+        postDelayed(() -> {
+            mRendererDestroyRetryScheduled = false;
+            if (destroyStereoRenderer() && mContainerCleanupPending) {
+                finishContainerCleanup();
+            }
+        }, 1000);
+    }
+
     public void onStereo3DSurfaceReady(Surface surface) {
         mCurrentSurface = surface;
         mBoundDecoderSurface = surface;
@@ -427,9 +714,23 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mDestroyed = true;
         mClientSbsSwitchGeneration++;
         mPendingClientSbsSwitch = null;
+        mRequestedEglAttachGeneration = 0;
+        mCreatedEglAttachGeneration = 0;
+        mRequestedEglDetachGeneration = 0;
+        mExpectedEglOutputSurface = null;
         setClientSbsActive(false);
         setHdrInput(false);
-        destroyStereoRenderer();
+        mContainerCleanupPending = true;
+        if (destroyStereoRenderer()) {
+            finishContainerCleanup();
+        }
+    }
+
+    private void finishContainerCleanup() {
+        if (mContainerCleanupComplete) {
+            return;
+        }
+        mContainerCleanupComplete = true;
         if (mXrPresenter != null) {
             mXrPresenter.onDestroy();
         }

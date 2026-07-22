@@ -1,0 +1,46 @@
+Client SBS model third-party notice
+
+This non-root Artemis APK contains converted and optimized TFLite depth models in:
+
+  client-sbs-dav2-models.tar.xz
+  client-sbs-midas-models.tar.xz
+
+Depth Anything V2 Small
+-----------------------
+Upstream project: https://github.com/DepthAnything/Depth-Anything-V2
+Upstream model card: https://huggingface.co/depth-anything/Depth-Anything-V2-Small
+The upstream project designates the Small model as Apache-2.0. A verbatim copy
+of that license is bundled beside this notice as LICENSE-APACHE-2.0.txt.
+
+Artemis ships modified TFLite conversions, not verbatim upstream checkpoint
+files. The shipped graphs use fixed rectangular input/output contracts,
+guarded attention and GELU graph rewrites, and FP16 storage for selected
+weights. The source distribution records hashes for the immediate Float32
+TFLite inputs and final packaged entries. It does not currently record a
+pinned upstream checkpoint revision and digest, exporter revision, dependency
+lock, or exact original export command, so it does not claim a complete
+upstream-checkpoint-to-TFLite reproduction chain.
+
+MiDaS v2.1 Small
+----------------
+Upstream project: https://github.com/isl-org/MiDaS
+The shipped conversions derive from the pinned Qualcomm AI Hub MiDaS-V2
+Float32 graph whose release, download revision, and hashes are recorded in the
+Artemis source distribution. MiDaS is licensed under the MIT License. A
+verbatim copy, including its copyright notice, is bundled beside this notice
+as LICENSE-MIDAS-MIT.txt.
+
+Artemis modifies that graph with fixed rectangular input/output and decoder
+resize contracts and FP16 storage for selected weights. The source model card
+also attributes its EfficientNet-Lite3 encoder under Apache-2.0; the bundled
+LICENSE-APACHE-2.0.txt supplies that license text as well.
+
+LiteRT 2.1.6 native runtime and accelerator
+-------------------------------------------
+Upstream project: https://github.com/google-ai-edge/LiteRT
+Upstream release: https://github.com/google-ai-edge/LiteRT/releases/tag/v2.1.6
+The non-root APK ships the official LiteRT 2.1.6 Android libLiteRt.so runtime
+and libLiteRtClGlAccelerator.so OpenCL/OpenGL accelerator for its packaged ABI.
+The source distribution records the official download URLs and SHA-256 values
+for both supported ABIs. These binaries are redistributed under Apache-2.0;
+LICENSE-APACHE-2.0.txt is bundled beside this notice.

@@ -648,9 +648,7 @@
     <string name="title_prevent_packet_loss">Предотвращать потерю пакетов</string>
     <string name="perf_overlay_lite_net">%1$dмс</string>
     <string name="perf_overlay_lite_dectime">%1$.2fмс</string>
-    <string name="summary_low_latency_frame_balance">Уменьшает задержку за счёт пропуска кадров в очереди</string>
     <string name="category_perf_monitor_settings">Монитор производительности</string>
-    <string name="title_low_latency_frame_balance">LFR (эксперементально)</string>
     <string name="title_checkbox_forceTightThresholds">Агрессивная вертикальная синхронизация (эксперементально)</string>
     <string name="title_checkbox_full_screen">Включить полноэкранный режим</string>
     <string name="summary_checkbox_full_screen">Скрывать системные панели в режиме погружения</string>

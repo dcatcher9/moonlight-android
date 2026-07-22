@@ -12,20 +12,19 @@ import java.nio.charset.StandardCharsets;
 /**
  * Low-overhead device-load sampler for the streaming statistics panel.
  *
- * <p>CPU load is the CPU time consumed by this app process, not system-wide CPU load. GPU and
- * NPU load are device-wide values only when the vendor kernel exposes an unprivileged, readable
- * utilization node. The availability flags must always be checked; clock frequency is never used
- * as a utilization estimate.</p>
+ * <p>CPU load is the CPU time consumed by this app process, not system-wide CPU load. GPU load is
+ * device-wide only when KGSL exposes an unprivileged utilization node. The availability flags must
+ * always be checked; clock frequency is never used as a utilization estimate.</p>
  */
 public final class DevicePerformanceSampler {
-    private static final long MIN_SAMPLE_INTERVAL_MS = 750L;
+    private static final long MIN_SAMPLE_INTERVAL_MS = 2_000L;
     /**
      * A process-CPU delta older than this is historical session data rather than a useful live
      * load sample. This commonly happens when the stats panel has been hidden for a while.
      */
     private static final long MAX_CPU_SAMPLE_WINDOW_MS = 3_000L;
     /** Avoid polling inaccessible vendor nodes every stats tick while still detecting late init. */
-    private static final long UNAVAILABLE_REPROBE_INTERVAL_MS = 10_000L;
+    private static final long UNAVAILABLE_REPROBE_INTERVAL_MS = 60_000L;
     /** Give a selected node one transient read failure before searching the alternatives again. */
     private static final int SELECTED_SOURCE_FAILURE_LIMIT = 2;
 
@@ -46,34 +45,17 @@ public final class DevicePerformanceSampler {
             "/sys/class/devfreq/3d00000.qcom,kgsl-3d0/cur_freq",
     };
 
-    // Android has no public NPU-utilization API on API 34. Probe only nodes whose names explicitly
-    // describe a percentage/busy metric. Generic "load" and frequency nodes are intentionally
-    // excluded because their scale and meaning are vendor-specific.
-    private static final PercentSource[] NPU_UTILIZATION_SOURCES = {
-            new PercentSource("/sys/class/misc/msm_npu/device/utilization",
-                    PercentFormat.DIRECT_PERCENT),
-            new PercentSource("/sys/class/misc/msm_npu/device/busy_percentage",
-                    PercentFormat.DIRECT_PERCENT),
-            new PercentSource("/sys/class/npu/npu0/utilization",
-                    PercentFormat.DIRECT_PERCENT),
-            new PercentSource("/sys/class/npu/npu0/busy_percentage",
-                    PercentFormat.DIRECT_PERCENT),
-    };
-
     private final PercentProbe gpuUtilizationProbe =
             new PercentProbe(GPU_UTILIZATION_SOURCES);
     private final FrequencyProbe gpuFrequencyProbe =
             new FrequencyProbe(GPU_FREQUENCY_SOURCES);
-    private final PercentProbe npuUtilizationProbe =
-            new PercentProbe(NPU_UTILIZATION_SOURCES);
-
     private long previousCpuTimeMs = Long.MIN_VALUE;
     private long previousCpuWallTimeMs = Long.MIN_VALUE;
     private long lastSampleTimeMs = Long.MIN_VALUE;
     private Snapshot latestSnapshot;
 
     /**
-     * Returns a fresh sample at most approximately once per second. Calls made sooner return the
+     * Returns a fresh sample at most approximately once every two seconds. Calls made sooner return the
      * same immutable snapshot and perform no sysfs I/O.
      */
     public synchronized Snapshot sample() {
@@ -89,8 +71,6 @@ public final class DevicePerformanceSampler {
 
         boolean appCpuAvailable = false;
         double appCpuCoreEquivalent = Double.NaN;
-        double appCpuPercentOfCapacity = Double.NaN;
-        long cpuSampleWindowMs = 0L;
 
         if (previousCpuTimeMs != Long.MIN_VALUE && previousCpuWallTimeMs != Long.MIN_VALUE) {
             long elapsedCpuMs = processCpuTimeMs - previousCpuTimeMs;
@@ -100,9 +80,6 @@ public final class DevicePerformanceSampler {
                 double coreEquivalent = (double) elapsedCpuMs / elapsedWallMs;
                 // Millisecond clock granularity can produce a tiny overshoot at a sampling edge.
                 appCpuCoreEquivalent = clamp(coreEquivalent, 0.0, cpuCapacityCores);
-                appCpuPercentOfCapacity =
-                        clamp(appCpuCoreEquivalent * 100.0 / cpuCapacityCores, 0.0, 100.0);
-                cpuSampleWindowMs = elapsedWallMs;
                 appCpuAvailable = true;
             }
         }
@@ -112,24 +89,14 @@ public final class DevicePerformanceSampler {
 
         PercentReading gpuUtilization = gpuUtilizationProbe.read(sampledAtMs);
         FrequencyReading gpuFrequency = gpuFrequencyProbe.read(sampledAtMs);
-        PercentReading npuUtilization = npuUtilizationProbe.read(sampledAtMs);
 
         latestSnapshot = new Snapshot(
-                sampledAtMs,
-                cpuSampleWindowMs,
-                cpuCapacityCores,
                 appCpuAvailable,
                 appCpuCoreEquivalent,
-                appCpuPercentOfCapacity,
                 gpuUtilization.available,
                 gpuUtilization.percent,
-                gpuUtilization.source,
                 gpuFrequency.available,
-                gpuFrequency.hertz,
-                gpuFrequency.source,
-                npuUtilization.available,
-                npuUtilization.percent,
-                npuUtilization.source);
+                gpuFrequency.hertz);
         lastSampleTimeMs = sampledAtMs;
         return latestSnapshot;
     }
@@ -180,7 +147,7 @@ public final class DevicePerformanceSampler {
                 Double value = readPercent(selected);
                 if (value != null) {
                     selectedReadFailures = 0;
-                    return PercentReading.available(value, selected.path);
+                    return PercentReading.available(value);
                 }
 
                 selectedReadFailures++;
@@ -203,7 +170,7 @@ public final class DevicePerformanceSampler {
                 if (value != null) {
                     selected = candidate;
                     selectedReadFailures = 0;
-                    return PercentReading.available(value, candidate.path);
+                    return PercentReading.available(value);
                 }
             }
             return PercentReading.unavailable();
@@ -227,7 +194,7 @@ public final class DevicePerformanceSampler {
                 Long value = readFrequencyHz(selected);
                 if (value != null) {
                     selectedReadFailures = 0;
-                    return FrequencyReading.available(value, selected);
+                    return FrequencyReading.available(value);
                 }
 
                 selectedReadFailures++;
@@ -248,7 +215,7 @@ public final class DevicePerformanceSampler {
                 if (value != null) {
                     selected = candidate;
                     selectedReadFailures = 0;
-                    return FrequencyReading.available(value, candidate);
+                    return FrequencyReading.available(value);
                 }
             }
             return FrequencyReading.unavailable();
@@ -365,98 +332,64 @@ public final class DevicePerformanceSampler {
     private static final class PercentReading {
         final boolean available;
         final double percent;
-        final String source;
 
-        private PercentReading(boolean available, double percent, String source) {
+        private PercentReading(boolean available, double percent) {
             this.available = available;
             this.percent = percent;
-            this.source = source;
         }
 
-        static PercentReading available(double percent, String source) {
-            return new PercentReading(true, percent, source);
+        static PercentReading available(double percent) {
+            return new PercentReading(true, percent);
         }
 
         static PercentReading unavailable() {
-            return new PercentReading(false, Double.NaN, null);
+            return new PercentReading(false, Double.NaN);
         }
     }
 
     private static final class FrequencyReading {
         final boolean available;
         final long hertz;
-        final String source;
 
-        private FrequencyReading(boolean available, long hertz, String source) {
+        private FrequencyReading(boolean available, long hertz) {
             this.available = available;
             this.hertz = hertz;
-            this.source = source;
         }
 
-        static FrequencyReading available(long hertz, String source) {
-            return new FrequencyReading(true, hertz, source);
+        static FrequencyReading available(long hertz) {
+            return new FrequencyReading(true, hertz);
         }
 
         static FrequencyReading unavailable() {
-            return new FrequencyReading(false, 0L, null);
+            return new FrequencyReading(false, 0L);
         }
     }
 
     /** Immutable point-in-time values. Check each availability flag before using its value. */
     public static final class Snapshot {
-        public final long sampledAtElapsedRealtimeMs;
-        public final long cpuSampleWindowMs;
-        public final int cpuCapacityCores;
-
         public final boolean appCpuAvailable;
         public final double appCpuCoreEquivalent;
-        public final double appCpuPercentOfCapacity;
 
         /** Global KGSL GPU busy percentage, not this process's exclusive GPU usage. */
         public final boolean deviceGpuUtilizationAvailable;
         public final double deviceGpuUtilizationPercent;
-        public final String deviceGpuUtilizationSource;
 
         /** Current GPU clock; this is diagnostic context and is not a utilization metric. */
         public final boolean gpuFrequencyAvailable;
         public final long gpuFrequencyHz;
-        public final String gpuFrequencySource;
 
-        /** Global NPU busy percentage only if a vendor utilization node is genuinely readable. */
-        public final boolean deviceNpuUtilizationAvailable;
-        public final double deviceNpuUtilizationPercent;
-        public final String deviceNpuUtilizationSource;
-
-        private Snapshot(long sampledAtElapsedRealtimeMs,
-                         long cpuSampleWindowMs,
-                         int cpuCapacityCores,
-                         boolean appCpuAvailable,
+        private Snapshot(boolean appCpuAvailable,
                          double appCpuCoreEquivalent,
-                         double appCpuPercentOfCapacity,
                          boolean deviceGpuUtilizationAvailable,
                          double deviceGpuUtilizationPercent,
-                         String deviceGpuUtilizationSource,
                          boolean gpuFrequencyAvailable,
-                         long gpuFrequencyHz,
-                         String gpuFrequencySource,
-                         boolean deviceNpuUtilizationAvailable,
-                         double deviceNpuUtilizationPercent,
-                         String deviceNpuUtilizationSource) {
-            this.sampledAtElapsedRealtimeMs = sampledAtElapsedRealtimeMs;
-            this.cpuSampleWindowMs = cpuSampleWindowMs;
-            this.cpuCapacityCores = cpuCapacityCores;
+                         long gpuFrequencyHz) {
             this.appCpuAvailable = appCpuAvailable;
             this.appCpuCoreEquivalent = appCpuCoreEquivalent;
-            this.appCpuPercentOfCapacity = appCpuPercentOfCapacity;
             this.deviceGpuUtilizationAvailable = deviceGpuUtilizationAvailable;
             this.deviceGpuUtilizationPercent = deviceGpuUtilizationPercent;
-            this.deviceGpuUtilizationSource = deviceGpuUtilizationSource;
             this.gpuFrequencyAvailable = gpuFrequencyAvailable;
             this.gpuFrequencyHz = gpuFrequencyHz;
-            this.gpuFrequencySource = gpuFrequencySource;
-            this.deviceNpuUtilizationAvailable = deviceNpuUtilizationAvailable;
-            this.deviceNpuUtilizationPercent = deviceNpuUtilizationPercent;
-            this.deviceNpuUtilizationSource = deviceNpuUtilizationSource;
         }
     }
 }

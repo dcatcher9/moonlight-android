@@ -5,8 +5,8 @@ package com.limelight.sbs;
  *
  * <p>The bindings are deliberately fixed and private to one processor dispatch:</p>
  * <ul>
- *     <li>SSBO 0: packed Float32 model output</li>
- *     <li>SSBO 1: raw range and histogram scratch</li>
+ *     <li>SSBO 0: packed Float32 model output, or raw scratch during range resolve</li>
+ *     <li>SSBO 1: raw range/histogram scratch, then the per-slot GPU scene-cut word</li>
  *     <li>SSBO 2: processed-depth histogram scratch</li>
  *     <li>SSBO 3: persistent temporal/profile state</li>
  *     <li>image 0: current processed depth</li>
@@ -32,14 +32,45 @@ final class ClientSbsGpuDepthShaders {
             "    vec4 rangeState;",      // frame low/high, EMA low/high
             "    vec4 profileA;",        // stretch low/high/inverse, subject candidate
             "    vec4 profileB;",        // subject, recenter, convergence, edge fraction
-            "    vec4 profileC;",        // change fraction, pop, pop ratio, unused
+            "    vec4 profileC;",        // change fraction, pop, pop ratio, cut evidence
             "    uvec4 stateFlags;",     // range init, profile init, first frame, hard cut
             "    ivec4 stateCounters;",  // scene age, cut state, valid samples, frame number
+            "    uvec4 healthCounters;", // hard cuts, external requests, empty, collapsed
             "};"
+    );
+
+    private static final String EXTERNAL_SCENE_CUT = lines(
+            // Binding 1 is raw-stat scratch in earlier programs, but is free in both consumers.
+            // Reusing it keeps the pipeline within GLES 3.1's minimum four SSBO bindings.
+            "layout(std430, binding = 1) readonly buffer ExternalSceneCut {",
+            "    uint externalSceneCutWords[];",
+            "};",
+            "uniform int uExternalSceneCut;",
+            "uniform uint uExternalSceneCutWordOffset;",
+            "bool externalSceneCutRequested() {",
+            "    return uExternalSceneCut != 0",
+            "            || externalSceneCutWords[uExternalSceneCutWordOffset] != 0u;",
+            "}"
     );
 
     private static final String RAW_STATS = lines(
             "layout(std430, binding = 1) buffer RawStats {",
+            "    uint rawMinimum;",
+            "    uint rawMaximum;",
+            "    uint rawValidCount;",
+            "    uint rawPadding;",
+            "    uint rawHistogram[256];",
+            "};"
+    );
+
+    /**
+     * Raw-range resolution no longer reads the model tensor, so it temporarily aliases raw
+     * scratch onto binding zero while the GPU scene-cut word occupies binding one. This lets the
+     * one-thread resolve phase apply the cut to the effective range itself and avoids a separate
+     * dispatch without exceeding GLES 3.1's minimum four SSBO bindings.
+     */
+    private static final String RAW_STATS_FOR_RESOLVE = lines(
+            "layout(std430, binding = 0) buffer RawStats {",
             "    uint rawMinimum;",
             "    uint rawMaximum;",
             "    uint rawValidCount;",
@@ -59,7 +90,7 @@ final class ClientSbsGpuDepthShaders {
             "};"
     );
 
-    private static final String RAW_INPUT = lines(
+    private static final String RAW_INPUT_HEADER = lines(
             "layout(std430, binding = 0) readonly buffer RawDepth {",
             "    uint rawWords[];",
             "};",
@@ -67,15 +98,29 @@ final class ClientSbsGpuDepthShaders {
             "uniform uint uRawPixelStrideBytes;",
             "uniform ivec2 uTensorSize;",
             "uniform ivec2 uOutputSize;",
-            "uniform vec2 uContentScale;",
-            "float tensorRaw(ivec2 point) {",
+            "bool tensorRaw(ivec2 point, out float finiteValue) {",
             "    ivec2 p = clamp(point, ivec2(0), uTensorSize - ivec2(1));",
             "    uint index = uint(p.y * uTensorSize.x + p.x);",
             "    uint absoluteByte = uRawByteOffset + index * uRawPixelStrideBytes;",
             "    float value = uintBitsToFloat(rawWords[absoluteByte >> 2u]);",
-            "    return isnan(value) || isinf(value) ? 0.0 : max(value, 0.0);",
-            "}",
-            "float sourceAlignedRaw(ivec2 destination) {",
+            "    if (isnan(value) || isinf(value) || value < 0.0) {",
+            "        finiteValue = 0.0;",
+            "        return false;",
+            "    }",
+            "    finiteValue = value;",
+            "    return true;",
+            "}"
+    );
+
+    private static final String DIRECT_SOURCE_ALIGNED_RAW = lines(
+            "bool sourceAlignedRaw(ivec2 destination, out float finiteValue) {",
+            "    return tensorRaw(destination, finiteValue);",
+            "}"
+    );
+
+    private static final String REFLECTED_PADDING_SOURCE_ALIGNED_RAW = lines(
+            "uniform vec2 uContentScale;",
+            "bool sourceAlignedRaw(ivec2 destination, out float finiteValue) {",
             "    vec2 outputUv = (vec2(destination) + vec2(0.5)) / vec2(uOutputSize);",
             "    vec2 padding = vec2(0.5) * (vec2(1.0) - uContentScale);",
             "    vec2 source = (padding + outputUv * uContentScale) * vec2(uTensorSize)",
@@ -85,57 +130,154 @@ final class ClientSbsGpuDepthShaders {
             "    ivec2 high = min(low + ivec2(1), uTensorSize - ivec2(1));",
             "    vec2 weight = source - vec2(low);",
             "    weight = mix(weight, vec2(0.0), lessThanEqual(weight, vec2(1.0e-5)));",
-            "    float top = mix(tensorRaw(low), tensorRaw(ivec2(high.x, low.y)), weight.x);",
-            "    float bottom = mix(tensorRaw(ivec2(low.x, high.y)), tensorRaw(high), weight.x);",
-            "    return mix(top, bottom, weight.y);",
-            "}",
-            "uint rawFixed(ivec2 destination) {",
-            "    return uint(clamp(sourceAlignedRaw(destination), 0.0, 65535.0)",
-            "            * 65536.0 + 0.5);",
+            "    vec4 sampleValue;",
+            "    bvec4 sampleValid;",
+            "    sampleValid.x = tensorRaw(low, sampleValue.x);",
+            "    sampleValid.y = tensorRaw(ivec2(high.x, low.y), sampleValue.y);",
+            "    sampleValid.z = tensorRaw(ivec2(low.x, high.y), sampleValue.z);",
+            "    sampleValid.w = tensorRaw(high, sampleValue.w);",
+            "    vec4 bilinearWeight = vec4((1.0 - weight.x) * (1.0 - weight.y),",
+            "            weight.x * (1.0 - weight.y), (1.0 - weight.x) * weight.y,",
+            "            weight.x * weight.y);",
+            "    vec4 validMask = vec4(sampleValid.x ? 1.0 : 0.0,",
+            "            sampleValid.y ? 1.0 : 0.0, sampleValid.z ? 1.0 : 0.0,",
+            "            sampleValid.w ? 1.0 : 0.0);",
+            "    vec4 validWeight = bilinearWeight * validMask;",
+            "    float weightTotal = dot(validWeight, vec4(1.0));",
+            "    if (weightTotal <= 1.0e-8) {",
+            "        finiteValue = 0.0;",
+            "        return false;",
+            "    }",
+            "    finiteValue = dot(sampleValue, validWeight) / weightTotal;",
+            "    return true;",
             "}"
     );
 
-    static final String RESET_RAW_STATS = HEADER + RAW_STATS + lines(
+    private static final String RAW_FIXED = lines(
+            "bool rawFixed(ivec2 destination, out uint fixedValue) {",
+            "    float rawValue;",
+            "    if (!sourceAlignedRaw(destination, rawValue)) {",
+            "        fixedValue = 0u;",
+            "        return false;",
+            "    }",
+            "    fixedValue = uint(clamp(rawValue, 0.0, 65535.0) * 65536.0 + 0.5);",
+            "    return true;",
+            "}"
+    );
+
+    private static String rawInput(boolean removeReflectedPadding) {
+        return RAW_INPUT_HEADER
+                + (removeReflectedPadding
+                ? REFLECTED_PADDING_SOURCE_ALIGNED_RAW : DIRECT_SOURCE_ALIGNED_RAW)
+                + RAW_FIXED;
+    }
+
+    /** Clears both independent 256-bin scratch blocks in one 256-thread dispatch. */
+    static final String RESET_ALL_STATS = HEADER + RAW_STATS + PROFILE_STATS + lines(
             "layout(local_size_x = 256) in;",
             "void main() {",
             "    uint index = gl_LocalInvocationID.x;",
             "    rawHistogram[index] = 0u;",
+            "    depthHistogram[index] = 0u;",
+            "    subjectHistogram[index] = 0u;",
             "    if (index == 0u) {",
             "        rawMinimum = 0xffffffffu;",
             "        rawMaximum = 0u;",
             "        rawValidCount = 0u;",
             "        rawPadding = 0u;",
+            "        edgeCount = 0u;",
+            "        changeCount = 0u;",
+            "        subjectWeightTotal = 0u;",
+            "        profilePadding = 0u;",
             "    }",
             "}"
     );
 
-    static final String RAW_MIN_MAX = HEADER + RAW_INPUT + RAW_STATS + lines(
-            "layout(local_size_x = 16, local_size_y = 16) in;",
-            "void main() {",
-            "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
-            "    if (any(greaterThanEqual(point, uOutputSize))) return;",
-            "    uint value = rawFixed(point);",
-            "    atomicMin(rawMinimum, value);",
-            "    atomicMax(rawMaximum, value);",
-            "    atomicAdd(rawValidCount, 1u);",
-            "}"
-    );
+    static String rawMinMax(boolean removeReflectedPadding) {
+        return HEADER + rawInput(removeReflectedPadding) + RAW_STATS + lines(
+                "layout(local_size_x = 16, local_size_y = 16) in;",
+                "shared uvec3 localRange[256];",
+                "void main() {",
+                "    uint lane = gl_LocalInvocationIndex;",
+                "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
+                "    uint value = 0u;",
+                "    bool valid = all(lessThan(point, uOutputSize)) && rawFixed(point, value);",
+                "    localRange[lane] = valid ? uvec3(value, value, 1u)",
+                "            : uvec3(0xffffffffu, 0u, 0u);",
+                "    barrier();",
+                "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
+                "        if (lane < stride) {",
+                "            uvec3 right = localRange[lane + stride];",
+                "            localRange[lane].x = min(localRange[lane].x, right.x);",
+                "            localRange[lane].y = max(localRange[lane].y, right.y);",
+                "            localRange[lane].z += right.z;",
+                "        }",
+                "        barrier();",
+                "    }",
+                "    if (lane == 0u && localRange[0].z != 0u) {",
+                "        atomicMin(rawMinimum, localRange[0].x);",
+                "        atomicMax(rawMaximum, localRange[0].y);",
+                "        atomicAdd(rawValidCount, localRange[0].z);",
+                "    }",
+                "}"
+        );
+    }
 
-    static final String RAW_HISTOGRAM = HEADER + RAW_INPUT + RAW_STATS + lines(
-            "layout(local_size_x = 16, local_size_y = 16) in;",
-            "void main() {",
-            "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
-            "    if (any(greaterThanEqual(point, uOutputSize))) return;",
-            "    uint value = rawFixed(point);",
-            "    uint rangeValue = rawMaximum - rawMinimum;",
-            "    uint bin = rangeValue == 0u ? 0u : min(uint(",
-            "            float(value - rawMinimum) * 256.0 / float(rangeValue)), 255u);",
-            "    atomicAdd(rawHistogram[bin], 1u);",
-            "}"
-    );
+    static final String RAW_MIN_MAX = rawMinMax(true);
 
-    static final String RESOLVE_RAW_RANGE = HEADER + RAW_STATS + STATE + lines(
+    static String rawHistogram(boolean removeReflectedPadding) {
+        return HEADER + rawInput(removeReflectedPadding) + RAW_STATS + STATE + lines(
+                "layout(local_size_x = 16, local_size_y = 16) in;",
+                "uniform sampler2D uPreviousDepth;",
+                "shared uint localHistogram[256];",
+                "shared uint localChangeCount[256];",
+                "void main() {",
+                "    uint lane = gl_LocalInvocationIndex;",
+                "    localHistogram[lane] = 0u;",
+                "    localChangeCount[lane] = 0u;",
+                "    barrier();",
+                "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
+                "    uint value = 0u;",
+                "    bool valid = all(lessThan(point, uOutputSize)) && rawFixed(point, value);",
+                "    if (valid) {",
+                "        uint rangeValue = rawMaximum - rawMinimum;",
+                "        uint bin = rangeValue == 0u ? 0u : min(uint(",
+                "                float(value - rawMinimum) * 256.0 / float(rangeValue)), 255u);",
+                // Histogram atomics stay in fast workgroup memory; only occupied bins are merged
+                // into the global scratch block once per workgroup below.
+                "        atomicAdd(localHistogram[bin], 1u);",
+                "        if (stateFlags.y != 0u && stateFlags.x != 0u) {",
+                "            float rawValue = float(value) / 65536.0;",
+                "            float denominator = max(rangeState.w - rangeState.z, 1.0e-6);",
+                "            float current = clamp((rawValue - rangeState.z) / denominator,",
+                "                    0.0, 1.0);",
+                "            float previous = texelFetch(uPreviousDepth, point, 0).r;",
+                "            localChangeCount[lane] = abs(current - previous) >= 0.12",
+                "                    ? 1u : 0u;",
+                "        }",
+                "    }",
+                "    barrier();",
+                "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
+                "        if (lane < stride)",
+                "            localChangeCount[lane] += localChangeCount[lane + stride];",
+                "        barrier();",
+                "    }",
+                "    uint binCount = localHistogram[lane];",
+                "    if (binCount != 0u) atomicAdd(rawHistogram[lane], binCount);",
+                // rawPadding is intentionally the broad depth-change count after reset. Giving
+                // it a real meaning avoids a second raw-tensor and previous-depth read later.
+                "    if (lane == 0u && localChangeCount[0] != 0u)",
+                "        atomicAdd(rawPadding, localChangeCount[0]);",
+                "}"
+        );
+    }
+
+    static final String RAW_HISTOGRAM = rawHistogram(true);
+
+    static final String RESOLVE_RAW_RANGE = HEADER + RAW_STATS_FOR_RESOLVE + STATE
+            + EXTERNAL_SCENE_CUT + lines(
             "layout(local_size_x = 1) in;",
+            "uniform float uRangeAlpha;",
             "float percentileValue(float percentile, float minimumValue, float binWidth) {",
             "    float target = percentile * float(rawValidCount);",
             "    uint cumulative = 0u;",
@@ -145,11 +287,26 @@ final class ClientSbsGpuDepthShaders {
             "    }",
             "    return minimumValue + 255.5 * binWidth;",
             "}",
+            "void applyExternalCutRange() {",
+            "    if (stateFlags.x != 0u && externalSceneCutRequested()) {",
+            "        rangeState.zw = rangeState.xy;",
+            "        stateFlags.w = 1u;",
+            "    }",
+            "}",
             "void main() {",
             "    stateFlags.z = 0u;",
+            // A hard-cut bit describes this frame only. It is re-established below from depth
+            // evidence or the external cut before temporal filtering begins.
             "    stateFlags.w = 0u;",
+            "    profileC.x = 0.0;",
+            "    profileC.w = 0.0;",
             "    stateCounters.z = int(rawValidCount);",
-            "    if (rawValidCount == 0u) return;",
+            "    if (rawValidCount == 0u) {",
+            "        healthCounters.z = min(healthCounters.z + 1u, 0xfffffffeu);",
+            // Keep the previous frame's raw range behavior for an empty external-cut frame.
+            "        applyExternalCutRange();",
+            "        return;",
+            "    }",
             "    float minimumValue = float(rawMinimum) / 65536.0;",
             "    float maximumValue = float(rawMaximum) / 65536.0;",
             "    float rawRange = maximumValue - minimumValue;",
@@ -164,115 +321,167 @@ final class ClientSbsGpuDepthShaders {
             "            frameHigh = highCandidate;",
             "        }",
             "    }",
+            "    float collapseScale = max(1.0, max(abs(frameLow), abs(frameHigh)));",
+            "    if (frameHigh - frameLow <= collapseScale * 1.0e-5)",
+            "        healthCounters.w = min(healthCounters.w + 1u, 0xfffffffeu);",
             "    bool firstFrame = stateFlags.x == 0u;",
-            "    if (firstFrame) {",
+            "    float previousRange = max(rangeState.w - rangeState.z, 1.0e-6);",
+            "    float distributionShift = firstFrame ? 0.0 : max(",
+            "            abs(frameLow - rangeState.z), abs(frameHigh - rangeState.w))",
+            "            / previousRange;",
+            "    float changeFraction = float(rawPadding) / float(rawValidCount);",
+            "    float internalCutEvidence = clamp(0.80 * changeFraction",
+            "            + 0.20 * min(distributionShift / 0.15, 1.0), 0.0, 1.0);",
+            // Decide broad depth cuts before mapping this frame. This is the same-frame phase
+            // boundary that prevents a new scene from being normalized with the old scene's EMA.
+            "    bool internalCut = !firstFrame && stateFlags.y != 0u",
+            "            && stateCounters.y > 0 && (changeFraction >= 0.58",
+            "            || (changeFraction >= 0.42 && distributionShift >= 0.10));",
+            "    if (firstFrame || internalCut) {",
             "        rangeState.zw = vec2(frameLow, frameHigh);",
             "        stateFlags.x = 1u;",
             "    } else {",
-            "        rangeState.zw = mix(rangeState.zw, vec2(frameLow, frameHigh), 0.18);",
+            "        rangeState.zw = mix(rangeState.zw, vec2(frameLow, frameHigh), uRangeAlpha);",
             "    }",
             "    rangeState.xy = vec2(frameLow, frameHigh);",
             "    stateFlags.z = firstFrame ? 1u : 0u;",
+            "    stateFlags.w = internalCut ? 1u : 0u;",
+            "    profileC.x = changeFraction;",
+            "    profileC.w = internalCutEvidence;",
+            // This runs in the same single invocation that owns rangeState, so no additional
+            // dispatch or cross-workgroup ordering is required.
+            "    applyExternalCutRange();",
             "}"
     );
 
-    static String temporalFilter(boolean r16f) {
-        String shaderHeader = r16f
-                ? lines("#version 310 es",
-                "#extension GL_EXT_shader_image_load_formatted : require",
-                "precision highp float;",
-                "precision highp int;")
-                : HEADER;
-        // R16F is not one of the core GLES image format qualifiers. The formatted-image
-        // extension permits a load/store-only image to omit its format and infer R16F from the
-        // image-unit binding. R32F keeps its core qualifier for the guaranteed fallback path.
-        String imageLayout = r16f ? "layout(binding = 0)"
-                : "layout(r32f, binding = 0)";
-        return shaderHeader + RAW_INPUT + STATE + lines(
+    static String temporalFilter(boolean removeReflectedPadding) {
+        return HEADER + rawInput(removeReflectedPadding)
+                + STATE + EXTERNAL_SCENE_CUT + lines(
                 "layout(local_size_x = 16, local_size_y = 16) in;",
                 "uniform sampler2D uPreviousDepth;",
-                imageLayout + " uniform writeonly highp image2D uCurrentDepth;",
-                "float mappedDepth(ivec2 point) {",
+                "uniform float uDepthAlpha;",
+                "uniform float uMovingDepthAlpha;",
+                "uniform float uSpatialThresholdScale;",
+                "layout(r32f, binding = 0) uniform writeonly highp image2D uCurrentDepth;",
+                "bool mappedDepth(ivec2 point, out float mappedValue) {",
                 "    ivec2 p = clamp(point, ivec2(0), uOutputSize - ivec2(1));",
+                "    float rawValue;",
+                "    if (!sourceAlignedRaw(p, rawValue) || stateFlags.x == 0u) {",
+                "        mappedValue = 0.5;",
+                "        return false;",
+                "    }",
                 "    float denominator = max(rangeState.w - rangeState.z, 1.0e-6);",
-                "    return clamp((max(sourceAlignedRaw(p), 0.0) - rangeState.z) / denominator, 0.0, 1.0);",
+                "    mappedValue = clamp((rawValue - rangeState.z) / denominator, 0.0, 1.0);",
+                "    return true;",
                 "}",
                 "void main() {",
                 "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
                 "    if (any(greaterThanEqual(point, uOutputSize))) return;",
-                "    float current = mappedDepth(point);",
                 "    float previous = texelFetch(uPreviousDepth, point, 0).r;",
+                "    float current;",
+                "    bool currentValid = mappedDepth(point, current);",
+                "    if (!currentValid) {",
+                "        float retained = stateFlags.y != 0u ? previous : 0.5;",
+                "        imageStore(uCurrentDepth, point, vec4(retained, 0.0, 0.0, 1.0));",
+                "        return;",
+                "    }",
                 "    float outputDepth = current;",
-                "    if (stateFlags.z == 0u) {",
+                "    bool resetHistory = stateFlags.z != 0u || stateFlags.w != 0u",
+                "            || externalSceneCutRequested();",
+                "    if (!resetHistory) {",
                 "        float change = abs(current - previous);",
                 "        float gradient = 0.0;",
-                "        gradient = max(gradient, abs(current - mappedDepth(point + ivec2(-1, 0))));",
-                "        gradient = max(gradient, abs(current - mappedDepth(point + ivec2(1, 0))));",
-                "        gradient = max(gradient, abs(current - mappedDepth(point + ivec2(0, -1))));",
-                "        gradient = max(gradient, abs(current - mappedDepth(point + ivec2(0, 1))));",
-                "        float filtered = mix(previous, current, 0.50);",
-                "        outputDepth = change >= 0.05 && gradient >= 0.02",
-                "                ? mix(filtered, current, 0.25) : filtered;",
+                "        float neighbor;",
+                "        if (mappedDepth(point + ivec2(-1, 0), neighbor))",
+                "            gradient = max(gradient, abs(current - neighbor));",
+                "        if (mappedDepth(point + ivec2(1, 0), neighbor))",
+                "            gradient = max(gradient, abs(current - neighbor));",
+                "        if (mappedDepth(point + ivec2(0, -1), neighbor))",
+                "            gradient = max(gradient, abs(current - neighbor));",
+                "        if (mappedDepth(point + ivec2(0, 1), neighbor))",
+                "            gradient = max(gradient, abs(current - neighbor));",
+                "        float referenceGradient = gradient / max(uSpatialThresholdScale, 1.0);",
+                "        float alpha = change >= 0.05 && referenceGradient >= 0.02",
+                "                ? uMovingDepthAlpha : uDepthAlpha;",
+                "        outputDepth = mix(previous, current, alpha);",
                 "    }",
                 "    imageStore(uCurrentDepth, point, vec4(outputDepth, 0.0, 0.0, 1.0));",
                 "}"
         );
     }
 
-    static final String RESET_PROFILE_STATS = HEADER + PROFILE_STATS + lines(
-            "layout(local_size_x = 256) in;",
-            "void main() {",
-            "    uint index = gl_LocalInvocationID.x;",
-            "    depthHistogram[index] = 0u;",
-            "    subjectHistogram[index] = 0u;",
-            "    if (index == 0u) {",
-            "        edgeCount = 0u;",
-            "        changeCount = 0u;",
-            "        subjectWeightTotal = 0u;",
-            "        profilePadding = 0u;",
-            "    }",
-            "}"
-    );
-
-    static final String ACCUMULATE_PROFILE = HEADER + PROFILE_STATS + STATE + lines(
-            "layout(local_size_x = 16, local_size_y = 16) in;",
+    static String accumulateProfile(boolean removeReflectedPadding) {
+        return HEADER + PROFILE_STATS + STATE + lines(
+                "layout(local_size_x = 16, local_size_y = 16) in;",
             "uniform sampler2D uCurrentDepth;",
-            "uniform sampler2D uPreviousDepth;",
             "uniform ivec2 uOutputSize;",
-            "void main() {",
-            "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
-            "    if (any(greaterThanEqual(point, uOutputSize))) return;",
-            "    float value = clamp(texelFetch(uCurrentDepth, point, 0).r, 0.0, 1.0);",
-            "    ivec2 right = min(point + ivec2(1, 0), uOutputSize - ivec2(1));",
-            "    ivec2 down = min(point + ivec2(0, 1), uOutputSize - ivec2(1));",
-            "    float gx = texelFetch(uCurrentDepth, right, 0).r - value;",
-            "    float gy = texelFetch(uCurrentDepth, down, 0).r - value;",
-            "    float gradient = sqrt(gx * gx + gy * gy);",
-            "    if (gradient >= 0.02) atomicAdd(edgeCount, 1u);",
-            "    float previous = stateFlags.z != 0u ? 0.0",
-            "            : texelFetch(uPreviousDepth, point, 0).r;",
-            "    if (abs(value - previous) >= 0.05) atomicAdd(changeCount, 1u);",
-            "    float normalizedX = uOutputSize.x > 1",
-            "            ? float(point.x) / float(uOutputSize.x - 1) * 2.0 - 1.0 : 0.0;",
-            "    float normalizedY = uOutputSize.y > 1",
-            "            ? float(point.y) / float(uOutputSize.y - 1) * 2.0 - 1.0 : 0.0;",
-            "    float centerWeight = exp(-0.5 * (",
-            "            (normalizedX / 0.70) * (normalizedX / 0.70)",
-            "            + (normalizedY / 0.55) * (normalizedY / 0.55)));",
-            "    float sigmoidValue = 1.0 / (1.0 + exp(-10.0 * (gradient - 0.025)));",
-            "    uint weight = uint(centerWeight * (1.0 - sigmoidValue) * 1024.0 + 0.5);",
-            "    uint bin = min(uint(value * 256.0), 255u);",
-            "    atomicAdd(depthHistogram[bin], 1u);",
-            "    atomicAdd(subjectHistogram[bin], weight);",
-            "    atomicAdd(subjectWeightTotal, weight);",
-            "}"
-    );
+            "uniform float uSpatialThresholdScale;",
+                "shared uint localDepthHistogram[256];",
+                "shared uint localSubjectHistogram[256];",
+                "shared uvec2 localTotals[256];",
+                "void main() {",
+                "    uint lane = gl_LocalInvocationIndex;",
+                "    localDepthHistogram[lane] = 0u;",
+                "    localSubjectHistogram[lane] = 0u;",
+                "    localTotals[lane] = uvec2(0u);",
+                "    barrier();",
+                "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
+                "    if (all(lessThan(point, uOutputSize))) {",
+                "        float value = clamp(texelFetch(uCurrentDepth, point, 0).r, 0.0, 1.0);",
+                "        ivec2 right = min(point + ivec2(1, 0), uOutputSize - ivec2(1));",
+                "        ivec2 down = min(point + ivec2(0, 1), uOutputSize - ivec2(1));",
+                "        float gx = texelFetch(uCurrentDepth, right, 0).r - value;",
+                "        float gy = texelFetch(uCurrentDepth, down, 0).r - value;",
+                "        float gradient = sqrt(gx * gx + gy * gy);",
+                "        float normalizedX = uOutputSize.x > 1",
+                "                ? float(point.x) / float(uOutputSize.x - 1) * 2.0 - 1.0 : 0.0;",
+                "        float normalizedY = uOutputSize.y > 1",
+                "                ? float(point.y) / float(uOutputSize.y - 1) * 2.0 - 1.0 : 0.0;",
+                "        float centerWeight = exp(-0.5 * (",
+                "                (normalizedX / 0.70) * (normalizedX / 0.70)",
+                "                + (normalizedY / 0.55) * (normalizedY / 0.55)));",
+                // Express finite differences in Apollo's aspect-matched reference-texel units
+                // before classifying edges or suppressing them from the subject histogram.
+                "        float referenceGradient = gradient / max(uSpatialThresholdScale, 1.0);",
+                "        float sigmoidValue = 1.0 / (1.0 + exp(-10.0 * (referenceGradient - 0.025)));",
+                "        uint weight = uint(centerWeight * (1.0 - sigmoidValue) * 1024.0 + 0.5);",
+                "        uint bin = min(uint(value * 256.0), 255u);",
+                // Contended histogram updates remain local to the workgroup. One invocation per
+                // occupied bin performs the substantially cheaper global merge below.
+                "        atomicAdd(localDepthHistogram[bin], 1u);",
+                "        atomicAdd(localSubjectHistogram[bin], weight);",
+                "        localTotals[lane] = uvec2(referenceGradient >= 0.02 ? 1u : 0u, weight);",
+                "    }",
+                "    barrier();",
+                "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
+                "        if (lane < stride) localTotals[lane] += localTotals[lane + stride];",
+                "        barrier();",
+                "    }",
+                "    uint depthCount = localDepthHistogram[lane];",
+                "    uint subjectWeight = localSubjectHistogram[lane];",
+                "    if (depthCount != 0u) atomicAdd(depthHistogram[lane], depthCount);",
+                "    if (subjectWeight != 0u)",
+                "        atomicAdd(subjectHistogram[lane], subjectWeight);",
+                "    if (lane == 0u) {",
+                "        if (localTotals[0].x != 0u) atomicAdd(edgeCount, localTotals[0].x);",
+                "        if (localTotals[0].y != 0u)",
+                "            atomicAdd(subjectWeightTotal, localTotals[0].y);",
+                "    }",
+                "}"
+        );
+    }
 
-    static final String RESOLVE_PROFILE = HEADER + PROFILE_STATS + STATE + lines(
+    static final String ACCUMULATE_PROFILE = accumulateProfile(true);
+
+    static final String RESOLVE_PROFILE = HEADER + PROFILE_STATS + STATE
+            + EXTERNAL_SCENE_CUT + lines(
             "layout(local_size_x = 1) in;",
             "layout(rgba32f, binding = 1) uniform writeonly highp image2D uProfileTexture;",
-            "uniform int uExternalSceneCut;",
             "uniform int uPixelCount;",
+            "uniform float uSubjectAlpha;",
+            "uniform float uConvergenceAlpha;",
+            "uniform float uSpatialThresholdScale;",
+            "uniform int uReferenceFrameAdvance;",
             "float depthPercentile(float percentile) {",
             "    float target = percentile * float(uPixelCount);",
             "    uint cumulative = 0u;",
@@ -302,7 +511,10 @@ final class ClientSbsGpuDepthShaders {
             "            vec4(profileA.w, profileC.y, float(stateFlags.w), float(stateCounters.x)));",
             "}",
             "void main() {",
-            "    if (subjectWeightTotal == 0u || uPixelCount <= 0) {",
+            // An empty model tensor must not turn the temporal fallback value (0.5) into a
+            // synthetic ready profile. Preserve the last real profile, or remain uninitialized
+            // during warm-up, until at least one finite raw sample exists.
+            "    if (stateCounters.z <= 0 || subjectWeightTotal == 0u || uPixelCount <= 0) {",
             "        stateFlags.w = 0u;",
             "        publishProfile();",
             "        return;",
@@ -311,14 +523,24 @@ final class ClientSbsGpuDepthShaders {
             "    float stretchLow = depthPercentile(0.05);",
             "    float stretchHigh = depthPercentile(0.95);",
             "    float stretchInverse = 1.0 / max(stretchHigh - stretchLow, 1.0e-4);",
-            "    float edgeFraction = float(edgeCount) / float(uPixelCount);",
-            "    float changeFraction = float(changeCount) / float(uPixelCount);",
+            // A one-texel silhouette occupies a larger fraction of a coarser map. Normalize the
+            // density back to Apollo's 434px-short-side calibration before adaptive-pop gating.
+            "    float edgeFraction = float(edgeCount) / float(uPixelCount)",
+            "            / max(uSpatialThresholdScale, 1.0);",
+            // RESOLVE_RAW_RANGE already compared the current raw frame with the previous depth
+            // before choosing this frame's effective normalization range.
+            "    float changeFraction = profileC.x;",
             "    bool wasInitialized = stateFlags.y != 0u;",
-            "    int sceneAge = wasInitialized ? min(stateCounters.x + 1, 65535) : 0;",
+            "    int sceneAge = wasInitialized ? min(stateCounters.x",
+            "            + max(uReferenceFrameAdvance, 1), 65535) : 0;",
             "    int cutState = stateCounters.y;",
             "    bool cutReady = cutState > 0;",
-            "    bool hardCut = wasInitialized && (uExternalSceneCut != 0",
-            "            || (cutReady && changeFraction >= 0.65));",
+            "    float internalCutEvidence = profileC.w;",
+            "    bool externalCut = externalSceneCutRequested();",
+            // stateFlags.w was decided before temporal filtering, so both external and internal
+            // cuts use this frame's range and bypass old-scene history in the current dispatch.
+            "    bool internalCut = stateFlags.w != 0u && !externalCut;",
+            "    bool hardCut = wasInitialized && (externalCut || internalCut);",
             "    if (!cutReady && wasInitialized && sceneAge >= 8) {",
             "        cutState = 1;",
             "        cutReady = true;",
@@ -330,12 +552,12 @@ final class ClientSbsGpuDepthShaders {
             "        cutState = 1;",
             "    }",
             "    float subjectDepth = !wasInitialized || hardCut ? subjectCandidate",
-            "            : mix(profileB.x, subjectCandidate, 0.20);",
+            "            : mix(profileB.x, subjectCandidate, uSubjectAlpha);",
             "    float stretchedSubject = clamp((subjectDepth - stretchLow) * stretchInverse, 0.0, 1.0);",
             "    float recenter = (0.5 - stretchedSubject) * 0.35;",
             "    float convergenceTarget = (1.0 - subjectDepth) * 0.006;",
             "    float convergence = !wasInitialized || hardCut ? convergenceTarget",
-            "            : mix(profileB.z, convergenceTarget, 0.10);",
+            "            : mix(profileB.z, convergenceTarget, uConvergenceAlpha);",
             "    float popStrength = wasInitialized ? profileC.y : 1.25;",
             "    if (!wasInitialized || hardCut) {",
             "        float confidence = 1.0 - smoothstep(0.007, 0.016, edgeFraction);",
@@ -343,9 +565,13 @@ final class ClientSbsGpuDepthShaders {
             "    }",
             "    profileA = vec4(stretchLow, stretchHigh, stretchInverse, subjectCandidate);",
             "    profileB = vec4(subjectDepth, recenter, convergence, edgeFraction);",
-            "    profileC = vec4(changeFraction, popStrength, popStrength / 1.25, 0.0);",
+            "    float hardCutEvidence = externalCut ? 2.0 : internalCutEvidence;",
+            "    profileC = vec4(changeFraction, popStrength, popStrength / 1.25, hardCutEvidence);",
             "    stateFlags.y = 1u;",
             "    stateFlags.w = hardCut ? 1u : 0u;",
+            "    if (hardCut) healthCounters.x = min(healthCounters.x + 1u, 0xfffffffeu);",
+            "    if (externalCut)",
+            "        healthCounters.y = min(healthCounters.y + 1u, 0xfffffffeu);",
             "    stateCounters.x = sceneAge;",
             "    stateCounters.y = cutState;",
             "    stateCounters.w = min(stateCounters.w + 1, 2147483647);",
@@ -363,6 +589,7 @@ final class ClientSbsGpuDepthShaders {
             "    profileC = vec4(0.0, 1.25, 1.0, 0.0);",
             "    stateFlags = uvec4(0u);",
             "    stateCounters = ivec4(0);",
+            "    healthCounters = uvec4(0u);",
             "    imageStore(uProfileTexture, ivec2(0, 0), vec4(0.0, 1.0, 1.0, 0.5));",
             "    imageStore(uProfileTexture, ivec2(1, 0), vec4(0.0, 0.0, 1.0, 0.0));",
             "    imageStore(uProfileTexture, ivec2(2, 0), vec4(0.0));",

@@ -28,6 +28,30 @@ public class ClientSbsFrameSlotsTest {
     }
 
     @Test
+    public void activePairSurvivesWhileReleasedSlotCapturesNextExactFrame() {
+        ClientSbsFrameSlots slots = new ClientSbsFrameSlots(2);
+        ClientSbsFrameSlots.Lease first = slots.tryAcquireForCapture(4, 10L, 100L);
+        ClientSbsFrameSlots.Lease second = slots.tryAcquireForCapture(4, 11L, 200L);
+
+        assertTrue(slots.markInference(first));
+        assertTrue(slots.markPublished(first));
+        assertTrue(slots.markActive(first));
+        assertTrue(slots.markInference(second));
+        assertTrue(slots.markPublished(second));
+        assertTrue(slots.markActive(second));
+        assertTrue(slots.release(first, ClientSbsFrameSlots.State.ACTIVE));
+
+        ClientSbsFrameSlots.Lease newest =
+                slots.tryAcquireForCapture(4, 12L, 300L);
+        assertNotNull(newest);
+        assertEquals(first.getSlot(), newest.getSlot());
+        assertEquals(12L, newest.getFrameSequence());
+        assertTrue(slots.markInference(newest));
+        assertEquals(ClientSbsFrameSlots.State.ACTIVE, slots.getState(second.getSlot()));
+        assertEquals(ClientSbsFrameSlots.State.INFERENCE, slots.getState(newest.getSlot()));
+    }
+
+    @Test
     public void releasedSlotGetsNewTokenAndRejectsStaleOwner() {
         ClientSbsFrameSlots slots = new ClientSbsFrameSlots(1);
         ClientSbsFrameSlots.Lease oldLease = slots.tryAcquireForCapture(1, 1L, 10L);

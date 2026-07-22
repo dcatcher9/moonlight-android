@@ -27,6 +27,9 @@ import com.limelight.preferences.PreferenceConfiguration;
 
 public class MediaCodecHelper {
 
+    private static final Pattern DEDICATED_LOW_LATENCY_COMPONENT_PATTERN = Pattern.compile(
+            "(^|[._-])low[._-]?latency($|[._-])", Pattern.CASE_INSENSITIVE);
+
     private static final List<String> preferredDecoders;
 
     private static final List<String> blacklistedDecoderPrefixes;
@@ -953,6 +956,11 @@ public class MediaCodecHelper {
     }
 
     public static MediaCodecInfo findFirstDecoder(String mimeType) {
+        return findFirstDecoder(mimeType, false);
+    }
+
+    private static MediaCodecInfo findFirstDecoder(String mimeType,
+                                                   boolean rejectDedicatedLowLatencyComponents) {
         for (MediaCodecInfo codecInfo : getMediaCodecList()) {
             // Skip encoders
             if (codecInfo.isEncoder()) {
@@ -969,6 +977,13 @@ public class MediaCodecHelper {
             // Find a decoder that supports the specified video format
             for (String mime : codecInfo.getSupportedTypes()) {
                 if (mime.equalsIgnoreCase(mimeType)) {
+                    if (rejectDedicatedLowLatencyComponents
+                            && isDedicatedLowLatencyDecoderName(codecInfo.getName())) {
+                        LimeLog.info("Skipping dedicated low-latency decoder component: "
+                                + codecInfo.getName());
+                        continue;
+                    }
+
                     // Skip blacklisted codecs
                     if (isCodecBlacklisted(codecInfo)) {
                         continue;
@@ -1002,11 +1017,52 @@ public class MediaCodecHelper {
         }
     }
 
+    /**
+     * Finds a decoder while excluding vendor components dedicated to low-latency operation.
+     * This is intentionally separate from the generic selector because AVC/HEVC depend on its
+     * FEATURE_LowLatency-first ordering.
+     */
+    public static MediaCodecInfo findProbableSafeRegularDecoder(String mimeType,
+                                                                int requiredProfile) {
+        MediaCodecInfo info = findPreferredDecoder();
+        if (info != null && decoderSupportsMimeType(info, mimeType)
+                && !isDedicatedLowLatencyDecoderName(info.getName())) {
+            return info;
+        }
+
+        try {
+            return findKnownSafeDecoder(mimeType, requiredProfile, true);
+        }
+        catch (Exception e) {
+            return findFirstDecoder(mimeType, true);
+        }
+    }
+
+    private static boolean decoderSupportsMimeType(MediaCodecInfo codecInfo, String mimeType) {
+        for (String supportedType : codecInfo.getSupportedTypes()) {
+            if (supportedType.equalsIgnoreCase(mimeType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static boolean isDedicatedLowLatencyDecoderName(String decoderName) {
+        return decoderName != null
+                && DEDICATED_LOW_LATENCY_COMPONENT_PATTERN.matcher(decoderName).find();
+    }
+
     // We declare this method as explicitly throwing Exception
     // since some bad decoders can throw IllegalArgumentExceptions unexpectedly
     // and we want to be sure all callers are handling this possibility
     @SuppressWarnings("RedundantThrows")
     private static MediaCodecInfo findKnownSafeDecoder(String mimeType, int requiredProfile) throws Exception {
+        return findKnownSafeDecoder(mimeType, requiredProfile, false);
+    }
+
+    private static MediaCodecInfo findKnownSafeDecoder(String mimeType, int requiredProfile,
+                                                       boolean rejectDedicatedLowLatencyComponents)
+            throws Exception {
         // Some devices (Exynos devces, at least) have two sets of decoders.
         // The first set of decoders are C2 which do not support FEATURE_LowLatency,
         // but the second set of OMX decoders do support FEATURE_LowLatency. We want
@@ -1032,6 +1088,13 @@ public class MediaCodecHelper {
                 // Find a decoder that supports the requested video format
                 for (String mime : codecInfo.getSupportedTypes()) {
                     if (mime.equalsIgnoreCase(mimeType)) {
+                        if (rejectDedicatedLowLatencyComponents
+                                && isDedicatedLowLatencyDecoderName(codecInfo.getName())) {
+                            LimeLog.info("Skipping dedicated low-latency decoder component: "
+                                    + codecInfo.getName());
+                            continue;
+                        }
+
                         LimeLog.info("Examining decoder capabilities of " + codecInfo.getName() + " (round " + (i + 1) + ")");
 
                         // Skip blacklisted codecs
