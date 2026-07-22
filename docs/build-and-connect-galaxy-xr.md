@@ -98,8 +98,8 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   ```bash
   "$ADB" shell am start -n com.limelight.noirdebug/com.limelight.PcView
   ```
-- **Presentation mode** is chosen from the XR control bar inside an active stream (Normal,
-  Host SBS Raw, Host SBS AI, or Client SBS AI). A fresh host connection starts in Normal; only a
+- **Presentation mode** is chosen from the XR control bar inside an active stream (2D,
+  Raw SBS, Host 3D, or Client 3D). A fresh host connection starts in Normal; only a
   host-confirmed resume of the same session/app restores the last successful mode. Client SBS has
   no strength/convergence/balance/movie-mode parameter panel; the old `render_mode_list` and client
   depth-parameter preferences are not part of the current path.

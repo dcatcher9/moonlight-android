@@ -577,7 +577,7 @@
     <!-- Labels on the in-headset XR control bar below the video panel. -->
     <string name="xr_bar_normal">2D</string>
     <string name="xr_bar_client_sbs_ai">Client 3D</string>
-    <string name="xr_bar_host_sbs_raw">SBS</string>
+    <string name="xr_bar_host_sbs_raw">Raw SBS</string>
     <string name="xr_bar_host_sbs_ai">Host 3D</string>
     <string name="xr_bar_machines">Machines</string>
     <string name="xr_home_subtitle">Choose a PC to open its XR application library.</string>
@@ -770,6 +770,8 @@
     <string name="xr_home_resume_short">Resume</string>
     <string name="xr_home_quit_short">Quit</string>
     <string name="xr_home_more">More</string>
+    <string name="xr_home_more_symbol">&#x22EE;</string>
+    <string name="xr_home_more_for_app">More actions for %1$s</string>
     <string name="xr_home_status_running">Running</string>
     <string name="xr_home_open_library">Open library</string>
     <string name="xr_home_pair">Pair</string>

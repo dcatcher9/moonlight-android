@@ -177,6 +177,27 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         quit.setFocusable(enabled);
     }
 
+    static void bindCardSessionState(ImageView overlayView, RelativeLayout gridMask,
+                                     TextView statusView, boolean hostOnline, boolean running) {
+        // A visible status label and direct action row communicate the running state without
+        // covering the app artwork with a large, redundant play icon.
+        overlayView.setVisibility(View.GONE);
+        if (!hostOnline) {
+            gridMask.setBackgroundColor(0x77000000);
+            statusView.setText(R.string.pcview_menu_header_offline);
+            statusView.setVisibility(View.VISIBLE);
+        }
+        else if (running) {
+            gridMask.setBackgroundColor(0x66000000);
+            statusView.setText(R.string.xr_home_status_running);
+            statusView.setVisibility(View.VISIBLE);
+        }
+        else {
+            gridMask.setBackgroundColor(0x00000000);
+            statusView.setVisibility(View.GONE);
+        }
+    }
+
     public void cancelQueuedOperations() {
         loader.cancelForegroundLoads();
         loader.cancelBackgroundLoads();
@@ -256,25 +277,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         loader.populateImageView(obj.app, imgView, txtView);
         appNameView.setText(obj.app.getAppName());
 
-        if (!hostOnline) {
-            overlayView.setVisibility(View.GONE);
-            gridMask.setBackgroundColor(0x77000000);
-            statusView.setText(R.string.pcview_menu_header_offline);
-            statusView.setVisibility(View.VISIBLE);
-        }
-        else if (obj.isRunning) {
-            // Show the play button overlay
-            overlayView.setImageResource(R.drawable.ic_play);
-            overlayView.setVisibility(View.VISIBLE);
-            gridMask.setBackgroundColor(0x66000000);
-            statusView.setText(R.string.xr_home_status_running);
-            statusView.setVisibility(View.VISIBLE);
-        }
-        else {
-            overlayView.setVisibility(View.GONE);
-            gridMask.setBackgroundColor(0x00000000);
-            statusView.setVisibility(View.GONE);
-        }
+        bindCardSessionState(overlayView, gridMask, statusView, hostOnline, obj.isRunning);
 
         if (obj.isHidden) {
             parentView.setAlpha(0.40f);
@@ -315,6 +318,8 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         moreActions.setEnabled(true);
         moreActions.setClickable(true);
         moreActions.setFocusable(true);
+        moreActions.setContentDescription(context.getString(
+                R.string.xr_home_more_for_app, obj.app.getAppName()));
         moreActions.setOnClickListener(v -> {
             if (actionListener != null) {
                 actionListener.onMoreActions(obj, v, parentView);

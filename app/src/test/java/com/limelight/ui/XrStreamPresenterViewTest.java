@@ -121,6 +121,7 @@ public final class XrStreamPresenterViewTest {
         assertTrue(XrStreamPresenter.SESSION_GROUP_TEXT_SP >= 26f);
         assertTrue(XrStreamPresenter.SESSION_ROW_TITLE_TEXT_SP >= 29f);
         assertTrue(XrStreamPresenter.SESSION_META_TEXT_SP >= 22f);
+        assertEquals("Raw SBS", activity.getString(R.string.xr_bar_host_sbs_raw));
         assertEquals("Cinema", activity.getString(R.string.xr_bar_cinema_view));
         controller.destroy();
     }

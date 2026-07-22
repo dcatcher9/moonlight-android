@@ -155,6 +155,14 @@ public final class XrHomeButtonLayoutTest {
         Button more = card.findViewById(R.id.grid_more_button);
         float density = card.getResources().getDisplayMetrics().density;
 
+        resume.setVisibility(View.VISIBLE);
+        quit.setVisibility(View.VISIBLE);
+        int cardWidth = card.getResources().getDimensionPixelSize(R.dimen.xr_app_card_width);
+        int cardHeight = Math.round(388 * density);
+        card.measure(View.MeasureSpec.makeMeasureSpec(cardWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(cardHeight, View.MeasureSpec.EXACTLY));
+        card.layout(0, 0, cardWidth, cardHeight);
+
         assertTrue(primary.isClickable());
         assertFalse(card.isClickable());
         assertSame(resume, actions.getChildAt(0));
@@ -170,21 +178,27 @@ public final class XrHomeButtonLayoutTest {
         assertEquals(1, quit.getMaxLines());
         assertEquals(1, more.getMaxLines());
         assertTrue(more.isSingleLine());
-        assertTrue(resume.getLayoutParams().height >= Math.round(56 * density));
-        assertTrue(quit.getLayoutParams().height >= Math.round(56 * density));
-        assertTrue(more.getLayoutParams().height >= Math.round(64 * density));
-        assertTrue(more.getLayoutParams().width >= Math.round(96 * density));
-        int occupiedWidth = actionWidthWithMargins(resume)
-                + actionWidthWithMargins(quit) + actionWidthWithMargins(more);
-        int innerCardWidth = card.getResources().getDimensionPixelSize(
-                R.dimen.xr_app_card_width) - card.getPaddingLeft() - card.getPaddingRight();
-        assertTrue(innerCardWidth - occupiedWidth >= Math.round(8 * density));
+        assertEquals(Math.round(56 * density), actions.getHeight());
+        assertEquals(resume.getTop(), quit.getTop());
+        assertEquals(resume.getTop(), more.getTop());
+        assertEquals(resume.getBottom(), quit.getBottom());
+        assertEquals(resume.getBottom(), more.getBottom());
+        assertEquals(resume.getWidth(), quit.getWidth());
+        assertTrue(resume.getWidth() >= Math.round(94 * density));
+        assertEquals(Math.round(56 * density), more.getWidth());
+        assertEquals(more.getWidth(), more.getHeight());
+        assertEquals(Math.round(6 * density), quit.getLeft() - resume.getRight());
+        assertEquals(Math.round(6 * density), more.getLeft() - quit.getRight());
         assertEquals(card.getResources().getString(R.string.xr_home_resume_short),
                 resume.getText().toString());
         assertEquals(card.getResources().getString(R.string.xr_home_quit_short),
                 quit.getText().toString());
-        assertEquals(card.getResources().getString(R.string.xr_home_more),
+        assertEquals(0, resume.getLayout().getEllipsisCount(0));
+        assertEquals(0, quit.getLayout().getEllipsisCount(0));
+        assertEquals(card.getResources().getString(R.string.xr_home_more_symbol),
                 more.getText().toString());
+        assertEquals(card.getResources().getString(R.string.xr_home_more),
+                more.getContentDescription().toString());
     }
 
     @Test
@@ -209,9 +223,4 @@ public final class XrHomeButtonLayoutTest {
         assertEquals(expectedResource, shadowOf(view.getBackground()).getCreatedFromResId());
     }
 
-    private static int actionWidthWithMargins(View view) {
-        ViewGroup.MarginLayoutParams params =
-                (ViewGroup.MarginLayoutParams) view.getLayoutParams();
-        return params.width + params.leftMargin + params.rightMargin;
-    }
 }

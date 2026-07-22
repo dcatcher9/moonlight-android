@@ -9,6 +9,9 @@ import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -27,6 +30,21 @@ import java.util.concurrent.atomic.AtomicInteger;
         com.limelight.shadows.ShadowGameManager.class,
 })
 public final class AppGridAdapterActionStateTest {
+    @Test
+    public void runningCardKeepsArtworkClearAndUsesExplicitStatus() {
+        View card = inflateCard();
+        ImageView overlay = card.findViewById(R.id.grid_overlay);
+        RelativeLayout mask = card.findViewById(R.id.grid_mask);
+        TextView status = card.findViewById(R.id.grid_status);
+
+        AppGridAdapter.bindCardSessionState(overlay, mask, status, true, true);
+
+        assertEquals(View.GONE, overlay.getVisibility());
+        assertEquals(View.VISIBLE, status.getVisibility());
+        assertEquals(card.getResources().getString(R.string.xr_home_status_running),
+                status.getText().toString());
+    }
+
     @Test
     public void onlineRunningCardShowsAndDispatchesDirectActions() {
         View card = inflateCard();
