@@ -2,12 +2,13 @@ package com.limelight.preferences;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.os.Build;
 import android.view.Display;
 
+import androidx.preference.PreferenceManager;
+
+import com.limelight.BuildConfig;
 import com.limelight.nvstream.jni.MoonBridge;
-import com.limelight.profiles.ProfilesManager;
 
 public class PreferenceConfiguration {
 
@@ -39,9 +40,9 @@ public class PreferenceConfiguration {
     private static final String LEGACY_STRETCH_PREF_STRING = "checkbox_stretch_video";
     private static final String LEGACY_ENFORCE_REFRESH_RATE_STRING = "checkbox_enforce_refresh_rate";
 
-    static final String RESOLUTION_PREF_STRING = "list_resolution";
-    static final String FPS_PREF_STRING = "list_fps";
-    static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
+    public static final String RESOLUTION_PREF_STRING = "list_resolution";
+    public static final String FPS_PREF_STRING = "list_fps";
+    public static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
     private static final String BITRATE_PREF_OLD_STRING = "seekbar_bitrate";
     private static final String METERED_BITRATE_PREF_STRING = "seekbar_metered_bitrate_kbps";
     private static final String ENABLE_ULTRA_LOW_LATENCY_PREF_STRING = "checkbox_ultra_low_latency";
@@ -49,30 +50,29 @@ public class PreferenceConfiguration {
     private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
     private static final String AUTO_INVERT_VIDEO_RESOLUTION_PREF_STRING = "checkbox_auto_invert_video_resolution";
     private static final String RESOLUTION_SCALE_FACTOR_PREF_STRING = "seekbar_resolution_scale_factor";
-    private static final String RESUME_WITHOUT_CONFIRM_PREF_STRING = "checkbox_resume_without_confirm";
     private static final String VIDEO_SCALE_MODE_PREF_STRING = "list_video_scale_mode";
     private static final String SOPS_PREF_STRING = "checkbox_enable_sops";
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
-    private static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
+    public static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
     private static final String OSC_OPACITY_PREF_STRING = "seekbar_osc_opacity";
     private static final String LANGUAGE_PREF_STRING = "list_languages";
-    private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
-    static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
+    public static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
-    private static final String VIDEO_FORMAT_PREF_STRING = "video_format";
-    private static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
+    public static final String VIDEO_FORMAT_PREF_STRING = "video_format";
+    public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
             "list_client_sbs_depth_model";
     private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
     private static final String CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD = "checkbox_hide_osc_when_has_gamepad";
     private static final String ONLY_L3_R3_PREF_STRING = "checkbox_only_show_L3R3";
     private static final String SHOW_GUIDE_BUTTON_PREF_STRING = "checkbox_show_guide_button";
     private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
-    private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
+    public static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
-    private static final String ENABLE_PERF_LOGGING = "checkbox_enable_perf_logging";
+    public static final String ENABLE_PERF_LOGGING_PREF_STRING =
+            "checkbox_enable_perf_logging";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
     private static final String REMEMBER_MOUSE_MODE_PREF_STRING = "checkbox_remember_mouse_mode";
@@ -85,11 +85,11 @@ public class PreferenceConfiguration {
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
 //    static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
-    private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
+    public static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
-    private static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
+    public static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
     private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
@@ -147,7 +147,6 @@ public class PreferenceConfiguration {
     private static final String DEFAULT_VIDEO_SCALE_MODE = "fit";
     private static final boolean DEFAULT_AUTO_INVERT_VIDEO_RESOLUTION = true;
     private static final int DEFAULT_RESOLUTION_SCALE_FACTOR = 100;
-    private static final boolean DEFAULT_RESUME_WITHOUT_CONFIRM = false;
     private static final boolean DEFAULT_SOPS = true;
     private static final boolean DEFAULT_DISABLE_TOASTS = false;
     private static final boolean DEFAULT_HOST_AUDIO = false;
@@ -177,7 +176,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ENABLE_PIP = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_PERF_OVERLAY_BOTTOM = false;
-    private static final boolean DEFAULT_ENABLE_PERF_LOGGING = true;
+    private static final boolean DEFAULT_ENABLE_PERF_LOGGING = BuildConfig.DEBUG;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
     private static final boolean DEFAULT_REMEMBER_MOUSE_MODE = false;
@@ -195,7 +194,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ABSOLUTE_MOUSE_MODE = false;
     private static final boolean DEFAULT_ENABLE_AUDIO_FX = false;
     private static final boolean DEFAULT_REDUCE_REFRESH_RATE = false;
-    private static final boolean DEFAULT_FULL_RANGE = false;
+    public static final boolean DEFAULT_FULL_RANGE = false;
     private static final boolean DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE = false;
     private static final boolean DEFAULT_GAMEPAD_MOTION_SENSORS = true;
     private static final boolean DEFAULT_GAMEPAD_MOTION_FALLBACK = false;
@@ -237,7 +236,23 @@ public class PreferenceConfiguration {
     // Max per-eye width for Host SBS AI: the host doubles this to 2W, which
     // must fit the encoder's max width (NVENC HEVC/AV1 = 8192). Keep 2*this <= that cap. Mirrors the
     // host's sbs_3d_max_encode_width (default 8192).
-    public static final int MAX_HOST_SBS_EYE_WIDTH = 4096;
+    public static final int MAX_HOST_SBS_PACKED_WIDTH_H264 = 4096;
+    public static final int MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1 = 8192;
+
+    public static int maxHostSbsPackedWidthForVideoFormat(int videoFormat) {
+        return (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0
+                ? MAX_HOST_SBS_PACKED_WIDTH_H264
+                : MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
+    }
+
+    public static int[] hostSbsPackedDimensions(int eyeWidth, int eyeHeight,
+                                                 int videoFormat) {
+        int packedWidthCap = maxHostSbsPackedWidthForVideoFormat(videoFormat);
+        int cappedEyeWidth = Math.min(eyeWidth, packedWidthCap / 2);
+        int packedWidth = (cappedEyeWidth * 2) & ~1;
+        int packedHeight = Math.round(eyeHeight * (cappedEyeWidth / (float) eyeWidth)) & ~1;
+        return new int[] {packedWidth, packedHeight};
+    }
 
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
@@ -269,7 +284,7 @@ public class PreferenceConfiguration {
     public boolean enforceDisplayMode, useVirtualDisplay, enableSops, playHostAudio, disableWarnings, fullScreen;
     public ScaleMode videoScaleMode;
     public String language;
-    public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
+    public boolean multiController, usbDriver, flipFaceButtons;
     public boolean onscreenController;
     public boolean hideOSCWhenHasGamepad;
     public boolean enableBatteryReport;
@@ -303,7 +318,6 @@ public class PreferenceConfiguration {
     //Invert video width/height
     public boolean autoInvertVideoResolution;
     public int resolutionScaleFactor;
-    public boolean resumeWithoutConfirm;
     //竖屏模式
     public boolean autoOrientation;
     //虚拟屏幕键盘按键
@@ -584,36 +598,22 @@ public class PreferenceConfiguration {
         return (int)Math.round(resolutionFactor * frameRateFactor) * 1000;
     }
 
-    public static boolean getDefaultSmallMode(Context context) {
-        PackageManager manager = context.getPackageManager();
-        if (manager != null) {
-            // TVs shouldn't use small mode by default
-            if (manager.hasSystemFeature(PackageManager.FEATURE_TELEVISION)) {
-                return false;
-            }
-
-            // API 21 uses LEANBACK instead of TELEVISION
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                if (manager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
-                    return false;
-                }
-            }
-        }
-
-        // Use small mode on anything smaller than a 7" tablet
-        return context.getResources().getConfiguration().smallestScreenWidthDp < 500;
-    }
-
     public static int getDefaultBitrate(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         return getDefaultBitrate(
                 prefs.getString(RESOLUTION_PREF_STRING, DEFAULT_RESOLUTION),
                 prefs.getString(FPS_PREF_STRING, DEFAULT_FPS));
     }
 
-    private static FormatOption getVideoFormatValue(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+    /** Persist the in-headset Stats choice so an activity reconnect/recreate cannot lose it. */
+    public static void setPerformanceOverlayEnabled(Context context, boolean enabled) {
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putBoolean(ENABLE_PERF_OVERLAY_STRING, enabled)
+                .apply();
+    }
 
+    private static FormatOption getVideoFormatValue(SharedPreferences prefs) {
         String str = prefs.getString(VIDEO_FORMAT_PREF_STRING, DEFAULT_VIDEO_FORMAT);
         if (str.equals("auto")) {
             return FormatOption.AUTO;
@@ -633,9 +633,7 @@ public class PreferenceConfiguration {
         }
     }
 
-    private static ScaleMode getVideoScaleMode(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
-
+    private static ScaleMode getVideoScaleMode(SharedPreferences prefs) {
         String str = prefs.getString(VIDEO_SCALE_MODE_PREF_STRING, DEFAULT_VIDEO_SCALE_MODE);
         if (str.equals("fit")) {
             return ScaleMode.FIT;
@@ -653,14 +651,11 @@ public class PreferenceConfiguration {
     }
 
     public static String getSelectedFramePacingName(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         return prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
     }
 
-    
-private static int getFramePacingValue(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
-
+    private static int getFramePacingValue(SharedPreferences prefs) {
         // Migrate legacy never drop frames option to the new location
         if (prefs.contains(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)) {
             boolean legacyNeverDropFrames = prefs.getBoolean(LEGACY_DISABLE_FRAME_DROP_PREF_STRING, false);
@@ -689,9 +684,7 @@ private static int getFramePacingValue(Context context) {
         }
     }
 
-    private static AnalogStickForScrolling getAnalogStickForScrollingValue(Context context) {
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
-
+    private static AnalogStickForScrolling getAnalogStickForScrollingValue(SharedPreferences prefs) {
         String str = prefs.getString(ANALOG_SCROLLING_PREF_STRING, DEFAULT_ANALOG_STICK_FOR_SCROLLING);
         if (str.equals("right")) {
             return AnalogStickForScrolling.RIGHT;
@@ -706,7 +699,7 @@ private static int getFramePacingValue(Context context) {
 
     public static void resetStreamingSettings(Context context) {
         // We consider resolution, FPS, bitrate, HDR, and video format as "streaming settings" here
-        SharedPreferences prefs = ProfilesManager.getInstance().getOverlayingSharedPreferences(context);
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         prefs.edit()
                 .remove(BITRATE_PREF_STRING)
                 .remove(BITRATE_PREF_OLD_STRING)
@@ -738,10 +731,8 @@ private static int getFramePacingValue(Context context) {
     }
 
     public static PreferenceConfiguration readPreferences(Context context, SharedPreferences prefs) {
-        boolean usingProfileOverlay = prefs == null;
-        ProfilesManager profilesManager = ProfilesManager.getInstance();
         if (prefs == null) {
-            prefs = profilesManager.getOverlayingSharedPreferences(context);
+            prefs = PreferenceManager.getDefaultSharedPreferences(context);
         }
         PreferenceConfiguration config = new PreferenceConfiguration();
 
@@ -841,12 +832,6 @@ private static int getFramePacingValue(Context context) {
                     .apply();
         }
 
-        if (!prefs.contains(SMALL_ICONS_PREF_STRING)) {
-            // We need to write small icon mode's default to disk for the settings page to display
-            // the current state of the option properly
-            prefs.edit().putBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context)).apply();
-        }
-
         if (!prefs.contains(GAMEPAD_MOTION_SENSORS_PREF_STRING) && Build.VERSION.SDK_INT == Build.VERSION_CODES.S) {
             // Android 12 has a nasty bug that causes crashes when the app touches the InputDevice's
             // associated InputDeviceSensorManager (just calling getSensorManager() is enough).
@@ -859,14 +844,13 @@ private static int getFramePacingValue(Context context) {
         // This must happen after the preferences migration to ensure the preferences are populated
         config.bitrate = prefs.getInt(BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
         if (config.bitrate == 0) {
-            config.bitrate = getDefaultBitrate(context);
+            config.bitrate = getDefaultBitrate(
+                    getResolutionString(config.width, config.height), Float.toString(config.fps));
         }
 
-        config.meteredBitrate = prefs.getInt((METERED_BITRATE_PREF_STRING), 0);
-        if (config.meteredBitrate == 0) {
-            config.meteredBitrate = config.bitrate / 4;
-            prefs.edit().putInt(METERED_BITRATE_PREF_STRING, 0).apply();
-        }
+        // Android XR exposes one authoritative bitrate in both Global Defaults and the current
+        // session panel. A hidden legacy metered override would make the reconnect preview lie.
+        config.meteredBitrate = config.bitrate;
 
         String audioConfig = prefs.getString(AUDIO_CONFIG_PREF_STRING, DEFAULT_AUDIO_CONFIG);
         if (audioConfig.equals("71")) {
@@ -879,9 +863,9 @@ private static int getFramePacingValue(Context context) {
             config.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_STEREO;
         }
 
-        config.videoScaleMode = getVideoScaleMode(context);
+        config.videoScaleMode = getVideoScaleMode(prefs);
 
-        config.videoFormat = getVideoFormatValue(context);
+        config.videoFormat = getVideoFormatValue(prefs);
         String clientSbsDepthModel;
         try {
             clientSbsDepthModel = prefs.getString(
@@ -893,23 +877,16 @@ private static int getFramePacingValue(Context context) {
                 || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(clientSbsDepthModel)
                 || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350.equals(
                 clientSbsDepthModel)) {
-            String legacyModel = clientSbsDepthModel;
             clientSbsDepthModel = CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
-            boolean migratedActiveProfile = usingProfileOverlay
-                    && profilesManager.replaceActiveOptionValue(
-                            CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                            legacyModel, clientSbsDepthModel);
-            if (!migratedActiveProfile) {
-                prefs.edit().putString(CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                        clientSbsDepthModel).apply();
-            }
+            prefs.edit().putString(CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                    clientSbsDepthModel).apply();
         }
         if (!CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(clientSbsDepthModel)
                 && !CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(clientSbsDepthModel)) {
             clientSbsDepthModel = DEFAULT_CLIENT_SBS_DEPTH_MODEL;
         }
         config.clientSbsDepthModelId = clientSbsDepthModel;
-        config.framePacing = getFramePacingValue(context);
+        config.framePacing = getFramePacingValue(prefs);
 
 
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
@@ -919,7 +896,7 @@ private static int getFramePacingValue(Context context) {
             config.framePacingWarpFactor = 4;
         }
 
-        config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
+        config.analogStickForScrolling = getAnalogStickForScrollingValue(prefs);
 
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
 
@@ -934,7 +911,6 @@ private static int getFramePacingValue(Context context) {
         config.enableUltraLowLatency = prefs.getBoolean(ENABLE_ULTRA_LOW_LATENCY_PREF_STRING, DEFAULT_ENABLE_ULTRA_LOW_LATENCY);
         config.enableSops = prefs.getBoolean(SOPS_PREF_STRING, DEFAULT_SOPS);
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
-        config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.fullScreen = prefs.getBoolean(FULL_SCREEN_PREF_STRING, DEFAULT_FULL_SCREEN);
@@ -969,7 +945,8 @@ private static int getFramePacingValue(Context context) {
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
         config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
-        config.enablePerfLogging = prefs.getBoolean(ENABLE_PERF_LOGGING, DEFAULT_ENABLE_PERF_LOGGING);
+        config.enablePerfLogging = prefs.getBoolean(
+                ENABLE_PERF_LOGGING_PREF_STRING, DEFAULT_ENABLE_PERF_LOGGING);
         config.enablePerfOverlayLite = prefs.getBoolean("checkbox_enable_perf_overlay_lite",DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfOverlayBottom = prefs.getBoolean("checkbox_enable_perf_overlay_bottom",DEFAULT_PERF_OVERLAY_BOTTOM);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
@@ -990,7 +967,6 @@ private static int getFramePacingValue(Context context) {
         config.autoInvertVideoResolution = prefs.getBoolean(AUTO_INVERT_VIDEO_RESOLUTION_PREF_STRING, DEFAULT_AUTO_INVERT_VIDEO_RESOLUTION);
         config.resolutionScaleFactor = prefs.getInt(RESOLUTION_SCALE_FACTOR_PREF_STRING, DEFAULT_RESOLUTION_SCALE_FACTOR);
 
-        config.resumeWithoutConfirm = prefs.getBoolean(RESUME_WITHOUT_CONFIRM_PREF_STRING, DEFAULT_RESUME_WITHOUT_CONFIRM);
 
         config.enableKeyboard = prefs.getBoolean(CHECKBOX_ENABLE_KEYBOARD,false);
 

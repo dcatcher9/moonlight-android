@@ -3,6 +3,8 @@ package com.limelight.binding.video;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import android.media.MediaFormat;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -28,5 +30,17 @@ public class MediaCodecHelperRegularDecoderTest {
         assertFalse(MediaCodecHelper.isDedicatedLowLatencyDecoderName(
                 "vendor.av1.decoder.flow_latency_control"));
         assertFalse(MediaCodecHelper.isDedicatedLowLatencyDecoderName(null));
+    }
+
+    @Test
+    public void reportsLowLatencyOnlyWhenSuccessfulFormatRequestsAnEnabledMode() {
+        MediaFormat format = new MediaFormat();
+        assertFalse(MediaCodecDecoderRenderer.requestsDecoderLowLatency(format));
+
+        format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
+        assertTrue(MediaCodecDecoderRenderer.requestsDecoderLowLatency(format));
+
+        format.setInteger("vendor.qti-ext-dec-low-latency.enable", 0);
+        assertFalse(MediaCodecDecoderRenderer.requestsDecoderLowLatency(format));
     }
 }

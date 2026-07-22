@@ -1,47 +1,159 @@
 <?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="170dp"
-    android:layout_height="220dp">
+    android:layout_width="@dimen/xr_app_card_width"
+    android:layout_height="388dp"
+    android:background="@drawable/xr_home_card_background"
+    android:orientation="vertical"
+    android:padding="10dp">
 
-    <androidx.cardview.widget.CardView
+    <LinearLayout
+        android:id="@+id/grid_primary_action"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_margin="10dp"
-        app:cardCornerRadius="12dp"
-        app:cardElevation="8dp"
-        app:cardMaxElevation="8dp">
-
-        <ImageView
-            android:id="@+id/grid_image"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:cropToPadding="false"
-            android:scaleType="centerCrop" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clickable="true"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:foreground="?android:attr/selectableItemBackground"
+        android:orientation="vertical">
 
         <RelativeLayout
-            android:id="@+id/grid_mask"
+            android:id="@+id/grid_image_layout"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="260dp">
 
             <ImageView
-                android:id="@+id/grid_overlay"
-                android:layout_width="50dp"
-                android:layout_height="50dp"
-                android:layout_centerHorizontal="true"
-                android:layout_marginTop="50dp" />
-
-            <TextView
-                android:id="@+id/grid_text"
+                android:id="@+id/grid_image"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:layout_below="@id/grid_overlay"
-                android:layout_margin="5dp"
-                android:gravity="center|center_vertical"
-                android:background="#00FFFFFF"
-                android:textAlignment="center"
-                android:textSize="18sp" />
+                android:contentDescription="@null"
+                android:scaleType="centerCrop" />
+
+            <RelativeLayout
+                android:id="@+id/grid_mask"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <TextView
+                    android:id="@+id/grid_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_centerInParent="true"
+                    android:ellipsize="end"
+                    android:gravity="center"
+                    android:maxLines="2"
+                    android:padding="12dp"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/grid_overlay"
+                    android:layout_width="54dp"
+                    android:layout_height="54dp"
+                    android:layout_centerInParent="true"
+                    android:contentDescription="@null" />
+            </RelativeLayout>
         </RelativeLayout>
 
-    </androidx.cardview.widget.CardView>
-</RelativeLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp">
+
+            <TextView
+                android:id="@+id/grid_app_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/grid_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FF8AB4F8"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/grid_action_row"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginTop="6dp"
+        android:gravity="end|center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/grid_resume_button"
+            android:layout_width="72dp"
+            android:layout_height="56dp"
+            android:background="@drawable/xr_home_primary_action_background"
+            app:backgroundTint="@null"
+            android:contentDescription="@string/applist_menu_resume"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:minWidth="72dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:text="@string/xr_home_resume_short"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/grid_quit_button"
+            android:layout_width="72dp"
+            android:layout_height="56dp"
+            android:layout_marginStart="5dp"
+            android:background="@drawable/xr_home_destructive_action_background"
+            app:backgroundTint="@null"
+            android:contentDescription="@string/applist_menu_quit"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:minWidth="72dp"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:text="@string/xr_home_quit_short"
+            android:textAllCaps="false"
+            android:textColor="#FFFFB4AB"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/grid_more_button"
+            android:layout_width="@dimen/xr_app_card_more_width"
+            android:layout_height="64dp"
+            android:layout_marginStart="5dp"
+            android:background="@drawable/xr_home_action_background"
+            app:backgroundTint="@null"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:minHeight="64dp"
+            android:minWidth="@dimen/xr_app_card_more_width"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:singleLine="true"
+            android:text="@string/xr_home_more"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp" />
+    </LinearLayout>
+</LinearLayout>

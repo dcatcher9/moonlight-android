@@ -79,15 +79,13 @@ public class ComputerDetails {
     public PairingManager.PairState pairState;
     public int runningGameId;
     public String runningGameUUID;
+    public String hostSessionId;
     public String rawAppList;
     public boolean nvidiaServer;
 
     // VDisplay info
     public boolean vDisplaySupported = false;
     public boolean vDisplayDriverReady = false;
-
-    // Server commands
-    public List<String> serverCommands;
 
     public ComputerDetails() {
         // Use defaults
@@ -158,13 +156,13 @@ public class ComputerDetails {
         this.pairState = details.pairState;
         this.runningGameId = details.runningGameId;
         this.runningGameUUID = details.runningGameUUID;
+        this.hostSessionId = details.hostSessionId;
         this.nvidiaServer = details.nvidiaServer;
         this.rawAppList = details.rawAppList;
 
         this.vDisplayDriverReady = details.vDisplayDriverReady;
         this.vDisplaySupported = details.vDisplaySupported;
 
-        this.serverCommands = details.serverCommands;
     }
 
     @NonNull
@@ -188,8 +186,7 @@ public class ComputerDetails {
                  clipboard_read   = _operation << 1,  // Allow read clipboard from host
                  file_upload      = _operation << 2,  // Allow upload files to host
                  file_dwnload     = _operation << 3,  // Allow download files from host
-                 server_cmd       = _operation << 4,  // Allow execute server cmd
-                 _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd,
+                 _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload,
 
                  _action          = _operation << 8,  // Action permission group
                  list             = _action << 0,     // Allow list apps
@@ -215,8 +212,6 @@ public class ComputerDetails {
 //                " - Read Clipboard: " + ((permission & 0x00020000) != 0) + "\n" +
 //                " - Upload Files: " + ((permission & 0x00040000) != 0) + "\n" +
 //                " - Download Files: " + ((permission & 0x00080000) != 0) + "\n" +
-                " - Server Command: " + ((permission & 0x00100000) != 0) + "\n" +
-                "\n" +
                 " - List Apps: " + ((permission & 0x01000000) != 0) + "\n" +
                 " - View Streams: " + ((permission & (0x02000000 | 0x01000000)) != 0) + "\n" +
                 " - Launch Apps: " + ((permission & (0x04000000 | 0x02000000 | 0x01000000)) != 0) + "\n";

@@ -68,18 +68,6 @@ Quick-start guide: writing JVM/Robolectric unit tests for this repo
 
 3.  Typical helpers used in current tests  
 
-    • **Resetting singletons** – many app classes use `private static` caches.  
-      Example (ProfilesManager):
-
-      ```java
-      Field f = ProfilesManager.class.getDeclaredField("instance");
-      f.setAccessible(true);
-      f.set(null, null);       // clear before each test
-      ```
-
-    • **Cleaning filesystem state** – tests create/delete `context.getFilesDir()/profiles`.  
-      Re-use `deleteRecursively(File)` from existing tests.
-
     • **Preferences isolation** – wipe them in `@Before`:
 
       ```java
@@ -199,12 +187,6 @@ Android emulator or `androidTest` instrumentation.
     public class ShadowFoo {
         @Implementation protected static void __staticInitializer__() {}
     }
-```
-
-```java
-      Field f = ProfilesManager.class.getDeclaredField("instance");
-      f.setAccessible(true);
-      f.set(null, null);       // clear before each test
 ```
 
 ```java

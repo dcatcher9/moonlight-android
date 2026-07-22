@@ -434,11 +434,10 @@ public class NvHTTP {
             details.vDisplayDriverReady = getServerVDisplayDriverReady(serverInfo);
         }
 
-        details.serverCommands = getServerCmds(serverInfo);
-
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
         details.runningGameUUID = getCurrentGameUUID(serverInfo);
+        details.hostSessionId = getHostSessionId(serverInfo);
 
         // The MJOLNIR codename was used by GFE but never by any third-party server
         details.nvidiaServer = getXmlString(serverInfo, "state", true).contains("MJOLNIR");
@@ -451,6 +450,15 @@ public class NvHTTP {
 
     public String getCurrentGameUUID(String serverInfo) throws IOException, XmlPullParserException {
         return getXmlString(serverInfo, "currentgameuuid", false);
+    }
+
+    public String getHostSessionId(String xml) throws IOException, XmlPullParserException {
+        String hostSessionId = getXmlString(xml, "hostsessionid", false);
+        if (hostSessionId == null) {
+            return null;
+        }
+        hostSessionId = hostSessionId.trim();
+        return hostSessionId.isEmpty() || "0".equals(hostSessionId) ? null : hostSessionId;
     }
 
     public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
@@ -563,10 +571,6 @@ public class NvHTTP {
         }
 
         return driverReady.equals("true");
-    }
-
-    public List<String> getServerCmds(String serverInfo) throws XmlPullParserException, IOException {
-        return getXmlArray(serverInfo, "ServerCommand", false);
     }
 
     public PairingManager.PairState getPairState() throws IOException, XmlPullParserException {
@@ -875,27 +879,49 @@ public class NvHTTP {
             }
         }
 
+        boolean resume = verb.equals("resume");
+        String expectedHostSessionId = context.streamConfig.getExpectedHostSessionId();
+        if (resume && (expectedHostSessionId == null || expectedHostSessionId.isEmpty()
+                || "0".equals(expectedHostSessionId))) {
+            throw new IOException("Refusing to resume without a bound host session token");
+        }
+
+        String appIdentityQuery;
+        if (appId > 0) {
+            appIdentityQuery = "appid=" + appId
+                    + (appUUID == null || appUUID.isEmpty()
+                    ? "" : "&appuuid=" + appUUID);
+        }
+        else if (appUUID != null && !appUUID.isEmpty()) {
+            appIdentityQuery = "appuuid=" + appUUID;
+        }
+        else {
+            throw new IOException("Refusing to launch without an application identity");
+        }
+
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb,
-            "appid=" + appId +
-            (appUUID == null ? "" : ("&appuuid=" + appUUID)) +
+            appIdentityQuery +
             "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fpsInt +
             "&scaleFactor=" + context.streamConfig.getResolutionScaleFactor() +
-            "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
+            "&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
-            (!enableHdr ? "" : "&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
+            (!enableHdr ? "" : "&hdrMode=1") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
             "&sbsMode=" + context.streamConfig.getInitialSbsMode() +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
-            "&remoteControllersBitmap=" + context.streamConfig.getAttachedGamepadMask() +
-            "&gcmap=" + context.streamConfig.getAttachedGamepadMask() +
-            "&gcpersist="+(context.streamConfig.getPersistGamepadsAfterDisconnect() ? 1 : 0) +
+            (resume ? "&hostSessionId=" + expectedHostSessionId : "") +
             MoonBridge.getLaunchUrlQueryParameters());
         if ((verb.equals("launch") && !getXmlString(xmlStr, "gamesession", true).equals("0") ||
                 (verb.equals("resume") && !getXmlString(xmlStr, "resume", true).equals("0")))) {
             // sessionUrl0 will be missing for older GFE versions
             context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0", false);
+            context.hostSessionId = getHostSessionId(xmlStr);
+            if (context.hostSessionId == null
+                    || (resume && !context.hostSessionId.equals(expectedHostSessionId))) {
+                throw new IOException("Host returned a missing or mismatched session token");
+            }
             return true;
         }
         else {
@@ -903,20 +929,16 @@ public class NvHTTP {
         }
     }
     
-    public boolean quitApp() throws IOException, XmlPullParserException {
-        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "cancel");
+    public boolean quitApp(String expectedHostSessionId) throws IOException, XmlPullParserException {
+        if (expectedHostSessionId == null || expectedHostSessionId.trim().isEmpty()
+                || "0".equals(expectedHostSessionId.trim())) {
+            throw new IOException("Refusing to quit without a bound host session token");
+        }
+        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout,
+                getHttpsUrl(true), "cancel", "hostSessionId=" + expectedHostSessionId.trim());
         if (getXmlString(xmlStr, "cancel", true).equals("0")) {
             return false;
         }
-
-        // Newer GFE versions will just return success even if quitting fails
-        // if we're not the original requestor.
-        if (getCurrentGame(getServerInfo(true)) != 0) {
-            // Generate a synthetic GfeResponseException letting the caller know
-            // that they can't kill someone else's stream.
-            throw new HostHttpResponseException(599, "");
-        }
-
         return true;
     }
 

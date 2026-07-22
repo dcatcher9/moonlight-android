@@ -141,7 +141,6 @@
     <string name="applist_menu_cancel">Hủy</string>
     <string name="applist_menu_details">Xem chi tiết</string>
     <string name="applist_menu_scut">Tạo phím tắt</string>
-    <string name="applist_menu_tv_channel">Thêm vào Kênh</string>
     <string name="applist_menu_hide_app">Ẩn ứng dụng</string>
     <string name="applist_refresh_title">Danh sách ứng dụng</string>
     <string name="applist_refresh_msg">Đang làm mới ứng dụng…</string>
@@ -594,12 +593,9 @@
     <string name="game_dialog_message_quit_confirm">Hãy chắc rằng bạn đã lưu tiến trình. Thoát khỏi phiên sẽ đóng ứng dụng đang chạy.</string>
 
         <string name="game_menu_quit_session">Thoát phiên</string>
-    <string name="game_menu_server_cmd">Lệnh máy chủ</string>
     <string name="game_menu_fetch_clipboard">Lấy nội dung clipboard</string>
     <string name="game_menu_upload_clipboard">Gửi nội dung clipboard</string>
 
-    <string name="game_dialog_title_server_cmd_empty">Không có lệnh máy chủ</string>
-    <string name="game_dialog_message_server_cmd_empty">Hãy đảm bảo bạn đang dùng phần mềm máy chủ Apollo và ứng dụng này đã được cấp quyền "Lệnh máy chủ".</string>
 
     <string name="vdisplay_not_ready">Driver hiển thị ảo trên máy chủ chưa sẵn sàng. Hãy kiểm tra xem bạn đã cài và bật driver SudoVDA chưa.</string>
     <string name="vdisplay_not_supported"><![CDATA[Máy chủ không hỗ trợ hiển thị ảo. Vui lòng dùng phần mềm Apollo: <a href="https://github.com/ClassicOldSong/Apollo">Apollo</a> để stream.]]></string>

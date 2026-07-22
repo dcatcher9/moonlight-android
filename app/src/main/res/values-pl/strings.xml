@@ -26,7 +26,6 @@
     <string name="perf_overlay_incomingfps">Przychodząca liczba klatek na sekundę z sieci: %1$.2f FPS</string>
     <string name="applist_menu_quit_and_start">Zakończ bieżącą grę i uruchom</string>
     <string name="applist_menu_scut">Utwórz skrót</string>
-    <string name="applist_menu_tv_channel">Dodaj do kanału</string>
     <string name="applist_refresh_title">Lista aplikacji</string>
     <string name="applist_refresh_error_msg">Nie udało się pobrać listy aplikacji</string>
     <string name="applist_quit_app">Rezygnacja</string>

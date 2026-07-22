@@ -69,7 +69,6 @@
     <string name="perf_overlay_decoder">Αποκωδικοποιητής: %1$s</string>
     <string name="perf_overlay_incomingfps">Ρυθμός εισερχόμενων καρέ από το δίκτυο: %1$.2f FPS</string>
     <string name="applist_menu_cancel">Ακύρωση</string>
-    <string name="applist_menu_tv_channel">Προσθήκη στο κανάλι</string>
     <string name="applist_refresh_msg">Ανανέωση εφαρμογών…</string>
     <string name="addpc_success">Ο υπολογιστής προστέθηκε με επιτυχία</string>
     <string name="addpc_unknown_host">Αδυναμία επίλυσης διεύθυνσης υπολογιστή. Βεβαιωθείτε ότι δεν κάνατε τυπογραφικό λάθος στη διεύθυνση.</string>

@@ -219,7 +219,6 @@
     <string name="perf_overlay_renderingfps">Rendering frame rate: %1$.2f FPS</string>
     <string name="perf_overlay_netdrops">Frames overgeslagen door uw netwerkverbinding: %1$.2f%%</string>
     <string name="perf_overlay_dectime">Gemiddelde decodeertijd: %1$.2f ms</string>
-    <string name="applist_menu_tv_channel">Toevoegen aan Kanaal</string>
     <!-- Array strings -->
     <string name="videoformat_hevcalways">Gebruik HEVC altijd (mogelijkheid tot crashes)</string>
     <string name="title_enable_commit_text">Commit-tekstinvoer inschakelen (veeg/stem)</string>

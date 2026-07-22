@@ -40,11 +40,15 @@ import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
-import com.limelight.profiles.ProfilesManager;
+import com.limelight.preferences.XrSessionSettingsController;
+import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
 import com.limelight.ui.XrStreamPresenter;
+import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
+import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
+import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
 import com.limelight.utils.MouseModeOption;
@@ -184,6 +188,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
+    private SessionSettingsStore sessionSettingsStore;
+    private SessionSettingsStore.PcIdentity sessionPc;
+    private SessionSettingsStore.AppIdentity sessionApp;
+    private String sessionLocalSessionId;
+    private volatile String sessionHostSessionId;
+    private XrSessionSettingsController xrSessionSettingsController;
+    private boolean streamContainerReleasedForReconnect;
+    private boolean reconnectScheduled;
 
     private int displayWidth;
     private int displayHeight;
@@ -275,9 +287,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public static final String EXTRA_APP_HDR = "HDR";
     /** True only when the host reported this same app as its currently resumable session. */
     public static final String EXTRA_RESUME_EXISTING_SESSION = "ResumeExistingSession";
+    public static final String EXTRA_HOST_SESSION_ID = "HostSessionId";
+    public static final String EXTRA_REQUIRE_HOST_IDLE = "RequireHostIdle";
     public static final String EXTRA_SERVER_CERT = "ServerCert";
     public static final String EXTRA_VDISPLAY = "VirtualDisplay";
-    public static final String EXTRA_SERVER_COMMANDS = "ServerCommands";
     public static final String EXTRA_DISPLAY_ID = "DisplayID";
 
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
@@ -290,7 +303,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private String uniqueId;
     private X509Certificate serverCert;
     private boolean vDisplay;
-    private ArrayList<String> serverCommands;
 
     private ViewParent rootView;
     private ClipboardManager clipboardManager;
@@ -349,6 +361,311 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     };
 
+    private SharedPreferences prepareCurrentSessionPreferences(boolean activityRecreated) {
+        SharedPreferences globalPreferences =
+                PreferenceManager.getDefaultSharedPreferences(this);
+        Intent intent = getIntent();
+        String pcUuid = intent.getStringExtra(EXTRA_PC_UUID);
+        String fallbackHost = intent.getStringExtra(EXTRA_HOST);
+        String launchAppName = intent.getStringExtra(EXTRA_APP_NAME);
+        String launchAppUuid = intent.getStringExtra(EXTRA_APP_UUID);
+        int launchAppId = readAppId(intent);
+        String publishedHostSessionId = intent.getStringExtra(EXTRA_HOST_SESSION_ID);
+
+        try {
+            sessionPc = new SessionSettingsStore.PcIdentity(pcUuid, fallbackHost);
+            sessionApp = new SessionSettingsStore.AppIdentity(
+                    launchAppId != StreamConfiguration.INVALID_APP_ID
+                            ? Integer.toString(launchAppId) : null,
+                    launchAppUuid, launchAppName);
+        }
+        catch (IllegalArgumentException missingIdentity) {
+            LimeLog.warning("Unable to establish XR session settings identity: "
+                    + missingIdentity.getMessage());
+            sessionPc = null;
+            sessionApp = null;
+            return globalPreferences;
+        }
+
+        sessionSettingsStore = new SessionSettingsStore(this);
+        boolean resume = activityRecreated
+                || intent.getBooleanExtra(EXTRA_RESUME_EXISTING_SESSION, false);
+        if (resume) {
+            SessionSettingsStore.SessionRecord restored =
+                    sessionSettingsStore.confirmHostResume(sessionPc, sessionApp,
+                            publishedHostSessionId,
+                            System.currentTimeMillis());
+            if (restored == null
+                    && SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                            publishedHostSessionId)) {
+                // The user explicitly selected Resume from a fresh serverinfo snapshot. A new
+                // host generation may be resumed, but stale per-session overrides must not cross
+                // that generation boundary.
+                sessionSettingsStore.startNewSession(sessionPc, sessionApp,
+                        publishedHostSessionId, System.currentTimeMillis());
+            }
+        }
+        else {
+            sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
+                    System.currentTimeMillis());
+        }
+
+        SessionSettingsStore.Snapshot snapshot =
+                sessionSettingsStore.snapshot(sessionPc, globalPreferences);
+        sessionLocalSessionId = snapshot.getRecord() != null
+                ? snapshot.getRecord().getLocalSessionId() : null;
+        SessionSettingsStore.ResumeMetadata resumeMetadata = snapshot.getRecord() != null
+                ? snapshot.getRecord().getResumeMetadata() : null;
+        sessionHostSessionId = resumeMetadata != null
+                ? resumeMetadata.getHostSessionId() : null;
+        xrSessionSettingsController = new XrSessionSettingsController(
+                sessionSettingsStore, sessionPc, sessionApp, globalPreferences, snapshot);
+
+        return xrSessionSettingsController.getStartupPreferences();
+    }
+
+    private static int readAppId(Intent intent) {
+        Bundle extras = intent != null ? intent.getExtras() : null;
+        Object value = extras != null ? extras.get(EXTRA_APP_ID) : null;
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        if (value instanceof String) {
+            try {
+                return Integer.parseInt((String) value);
+            }
+            catch (NumberFormatException ignored) {
+                return StreamConfiguration.INVALID_APP_ID;
+            }
+        }
+        return StreamConfiguration.INVALID_APP_ID;
+    }
+
+    private void configureXrSessionControls() {
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        if (presenter == null || xrSessionSettingsController == null) {
+            return;
+        }
+
+        refreshXrSessionSettingsModels();
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override
+            public boolean onSharedSettingSelected(SessionSettingsModel.Key key,
+                                                   String choiceId,
+                                                   SessionSettingsModel current) {
+                if (reconnectScheduled) {
+                    return false;
+                }
+                xrSessionSettingsController.selectSharedSetting(key, choiceId);
+                refreshXrSessionSettingsModels();
+                return true;
+            }
+
+            @Override
+            public void onUseGlobalDefaultsRequested(SessionSettingsModel current) {
+                if (reconnectScheduled) {
+                    return;
+                }
+                xrSessionSettingsController.useGlobalSharedDefaults();
+                refreshXrSessionSettingsModels();
+            }
+
+            @Override
+            public boolean onModeQualitySettingSelected(
+                    XrStreamPresenter.PresenterMode mode,
+                    SessionSettingsModel.Key key,
+                    String choiceId,
+                    ModeStreamQualityModel current) {
+                if (reconnectScheduled) {
+                    return false;
+                }
+                xrSessionSettingsController.selectModeQualitySetting(
+                        toSessionPresenterMode(mode), key, choiceId);
+                refreshXrSessionSettingsModels();
+                return true;
+            }
+
+            @Override
+            public void onUseModeGlobalDefaultsRequested(
+                    XrStreamPresenter.PresenterMode mode,
+                    ModeStreamQualityModel current) {
+                if (reconnectScheduled) {
+                    return;
+                }
+                xrSessionSettingsController.useGlobalModeDefaults(
+                        toSessionPresenterMode(mode));
+                refreshXrSessionSettingsModels();
+            }
+
+            @Override
+            public void onApplyAndReconnectRequested(SessionSettingsModel pending) {
+                applyXrSessionSettingsAndReconnect();
+            }
+
+            @Override
+            public boolean onClientSbsModelSelected(String modelId,
+                                                    ClientSbsModeSettingsModel current) {
+                if (reconnectScheduled) {
+                    return false;
+                }
+                xrSessionSettingsController.selectClientSbsModel(modelId);
+                refreshXrSessionSettingsModels();
+                return true;
+            }
+
+            @Override
+            public void onPresentationModeCommitted(XrStreamPresenter.PresenterMode mode) {
+                SessionSettingsStore.PresenterMode selected = toSessionPresenterMode(mode);
+                xrSessionSettingsController.selectPresentationMode(selected);
+                refreshXrSessionSettingsModels();
+                if (xrSessionSettingsController.selectedModeRequiresReconnect()) {
+                    LimeLog.info("XR: reconnecting to the saved stream quality for " + selected);
+                    // A reconnect is already required to honor the selected mode's quality.
+                    // Commit the complete staged record atomically so the replacement Activity
+                    // cannot lose unrelated shared or per-mode edits while restoring that tuple.
+                    if (!xrSessionSettingsController.commitPending()) {
+                        showCenteredStreamMessage(
+                                getString(R.string.xr_session_stale_settings),
+                                Toast.LENGTH_LONG);
+                        return;
+                    }
+                    scheduleXrSessionReconnect();
+                    return;
+                }
+                if (sessionSettingsStore != null && sessionPc != null && sessionApp != null
+                        && sessionLocalSessionId != null) {
+                    sessionSettingsStore.edit(sessionPc, sessionApp, sessionLocalSessionId)
+                            .setLastSuccessfulMode(selected)
+                            .commit();
+                }
+            }
+
+            @Override
+            public void onLibraryRequested() {
+                // Leave the host session running and replace the streaming Activity with the
+                // current PC's application library. CLEAR_TOP deliberately recreates AppView with
+                // fresh extras instead of dropping the user at the machine-selection screen.
+                startActivity(createLibraryIntent(Game.this, getIntent()));
+                finish();
+            }
+
+            @Override
+            public boolean onEndSessionRequested() {
+                quit();
+                return true;
+            }
+        });
+    }
+
+    static Intent createLibraryIntent(Context context, Intent streamIntent) {
+        Intent libraryIntent = new Intent(context, AppView.class);
+        libraryIntent.putExtra(AppView.NAME_EXTRA,
+                streamIntent.getStringExtra(EXTRA_PC_NAME));
+        libraryIntent.putExtra(AppView.UUID_EXTRA,
+                streamIntent.getStringExtra(EXTRA_PC_UUID));
+        libraryIntent.putExtra(AppView.NEW_PAIR_EXTRA, false);
+        libraryIntent.putExtra(AppView.SHOW_HIDDEN_APPS_EXTRA, false);
+        libraryIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return libraryIntent;
+    }
+
+    private void refreshXrSessionSettingsModels() {
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        if (presenter == null || xrSessionSettingsController == null) {
+            return;
+        }
+        Map<XrStreamPresenter.PresenterMode, ModeStreamQualityModel> qualityModels =
+                new HashMap<>();
+        for (XrStreamPresenter.PresenterMode mode
+                : XrStreamPresenter.PresenterMode.values()) {
+            qualityModels.put(mode, xrSessionSettingsController.getModeStreamQualityModel(
+                    toSessionPresenterMode(mode)));
+        }
+        presenter.setSettingsModels(xrSessionSettingsController.getSharedSessionModel(),
+                qualityModels, xrSessionSettingsController.getClientSbsModel(),
+                xrSessionSettingsController.hasPendingChanges());
+    }
+
+    private void applyXrSessionSettingsAndReconnect() {
+        if (reconnectScheduled || xrSessionSettingsController == null
+                || !xrSessionSettingsController.hasPendingChanges()) {
+            return;
+        }
+        if (!xrSessionSettingsController.commitPending()) {
+            showCenteredStreamMessage(
+                    getString(R.string.xr_session_stale_settings),
+                    Toast.LENGTH_LONG);
+            return;
+        }
+
+        scheduleXrSessionReconnect();
+    }
+
+    private void scheduleXrSessionReconnect() {
+        if (reconnectScheduled) {
+            return;
+        }
+        reconnectScheduled = true;
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        if (presenter != null) {
+            presenter.setSessionControlsEnabled(false);
+        }
+        showCenteredStreamMessage(getString(R.string.xr_session_reconnecting),
+                Toast.LENGTH_SHORT);
+        Intent reconnectIntent = new Intent(getIntent());
+        reconnectIntent.setClass(this, Game.class);
+        reconnectIntent.putExtra(EXTRA_RESUME_EXISTING_SESSION, true);
+        reconnectIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+
+        stopConnection();
+        runAfterConnectionStop(() -> {
+            Runnable restart = () -> {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                // Game is singleTask, so self-launching would deliver onNewIntent() to this
+                // instance and a subsequent finish would simply exit the stream. Recreate in
+                // place with the updated intent after native/Surface teardown instead.
+                setIntent(reconnectIntent);
+                recreate();
+                overridePendingTransition(0, 0);
+            };
+            if (streamContainer != null && !streamContainerReleasedForReconnect) {
+                streamContainerReleasedForReconnect = true;
+                streamContainer.onDestroy(restart);
+            }
+            else {
+                restart.run();
+            }
+        });
+    }
+
+    /**
+     * An Apply-driven {@link #recreate()} is a replacement of the active stream Activity, not an
+     * exit from it. The ordinary XR stop path deliberately finishes this no-history Activity, but
+     * doing that during the replacement races the relaunched instance and exposes AppView instead.
+     */
+    static boolean shouldFinalizeStreamOnStop(boolean reconnectScheduled) {
+        return !reconnectScheduled;
+    }
+
+    private static SessionSettingsStore.PresenterMode toSessionPresenterMode(
+            XrStreamPresenter.PresenterMode mode) {
+        switch (mode) {
+            case HOST_SBS_RAW:
+                return SessionSettingsStore.PresenterMode.HOST_SBS_RAW;
+            case HOST_SBS_AI:
+                return SessionSettingsStore.PresenterMode.HOST_SBS_AI;
+            case CLIENT_SBS_AI:
+                return SessionSettingsStore.PresenterMode.CLIENT_SBS_AI;
+            default:
+                return SessionSettingsStore.PresenterMode.NORMAL;
+        }
+    }
+
     @SuppressLint({"MissingInflatedId", "ClickableViewAccessibility"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -363,7 +680,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         requestWindowFeature(Window.FEATURE_NO_TITLE);
 
         // Read the stream preferences
-        prefConfig = PreferenceConfiguration.readPreferences(this);
+        prefConfig = PreferenceConfiguration.readPreferences(
+                this, prepareCurrentSessionPreferences(savedInstanceState != null));
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
         if (prefConfig.fullScreen) {
@@ -480,6 +798,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     "Unable to initialize the XR presentation session.", true);
             return;
         }
+        configureXrSessionControls();
         streamContainer.setOnGenericMotionListener(this);
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
@@ -584,10 +903,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         port = Game.this.getIntent().getIntExtra(EXTRA_PORT, NvHTTP.DEFAULT_HTTP_PORT);
         httpsPort = Game.this.getIntent().getIntExtra(EXTRA_HTTPS_PORT, 0); // 0 is treated as unknown
         appUUID = Game.this.getIntent().getStringExtra(EXTRA_APP_UUID);
-        appId = Game.this.getIntent().getIntExtra(EXTRA_APP_ID, StreamConfiguration.INVALID_APP_ID);
+        appId = readAppId(Game.this.getIntent());
         uniqueId = Game.this.getIntent().getStringExtra(EXTRA_UNIQUEID);
         vDisplay = Game.this.getIntent().getBooleanExtra(EXTRA_VDISPLAY, false);
-        serverCommands = Game.this.getIntent().getStringArrayListExtra(EXTRA_SERVER_COMMANDS);
         boolean appSupportsHdr = Game.this.getIntent().getBooleanExtra(EXTRA_APP_HDR, false);
         byte[] derCertData = Game.this.getIntent().getByteArrayExtra(EXTRA_SERVER_CERT);
 
@@ -604,7 +922,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             e.printStackTrace();
         }
 
-        if (appId == StreamConfiguration.INVALID_APP_ID) {
+        if (appId == StreamConfiguration.INVALID_APP_ID
+                && (appUUID == null || appUUID.trim().isEmpty())) {
             finish();
             return;
         }
@@ -685,6 +1004,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     }
                     handleDecoderSurfaceSwitchFailure();
                 }));
+        decoderRenderer.setActiveVideoFormatListener(videoFormat -> runOnUiThread(() -> {
+            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().setHostSbsVideoFormat(videoFormat);
+            }
+        }));
 
 // --- Force tight thresholds (prefConfig.forceTightThresholds) ---
         try {
@@ -731,18 +1055,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (willStreamHdr && decoderRenderer.isAv1Main10Supported()) {
                 supportedVideoFormats |= MoonBridge.VIDEO_FORMAT_AV1_MAIN10;
             }
-        }
-
-        int gamepadMask = ControllerHandler.getAttachedControllerMask(this);
-        if (!prefConfig.multiController) {
-            // Always set gamepad 1 present for when multi-controller is
-            // disabled for games that don't properly support detection
-            // of gamepads removed and replugged at runtime.
-            gamepadMask = 1;
-        }
-        if (prefConfig.onscreenController) {
-            // If we're using OSC, always set at least gamepad 1.
-            gamepadMask |= 1;
         }
 
         // Set to the optimal mode for streaming
@@ -792,7 +1104,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setMaxPacketSize(1392)
                 .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO) // NvConnection will perform LAN and VPN detection
                 .setSupportedVideoFormats(supportedVideoFormats)
-                .setAttachedGamepadMask(gamepadMask)
                 .setClientRefreshRateX100((int)(displayRefreshRate * 100))
                 .setAudioConfiguration(prefConfig.audioConfiguration)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
@@ -800,7 +1111,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setInitialSbsMode(streamContainer.getXrPresenter() != null
                         ? streamContainer.getXrPresenter().getInitialHostSbsWireMode()
                         : MoonBridge.SBS_MODE_OFF)
-                .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
+                .setExpectedHostSessionId(sessionHostSessionId)
+                .requireHostIdleForLaunch(getIntent().getBooleanExtra(
+                        EXTRA_REQUIRE_HOST_IDLE, false))
                 .build();
 
         // Initialize the connection
@@ -876,7 +1189,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 decoderRenderer.setRenderTarget(streamContainer.getSurface());
 
                 // Starten Sie die NvConnection
-                conn.start(new AndroidAudioRenderer(Game.this, prefConfig.playHostAudio),
+                conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx),
                         decoderRenderer, Game.this);
             }
         });
@@ -1687,7 +2000,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // In particular, cancellation during startup is now covered because connecting is set
         // before NvConnection.start().
         stopConnection();
-        runAfterConnectionStop(streamContainer::onDestroy);
+        if (streamContainer != null && !streamContainerReleasedForReconnect) {
+            runAfterConnectionStop(streamContainer::onDestroy);
+        }
 
         instance = null;
         timerHandler.removeCallbacksAndMessages(null);
@@ -1762,6 +2077,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         if(keyBoardLayoutController!=null){
             keyBoardLayoutController.hide();
+        }
+
+        // applyXrSessionSettingsAndReconnect() has already stopped the native connection and
+        // completed decoder/EGL/XR cleanup before calling recreate(). Do not run the normal
+        // no-history exit path for the old Activity instance or it will finish the replacement.
+        if (!shouldFinalizeStreamOnStop(reconnectScheduled)) {
+            return;
         }
 
         if (conn != null) {
@@ -3438,6 +3760,29 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void stageComplete(String stage) {
     }
 
+    @Override
+    public void hostSessionEstablished(String hostSessionId, boolean resumed) {
+        if (!SessionSettingsStore.ResumeMetadata.isValidHostSessionId(hostSessionId)
+                || sessionSettingsStore == null || sessionPc == null || sessionApp == null
+                || sessionLocalSessionId == null) {
+            LimeLog.warning("Ignoring invalid or stale host session establishment callback");
+            return;
+        }
+
+        SessionSettingsStore.ResumeMetadata metadata =
+                new SessionSettingsStore.ResumeMetadata(resumed, hostSessionId,
+                        System.currentTimeMillis());
+        // Keep the live cancel capability even if durable storage fails. The callback belongs to
+        // this Game generation and NvConnection serializes replacement sessions behind stop().
+        sessionHostSessionId = hostSessionId;
+        getIntent().putExtra(EXTRA_HOST_SESSION_ID, hostSessionId);
+        if (!sessionSettingsStore.edit(sessionPc, sessionApp, sessionLocalSessionId)
+                .setResumeMetadata(metadata)
+                .commit()) {
+            LimeLog.warning("Unable to persist the established host session capability");
+        }
+    }
+
     private void stopConnection() {
         synchronized (connectionStopLock) {
             if (!connecting && !connected) {
@@ -3458,6 +3803,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // we prevent another thread from starting a connection before and
             // during the process of stopping this one.
             connectionNativeStopped = false;
+            final String expectedLocalSessionId = sessionLocalSessionId;
             connectionStopThread = new Thread("Artemis connection stop") {
                 public void run() {
                     try {
@@ -3468,13 +3814,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             publishNativeStopComplete();
                             if (heldSessionTransaction && httpConn != null && quitOnStop) {
                                 try {
-                                    sleep(1000);
-                                    httpConn.quitApp();
+                                    // startApp() publishes its token before stop completes. Read it
+                                    // here so a Quit racing the HTTP launch can still cancel the
+                                    // exact session that this local generation just created.
+                                    String expectedHostSessionId = sessionHostSessionId;
+                                    boolean sessionEnded = httpConn.quitApp(
+                                            expectedHostSessionId);
+                                    if (sessionEnded && sessionSettingsStore != null
+                                            && sessionPc != null) {
+                                        if (expectedLocalSessionId != null
+                                                && expectedHostSessionId != null) {
+                                            sessionSettingsStore.clearCurrentSession(
+                                                    sessionPc, expectedLocalSessionId,
+                                                    expectedHostSessionId);
+                                        }
+                                    }
                                     Game.this.runOnUiThread(() -> {
                                         if (!isFinishing()) {
                                             Toast.makeText(Game.this,
                                                     Game.this.getResources().getString(
-                                                            R.string.applist_quit_success)
+                                                            sessionEnded
+                                                                    ? R.string.applist_quit_success
+                                                                    : R.string.applist_quit_fail)
                                                             + " " + appName,
                                                     Toast.LENGTH_LONG).show();
                                         }
@@ -3808,7 +4169,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     ShortcutHelper shortcutHelper = new ShortcutHelper(Game.this);
                     shortcutHelper.reportComputerShortcutUsed(computer);
                     if (appName != null) {
-                        shortcutHelper.reportGameLaunched(computer, app);
                     }
                 }, "Artemis shortcut reporting").start();
             }
@@ -4213,14 +4573,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         super.onBackPressed();
     }
 
-    public void sendExecServerCmd(int cmdId) {
-        conn.sendExecServerCmd(cmdId);
-    }
-
-    public ArrayList<String> getServerCmds() {
-        return serverCommands;
-    }
-
     public boolean isZoomModeEnabled() {
         return isPanZoomMode;
     }
@@ -4267,8 +4619,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void initMouseMode() {
         String[] mouseModes = getResources().getStringArray(R.array.mouse_mode_names);
 
-        String savedMouseModeIndexStr = ProfilesManager.getInstance()
-                .getOverlayingSharedPreferences(this)
+        String savedMouseModeIndexStr = PreferenceManager.getDefaultSharedPreferences(this)
                 .getString("mouse_mode_list", "0");
 
         int savedMouseModeIndex;
@@ -4360,7 +4711,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     } else {
                         applyMouseMode(selected.index);
                         if (prefConfig.rememberMouseMode) {
-                            ProfilesManager.getInstance().getOverlayingSharedPreferences(this)
+                            PreferenceManager.getDefaultSharedPreferences(this)
                                     .edit()
                                     .putString("mouse_mode_list", String.valueOf(selected.index))
                                     .apply();

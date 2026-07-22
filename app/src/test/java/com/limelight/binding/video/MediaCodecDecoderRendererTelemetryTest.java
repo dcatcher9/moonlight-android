@@ -4,9 +4,32 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.PreferenceConfiguration;
+
 import org.junit.Test;
 
 public class MediaCodecDecoderRendererTelemetryTest {
+    @Test
+    public void codecDescriptionReportsNegotiatedCodecAndProfile() {
+        assertEquals("AV1 Main, 8-bit", MediaCodecDecoderRenderer.describeVideoCodec(
+                MoonBridge.VIDEO_FORMAT_AV1_MAIN8));
+        assertEquals("AV1 Main, 10-bit", MediaCodecDecoderRenderer.describeVideoCodec(
+                MoonBridge.VIDEO_FORMAT_AV1_MAIN10));
+        assertEquals("HEVC Main 10, 10-bit", MediaCodecDecoderRenderer.describeVideoCodec(
+                MoonBridge.VIDEO_FORMAT_H265_MAIN10));
+    }
+
+    @Test
+    public void outputPacingDescriptionDoesNotPretendToBeTheDecoderMode() {
+        assertEquals("Lowest latency (latest frame)",
+                MediaCodecDecoderRenderer.describeOutputPacing(
+                        PreferenceConfiguration.FRAME_PACING_MIN_LATENCY));
+        assertEquals("Balanced (vsync queue)",
+                MediaCodecDecoderRenderer.describeOutputPacing(
+                        PreferenceConfiguration.FRAME_PACING_BALANCED));
+    }
+
     @Test
     public void hiddenPaneStillDispatchesWhenExplicitLoggingIsEnabled() {
         assertTrue(MediaCodecDecoderRenderer.shouldDispatchPerformanceSnapshot(false, true));

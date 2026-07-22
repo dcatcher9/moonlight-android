@@ -27,6 +27,7 @@ import java.nio.FloatBuffer;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -80,6 +81,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private boolean terminalSurfaceDestroyRequested;
     /** Serializes bounded terminal-teardown attempts after the lifecycle terminal bit is set. */
     private final Object terminalTeardownLock = new Object();
+    /** Exactly one background coordinator owns terminal worker joining and native-close retries. */
+    private final AtomicBoolean terminalTeardownStarted = new AtomicBoolean(false);
     /**
      * Excludes terminal field release from an already-running draw, resize, or queued-frame drain.
      * Shutdown never holds this monitor while joining AiTask because the worker may require one
@@ -421,6 +424,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         /** True GL completion timings; absent when EXT_disjoint_timer_query is unavailable. */
         public final boolean gpuTimersAvailable;
+        public final long gpuModelInputSamples;
+        public final long gpuMatchedColorSamples;
+        public final long gpuDepthProfileSamples;
+        public final long gpuSbsComposeSamples;
         public final float averageGpuModelInputMs;
         public final float averageGpuMatchedColorMs;
         public final float averageGpuDepthProfileMs;
@@ -473,6 +480,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             ClientSbsGpuTimer.Snapshot composeGpu = timer == null ? null
                     : timer.drain(ClientSbsGpuTimer.Stage.SBS_COMPOSE);
             this.gpuTimersAvailable = timer != null;
+            this.gpuModelInputSamples = gpuSampleCount(modelInputGpu);
+            this.gpuMatchedColorSamples = gpuSampleCount(matchedColorGpu);
+            this.gpuDepthProfileSamples = gpuSampleCount(depthProfileGpu);
+            this.gpuSbsComposeSamples = gpuSampleCount(composeGpu);
             this.averageGpuModelInputMs = averageGpuMs(modelInputGpu);
             this.averageGpuMatchedColorMs = averageGpuMs(matchedColorGpu);
             this.averageGpuDepthProfileMs = averageGpuMs(depthProfileGpu);
@@ -499,7 +510,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
 
         private static float averageGpuMs(ClientSbsGpuTimer.Snapshot snapshot) {
-            return snapshot == null ? 0.0f : snapshot.averageMs();
+            return snapshot == null || snapshot.samples == 0L
+                    ? Float.NaN : snapshot.averageMs();
+        }
+
+        private static long gpuSampleCount(ClientSbsGpuTimer.Snapshot snapshot) {
+            return snapshot == null ? 0L : snapshot.samples;
         }
     }
 
@@ -722,19 +738,48 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         currentThermalStatus = PowerManager.THERMAL_STATUS_NONE;
     }
 
-    public boolean onSurfaceDestroyed() {
+    /**
+     * Starts terminal teardown without joining the inference worker on the caller/UI thread.
+     *
+     * <p>LiteRT creation, invocation, and destruction remain on AiTask (or its dedicated retained-
+     * engine cleanup worker). The coordinator only waits for that owner and retries retained close
+     * attempts. Context-independent Java/Surface release and {@code onCleanupComplete} are posted
+     * through {@code completionExecutor} after native ownership has ended.</p>
+     */
+    public void onSurfaceDestroyedAsync(Executor completionExecutor,
+                                        Runnable onCleanupComplete) {
         synchronized (surfaceLifecycleLock) {
             terminalSurfaceDestroyRequested = true;
-            // Publish this while excluding onSurfaceCreated(). Once the lifecycle lock is
-            // released, any future GL lifecycle callback observes a terminal renderer.
             shuttingDown.set(true);
         }
-        synchronized (terminalTeardownLock) {
-            return performTerminalSurfaceDestroy();
+        invalidateQueuedFrameDrain();
+
+        if (!terminalTeardownStarted.compareAndSet(false, true)) {
+            return;
         }
+
+        Executor backgroundExecutor = command -> {
+            Thread thread = new Thread(command, "ClientSbsTerminalTeardown");
+            thread.start();
+        };
+        AsyncCleanupCoordinator.start(backgroundExecutor, completionExecutor,
+                this::awaitTerminalWorkerCleanup,
+                Stereo3DRenderer::awaitTerminalCleanupRetry,
+                () -> {
+                    boolean released;
+                    synchronized (terminalTeardownLock) {
+                        synchronized (glCallbackLifecycleLock) {
+                            released = releaseTerminalSurfaceResources();
+                        }
+                    }
+                    if (released) {
+                        onCleanupComplete.run();
+                    }
+                });
     }
 
-    private boolean performTerminalSurfaceDestroy() {
+    /** Blocking portion of terminal teardown. Runs only on ClientSbsTerminalTeardown. */
+    private boolean awaitTerminalWorkerCleanup() {
         LimeLog.info("Quit called. Shutting down 3dRenderer.");
         invalidateQueuedFrameDrain();
 
@@ -745,14 +790,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             // Synchronization is the barrier.
         }
         if (!stopAiWorkers()) {
-            // The worker may still own native tensor buffers, cross-context fences, and color-slot
-            // leases. Keep every reference intact so a later lifecycle retry can finish teardown.
+            // Keep every shared reference intact. The background coordinator retries without
+            // blocking the main thread or releasing the XR/decoder cleanup callback early.
             LimeLog.severe("Client SBS renderer teardown deferred until its AI worker terminates");
             return false;
         }
+        return true;
+    }
 
-        synchronized (glCallbackLifecycleLock) {
-            return releaseTerminalSurfaceResources();
+    private static boolean awaitTerminalCleanupRetry() {
+        try {
+            Thread.sleep(1000L);
+            return true;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
@@ -983,6 +1035,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     public boolean isClientSbs() {
         return clientSbs;
+    }
+
+    /** Lightweight live status for the Client SBS options pane; reads one volatile string. */
+    public String getClientSbsBackendStatus() {
+        return shuttingDown.get() ? "Unavailable" : activeInferenceBackend;
     }
 
     public void setHdrInput(boolean enabled) {
@@ -1819,10 +1876,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         long performanceEpoch = capturePerformanceSamplingEpoch();
         boolean composeGpuTimerStarted = beginGpuTimer(
                 ClientSbsGpuTimer.Stage.SBS_COMPOSE);
-        prepareMatchedDepth();
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        drawWithShader();
-        endGpuTimer(composeGpuTimerStarted);
+        try {
+            prepareMatchedDepth();
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            drawWithShader();
+        } finally {
+            endGpuTimer(composeGpuTimerStarted);
+        }
         matchedOutputPresented = true;
         recordGlOutputSubmit(false, performanceEpoch);
     }
@@ -2015,52 +2075,55 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         // matched-color copy below.
         boolean modelGpuTimerStarted = beginGpuTimer(
                 ClientSbsGpuTimer.Stage.MODEL_INPUT);
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
-        GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
-        drawQuad(modelInputProgram, 1.0f, 0.0f);
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT
-                | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
-
-        int inputBufferId = engine.getInputBufferId(bufferSlot);
         boolean tensorPackedWithSceneCut = false;
         ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
-        if (sceneCutDetector != null) {
-            try {
-                sceneCutDetector.processRendererOwnedAndPack(fboTextureId, inputBufferId,
-                        gpuDepthProcessor.getSceneCutMailboxBufferId(),
-                        gpuDepthProcessor.getSceneCutMailboxByteOffset(bufferSlot));
-                tensorPackedWithSceneCut = true;
-            } catch (Throwable error) {
-                LimeLog.warning("Client SBS GPU color-cut detector disabled: "
-                        + error.getMessage());
-                try {
-                    sceneCutDetector.close();
-                } catch (Throwable ignored) {
-                    // The detector is optional; retain the primary pipeline's original failure.
-                }
-                gpuSceneCutDetector = null;
-            }
-        }
-
-        boolean sceneCutFramePending = tensorPackedWithSceneCut;
+        boolean sceneCutFramePending = false;
         try {
-            if (!tensorPackedWithSceneCut) {
-                // Preserve a depth-only fallback if the optional scene-cut program fails at
-                // runtime.
-                GpuPackProgramBindings bindings = gpuPackProgramBindings;
-                GLES20.glUseProgram(modelInputPackProgram);
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureId);
-                GLES20.glUniform1i(bindings.modelInputTexture, 0);
-                GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, inputBufferId);
-                GLES31.glDispatchCompute((modelInputWidth + 7) / 8,
-                        (modelInputHeight + 7) / 8, 1);
-                GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
-                GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0);
+            try {
+                int inputBufferId = engine.getInputBufferId(bufferSlot);
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
+                GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
+                drawQuad(modelInputProgram, 1.0f, 0.0f);
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT
+                        | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
+
+                if (sceneCutDetector != null) {
+                    try {
+                        sceneCutDetector.processRendererOwnedAndPack(fboTextureId, inputBufferId,
+                                gpuDepthProcessor.getSceneCutMailboxBufferId(),
+                                gpuDepthProcessor.getSceneCutMailboxByteOffset(bufferSlot));
+                        tensorPackedWithSceneCut = true;
+                        sceneCutFramePending = true;
+                    } catch (Throwable error) {
+                        LimeLog.warning("Client SBS GPU color-cut detector disabled: "
+                                + error.getMessage());
+                        try {
+                            sceneCutDetector.close();
+                        } catch (Throwable ignored) {
+                            // The detector is optional; retain the primary pipeline's original failure.
+                        }
+                        gpuSceneCutDetector = null;
+                    }
+                }
+
+                if (!tensorPackedWithSceneCut) {
+                    // Preserve a depth-only fallback if the optional scene-cut program fails at
+                    // runtime.
+                    GpuPackProgramBindings bindings = gpuPackProgramBindings;
+                    GLES20.glUseProgram(modelInputPackProgram);
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTextureId);
+                    GLES20.glUniform1i(bindings.modelInputTexture, 0);
+                    GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, inputBufferId);
+                    GLES31.glDispatchCompute((modelInputWidth + 7) / 8,
+                            (modelInputHeight + 7) / 8, 1);
+                    GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
+                    GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0);
+                }
+            } finally {
+                endGpuTimer(modelGpuTimerStarted);
             }
-            endGpuTimer(modelGpuTimerStarted);
 
             long inputReadyFence = GLES30.glFenceSync(
                     GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -2068,8 +2131,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
             boolean captureGpuTimerStarted = beginGpuTimer(
                     ClientSbsGpuTimer.Stage.MATCHED_COLOR);
-            capturePendingMatchedColorFrame();
-            endGpuTimer(captureGpuTimerStarted);
+            try {
+                capturePendingMatchedColorFrame();
+            } finally {
+                endGpuTimer(captureGpuTimerStarted);
+            }
 
             int glError = GLES20.glGetError();
             pendingColorFrameLease = null;

@@ -55,7 +55,6 @@
     <string name="applist_menu_quit">Вийти з сесії</string>
     <string name="applist_menu_quit_and_start">Вийти з поточної гри і запустити</string>
     <string name="applist_menu_cancel">Скасувати</string>
-    <string name="applist_menu_tv_channel">Додати на канал</string>
     <string name="applist_refresh_title">Перелік застосунків</string>
     <string name="applist_refresh_msg">Оновлення застосунків…</string>
     <string name="applist_refresh_error_title">Помилка</string>

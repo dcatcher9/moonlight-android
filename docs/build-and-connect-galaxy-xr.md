@@ -30,7 +30,8 @@ JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-25.0.3.9-hotspot" \
 - Launcher activity: **`com.limelight.PcView`**
 
 `installNonRoot_gameDebug` performs an update install of that existing debug application and
-preserves preferences, certificates, host pairings, and profiles. `assembleNonRoot_gameDebug` only
+preserves global defaults, current-session settings, certificates, and host pairings. The retired
+active profile is migrated once into XR global defaults. `assembleNonRoot_gameDebug` only
 creates APKs; it does not deploy anything. Do not substitute `assembleNonRoot`, which is neither a
 complete variant name nor an install task.
 
@@ -102,6 +103,9 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   host-confirmed resume of the same session/app restores the last successful mode. Client SBS has
   no strength/convergence/balance/movie-mode parameter panel; the old `render_mode_list` and client
   depth-parameter preferences are not part of the current path.
+- Debug builds default performance logging on; release builds default it off. The first debug
+  update using this policy enables logging once for existing installs; subsequent explicit
+  Diagnostics choices persist.
 - From **Git Bash**, prefix adb commands that pass Unix-style paths (e.g. `run-as`, `/data/...`)
   with `MSYS_NO_PATHCONV=1` so MSYS doesn't mangle the paths.
 

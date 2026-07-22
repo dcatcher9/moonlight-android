@@ -133,7 +133,6 @@
     <string name="applist_menu_details"> 查看详情 </string>
     <string name="applist_menu_scut"> 创建快捷方式 </string>
     <string name="applist_menu_export_launcher"> 导出启动文件 </string>
-    <string name="applist_menu_tv_channel"> 添加到频道 </string>
     <string name="applist_refresh_title"> 游戏列表 </string>
     <string name="applist_refresh_msg"> 刷新中…… </string>
     <string name="applist_refresh_error_title"> 错误 </string>
@@ -587,11 +586,8 @@
     <string name="game_dialog_title_quit_confirm">确定要退出吗？</string>
     <string name="game_dialog_message_quit_confirm">请确保当前没有未保存的进度。终止会话会导致当前运行的程序被强行停止。</string>
     <string name="game_menu_quit_session">终止会话</string>
-    <string name="game_menu_server_cmd">服务端命令</string>
     <string name="game_menu_fetch_clipboard">获取剪贴板</string>
     <string name="game_menu_upload_clipboard">上传剪贴板</string>
-    <string name="game_dialog_title_server_cmd_empty">无服务端命令</string>
-    <string name="game_dialog_message_server_cmd_empty">请确保你的服务端为 Apollo，并已授予此客户端"服务端命令"权限。</string>
     <string name="vdisplay_not_ready">服务端虚拟显示器驱动未就绪。请确保 SudoVDA 驱动已正确安装并启用。</string>
     <string name="vdisplay_not_supported"><![CDATA[此服务端不支持虚拟显示器。请使用 <a href=\"https://github.com/ClassicOldSong/Apollo\">Apollo</a> 作为服务端串流软件。]]></string>
     <string name="clipboard_sync_unsupported">此服务器不支持剪贴板同步，请安装或升级服务端至最新的 Apollo。</string>

@@ -154,7 +154,6 @@
     <string name="poor_connection_msg">Connessione al PC di bassa qualità</string>
     <string name="applist_menu_hide_app">Nascondi App</string>
     <string name="applist_menu_scut">Crea Collegamento</string>
-    <string name="applist_menu_tv_channel">Aggiungi al Canale</string>
     <string name="applist_menu_details">Mostra Dettagli</string>
     <string name="summary_fps_list">Aumentare per uno streaming video più fluido. Diminuire per prestazioni migliori su dispositivi di fascia più bassa.</string>
     <string name="applist_details_id">ID Applicazione:</string>

@@ -120,7 +120,6 @@
     <string name="applist_menu_cancel">בטל</string>
     <string name="applist_refresh_error_msg">נכשל להשיג רשימת אפליקציות</string>
     <string name="applist_quit_fail">יציאה נכשלה</string>
-    <string name="applist_menu_tv_channel">הוסף לערוץ</string>
     <string name="applist_refresh_title">רשימת אפליקציות</string>
     <string name="applist_refresh_msg">מרענן אפליקציות…</string>
     <string name="applist_refresh_error_title">שגיאה</string>

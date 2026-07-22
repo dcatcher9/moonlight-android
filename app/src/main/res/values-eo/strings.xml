@@ -9,7 +9,6 @@
     <string name="applist_menu_hide_app">Kaŝi programon</string>
     <string name="applist_refresh_title">Listo de programoj</string>
     <string name="applist_menu_details">Vidi detalojn</string>
-    <string name="applist_menu_tv_channel">Aldoni al kanalo</string>
     <string name="resolution_prefix_native_landscape">(horizontala)</string>
     <string name="resolution_prefix_native_portrait">(vertikala)</string>
     <string name="suffix_osc_opacity">%</string>

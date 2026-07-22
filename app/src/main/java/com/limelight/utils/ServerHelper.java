@@ -22,6 +22,7 @@ import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.session.SessionSettingsStore;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -29,7 +30,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.UnknownHostException;
 import java.security.cert.CertificateEncodingException;
-import java.util.ArrayList;
 
 public class ServerHelper {
     public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
@@ -43,16 +43,19 @@ public class ServerHelper {
         if (computer == null || app == null) {
             return false;
         }
-
-        if (computer.runningGameId != 0 && computer.runningGameId == app.getAppId()) {
-            return true;
+        if (!SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                computer.hostSessionId)) {
+            return false;
         }
 
         String runningUuid = computer.runningGameUUID;
         String appUuid = app.getAppUUID();
-        return runningUuid != null && !runningUuid.isEmpty()
-                && appUuid != null && !appUuid.isEmpty()
-                && runningUuid.equalsIgnoreCase(appUuid);
+        if (runningUuid != null && !runningUuid.isEmpty()
+                && appUuid != null && !appUuid.isEmpty()) {
+            return runningUuid.equalsIgnoreCase(appUuid);
+        }
+        return computer.runningGameId > 0 && app.getAppId() > 0
+                && computer.runningGameId == app.getAppId();
     }
 
     public static ComputerDetails.AddressTuple getCurrentAddressFromComputer(ComputerDetails computer) throws IOException {
@@ -140,11 +143,13 @@ public class ServerHelper {
         // Gate XR presentation restoration on the host's authoritative running-app state. Any
         // Game intent constructed elsewhere omits this extra and therefore defaults to fresh.
         gameIntent.putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, resumeExistingSession);
+        if (resumeExistingSession && computer.hostSessionId != null) {
+            gameIntent.putExtra(Game.EXTRA_HOST_SESSION_ID, computer.hostSessionId);
+        }
         gameIntent.putExtra(Game.EXTRA_UNIQUEID, managerBinder.getUniqueId());
         gameIntent.putExtra(Game.EXTRA_PC_UUID, computer.uuid);
         gameIntent.putExtra(Game.EXTRA_PC_NAME, computer.name);
         gameIntent.putExtra(Game.EXTRA_VDISPLAY, withVDisplay);
-        gameIntent.putExtra(Game.EXTRA_SERVER_COMMANDS, (ArrayList<String>) computer.serverCommands);
 
         try {
             if (computer.serverCert != null) {
@@ -175,12 +180,24 @@ public class ServerHelper {
             ComputerManagerService.ComputerManagerBinder managerBinder,
             boolean withVDisplay
     ) {
+        doStart(parent, app, computer, managerBinder, withVDisplay, false);
+    }
+
+    public static void doStart(
+            Activity parent,
+            NvApp app,
+            ComputerDetails computer,
+            ComputerManagerService.ComputerManagerBinder managerBinder,
+            boolean withVDisplay,
+            boolean requireHostIdle
+    ) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(parent, parent.getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
 
         Intent intent = createStartIntent(parent, app, computer, managerBinder, withVDisplay);
+        intent.putExtra(Game.EXTRA_REQUIRE_HOST_IDLE, requireHostIdle);
         parent.startActivity(intent);
     }
 
@@ -219,6 +236,7 @@ public class ServerHelper {
     public static void doQuit(final Activity parent,
                               final NvHTTP httpConn,
                               final String appName,
+                              final String expectedHostSessionId,
                               final Runnable onComplete,
                               final Runnable onFail
     ) {
@@ -229,9 +247,11 @@ public class ServerHelper {
                 String message;
                 boolean failed = false;
                 try {
-                    if (httpConn.quitApp()) {
+                    boolean sessionEnded = httpConn.quitApp(expectedHostSessionId);
+                    if (sessionEnded) {
                         message = parent.getResources().getString(R.string.applist_quit_success) + " " + appName;
                     } else {
+                        failed = true;
                         message = parent.getResources().getString(R.string.applist_quit_fail) + " " + appName;
                     }
                 } catch (HostHttpResponseException e) {
@@ -276,6 +296,7 @@ public class ServerHelper {
     public static void doQuit(final Activity parent,
                               final ComputerDetails computer,
                               final NvApp app,
+                              final String expectedHostSessionId,
                               final ComputerManagerService.ComputerManagerBinder managerBinder,
                               final Runnable onComplete
     ) {
@@ -291,6 +312,7 @@ public class ServerHelper {
                     parent,
                     httpConn,
                     app.getAppName(),
+                    expectedHostSessionId,
                     onComplete,
                     null
             );

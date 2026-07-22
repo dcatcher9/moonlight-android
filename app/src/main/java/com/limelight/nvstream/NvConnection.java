@@ -401,19 +401,38 @@ public class NvConnection {
             }
         }
         
-        // If there's a game running, resume it
-        if (h.getCurrentGame(serverInfo) != 0 || (h.getCurrentGameUUID(serverInfo) != null && !h.getCurrentGameUUID(serverInfo).isEmpty())) {
+        // If there's a game running, resume it only with the exact session capability that
+        // serverinfo published and this client previously persisted.
+        if (details.runningGameId != 0 || hasIdentity(details.runningGameUUID)) {
+            if (context.streamConfig.getRequireHostIdleForLaunch()) {
+                context.connListener.displayMessage("Another session started before the " +
+                        "replacement launch. Refresh the host and confirm again.");
+                return false;
+            }
             try {
-                if (h.getCurrentGame(serverInfo) == app.getAppId() || Objects.equals(h.getCurrentGameUUID(serverInfo), app.getAppUUID())) {
-                    if (!h.launchApp(context, "resume", app.getAppUUID(), app.getAppId(), context.negotiatedHdr)) {
+                if (isSameApplication(details.runningGameId, details.runningGameUUID, app)) {
+                    String expectedHostSessionId = context.streamConfig.getExpectedHostSessionId();
+                    if (expectedHostSessionId == null
+                            || !expectedHostSessionId.equals(details.hostSessionId)) {
+                        context.connListener.displayMessage("The running session has changed and " +
+                                "cannot be resumed safely. Refresh the host and try again.");
+                        return false;
+                    }
+                    context.expectedHostSessionId = expectedHostSessionId;
+                    // UUID is authoritative when both sides have one. Use the ID from the same
+                    // serverinfo snapshot so a refreshed app-list ID cannot contradict the UUID
+                    // in Apollo's resume identity check.
+                    if (!h.launchApp(context, "resume", app.getAppUUID(),
+                            details.runningGameId, context.negotiatedHdr)) {
                         context.connListener.displayMessage("Failed to resume existing session");
                         return false;
                     }
+                    context.resumedHostSession = true;
                 } else if (Objects.equals(NvApp.REMOTE_INPUT_UUID, app.getAppUUID())) {
                     // When launching InputOnly, we shouldn't try terminating the current running app
                     return launchNotRunningApp(h, context);
                 } else {
-                    return quitAndLaunch(h, context);
+                    return quitAndLaunch(h, context, details.hostSessionId);
                 }
             } catch (HostHttpResponseException e) {
                 if (e.getErrorCode() == 470) {
@@ -441,10 +460,23 @@ public class NvConnection {
         }
     }
 
-    protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context) throws IOException,
+    private static boolean hasIdentity(String identity) {
+        return identity != null && !identity.trim().isEmpty();
+    }
+
+    static boolean isSameApplication(int runningAppId, String runningAppUuid, NvApp requestedApp) {
+        if (hasIdentity(runningAppUuid) && hasIdentity(requestedApp.getAppUUID())) {
+            return runningAppUuid.equalsIgnoreCase(requestedApp.getAppUUID());
+        }
+        return runningAppId > 0 && requestedApp.getAppId() > 0
+                && runningAppId == requestedApp.getAppId();
+    }
+
+    protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context,
+                                    String expectedHostSessionId) throws IOException,
             XmlPullParserException {
         try {
-            if (!h.quitApp()) {
+            if (!h.quitApp(expectedHostSessionId)) {
                 context.connListener.displayMessage("Failed to quit previous session! You must quit it manually");
                 return false;
             } 
@@ -472,6 +504,7 @@ public class NvConnection {
         }
         
         LimeLog.info("Launched new game session");
+        context.resumedHostSession = false;
         
         return true;
     }
@@ -522,6 +555,13 @@ public class NvConnection {
                 boolean retry = false;
                 try {
                     boolean appStarted = startApp();
+                    if (appStarted) {
+                        // Publish the capability before honoring a concurrent stop. Otherwise a
+                        // successful HTTP launch can become impossible for Game.stopConnection()
+                        // to cancel safely.
+                        context.connListener.hostSessionEstablished(context.hostSessionId,
+                                context.resumedHostSession);
+                    }
                     if (stopRequested) return;
                     if (!appStarted) {
                         retry = context.connListener.stageFailed(appName, 0, 0);
@@ -632,12 +672,6 @@ public class NvConnection {
         }
     }
 
-    public void sendExecServerCmd(final int cmdId) {
-        if (!isMonkey) {
-            MoonBridge.sendExecServerCmd(cmdId);
-        }
-    }
-    
     public void sendMouseMove(final short deltaX, final short deltaY)
     {
         if (!isMonkey) {

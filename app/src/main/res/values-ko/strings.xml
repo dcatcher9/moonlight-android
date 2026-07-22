@@ -182,7 +182,6 @@
     <string name="pcview_menu_details">PC 세부정보</string>
     <string name="scut_pc_not_found">PC를 찾을 수 없음</string>
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>
-    <string name="applist_menu_tv_channel">채널 추가하기</string>
     <string name="scut_invalid_uuid">PC를 사용할 수 없음</string>
     <string name="scut_invalid_app_id">앱을 사용할 수 없음</string>
     <string name="summary_enable_post_stream_toast">스트림 종료 후 지연시간 정보 표시</string>

@@ -24,4 +24,7 @@ public interface NvConnectionListener {
     // Host SBS preparation phase (Apollo extension): 0 = idle/failure,
     // 1 = process-wide depth-engine preparation, 2 = ready, 3 = per-stream GPU pipeline setup.
     void depthStatus(int phase);
+
+    /** Called after Apollo has accepted launch/resume and returned the bound session token. */
+    void hostSessionEstablished(String hostSessionId, boolean resumed);
 }

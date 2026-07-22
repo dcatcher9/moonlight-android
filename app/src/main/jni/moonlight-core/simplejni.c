@@ -15,12 +15,6 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendMouseMove(JNIEnv *env, jclass cla
     LiSendMouseMoveEvent(deltaX, deltaY);
 }
 
-JNIEXPORT void JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_sendExecServerCmd(JNIEnv *env, jclass clazz,
-                                                             jint cmdId) {
-    LiSendExecServerCmd(cmdId);
-}
-
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass clazz,
                                                           jint mode) {

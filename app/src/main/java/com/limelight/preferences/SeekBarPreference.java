@@ -1,31 +1,25 @@
 package com.limelight.preferences;
 
 import android.content.Context;
+import android.content.res.TypedArray;
 import android.util.AttributeSet;
-import android.view.Gravity;
-import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
-import androidx.appcompat.app.AlertDialog;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.widget.AppCompatButton;
 import androidx.preference.Preference;
+import androidx.preference.PreferenceViewHolder;
 
 import com.limelight.R;
 
 import java.util.Locale;
 
-// Based on a Stack Overflow example: http://stackoverflow.com/questions/1974193/slider-on-my-preferencescreen
-public class SeekBarPreference extends Preference
-{
+/** An inline, directly adjustable slider preference designed for the XR settings panel. */
+public class SeekBarPreference extends Preference {
     private static final String ANDROID_SCHEMA_URL = "http://schemas.android.com/apk/res/android";
-    private static final String SEEKBAR_SCHEMA_URL = "http://schemas.moonlight-stream.com/apk/res/seekbar";
 
-    private AlertDialog dialog;
-    private SeekBar seekBar;
-    private TextView valueText;
-    private final Context context;
-
-    private final String dialogMessage;
     private final String suffix;
     private final int defaultValue;
     private final int maxValue;
@@ -35,171 +29,192 @@ public class SeekBarPreference extends Preference
     private final int divisor;
     private int currentValue;
 
-    private final int seekbarMax;
-
-    public SeekBarPreference(Context context, AttributeSet attrs) {
-        super(context, attrs);
-        this.context = context;
-
-        // Read the message from XML
-        int dialogMessageId = attrs.getAttributeResourceValue(ANDROID_SCHEMA_URL, "dialogMessage", 0);
-        if (dialogMessageId == 0) {
-            dialogMessage = attrs.getAttributeValue(ANDROID_SCHEMA_URL, "dialogMessage");
-        }
-        else {
-            dialogMessage = context.getString(dialogMessageId);
-        }
-
-        // Get the suffix for the number displayed in the dialog
-        int suffixId = attrs.getAttributeResourceValue(ANDROID_SCHEMA_URL, "text", 0);
-        if (suffixId == 0) {
-            suffix = attrs.getAttributeValue(ANDROID_SCHEMA_URL, "text");
-        }
-        else {
-            suffix = context.getString(suffixId);
-        }
-
-        // Get default, min, and max seekbar values
-        defaultValue = attrs.getAttributeIntValue(ANDROID_SCHEMA_URL, "defaultValue", PreferenceConfiguration.getDefaultBitrate(context));
-        maxValue = attrs.getAttributeIntValue(ANDROID_SCHEMA_URL, "max", 100);
-        minValue = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "min", 1);
-        stepSize = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "step", 1);
-        divisor = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "divisor", 1);
-        keyStepSize = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "keyStep", 0);
-        seekbarMax = maxValue - minValue;
+    public SeekBarPreference(@NonNull Context context) {
+        this(context, null);
     }
 
-    protected AlertDialog getDialog() {
-        if (dialog != null) {
-            return dialog;
-        }
-
-        LinearLayout.LayoutParams params;
-        LinearLayout layout = new LinearLayout(context);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(6, 6, 6, 6);
-
-        TextView splashText = new TextView(context);
-        splashText.setPadding(30, 10, 30, 10);
-        if (dialogMessage != null) {
-            splashText.setText(dialogMessage);
-        }
-        layout.addView(splashText);
-
-        valueText = new TextView(context);
-        valueText.setGravity(Gravity.CENTER_HORIZONTAL);
-        valueText.setTextSize(32);
-        // Default text for value; hides bug where OnSeekBarChangeListener isn't called when opacity is 0%
-        valueText.setText("0%");
-        params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        layout.addView(valueText, params);
-
-        seekBar = new SeekBar(context);
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int value, boolean b) {
-                value += minValue;
-                if (value < minValue) {
-                    seekBar.setProgress(0);
-                    return;
-                }
-
-                int roundedValue = Math.round((float)value / stepSize) * stepSize;
-                if (roundedValue != value) {
-                    seekBar.setProgress(roundedValue - minValue);
-                    return;
-                }
-
-                String t;
-                if (divisor != 1) {
-                    float floatValue = roundedValue / (float)divisor;
-                    t = String.format((Locale)null, "%.1f", floatValue);
-                }
-                else {
-                    t = String.valueOf(value);
-                }
-                valueText.setText(suffix == null ? t : t.concat(suffix.length() > 1 ? " "+suffix : suffix));
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-
-        layout.addView(seekBar, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        if (shouldPersist()) {
-            currentValue = getPersistedInt(defaultValue);
-        }
-
-        seekBar.setMax(seekbarMax);
-        if (keyStepSize != 0) {
-            seekBar.setKeyProgressIncrement(keyStepSize);
-        }
-        seekBar.setProgress(currentValue - minValue);
-
-        AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(context);
-        dialogBuilder.setTitle(getTitle());
-        dialogBuilder.setView(layout);
-
-        dialogBuilder.setPositiveButton("OK", (dialog, which) -> {
-            if (shouldPersist()) {
-                currentValue = seekBar.getProgress() + minValue;
-                persistInt(currentValue);
-                callChangeListener(currentValue);
-            }
-
-            dialog.dismiss();
-        });
-        dialogBuilder.setNegativeButton(context.getString(R.string.cancel), (dialog, which) -> dialog.dismiss());
-
-        dialog = dialogBuilder.create();
-        return dialog;
+    public SeekBarPreference(@NonNull Context context, @Nullable AttributeSet attrs) {
+        this(context, attrs, 0);
     }
 
-    protected void updateSeekbar() {
-        seekBar.setMax(seekbarMax);
-        if (keyStepSize != 0) {
-            seekBar.setKeyProgressIncrement(keyStepSize);
+    public SeekBarPreference(@NonNull Context context, @Nullable AttributeSet attrs,
+                             int defStyleAttr) {
+        super(context, attrs, defStyleAttr);
+
+        defaultValue = attrs == null ? PreferenceConfiguration.getDefaultBitrate(context)
+                : attrs.getAttributeIntValue(ANDROID_SCHEMA_URL, "defaultValue",
+                PreferenceConfiguration.getDefaultBitrate(context));
+        maxValue = attrs == null ? 100
+                : attrs.getAttributeIntValue(ANDROID_SCHEMA_URL, "max", 100);
+        suffix = readTextAttribute(context, attrs, "text");
+
+        TypedArray styled = context.obtainStyledAttributes(attrs,
+                R.styleable.SeekBarPreference, defStyleAttr, 0);
+        minValue = styled.getInt(R.styleable.SeekBarPreference_xrMin, 1);
+        stepSize = Math.max(1, styled.getInt(R.styleable.SeekBarPreference_xrStep, 1));
+        keyStepSize = Math.max(stepSize,
+                styled.getInt(R.styleable.SeekBarPreference_xrKeyStep, stepSize));
+        divisor = Math.max(1, styled.getInt(R.styleable.SeekBarPreference_xrDivisor, 1));
+        styled.recycle();
+
+        currentValue = normalize(defaultValue);
+        setLayoutResource(R.layout.preference_xr_inline_seekbar);
+        setSelectable(false);
+    }
+
+    @Nullable
+    private static String readTextAttribute(Context context, @Nullable AttributeSet attrs,
+                                            String name) {
+        if (attrs == null) {
+            return null;
         }
-        seekBar.setProgress(currentValue - minValue);
+        int resourceId = attrs.getAttributeResourceValue(ANDROID_SCHEMA_URL, name, 0);
+        return resourceId == 0 ? attrs.getAttributeValue(ANDROID_SCHEMA_URL, name)
+                : context.getString(resourceId);
     }
 
     @Override
-    protected void onSetInitialValue(boolean restore, Object defaultValue)
-    {
-        super.onSetInitialValue(restore, defaultValue);
-        if (restore) {
-            currentValue = shouldPersist() ? getPersistedInt(this.defaultValue) : 0;
+    protected void onSetInitialValue(@Nullable Object suppliedDefaultValue) {
+        int fallback = suppliedDefaultValue instanceof Number
+                ? ((Number) suppliedDefaultValue).intValue() : defaultValue;
+        currentValue = normalize(getPersistedInt(fallback));
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull PreferenceViewHolder holder) {
+        super.onBindViewHolder(holder);
+        holder.itemView.setClickable(false);
+        holder.itemView.setFocusable(false);
+
+        if (shouldPersist()) {
+            currentValue = normalize(getPersistedInt(defaultValue));
+        }
+
+        SeekBar seekBar = (SeekBar) holder.findViewById(R.id.xr_seekbar);
+        TextView valueText = (TextView) holder.findViewById(R.id.xr_seekbar_value);
+        AppCompatButton decrease = (AppCompatButton) holder.findViewById(
+                R.id.xr_seekbar_decrease);
+        AppCompatButton increase = (AppCompatButton) holder.findViewById(
+                R.id.xr_seekbar_increase);
+        if (seekBar == null || valueText == null || decrease == null || increase == null) {
+            return;
+        }
+
+        int progressMaximum = Math.max(0, (maxValue - minValue) / stepSize);
+        seekBar.setMax(progressMaximum);
+        seekBar.setKeyProgressIncrement(Math.max(1, keyStepSize / stepSize));
+        seekBar.setEnabled(isEnabled());
+        seekBar.setProgress(valueToProgress(currentValue));
+        updateValueText(valueText, currentValue);
+        updateStepButtons(decrease, increase, currentValue);
+
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                int pendingValue = progressToValue(progress);
+                updateValueText(valueText, pendingValue);
+                updateStepButtons(decrease, increase, pendingValue);
+                if (fromUser) {
+                    // Hardware key/D-pad changes are not guaranteed to produce a tracking-stop
+                    // callback, so every user-originated step must be durable on its own.
+                    commitFromView(pendingValue, bar, valueText, decrease, increase);
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar bar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar bar) {
+                commitFromView(progressToValue(bar.getProgress()), bar, valueText,
+                        decrease, increase);
+            }
+        });
+
+        decrease.setOnClickListener(view -> {
+            int value = normalize(currentValue - keyStepSize);
+            seekBar.setProgress(valueToProgress(value));
+            commitFromView(value, seekBar, valueText, decrease, increase);
+        });
+        increase.setOnClickListener(view -> {
+            int value = normalize(currentValue + keyStepSize);
+            seekBar.setProgress(valueToProgress(value));
+            commitFromView(value, seekBar, valueText, decrease, increase);
+        });
+    }
+
+    private void commitFromView(int value, SeekBar seekBar, TextView valueText,
+                                AppCompatButton decrease, AppCompatButton increase) {
+        value = normalize(value);
+        if (value != currentValue && !callChangeListener(value)) {
+            seekBar.setProgress(valueToProgress(currentValue));
+            updateValueText(valueText, currentValue);
+            updateStepButtons(decrease, increase, currentValue);
+            return;
+        }
+        if (value != currentValue) {
+            currentValue = value;
+            persistInt(currentValue);
+        }
+        updateValueText(valueText, currentValue);
+        updateStepButtons(decrease, increase, currentValue);
+    }
+
+    private void updateStepButtons(AppCompatButton decrease, AppCompatButton increase, int value) {
+        decrease.setEnabled(isEnabled() && value > minValue);
+        increase.setEnabled(isEnabled() && value < maxValue);
+    }
+
+    private void updateValueText(TextView valueText, int value) {
+        valueText.setText(formatValue(value));
+    }
+
+    String formatValue(int value) {
+        String number;
+        if (divisor == 1) {
+            number = Integer.toString(value);
+        }
+        else if (value % divisor == 0) {
+            number = Integer.toString(value / divisor);
         }
         else {
-            currentValue = (Integer) defaultValue;
+            number = String.format(Locale.getDefault(), "%.1f", value / (float) divisor);
         }
+        if (suffix == null || suffix.isEmpty()) {
+            return number;
+        }
+        return number + (suffix.length() > 1 ? " " : "") + suffix;
     }
 
+    private int valueToProgress(int value) {
+        return (normalize(value) - minValue) / stepSize;
+    }
+
+    private int progressToValue(int progress) {
+        return normalize(minValue + progress * stepSize);
+    }
+
+    private int normalize(int value) {
+        int clamped = Math.max(minValue, Math.min(maxValue, value));
+        int stepped = minValue + Math.round((clamped - minValue) / (float) stepSize) * stepSize;
+        return Math.max(minValue, Math.min(maxValue, stepped));
+    }
+
+    /** Programmatic updates are persisted and immediately rebind the visible row. */
     public void setProgress(int progress) {
-        this.currentValue = progress;
-        if (seekBar != null) {
-            seekBar.setProgress(progress - minValue);
-        }
-    }
-    public int getProgress() {
-        return currentValue + minValue;
+        int normalized = normalize(progress);
+        currentValue = normalized;
+        persistInt(normalized);
+        notifyChanged();
     }
 
-    public void showDialog() {
-        AlertDialog dialog = getDialog();
-        updateSeekbar();
-        dialog.show();
+    /** Returns the actual persisted unit, including a negative minimum when configured. */
+    public int getProgress() {
+        return currentValue;
     }
 
     @Override
     protected void onClick() {
-        super.onClick();
-        showDialog();
     }
 }

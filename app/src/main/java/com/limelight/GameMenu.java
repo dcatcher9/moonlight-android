@@ -23,7 +23,6 @@ import com.limelight.utils.KeyMapper;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Provide options for ongoing Game Stream.
@@ -271,20 +270,6 @@ public class GameMenu implements Game.GameMenuCallbacks {
         showMenuDialog(getString(R.string.game_menu_advanced), options.toArray(new MenuOption[options.size()]));
     }
 
-    private void showServerCmd(ArrayList<String> serverCmds) {
-        List<MenuOption> options = new ArrayList<>();
-
-        AtomicInteger index = new AtomicInteger(0);
-        for (String str : serverCmds) {
-            final int finalI = index.getAndIncrement();
-            options.add(new MenuOption("> " + str, true, () -> game.sendExecServerCmd(finalI)));
-        };
-
-        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
-
-        showMenuDialog(getString(R.string.game_menu_server_cmd), options.toArray(new MenuOption[options.size()]));
-    }
-
     public void showMenu(GameInputDevice device) {
         List<MenuOption> options = new ArrayList<>();
 
@@ -297,22 +282,6 @@ public class GameMenu implements Game.GameMenuCallbacks {
 
         options.add(new MenuOption(getString(R.string.game_menu_fetch_clipboard), true,
                 () -> game.getClipboard(0)));
-
-        options.add(new MenuOption(getString(R.string.game_menu_server_cmd), true,
-                () -> {
-                    ArrayList<String> serverCmds = game.getServerCmds();
-                    if (serverCmds.isEmpty()) {
-                        int themeResId = game.getApplicationInfo().theme;
-                        Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
-                        new AlertDialog.Builder(themedContext)
-                                .setTitle(R.string.game_dialog_title_server_cmd_empty)
-                                .setMessage(R.string.game_dialog_message_server_cmd_empty)
-                                .show();
-                    } else {
-                        hideMenu();
-                        this.showServerCmd(serverCmds);
-                    }
-                }));
 
         options.add(new MenuOption(getString(R.string.game_menu_toggle_keyboard), true,
                 game::toggleKeyboard));

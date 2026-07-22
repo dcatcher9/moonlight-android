@@ -111,7 +111,6 @@
     <string name="applist_menu_details">Виж детайлите</string>
     <string name="applist_menu_scut">Създаване на пряк път</string>
     <string name="applist_refresh_error_title">Грешка</string>
-    <string name="applist_menu_tv_channel">Добавяне към канал</string>
     <string name="applist_refresh_error_msg">Неуспешно получаване на списък с приложения</string>
     <string name="applist_quit_success">Успешно изключване</string>
     <string name="applist_quit_app">Изключване</string>

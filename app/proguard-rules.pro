@@ -12,10 +12,6 @@
 -keep class com.limelight.utils.KeyConfigHelper$ShortcutFile {*;}
 -keep class com.limelight.utils.KeyConfigHelper$Shortcut {*;}
 
-# Profiles
--keep class com.limelight.profiles.ProfilesManager$ProfilesData {*;}
--keep class com.limelight.profiles.SettingsProfile {*;}
-
 # Moonlight common
 -keep class com.limelight.nvstream.jni.* {*;}
 

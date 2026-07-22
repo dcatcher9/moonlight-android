@@ -41,10 +41,28 @@ public class ServerHelperTest {
         assertFalse(ServerHelper.isResumeOfSameHostApp(computer, app));
     }
 
+    @Test
+    public void matchingIdCannotOverrideConflictingUuid() {
+        ComputerDetails computer = computerWithRunningApp(42, "host-uuid");
+        NvApp app = new NvApp("Desktop", "other-uuid", 42, false);
+
+        assertFalse(ServerHelper.isResumeOfSameHostApp(computer, app));
+    }
+
+    @Test
+    public void missingHostSessionTokenCannotResume() {
+        ComputerDetails computer = computerWithRunningApp(42, null);
+        computer.hostSessionId = null;
+        NvApp app = new NvApp("Desktop", null, 42, false);
+
+        assertFalse(ServerHelper.isResumeOfSameHostApp(computer, app));
+    }
+
     private static ComputerDetails computerWithRunningApp(int appId, String appUuid) {
         ComputerDetails computer = new ComputerDetails();
         computer.runningGameId = appId;
         computer.runningGameUUID = appUuid;
+        computer.hostSessionId = "18446744073709551615";
         return computer;
     }
 }

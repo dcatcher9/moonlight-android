@@ -188,7 +188,6 @@
     <string name="perf_overlay_netlatency">Rata-rata latensi jaringan: %1$d ms (variasi: %2$d ms)</string>
     <string name="perf_overlay_netdrops">Bingkai hilang oleh koneksi jaringan Anda: %1$.2f%%</string>
     <string name="applist_connect_msg">Menghubungkan ke PC…</string>
-    <string name="applist_menu_tv_channel">Tambahkan ke Saluran</string>
     <string name="applist_refresh_error_msg">Gagal mendapatkan daftar aplikasi</string>
     <string name="applist_quit_success">Berhasil keluar</string>
     <string name="addpc_unknown_host">Tidak dapat menyelesaikan alamat PC. Pastikan Anda tidak salah ketik di alamat.</string>

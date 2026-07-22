@@ -165,7 +165,6 @@
 	<string name="applist_menu_details">檢視詳細資訊</string>
 	<string name="applist_menu_scut">建立捷徑</string>
 	<string name="applist_menu_export_launcher">匯出啟動檔</string>
-	<string name="applist_menu_tv_channel">新增至頻道</string>
 	<string name="applist_menu_hide_app">隱藏應用程式</string>
 	<string name="applist_refresh_title">應用程式清單</string>
 	<string name="applist_refresh_msg">正在重新整理應用程式…</string>
@@ -674,11 +673,8 @@
 	<string name="game_dialog_title_quit_confirm">確定要離開？</string>
 	<string name="game_dialog_message_quit_confirm">請確認沒有未儲存的進度。離開工作階段將終止您目前執行的應用程式。</string>
 	<string name="game_menu_quit_session">結束工作階段</string>
-	<string name="game_menu_server_cmd">伺服器指令</string>
 	<string name="game_menu_fetch_clipboard">取得剪貼簿</string>
 	<string name="game_menu_upload_clipboard">上傳剪貼簿</string>
-	<string name="game_dialog_title_server_cmd_empty">無伺服器指令</string>
-	<string name="game_dialog_message_server_cmd_empty">請確認您使用的是 Apollo 作為伺服器軟體，且已授予此客戶端「伺服器指令」權限。</string>
 
 	<string name="vdisplay_not_ready">伺服器上的虛擬顯示器驅動尚未就緒。請確認已安裝並啟用 SudoVDA 驅動程式。</string>
 	<string name="vdisplay_not_supported"><![CDATA[此伺服器不支援虛擬顯示器。請使用 <a href="https://github.com/ClassicOldSong/Apollo">Apollo</a> 作為主機串流軟體。]]></string>

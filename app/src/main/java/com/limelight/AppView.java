@@ -4,8 +4,8 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.grid.AppGridAdapter;
@@ -14,9 +14,11 @@ import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
 import com.limelight.preferences.PreferenceConfiguration;
-import com.limelight.profiles.ProfilesManager;
+import com.limelight.preferences.StreamSettings;
+import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.ui.AdapterFragment;
 import com.limelight.ui.AdapterFragmentCallbacks;
+import com.limelight.ui.HomeSessionLaunchPolicy;
 import com.limelight.utils.CacheHelper;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ServerHelper;
@@ -25,6 +27,7 @@ import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -46,6 +49,8 @@ import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageView;
+import android.widget.PopupMenu;
+import android.widget.SearchView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.AdapterView.AdapterContextMenuInfo;
@@ -65,6 +70,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private SpinnerDialog blockingLoadSpinner;
     private String lastRawApplist;
     private int lastRunningAppId;
+    private String lastRunningAppUuid;
+    private String lastHostSessionId;
     private boolean inForeground;
     private boolean showHiddenApps;
     private HashSet<Integer> hiddenAppIds = new HashSet<>();
@@ -78,8 +85,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private final static int CREATE_SHORTCUT_ID = 6;
     private final static int EXPORT_LAUNCHER_FILE_ID = 7;
     private final static int HIDE_APP_ID = 8;
-    private final static int START_WITH_VDISPLAY = 20;
-    private final static int START_WITH_QUIT_VDISPLAY = 21;
 
     public final static String HIDDEN_APPS_PREF_FILENAME = "HiddenApps";
 
@@ -107,6 +112,17 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                         finish();
                         return;
                     }
+                    lastRunningAppId = computer.runningGameId;
+                    lastRunningAppUuid = computer.runningGameUUID;
+                    lastHostSessionId = computer.hostSessionId;
+                    runOnUiThread(() -> {
+                        TextView label = findViewById(R.id.appListText);
+                        if (label != null) {
+                            label.setText(computer.name);
+                        }
+                        updateComputerStatus(computer);
+                        updateCurrentSessionBanner();
+                    });
 
                     // Add a launcher shortcut for this PC (forced, since this is user interaction)
                     shortcutHelper.createAppViewShortcut(computer, true, getIntent().getBooleanExtra(NEW_PAIR_EXTRA, false));
@@ -124,6 +140,27 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     }
 
                     appGridAdapter.updateHiddenApps(hiddenAppIds, true);
+                    appGridAdapter.setActionListener(new AppGridAdapter.ActionListener() {
+                        @Override
+                        public void onPrimaryAction(AppObject app, View anchor) {
+                            handleAppSelection(app);
+                        }
+
+                        @Override
+                        public void onResumeSession(AppObject app) {
+                            resumeCurrentSession(app);
+                        }
+
+                        @Override
+                        public void onQuitSession(AppObject app) {
+                            endCurrentSession(app);
+                        }
+
+                        @Override
+                        public void onMoreActions(AppObject app, View anchor, View card) {
+                            showAppActions(app, anchor, card);
+                        }
+                    });
 
                     // Now make the binder visible. We must do this after appGridAdapter
                     // is set to prevent us from reaching updateUiWithServerinfo() and
@@ -135,6 +172,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     // so the initial serverinfo response can update the running
                     // icon.
                     populateAppGridWithCache();
+                    updateUiWithServerinfo(computer);
 
                     // Start updates
                     startComputerUpdates();
@@ -145,6 +183,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                             if (isFinishing() || isChangingConfigurations()) {
                                 return;
                             }
+
+                            SearchView searchView = findViewById(R.id.appSearch);
+                            appGridAdapter.setSearchQuery(searchView.getQuery().toString());
 
                             // Despite my best efforts to catch all conditions that could
                             // cause the activity to be destroyed when we try to commit
@@ -204,17 +245,19 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     return;
                 }
 
+                // Keep launch and session decisions tied to the latest authoritative host state.
+                computer = details;
+                runOnUiThread(() -> updateComputerStatus(details));
+
                 if (details.state == ComputerDetails.State.OFFLINE) {
-                    // The PC is unreachable now
-                    AppView.this.runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            // Display a toast to the user and quit the activity
-                            Toast.makeText(AppView.this, R.string.lost_connection, Toast.LENGTH_SHORT).show();
-                            finish();
+                    // Keep the library visible so the user can see the machine state and go back
+                    // without being ejected from the Home Space shell.
+                    runOnUiThread(() -> {
+                        if (blockingLoadSpinner != null) {
+                            blockingLoadSpinner.dismiss();
+                            blockingLoadSpinner = null;
                         }
                     });
-
                     return;
                 }
 
@@ -239,17 +282,17 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 // App list is the same or empty
                 if (details.rawAppList == null || details.rawAppList.equals(lastRawApplist)) {
 
-                    // Let's check if the running app ID changed
-                    if (details.runningGameId != lastRunningAppId) {
-                        // Update the currently running game using the app ID
-                        updateRunningAppId(details.runningGameId);
+                    if (details.runningGameId != lastRunningAppId
+                            || !Objects.equals(details.runningGameUUID, lastRunningAppUuid)
+                            || !Objects.equals(details.hostSessionId, lastHostSessionId)) {
+                        updateRunningSession(details);
                         updateUiWithServerinfo(details);
                     }
 
                     return;
                 }
 
-                updateRunningAppId(details.runningGameId);
+                updateRunningSession(details);
                 lastRawApplist = details.rawAppList;
 
                 try {
@@ -313,9 +356,29 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         findViewById(R.id.backButton)
             .setOnClickListener(v -> finish());
 
-        // Setup the profiles button
-        findViewById(R.id.profilesButton)
-            .setOnClickListener(v -> startActivity(new Intent(this, ProfilesActivity.class)));
+        findViewById(R.id.settingsButton)
+                .setOnClickListener(v -> startActivity(new Intent(this, StreamSettings.class)));
+        findViewById(R.id.resumeSessionButton).setOnClickListener(v -> resumeCurrentSession());
+        findViewById(R.id.endSessionButton).setOnClickListener(v -> endCurrentSession());
+        SearchView searchView = findViewById(R.id.appSearch);
+        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+            @Override
+            public boolean onQueryTextSubmit(String query) {
+                if (appGridAdapter != null) {
+                    appGridAdapter.setSearchQuery(query);
+                }
+                searchView.clearFocus();
+                return true;
+            }
+
+            @Override
+            public boolean onQueryTextChange(String newText) {
+                if (appGridAdapter != null) {
+                    appGridAdapter.setSearchQuery(newText);
+                }
+                return true;
+            }
+        });
 
         showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
         uuidString = getIntent().getStringExtra(UUID_EXTRA);
@@ -330,6 +393,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         TextView label = findViewById(R.id.appListText);
         setTitle(computerName);
         label.setText(computerName);
+        updateCurrentSessionBanner();
 
         this.prefConfig = PreferenceConfiguration.readPreferences(this);
 
@@ -395,22 +459,10 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         // Display a decoder crash notification if we've returned after a crash
         UiHelper.showDecoderCrashDialog(this);
 
+        prefConfig = PreferenceConfiguration.readPreferences(this);
         inForeground = true;
         startComputerUpdates();
 
-        ExtendedFloatingActionButton profilesButton = findViewById(R.id.profilesButton);
-        // User report Samsung and Xiaomi devices have this problem
-        // Why just these two brands have the most problems?
-        if (profilesButton == null) {
-            return;
-        }
-        String activeProfileName = ProfilesManager.getInstance().getActiveName();
-        if (activeProfileName.isEmpty()) {
-            profilesButton.shrink();
-        } else {
-            profilesButton.setText(activeProfileName);
-            profilesButton.extend();
-        }
     }
 
     @Override
@@ -448,31 +500,36 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
 
         menu.setHeaderTitle(selectedApp.app.getAppName());
+        populateAppActions(menu, selectedApp, info.targetView, true);
+    }
 
-        if (lastRunningAppId == 0) {
-            if (prefConfig.useVirtualDisplay) {
-                menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_start_primarydisplay));
-            } else {
-                menu.add(Menu.NONE, START_WITH_VDISPLAY, 1, getResources().getString(R.string.applist_menu_start_vdisplay));
+    private void populateAppActions(Menu menu, AppObject selectedApp, View targetView,
+                                    boolean includeSessionActions) {
+        boolean hostOnline = computer != null
+                && computer.state == ComputerDetails.State.ONLINE
+                && computer.activeAddress != null;
+        boolean selectedIsCurrent = isCurrentSessionApp(selectedApp);
+        if (includeSessionActions) {
+            if (hostOnline && !hasCurrentSession()) {
+                menu.add(Menu.NONE, START_OR_RESUME_ID, 1,
+                        getResources().getString(R.string.applist_menu_start));
             }
-        } else {
-            if (lastRunningAppId == selectedApp.app.getAppId()) {
-                menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
-                menu.add(Menu.NONE, QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
-            }
-            else {
-                if (prefConfig.useVirtualDisplay) {
-                    menu.add(Menu.NONE, START_WITH_QUIT_VDISPLAY, 1, getResources().getString(R.string.applist_menu_quit_and_start));
-                    menu.add(Menu.NONE, START_WITH_QUIT, 2, getResources().getString(R.string.applist_menu_quit_and_start_primarydisplay));
-                } else{
-                    menu.add(Menu.NONE, START_WITH_QUIT, 1, getResources().getString(R.string.applist_menu_quit_and_start));
-                    menu.add(Menu.NONE, START_WITH_QUIT_VDISPLAY, 2, getResources().getString(R.string.applist_menu_quit_and_start_vdisplay));
+            else if (hostOnline) {
+                if (selectedIsCurrent) {
+                    menu.add(Menu.NONE, START_OR_RESUME_ID, 1,
+                            getResources().getString(R.string.applist_menu_resume));
+                    menu.add(Menu.NONE, QUIT_ID, 2,
+                            getResources().getString(R.string.applist_menu_quit));
+                }
+                else {
+                    menu.add(Menu.NONE, START_WITH_QUIT, 1,
+                            getResources().getString(R.string.applist_menu_quit_and_start));
                 }
             }
         }
 
         // Only show the hide checkbox if this is not the currently running app or it's already hidden
-        if (lastRunningAppId != selectedApp.app.getAppId() || selectedApp.isHidden) {
+        if (!selectedIsCurrent || selectedApp.isHidden) {
             MenuItem hideAppItem = menu.add(Menu.NONE, HIDE_APP_ID, 3, getResources().getString(R.string.applist_menu_hide_app));
             hideAppItem.setCheckable(true);
             hideAppItem.setChecked(selectedApp.isHidden);
@@ -483,7 +540,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Only add an option to create shortcut if box art is loaded
             // and when we're in grid-mode (not list-mode).
-            ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
+            ImageView appImageView = targetView.findViewById(R.id.grid_image);
             if (appImageView != null) {
                 // We have a grid ImageView, so we must be in grid-mode
                 BitmapDrawable drawable = (BitmapDrawable)appImageView.getDrawable();
@@ -497,6 +554,330 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         menu.add(Menu.NONE, EXPORT_LAUNCHER_FILE_ID, 6, getResources().getString(R.string.applist_menu_export_launcher));
     }
 
+    private void showAppActions(AppObject app, View anchor, View appCard) {
+        PopupMenu popup = new PopupMenu(this, anchor);
+        // The card surface handles Start/Replace and the active card exposes Resume/Quit directly.
+        // Keep More limited to secondary actions while preserving the legacy context menu above.
+        populateAppActions(popup.getMenu(), app, appCard, false);
+        popup.setOnMenuItemClickListener(item -> handleAppAction(item, app, appCard));
+        popup.show();
+    }
+
+    private void handleAppSelection(AppObject selectedApp) {
+        if (managerBinder == null || computer == null) {
+            Toast.makeText(this, R.string.error_manager_not_running, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (computer.state != ComputerDetails.State.ONLINE
+                || computer.activeAddress == null) {
+            Toast.makeText(this, R.string.pair_pc_offline, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (HomeSessionLaunchPolicy.actionFor(lastRunningAppId,
+                computer != null ? computer.runningGameUUID : null,
+                selectedApp.app.getAppId(), selectedApp.app.getAppUUID()) ==
+                HomeSessionLaunchPolicy.Action.START_OR_RESUME) {
+            startApp(selectedApp.app);
+            return;
+        }
+
+        // A host exposes one current session. Never make a second launch look independent:
+        // explicitly let the user resume it, replace it, or cancel.
+        AppObject runningApp = findCurrentSessionApp();
+        String runningName = runningApp != null ? runningApp.app.getAppName() :
+                getString(R.string.xr_home_status_running);
+        NvApp currentApp = runningApp != null ? runningApp.app
+                : new NvApp("app", computer.runningGameUUID, computer.runningGameId, false);
+        HostSessionSnapshot expectedSession = captureCurrentHostSession(currentApp);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.xr_session_replace_title)
+                .setMessage(getString(R.string.xr_session_replace_message, runningName))
+                .setPositiveButton(R.string.xr_session_end_and_start,
+                        (dialog, which) -> endCurrentSessionThenStart(
+                                selectedApp.app, expectedSession))
+                .setNeutralButton(R.string.xr_session_resume_current,
+                        (dialog, which) -> resumeCurrentSession())
+                .setNegativeButton(R.string.applist_menu_cancel, null)
+                .show();
+    }
+
+    private void startApp(NvApp app) {
+        startApp(app, false);
+    }
+
+    private void startApp(NvApp app, boolean requireHostIdle) {
+        if (managerBinder == null || computer == null) {
+            Toast.makeText(this, R.string.error_manager_not_running, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (computer.state != ComputerDetails.State.ONLINE
+                || computer.activeAddress == null) {
+            Toast.makeText(this, R.string.pair_pc_offline, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        ServerHelper.doStart(this, app, computer, managerBinder, false,
+                requireHostIdle);
+    }
+
+    private boolean isCurrentSessionApp(AppObject app) {
+        return app != null && computer != null &&
+                HomeSessionLaunchPolicy.isCurrentSessionApp(computer.runningGameId,
+                        computer.runningGameUUID, app.app.getAppId(), app.app.getAppUUID());
+    }
+
+    private AppObject findCurrentSessionApp() {
+        if (appGridAdapter == null || computer == null) {
+            return null;
+        }
+        for (int i = 0; i < appGridAdapter.getAllAppCount(); i++) {
+            AppObject app = appGridAdapter.getAllApp(i);
+            if (isCurrentSessionApp(app)) {
+                return app;
+            }
+        }
+        return null;
+    }
+
+    private boolean hasCurrentSession() {
+        return lastRunningAppId != 0
+                || (lastRunningAppUuid != null && !lastRunningAppUuid.isEmpty())
+                || lastHostSessionId != null;
+    }
+
+    private boolean validateCardSessionAction(AppObject expectedApp) {
+        if (managerBinder == null || computer == null) {
+            Toast.makeText(this, R.string.error_manager_not_running, Toast.LENGTH_LONG).show();
+            return false;
+        }
+        if (computer.state != ComputerDetails.State.ONLINE || computer.activeAddress == null) {
+            Toast.makeText(this, R.string.pair_pc_offline, Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        if (!isCurrentSessionApp(expectedApp)) {
+            Toast.makeText(this, R.string.xr_session_changed, Toast.LENGTH_SHORT).show();
+            managerBinder.pollComputerNow(uuidString);
+            return false;
+        }
+        return true;
+    }
+
+    private static final class HostSessionSnapshot {
+        final ComputerDetails computer;
+        final NvApp app;
+        final String hostSessionId;
+        final SessionSettingsStore.PcIdentity pcIdentity;
+        final String localSessionId;
+
+        HostSessionSnapshot(ComputerDetails computer, NvApp app, String hostSessionId,
+                            SessionSettingsStore.PcIdentity pcIdentity,
+                            String localSessionId) {
+            this.computer = computer;
+            this.app = app;
+            this.hostSessionId = hostSessionId;
+            this.pcIdentity = pcIdentity;
+            this.localSessionId = localSessionId;
+        }
+    }
+
+    private HostSessionSnapshot captureCurrentHostSession(NvApp expectedApp) {
+        if (computer == null || expectedApp == null
+                || !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                        computer.hostSessionId)) {
+            return null;
+        }
+        NvApp app = new NvApp(expectedApp.getAppName(), expectedApp.getAppUUID(),
+                expectedApp.getAppId(), expectedApp.isHdrSupported());
+        ComputerDetails capturedComputer = new ComputerDetails(computer);
+        String fallbackHost = capturedComputer.activeAddress != null
+                ? capturedComputer.activeAddress.address : null;
+        try {
+            SessionSettingsStore.PcIdentity pcIdentity =
+                    new SessionSettingsStore.PcIdentity(capturedComputer.uuid, fallbackHost);
+            SessionSettingsStore.SessionRecord record =
+                    new SessionSettingsStore(this).getCurrentSession(pcIdentity);
+            String localSessionId = null;
+            if (record != null && record.getResumeMetadata() != null
+                    && capturedComputer.hostSessionId.equals(
+                            record.getResumeMetadata().getHostSessionId())) {
+                localSessionId = record.getLocalSessionId();
+            }
+            return new HostSessionSnapshot(capturedComputer, app,
+                    capturedComputer.hostSessionId, pcIdentity, localSessionId);
+        }
+        catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private boolean stillOwnsHostSession(HostSessionSnapshot expected) {
+        return expected != null && inForeground && computer != null
+                && Objects.equals(expected.hostSessionId, computer.hostSessionId)
+                && HomeSessionLaunchPolicy.isCurrentSessionApp(computer.runningGameId,
+                        computer.runningGameUUID, expected.app.getAppId(),
+                        expected.app.getAppUUID());
+    }
+
+    private boolean quitCompletionStillApplies(HostSessionSnapshot expected) {
+        if (expected == null || !inForeground || computer == null) {
+            return false;
+        }
+        if (stillOwnsHostSession(expected)) {
+            return true;
+        }
+        return computer.runningGameId == 0
+                && (computer.runningGameUUID == null || computer.runningGameUUID.isEmpty())
+                && computer.hostSessionId == null;
+    }
+
+    private void resumeCurrentSession() {
+        resumeCurrentSession(null);
+    }
+
+    private void resumeCurrentSession(AppObject expectedApp) {
+        if (expectedApp != null && !validateCardSessionAction(expectedApp)) {
+            return;
+        }
+        int runningAppId = computer != null ? computer.runningGameId : lastRunningAppId;
+        if (!hasCurrentSession()) {
+            return;
+        }
+
+        AppObject runningApp = expectedApp != null ? expectedApp : findCurrentSessionApp();
+        NvApp app = runningApp != null ? runningApp.app :
+                new NvApp("app", computer != null ? computer.runningGameUUID : null,
+                        runningAppId, false);
+        startApp(app);
+    }
+
+    private void endCurrentSession() {
+        endCurrentSession(null);
+    }
+
+    private void endCurrentSession(AppObject expectedApp) {
+        if (expectedApp != null && !validateCardSessionAction(expectedApp)) {
+            return;
+        }
+        if (managerBinder == null || computer == null || !hasCurrentSession()) {
+            return;
+        }
+
+        AppObject runningApp = expectedApp != null ? expectedApp : findCurrentSessionApp();
+        NvApp app = runningApp != null ? runningApp.app :
+                new NvApp("app", computer.runningGameUUID, computer.runningGameId, false);
+        HostSessionSnapshot expectedSession = captureCurrentHostSession(app);
+        if (expectedSession == null) {
+            Toast.makeText(this, R.string.xr_session_changed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        UiHelper.displayQuitConfirmationDialog(this,
+                () -> {
+                    if (!stillOwnsHostSession(expectedSession)) {
+                        Toast.makeText(this, R.string.xr_session_changed,
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    ServerHelper.doQuit(this, expectedSession.computer, expectedSession.app,
+                            expectedSession.hostSessionId, managerBinder, () -> {
+                        clearPersistedSession(expectedSession);
+                        if (managerBinder != null) {
+                            managerBinder.pollComputerNow(uuidString);
+                        }
+                    });
+                },
+                null);
+    }
+
+    private void endCurrentSessionThenStart(NvApp nextApp) {
+        if (!hasCurrentSession() || managerBinder == null || computer == null) {
+            startApp(nextApp);
+            return;
+        }
+
+        AppObject runningApp = findCurrentSessionApp();
+        NvApp currentApp = runningApp != null ? runningApp.app :
+                new NvApp("app", computer.runningGameUUID, lastRunningAppId, false);
+        endCurrentSessionThenStart(nextApp, captureCurrentHostSession(currentApp));
+    }
+
+    private void endCurrentSessionThenStart(NvApp nextApp,
+                                            HostSessionSnapshot expectedSession) {
+        if (!stillOwnsHostSession(expectedSession)) {
+            Toast.makeText(this, R.string.xr_session_changed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ServerHelper.doQuit(this, expectedSession.computer, expectedSession.app,
+                expectedSession.hostSessionId, managerBinder, () -> {
+            clearPersistedSession(expectedSession);
+            runOnUiThread(() -> {
+                if (quitCompletionStillApplies(expectedSession)) {
+                    if (stillOwnsHostSession(expectedSession)) {
+                        updateRunningSessionCleared(expectedSession);
+                    }
+                    startApp(nextApp, true);
+                }
+            });
+        });
+    }
+
+    private void clearPersistedSession(HostSessionSnapshot expected) {
+        if (expected == null || expected.localSessionId == null) {
+            return;
+        }
+        new SessionSettingsStore(this).clearCurrentSession(expected.pcIdentity,
+                expected.localSessionId, expected.hostSessionId);
+    }
+
+    private void updateComputerStatus(ComputerDetails details) {
+        boolean online = details.state == ComputerDetails.State.ONLINE
+                && details.activeAddress != null;
+        if (appGridAdapter != null) {
+            appGridAdapter.setHostOnline(online);
+        }
+        findViewById(R.id.resumeSessionButton).setEnabled(online);
+        findViewById(R.id.endSessionButton).setEnabled(online);
+        TextView status = findViewById(R.id.computerStatusText);
+        if (status == null) {
+            return;
+        }
+
+        switch (details.state) {
+            case ONLINE:
+                status.setText(R.string.pcview_menu_header_online);
+                status.setTextColor(0xFF81C995);
+                break;
+            case OFFLINE:
+                status.setText(R.string.pcview_menu_header_offline);
+                status.setTextColor(0xFFFFB4AB);
+                break;
+            default:
+                status.setText(R.string.xr_home_refreshing);
+                status.setTextColor(0xFFBDC1C6);
+                break;
+        }
+    }
+
+    private void updateCurrentSessionBanner() {
+        runOnUiThread(() -> {
+            View panel = findViewById(R.id.currentSessionPanel);
+            TextView appName = findViewById(R.id.currentSessionAppText);
+            if (panel == null || appName == null) {
+                return;
+            }
+
+            if (!hasCurrentSession()) {
+                panel.setVisibility(View.GONE);
+                return;
+            }
+
+            AppObject runningApp = findCurrentSessionApp();
+            appName.setText(runningApp != null ? runningApp.app.getAppName() :
+                    getString(R.string.xr_home_status_running));
+            panel.setVisibility(View.VISIBLE);
+        });
+    }
+
     @Override
     public void onContextMenuClosed(Menu menu) {
     }
@@ -504,60 +885,53 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     @Override
     public boolean onContextItemSelected(MenuItem item) {
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
+        if (info == null) {
+            return super.onContextItemSelected(item);
+        }
+        AppObject app = (AppObject) appGridAdapter.getItem(info.position);
+        return handleAppAction(item, app, info.targetView);
+    }
+
+    private boolean handleAppAction(MenuItem item, AppObject app, View targetView) {
         int itemId = item.getItemId();
         switch (itemId) {
-            case START_WITH_QUIT:
-            case START_WITH_QUIT_VDISPLAY: {
-                boolean withVDiaplay = itemId == START_WITH_QUIT_VDISPLAY;
-                if (withVDiaplay && !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
-                    UiHelper.displayVdisplayConfirmationDialog(
-                        AppView.this,
-                        computer,
-                        () -> UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
-                            @Override
-                            public void run() {
-                                ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, true);
-                            }
-                        }, null),
-                        null
-                    );
-                } else {
-                    // Display a confirmation dialog first
-                    UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
-                        @Override
-                        public void run() {
-                            ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, withVDiaplay);
-                        }
-                    }, null);
+            case START_WITH_QUIT: {
+                if (!hostIsOnline()) {
+                    Toast.makeText(this, R.string.pair_pc_offline, Toast.LENGTH_SHORT).show();
+                    return true;
                 }
+                AppObject runningApp = findCurrentSessionApp();
+                NvApp currentApp = runningApp != null ? runningApp.app
+                        : new NvApp("app", computer.runningGameUUID,
+                                computer.runningGameId, false);
+                HostSessionSnapshot expectedSession = captureCurrentHostSession(currentApp);
+                UiHelper.displayQuitConfirmationDialog(this,
+                        () -> endCurrentSessionThenStart(app.app, expectedSession), null);
                 return true;
             }
 
-            case START_OR_RESUME_ID:
-            case START_WITH_VDISPLAY: {
-                boolean withVDiaplay = itemId == START_WITH_VDISPLAY;
-                if (withVDiaplay && !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
-                    UiHelper.displayVdisplayConfirmationDialog(
-                            AppView.this,
-                            computer,
-                            () -> ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, true),
-                            null
-                    );
-                } else {
-                    // Resume is the same as start for us
-                    ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, withVDiaplay);
-                }
+            case START_OR_RESUME_ID: {
+                startApp(app.app);
                 return true;
             }
 
             case QUIT_ID: {
-                // Display a confirmation dialog first
+                if (!hostIsOnline()) {
+                    Toast.makeText(this, R.string.pair_pc_offline, Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+                HostSessionSnapshot expectedSession = captureCurrentHostSession(app.app);
                 UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
                     @Override
                     public void run() {
-                        ServerHelper.doQuit(AppView.this, computer,
-                                app.app, managerBinder, new Runnable() {
+                        if (!stillOwnsHostSession(expectedSession)) {
+                            Toast.makeText(AppView.this, R.string.xr_session_changed,
+                                    Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        ServerHelper.doQuit(AppView.this, expectedSession.computer,
+                                expectedSession.app, expectedSession.hostSessionId,
+                                managerBinder, new Runnable() {
                                     @Override
                                     public void run() {
                                         // Re-read authoritative /serverinfo state immediately.
@@ -591,7 +965,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             }
 
             case CREATE_SHORTCUT_ID: {
-                ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
+                ImageView appImageView = targetView.findViewById(R.id.grid_image);
                 Bitmap appBits = ((BitmapDrawable) appImageView.getDrawable()).getBitmap();
                 if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, appBits)) {
                     Toast.makeText(AppView.this, getResources().getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
@@ -617,9 +991,14 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             }
 
             default: {
-                return super.onContextItemSelected(item);
+                return false;
             }
         }
+    }
+
+    private boolean hostIsOnline() {
+        return computer != null && computer.state == ComputerDetails.State.ONLINE
+                && computer.activeAddress != null && managerBinder != null;
     }
 
     private void updateUiWithServerinfo(final ComputerDetails details) {
@@ -628,28 +1007,16 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             public void run() {
                 boolean updated = false;
 
-                    // Look through our current app list to tag the running app
-                for (int i = 0; i < appGridAdapter.getCount(); i++) {
-                    AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
-
-                    // There can only be one or zero apps running.
-                    if (existingApp.isRunning &&
-                            existingApp.app.getAppId() == details.runningGameId) {
-                        // This app was running and still is, so we're done now
-                        return;
-                    }
-                    else if (existingApp.app.getAppId() == details.runningGameId) {
-                        // This app wasn't running but now is
-                        existingApp.isRunning = true;
+                // Look through our current app list to tag the one host-owned session. Prefer the
+                // stable app UUID when Apollo refreshes an app with a different numeric ID.
+                for (int i = 0; i < appGridAdapter.getAllAppCount(); i++) {
+                    AppObject existingApp = appGridAdapter.getAllApp(i);
+                    boolean isCurrent = HomeSessionLaunchPolicy.isCurrentSessionApp(
+                            details.runningGameId, details.runningGameUUID,
+                            existingApp.app.getAppId(), existingApp.app.getAppUUID());
+                    if (existingApp.isRunning != isCurrent) {
+                        existingApp.isRunning = isCurrent;
                         updated = true;
-                    }
-                    else if (existingApp.isRunning) {
-                        // This app was running but now isn't
-                        existingApp.isRunning = false;
-                        updated = true;
-                    }
-                    else {
-                        // This app wasn't running and still isn't
                     }
                 }
 
@@ -660,13 +1027,56 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         });
     }
 
-    private void updateRunningAppId(int runningGameId) {
-        boolean changed = runningGameId != lastRunningAppId;
-        lastRunningAppId = runningGameId;
+    private void updateRunningSession(ComputerDetails details) {
+        String previousHostSessionId = lastHostSessionId;
+        boolean changed = details.runningGameId != lastRunningAppId
+                || !Objects.equals(details.runningGameUUID, lastRunningAppUuid)
+                || !Objects.equals(details.hostSessionId, lastHostSessionId);
+        lastRunningAppId = details.runningGameId;
+        lastRunningAppUuid = details.runningGameUUID;
+        lastHostSessionId = details.hostSessionId;
+        if (details.runningGameId == 0
+                && (details.runningGameUUID == null || details.runningGameUUID.isEmpty())
+                && details.hostSessionId == null) {
+            clearPersistedSessionAfterAuthoritativeEnd(previousHostSessionId);
+        }
         if (changed) {
             // Context-menu contents are snapshots. Close a stale Resume/Quit menu when the
             // authoritative host state changes; the next open will rebuild Start-ready actions.
             runOnUiThread(this::closeContextMenu);
+        }
+        updateCurrentSessionBanner();
+    }
+
+    private void updateRunningSessionCleared(HostSessionSnapshot expected) {
+        if (!stillOwnsHostSession(expected)) {
+            return;
+        }
+        computer.runningGameId = 0;
+        computer.runningGameUUID = null;
+        computer.hostSessionId = null;
+        updateRunningSession(computer);
+    }
+
+    private void clearPersistedSessionAfterAuthoritativeEnd(String endedHostSessionId) {
+        if (!inForeground || computer == null || endedHostSessionId == null) {
+            return;
+        }
+        String fallbackHost = computer.activeAddress != null
+                ? computer.activeAddress.address : null;
+        try {
+            SessionSettingsStore store = new SessionSettingsStore(this);
+            SessionSettingsStore.PcIdentity pc =
+                    new SessionSettingsStore.PcIdentity(computer.uuid, fallbackHost);
+            SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
+            if (record != null && record.getResumeMetadata() != null
+                    && endedHostSessionId.equals(
+                            record.getResumeMetadata().getHostSessionId())) {
+                store.clearCurrentSession(pc, record.getLocalSessionId(), endedHostSessionId);
+            }
+        }
+        catch (IllegalArgumentException ignored) {
+            // A transient discovery record without an identity cannot own persisted settings.
         }
     }
 
@@ -681,18 +1091,22 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     boolean foundExistingApp = false;
 
                     // Try to update an existing app in the list first
-                    for (int i = 0; i < appGridAdapter.getCount(); i++) {
-                        AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
-                        if (existingApp.app.getAppId() == app.getAppId()) {
-                            // Found the app; update its properties
-                            if (!existingApp.app.getAppName().equals(app.getAppName())) {
-                                existingApp.app.setAppName(app.getAppName());
-                                updated = true;
-                            }
-
-                            foundExistingApp = true;
-                            break;
+                    AppObject existingApp = appGridAdapter.findAppById(app.getAppId());
+                    if (existingApp != null) {
+                        // Found the app; update its properties
+                        if (!existingApp.app.getAppName().equals(app.getAppName())) {
+                            existingApp.app.setAppName(app.getAppName());
+                            updated = true;
                         }
+                        if (!Objects.equals(existingApp.app.getAppUUID(), app.getAppUUID())) {
+                            existingApp.app.setAppUUID(app.getAppUUID());
+                            updated = true;
+                        }
+                        if (existingApp.app.isHdrSupported() != app.isHdrSupported()) {
+                            existingApp.app.setHdrSupported(app.isHdrSupported());
+                            updated = true;
+                        }
+                        foundExistingApp = true;
                     }
 
                     if (!foundExistingApp) {
@@ -710,9 +1124,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
                 // Next handle app removals
                 int i = 0;
-                while (i < appGridAdapter.getCount()) {
+                while (i < appGridAdapter.getAllAppCount()) {
                     boolean foundExistingApp = false;
-                    AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
+                    AppObject existingApp = appGridAdapter.getAllApp(i);
 
                     // Check if this app is in the latest list
                     for (NvApp app : appList) {
@@ -738,16 +1152,16 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 }
 
                 if (updated) {
-                    appGridAdapter.notifyDataSetChanged();
+                    appGridAdapter.refreshVisibleApps();
                 }
+                updateCurrentSessionBanner();
             }
         });
     }
 
     @Override
     public int getAdapterFragmentLayoutId() {
-        return PreferenceConfiguration.readPreferences(AppView.this).smallIconMode ?
-                    R.layout.app_grid_view_small : R.layout.app_grid_view;
+        return R.layout.app_grid_view;
     }
 
     @Override
@@ -757,27 +1171,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             @Override
             public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
                                     long id) {
-                AppObject app = (AppObject) appGridAdapter.getItem(pos);
-
-                // Only open the context menu if something is running, otherwise start it
-                if (lastRunningAppId != 0) {
-                    if (prefConfig.resumeWithoutConfirm && lastRunningAppId == app.app.getAppId()) {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
-                    } else {
-                        openContextMenu(arg1);
-                    }
-                } else {
-                    if (prefConfig.useVirtualDisplay && !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
-                        UiHelper.displayVdisplayConfirmationDialog(
-                                AppView.this,
-                                computer,
-                                () -> ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, true),
-                                null
-                        );
-                    } else {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
-                    }
-                }
+                handleAppSelection((AppObject) appGridAdapter.getItem(pos));
             }
         });
         UiHelper.applyStatusBarPadding(listView);

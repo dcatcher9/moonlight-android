@@ -313,7 +313,7 @@ engine from the renderer thread.
 
 ## Fixed Client SBS profile
 
-Client SBS and Host SBS AI are single-tap modes with no parameter subpanels. Client normalization,
+Client SBS and Host SBS AI expose no manual depth-tuning parameters. Client normalization,
 convergence, and pop compensation are adaptive GPU state in `ClientSbsGpuDepthProcessor`.
 Reprojection mirrors the host's fixed legacy zero plane: half of the tracked subject shift is used
 as the anchor and the host convergence bias is retained. Do not reintroduce the removed strength,
@@ -384,6 +384,10 @@ On destroy or mode exit:
 
 - Stop new Client SBS captures.
 - Let the inference owner thread close native LiteRT.
+- Perform terminal worker joining and retained-engine close retries on a background coordinator;
+  never block the Activity/UI thread on `awaitTermination()` or a cleanup-thread join. Post the
+  dependent SceneCore/surface release and reconnect callback to main only after native cleanup
+  succeeds.
 - Release pending and active color leases and delete owned fences/GL resources.
 - Detach/release the old decoder surface only after the replacement target is ready.
 - Cancel delayed render retries so they cannot resurrect a destroyed renderer.
@@ -393,14 +397,46 @@ On destroy or mode exit:
 Apollo's `/serverinfo` response is the authority for whether a stream session exists. Artemis does
 not duplicate Apollo's disconnect grace period with a client timer.
 
-- A fresh host connection starts in **Normal**.
-- Resuming the same host session/app restores the last successfully rendered presentation mode.
-- Panel height is durable per machine/app and is restored independently of presentation mode.
+- A genuinely new host session starts in **Normal** and inherits Global Settings.
+- Resuming the same host session/app, including the in-place restart after **Apply & reconnect**,
+  starts with the last successfully applied presentation mode and that mode's saved stream-quality
+  tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
+  required) succeeds.
+- Panel height is durable per machine and is restored independently of presentation mode.
 - Transport, authentication, and pre-frame startup failures preserve the last successful mode;
   fresh launches still start Normal, and only a host-confirmed resume restores it.
 
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
+
+Artemis stores exactly one current-session record per PC. A new host app replaces that record;
+resuming the same host app preserves it. The record contains shared stream overrides, per-mode
+overrides, the last proven presentation mode, and a local generation ID that rejects stale panel
+writes. Global Settings remain the inheritance source across PCs and sessions; a current-session
+override is stored only while it differs from its global value.
+
+Each of the four presentation modes owns an independent stream-quality tuple: **resolution, frame
+rate, and bitrate**. Changing one mode's tuple never changes another mode. After a presentation
+handoff succeeds, selecting a mode whose saved or newly staged tuple differs from the tuple backing
+the live decoder automatically commits the complete staged session record and reconnects into the
+selected tuple. Committing the whole record ensures that shared or other-mode edits cannot be lost
+when the Activity is recreated. A same-tuple switch remains live and never restarts the connection;
+**Apply & reconnect** remains the explicit action when no mode-quality change already requires a
+restart. The Client SBS model is also mode-specific, and its aspect bucket is derived from the
+pending Client SBS resolution.
+
+The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
+range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
+shared set. Global Settings provide the cross-session defaults for both the shared set and the
+quality baseline inherited independently by each mode.
+
+**Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, the Client
+SBS model, and the selected startup mode as one guarded record replacement. It then waits for
+decoder and deferred GPU/XR cleanup before recreating the singleTask `Game` activity in place. The
+old Activity's ordinary no-history stop path must not finish this intentional replacement, so the
+stream resumes immediately instead of exposing the application grid. A stale panel generation
+cannot write into a replacement session. Legacy records that stored quality as shared values are
+read compatibly and are expanded into all four mode scopes on the next atomic commit.
 
 ## HDR and color range
 
@@ -432,25 +468,114 @@ SceneCore quad transparent or black.
 
 ## In-headset controls and stats
 
-The control bar stays at its fixed location beneath the video; opening Stats must not move it. Stats
-is a compact, single-column panel whose inner edge is anchored just beyond the video's right edge.
-It yaws inward around local Y so its outer edge wraps toward the current head position, with a
-clearance limit preventing it from approaching the viewer too closely. Recompute this pose when
-Stats opens, on video resize/mode change, after screen movement/Cinema View, and on the existing
-slow Stats refresh. Never poll head pose from the video frame loop or while Stats is hidden.
+### Single-PC home
+
+Optimize Home for the usual one-PC LAN. Exactly one discovered PC uses a centered 760 x 250 dp hero
+card whose whole surface opens that PC's application library. The card exposes only useful session
+context: connection state, the active LAN address, the headset's negotiated Wi-Fi download/upload
+link rates, virtual-display readiness, current-session readiness, and a short next-action cue. Wake
+or Pair remains an explicit primary action when needed;
+secondary machine actions stay behind the compact `+`. If a second PC appears, Home automatically
+falls back to the compact multi-machine grid.
+
+### Spatial control layout
+
+A passive glance strip sits above the video and never intercepts input. It keeps the PC/application
+identity, active presentation mode, live stream tuple, and reconnect/status cue visible without
+requiring a pane. The main dock remains level at its fixed pose beneath the video. Opening or closing
+another surface must not move that dock.
+
+The contextual mode panel is anchored directly below the dock and pitches upward toward the
+viewer while leaving the dock pose unchanged. Session Settings opens to the **left** of the video;
+its inner edge remains anchored outside the video and the panel yaws inward toward the viewer's
+face. **Stats** uses the **right** side as a compact, single-column panel whose
+inner edge is anchored just beyond the video's right edge. It yaws inward around local Y so its
+outer edge wraps toward the current head position, with a clearance limit preventing it from
+approaching the viewer too closely. Recompute side-panel poses when they open, on video resize/mode
+change, after screen movement/Cinema View, and on the existing slow Stats refresh. Never poll head
+pose from the video frame loop or while the associated side panel is hidden.
 
 Presentation modes form one single-select group. Navigation/disconnect actions remain separate
-one-shot controls. A fresh connection highlights Normal; a resumed session highlights its restored
-mode only after that mode is actually active.
+one-shot controls. A new session highlights Normal; a resumed/restarted session highlights its
+restored mode only after that mode is actually active.
 
-The visible pane is a lean optimization summary: stream format/decoder, sender / receive FPS,
-decoder output / release / surface FPS, network and host/decode latency, app CPU as core-equivalent
-load, device GPU busy/clock, and Android thermal status. Client SBS adds the selected
-model/backend/input shape, latch/depth/output FPS, LiteRT call-wall average/maximum, matched depth-age
-average/maximum, and four true GL GPU averages: model-input pack, matched-color copy, depth profile,
-and SBS compose. The only exceptional counters are occupied color slots (`color_busy`) and flat SBS
-outputs (`flat`). Depth health is intentionally limited to valid fraction, effective range width,
-pop strength, and collapsed-range state.
+The four mode tiles live in one level toolbar `PanelEntity` and share one contextual
+`PanelEntity` directly beneath it. An inactive mode tile switches modes on its first tap; tapping
+the active tile again toggles that mode's row. A passive down/up chevron with a conventional aspect
+ratio sits centered against the lower edge of the tile and communicates the expandable state
+without a small nested "Options" target. It does not change the fixed dock/tile geometry. Every
+mode row owns that mode's
+resolution/FPS/bitrate tuple. Resolution uses visual cards, FPS uses a compact segmented control,
+and bitrate uses a bandwidth meter, discrete slider, exact value, and direct minus/plus steps. The
+row identifies Global versus Current Session inheritance, shows the tuple currently backing the
+live decoder, and offers the same atomic **Apply & reconnect** action whenever any scoped change
+requires it.
+
+Normal and Host SBS rows also show their presentation/source status. Client SBS adds only its model
+choice, resolution-derived fixed aspect bucket, and live GPU backend status; it has no strength,
+convergence, balance, movie-mode, or depth-inference cadence controls. Restoring global defaults is
+scoped: the shared pane resets only shared values, while a mode row resets only that mode's quality
+tuple (and the Client SBS model for the Client row).
+
+The Settings tile opens the left side panel for values shared by every mode in the current PC
+session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
+(pacing, audio layout, host audio), with large XR-readable labels, choice targets, and status text.
+Each setting is a distinct raised card under a strong semantic heading; mode options likewise group
+resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
+surfaces rather than one undifferentiated row.
+
+Keep the four modes, Settings, Cinema, Library, Stats, and a compact half-width `+` in the permanent
+dock. Library returns directly to the current PC's application library without an intermediate
+machine-selection step, and Stats is a direct one-tap toggle; Stats visibility
+is independent, so it stays open while left-side Settings or the lower mode row opens. The `+`
+widens the same dock inline to reveal **Dump 3D** and **End session**, then becomes `-`; tapping `-`
+hides those secondary tiles and restores the compact width. The right edge stays anchored so the
+`+`/`-` gaze target never moves and a newly revealed destructive action can never replace it under
+the pointer. Expansion never opens another pane or
+masks Stats. The Stats choice is persisted so an in-place
+reconnect or activity recreation cannot silently clear it. All controls remain ordinary clickable
+Android `View`s grouped within their respective panel; never create one entity per control.
+
+Enum values in both Global Settings and the current-session panel are ordinary buttons in one
+connected segmented surface, not radio dialogs or cycle-only rows. Compact choices use equal-width,
+single-line horizontal segments with an 80 dp minimum gaze-target height. If every localized label
+cannot fit, the entire control becomes a
+full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
+make the user scroll an enum sideways. Numeric values use an inline slider with direct step buttons.
+The Client SBS model is selected from the same kind of two-button group inside its existing Options
+row, without opening another panel. On a running application card, Resume and Quit Session are
+direct siblings of More; More is reserved for secondary actions such as details, hiding, and
+shortcut/export tools.
+
+After the first decoded frame, the dock may **soft-collapse** after eight seconds of true idle. This
+does not disable or move the dock `PanelEntity`: it hides only the full control row, dims the passive
+glance strip, and leaves a centered, gazeable reveal pill showing the active mode and current status.
+Hovering, focusing, or activating a full-dock control reveals the row and restarts the timer. While
+collapsed, passive hover alone keeps the pill stable; the first focus/press generated by an explicit
+pinch reveals the row (with click activation retained for keyboard/controller input), so a newly
+exposed mode tile can never replace the target beneath the pointer or require a second pinch.
+
+Auto-collapse is allowed only while session controls are enabled, no dock child is hovered or
+focused, secondary session tools are collapsed, no Settings/Stats/mode-options pane is open, no reconnect-required change is pending,
+and no mode switch, decoder handoff/IDR gate, or depth-engine transition is active. If any guard
+becomes active, cancel the timer and keep the full dock visible so work and Apply actions cannot be
+hidden. This is a soft visibility policy only; it must not alter the dock pose or presentation mode.
+
+### Stats content and telemetry
+
+The visible pane is a lean optimization summary: negotiated codec/profile, exact Android decoder
+component, whether that component is dedicated to low latency, whether low-latency format options
+were requested, the separate Artemis output-pacing policy, sender / receive FPS, decoder output /
+release / surface FPS, network and host/decode latency, app CPU as core-equivalent load, device GPU
+busy/clock, and Android thermal status. Client SBS adds the selected model/backend/input shape,
+latch/depth/output FPS, LiteRT call-wall average/maximum, matched depth-age average/maximum, and four
+separately labelled true GL GPU averages: model-input resize/color-cut/pack, matched-color copy,
+depth normalization/profile, and stereo prefilter/warp/draw. The device GPU percentage remains a
+system-wide total: GL stages can overlap each other and OpenCL, so their durations must not be
+summed into a synthetic utilization percentage. Show XR composition as unavailable because
+SceneCore exposes no compositor timing. The only exceptional counters are occupied color slots
+(`color_busy`) and flat SBS outputs (`flat`). Depth health is intentionally limited to valid
+fraction, effective range width, pop strength, and collapsed-range state.
 
 The depth policy row must say `Uncapped | one in flight | newest frame when free`; Android thermal
 status is reported separately so it is not mistaken for a hidden throttle. Do not add expected
@@ -536,13 +661,19 @@ Use [client-sbs-evaluation.md](client-sbs-evaluation.md) for exact unit, assembl
 update-install, log, and sustained-stream procedures.
 
 On the user's physical Galaxy XR, never run Gradle's connected Android test task: it uninstalls the
-target application afterward and erases preferences, certificates, pairings, and profiles. Install
+target application afterward and erases global defaults, current-session settings, certificates,
+and pairings. Install
 the main and test APKs with `adb install -r`, invoke instrumentation manually, and uninstall only
 `com.limelight.noirdebug.test`.
 
 For every mode/surface change, test:
 
-- Fresh connection starts Normal; resume restores the prior active mode.
+- A new session starts Normal with inherited global defaults; host-confirmed resume and the
+  Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
+- Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
+  A successfully selected mode whose tuple differs from the live decoder must reconnect into that
+  tuple automatically; a same-tuple switch must not reconnect. Any other staged edits must be
+  committed in the same atomic record before that automatic Activity recreation.
 - Normal and Host SBS remain direct and work when Client SBS initialization fails.
 - Test all six selectable models separately on Galaxy XR: the three canonical DA-V2 entries from
   `client-sbs-dav2-models.tar.xz` and the three MiDaS entries from
@@ -580,6 +711,12 @@ For every mode/surface change, test:
   continuously trigger cuts.
 - The four GL GPU averages receive non-disjoint samples without stalling and remain distinct from
   LiteRT call-wall latency.
-- Controls do not move when Stats opens, and the wrapped right-side panel remains fully readable.
+- The glance strip remains passive; the level dock does not move when the upward-pitched mode pane,
+  inward-yawed left Settings pane, or wrapped right Stats pane opens. Expanding secondary session
+  tools changes only the dock width.
+- After eight idle seconds the dock leaves its reveal/status pill, then expands on the first
+  explicit press/pinch.
+  It must remain expanded while a pane, inline session tools, pending Apply, depth preparation,
+  mode/decoder transition, or focused/hovered control is active.
 - Repeated disconnect/resume/mode switches do not leak surfaces, entities, EGL contexts, leases, or
   fences and do not recreate LiteRT during a stable stream.

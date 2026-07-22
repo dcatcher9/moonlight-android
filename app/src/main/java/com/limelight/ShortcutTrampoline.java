@@ -19,6 +19,7 @@ import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
+import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
 import com.limelight.nvstream.wol.WakeOnLanSender;
@@ -435,7 +436,7 @@ public class ShortcutTrampoline extends AppCompatActivity {
             if (appUUID != null && !appUUID.isEmpty()) {
                 app = new NvApp(appName, // appName can be null if only UUID is provided
                         appUUID,
-                        -1, // App ID is not strictly needed if UUID is present
+                        StreamConfiguration.INVALID_APP_ID,
                         getIntent().getBooleanExtra(Game.EXTRA_APP_HDR, false)); // HDR info still from intent
             } else if (appIDStr != null && !appIDStr.isEmpty()) {
                 int appID = Integer.parseInt(appIDStr);

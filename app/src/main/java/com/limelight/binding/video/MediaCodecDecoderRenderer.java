@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntConsumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -63,6 +64,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final String MEDIA_FORMAT_KEY_CROP_TOP = "crop-top";
     private static final String MEDIA_FORMAT_KEY_CROP_RIGHT = "crop-right";
     private static final String MEDIA_FORMAT_KEY_CROP_BOTTOM = "crop-bottom";
+    private static final String[] DECODER_LOW_LATENCY_FORMAT_KEYS = {
+            "low-latency",
+            "vdec-lowlatency",
+            "media.low-latency.enable",
+            "vendor.low-latency.enable",
+            "vendor.qti-ext-dec-low-latency.enable",
+            "vendor.mtk.vdec.low-latency.mode",
+            "vendor.mtk.vdec.ultra-low-latency",
+            "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req",
+            "vendor.rtc-ext-dec-low-latency.enable",
+    };
 
     private boolean isMinimumLatencyMode() {
         return prefs != null
@@ -98,6 +110,56 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         catch (RuntimeException e) {
             return null;
+        }
+    }
+
+    static boolean requestsDecoderLowLatency(MediaFormat format) {
+        for (String key : DECODER_LOW_LATENCY_FORMAT_KEYS) {
+            Integer value = getOptionalFormatInteger(format, key);
+            if (value != null && value != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static String describeVideoCodec(int format) {
+        switch (format) {
+            case MoonBridge.VIDEO_FORMAT_H264:
+                return "H.264 High, 8-bit";
+            case MoonBridge.VIDEO_FORMAT_H265:
+                return "HEVC Main, 8-bit";
+            case MoonBridge.VIDEO_FORMAT_H265_MAIN10:
+                return "HEVC Main 10, 10-bit";
+            case MoonBridge.VIDEO_FORMAT_AV1_MAIN8:
+                return "AV1 Main, 8-bit";
+            case MoonBridge.VIDEO_FORMAT_AV1_MAIN10:
+                return "AV1 Main, 10-bit";
+            default:
+                if ((format & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
+                    return String.format(java.util.Locale.US, "AV1 profile 0x%04x", format);
+                }
+                if ((format & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
+                    return String.format(java.util.Locale.US, "HEVC profile 0x%04x", format);
+                }
+                if ((format & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
+                    return String.format(java.util.Locale.US, "H.264 profile 0x%04x", format);
+                }
+                return String.format(java.util.Locale.US, "Unknown format 0x%04x", format);
+        }
+    }
+
+    static String describeOutputPacing(int framePacing) {
+        switch (framePacing) {
+            case PreferenceConfiguration.FRAME_PACING_BALANCED:
+                return "Balanced (vsync queue)";
+            case PreferenceConfiguration.FRAME_PACING_CAP_FPS:
+                return "FPS cap";
+            case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
+                return "Maximum smoothness";
+            case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
+            default:
+                return "Lowest latency (latest frame)";
         }
     }
 
@@ -237,6 +299,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long modeTransitionWatchdogDeadlineMs;
     private volatile Runnable modeTransitionOpenedListener;
     private volatile Runnable modeTransitionTimedOutListener;
+    private volatile IntConsumer activeVideoFormatListener;
     // Guarded by codecRecoveryMonitor. Presentation-mode recovery is expected and must not consume
     // the limited codec-error recovery budget.
     private boolean presentationModeRecoveryPending;
@@ -495,6 +558,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     public void setPresentationModeTransitionListeners(Runnable opened, Runnable timedOut) {
         modeTransitionOpenedListener = opened;
         modeTransitionTimedOutListener = timedOut;
+    }
+
+    public void setActiveVideoFormatListener(IntConsumer listener) {
+        activeVideoFormatListener = listener;
     }
 
     /** Enables per-frame timing only for the visible Stats panel or explicit perf logging. */
@@ -827,12 +894,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Host depth SBS makes the host switch the encoded frame from W x H (2D) to a packed
             // 2W' x H' side-by-side frame on the fly. Pre-size the adaptive-playback max so
             // MediaCodec absorbs it without a reconfigure. The packed width is capped at the
-            // encoder/decoder max (2 * MAX_HOST_SBS_EYE_WIDTH), and the packed height never exceeds
+            // selected codec's packed-width ceiling, and the packed height never exceeds
             // the 2D height, so max height stays initialHeight.
             int maxWidth = initialWidth;
             if (prefs != null && prefs.isHostDoubledWidthMode()) {
                 maxWidth = Math.min(initialWidth * 2,
-                        PreferenceConfiguration.MAX_HOST_SBS_EYE_WIDTH * 2);
+                        PreferenceConfiguration.maxHostSbsPackedWidthForVideoFormat(
+                                getActiveVideoFormat()));
             }
             videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, maxWidth);
             videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
@@ -1105,6 +1173,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         currentOutputDimensions.set(
                 new DecodedVideoDimensions(this.initialWidth, this.initialHeight));
         this.videoFormat = format;
+        IntConsumer formatListener = activeVideoFormatListener;
+        if (formatListener != null) {
+            formatListener.accept(format);
+        }
         this.refreshRate = redrawRate;
 
         return initializeDecoder(false);
@@ -2378,7 +2450,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         estimatedRttMs,
                         hostProcessingAverageMs,
                         hostProcessingMaxMs,
+                        describeVideoCodec(videoFormat),
                         decoder,
+                        MediaCodecHelper.isDedicatedLowLatencyDecoderName(decoder),
+                        requestsDecoderLowLatency(configuredFormat),
+                        describeOutputPacing(prefs.framePacing),
                         actualVideoRange);
                 boolean targetFpsMatched = ((int) smoothedFps == (int) prefs.fps);
                 boolean newBestDecodeSample = minDecodeTime > decodeTimeMs && targetFpsMatched;

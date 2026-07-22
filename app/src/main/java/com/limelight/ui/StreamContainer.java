@@ -159,9 +159,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     // already-disposed XR surface.
     private volatile boolean mDestroyed = false;
     private boolean mStereoRendererDestroyed;
-    private boolean mRendererDestroyRetryScheduled;
+    private boolean mStereoRendererDestroyStarted;
     private boolean mContainerCleanupPending;
     private boolean mContainerCleanupComplete;
+    private Runnable mContainerCleanupCallback;
 
     public StreamContainer(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -209,6 +210,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return clientSbsDiagnosticsEnabled()
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs()
                 ? mStereoRenderer.sampleClientSbsPerformance() : null;
+    }
+
+    public String getClientSbsBackendStatus() {
+        return mStereoRenderer != null
+                ? mStereoRenderer.getClientSbsBackendStatus() : "Unavailable";
     }
 
     public void setHdrInput(boolean enabled) {
@@ -540,7 +546,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             return;
         }
         mPendingClientSbsSwitch = null;
-        post(() -> callback.onComplete(success));
+        // The GL detach/attach acknowledgement can arrive just before Activity teardown and be
+        // queued on the main thread behind onDestroy(). Revalidate the generation at execution
+        // time so a stale completion cannot touch the disposed Activity-bound SurfaceEntity.
+        post(() -> {
+            if (mDestroyed || generation != mClientSbsSwitchGeneration) {
+                return;
+            }
+            callback.onComplete(success);
+        });
     }
 
     private synchronized boolean bindDecoderSurface(Surface surface) {
@@ -681,27 +695,25 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     private boolean destroyStereoRenderer() {
-        if (!mStereoRendererDestroyed && mStereoRenderer != null) {
-            if (!mStereoRenderer.onSurfaceDestroyed()) {
-                scheduleRendererDestroyRetry();
-                return false;
-            }
-            mStereoRendererDestroyed = true;
+        if (mStereoRendererDestroyed || mStereoRenderer == null) {
+            return true;
         }
-        return true;
-    }
+        if (mStereoRendererDestroyStarted) {
+            return false;
+        }
 
-    private void scheduleRendererDestroyRetry() {
-        if (mRendererDestroyRetryScheduled) {
-            return;
-        }
-        mRendererDestroyRetryScheduled = true;
-        postDelayed(() -> {
-            mRendererDestroyRetryScheduled = false;
-            if (destroyStereoRenderer() && mContainerCleanupPending) {
-                finishContainerCleanup();
-            }
-        }, 1000);
+        mStereoRendererDestroyStarted = true;
+        mStereoRenderer.onSurfaceDestroyedAsync(
+                command -> game.runOnUiThread(command),
+                () -> {
+                    // Stereo3DRenderer dispatches this only after its AI/native cleanup succeeds.
+                    // Keep SceneCore, dummy-surface, and reconnect callbacks serialized on main.
+                    mStereoRendererDestroyed = true;
+                    if (mContainerCleanupPending) {
+                        finishContainerCleanup();
+                    }
+                });
+        return false;
     }
 
     public void onStereo3DSurfaceReady(Surface surface) {
@@ -711,6 +723,27 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     public void onDestroy() {
+        onDestroy(null);
+    }
+
+    /** Runs {@code onCleanupComplete} after deferred Client-SBS GPU teardown has actually ended. */
+    public void onDestroy(Runnable onCleanupComplete) {
+        if (onCleanupComplete != null) {
+            if (mContainerCleanupComplete) {
+                onCleanupComplete.run();
+                return;
+            }
+            if (mContainerCleanupCallback == null) {
+                mContainerCleanupCallback = onCleanupComplete;
+            }
+            else {
+                Runnable previous = mContainerCleanupCallback;
+                mContainerCleanupCallback = () -> {
+                    previous.run();
+                    onCleanupComplete.run();
+                };
+            }
+        }
         mDestroyed = true;
         mClientSbsSwitchGeneration++;
         mPendingClientSbsSwitch = null;
@@ -745,5 +778,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mClientSbsSurface = null;
         mCurrentSurface = null;
         mBoundDecoderSurface = null;
+        Runnable callback = mContainerCleanupCallback;
+        mContainerCleanupCallback = null;
+        if (callback != null) {
+            callback.run();
+        }
     }
 }

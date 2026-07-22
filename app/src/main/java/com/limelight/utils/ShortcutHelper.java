@@ -26,7 +26,6 @@ public class ShortcutHelper {
 
     private final ShortcutManager sm;
     private final Activity context;
-    private final TvChannelHelper tvChannelHelper;
 
     public static final int REQUEST_CODE_EXPORT_ART_FILE = 778; // Unique request code
     public static String artFileContentToExport;
@@ -45,7 +44,6 @@ public class ShortcutHelper {
         else {
             sm = null;
         }
-        this.tvChannelHelper = new TvChannelHelper(context);
     }
 
     @TargetApi(Build.VERSION_CODES.N_MR1)
@@ -102,11 +100,6 @@ public class ShortcutHelper {
         }
     }
 
-    public void reportGameLaunched(ComputerDetails computer, NvApp app) {
-        tvChannelHelper.createTvChannel(computer);
-        tvChannelHelper.addGameToChannel(computer, app);
-    }
-
     public void createAppViewShortcut(ComputerDetails computer, boolean forceAdd, boolean newlyPaired) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
             ShortcutInfo sinfo = new ShortcutInfo.Builder(context, computer.uuid)
@@ -145,11 +138,6 @@ public class ShortcutHelper {
             }
         }
 
-        if (newlyPaired) {
-            // Avoid hammering the channel API for each computer poll because it will throttle us
-            tvChannelHelper.createTvChannel(computer);
-            tvChannelHelper.requestChannelOnHomeScreen(computer);
-        }
     }
 
     public void createAppViewShortcutForOnlineHost(ComputerDetails details) {
@@ -184,7 +172,6 @@ public class ShortcutHelper {
     }
 
     public void disableComputerShortcut(ComputerDetails computer, CharSequence reason) {
-        tvChannelHelper.deleteChannel(computer);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
             // Delete the computer shortcut itself
             if (getInfoForId(computer.uuid) != null) {
@@ -204,7 +191,6 @@ public class ShortcutHelper {
     }
 
     public void disableAppShortcut(ComputerDetails computer, NvApp app, CharSequence reason) {
-        tvChannelHelper.deleteProgram(computer, app);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
             String id = getShortcutIdForGame(computer, app);
             if (getInfoForId(id) != null) {

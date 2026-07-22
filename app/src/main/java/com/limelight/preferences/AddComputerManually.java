@@ -17,9 +17,7 @@ import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.jni.MoonBridge;
-import com.limelight.utils.Dialog;
 import com.limelight.utils.ServerHelper;
-import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
 import android.app.AlertDialog;
@@ -35,13 +33,18 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
+import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
 public class AddComputerManually extends AppCompatActivity {
     private TextView hostText;
+    private TextView connectionStageTitle;
+    private TextView connectionStageDetail;
+    private ProgressBar connectionProgress;
+    private Button addPcButton;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private final LinkedBlockingQueue<String> computersToAdd = new LinkedBlockingQueue<>();
     private Thread addThread;
@@ -124,8 +127,8 @@ public class AddComputerManually extends AppCompatActivity {
         boolean success;
         int portTestResult;
 
-        SpinnerDialog dialog = SpinnerDialog.displayDialog(this, getResources().getString(R.string.title_add_pc),
-            getResources().getString(R.string.msg_add_pc), false);
+        setConnectionStage(getString(R.string.xr_connection_stage_connecting),
+                getString(R.string.msg_add_pc), true, false);
 
         Uri uri = parseRawUserInputToUri(rawUserInput);
         try {
@@ -153,7 +156,6 @@ public class AddComputerManually extends AppCompatActivity {
             }
         } catch (InterruptedException e) {
             // Propagate the InterruptedException to the caller for proper handling
-            dialog.dismiss();
             throw e;
         } catch (IllegalArgumentException e) {
             // This can be thrown from OkHttp if the host fails to canonicalize to a valid name.
@@ -163,8 +165,10 @@ public class AddComputerManually extends AppCompatActivity {
             invalidInput = true;
         }
 
-        // Keep the SpinnerDialog open while testing connectivity
+        // Keep connection progress visible while testing connectivity.
         if (!success && !wrongSiteLocal && !invalidInput) {
+            setConnectionStage(getString(R.string.xr_connection_stage_checking),
+                    getString(R.string.xr_connection_checking_detail), true, false);
             // Run the test before dismissing the spinner because it can take a few seconds.
             portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443,
                     MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989);
@@ -173,13 +177,13 @@ public class AddComputerManually extends AppCompatActivity {
             portTestResult = MoonBridge.ML_TEST_RESULT_INCONCLUSIVE;
         }
 
-        dialog.dismiss();
-
         if (invalidInput) {
-            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title), getResources().getString(R.string.addpc_unknown_host), false);
+            setConnectionStage(getString(R.string.xr_connection_stage_failed),
+                    getString(R.string.addpc_unknown_host), false, true);
         }
         else if (wrongSiteLocal) {
-            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title), getResources().getString(R.string.addpc_wrong_sitelocal), false);
+            setConnectionStage(getString(R.string.xr_connection_stage_failed),
+                    getString(R.string.addpc_wrong_sitelocal), false, true);
         }
         else if (!success) {
             String dialogText;
@@ -189,19 +193,15 @@ public class AddComputerManually extends AppCompatActivity {
             else {
                 dialogText = getResources().getString(R.string.addpc_fail);
             }
-            Dialog.displayDialog(this, getResources().getString(R.string.conn_error_title), dialogText, false);
+            setConnectionStage(getString(R.string.xr_connection_stage_failed), dialogText,
+                    false, true);
         }
         else {
+            setConnectionStage(getString(R.string.xr_connection_stage_connected),
+                    getString(R.string.xr_connection_connected_detail), false, false);
             AddComputerManually.this.runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_success), Toast.LENGTH_LONG).show();
-
-                    if (!isFinishing()) {
-                        // Close the activity
-                        AddComputerManually.this.finish();
-                    }
-
                     String pin = uri.getQueryParameter("pin");
                     String passphrase = uri.getQueryParameter("passphrase");
                     if (pin != null && passphrase != null) {
@@ -214,6 +214,12 @@ public class AddComputerManually extends AppCompatActivity {
 
                         startActivity(intent);
                     }
+
+                    hostText.postDelayed(() -> {
+                        if (!isFinishing()) {
+                            AddComputerManually.this.finish();
+                        }
+                    }, 650L);
 
                 }
             });
@@ -256,14 +262,6 @@ public class AddComputerManually extends AppCompatActivity {
 
             addThread = null;
         }
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-
-        Dialog.closeDialogs();
-        SpinnerDialog.closeDialogs(this);
     }
 
     @Override
@@ -327,6 +325,13 @@ public class AddComputerManually extends AppCompatActivity {
         UiHelper.notifyNewRootView(this);
 
         this.hostText = findViewById(R.id.hostTextView);
+        connectionStageTitle = findViewById(R.id.connectionStageTitle);
+        connectionStageDetail = findViewById(R.id.connectionStageDetail);
+        connectionProgress = findViewById(R.id.connectionProgress);
+        addPcButton = findViewById(R.id.addPcButton);
+        findViewById(R.id.addPcBackButton).setOnClickListener(v -> finish());
+        setConnectionStage(getString(R.string.xr_connection_stage_ready),
+                getString(R.string.xr_connection_ready_detail), false, false);
         hostText.setImeOptions(EditorInfo.IME_ACTION_DONE);
         hostText.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
@@ -348,7 +353,7 @@ public class AddComputerManually extends AppCompatActivity {
             }
         });
 
-        findViewById(R.id.addPcButton).setOnClickListener(new View.OnClickListener() {
+        addPcButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 handleDoneEvent();
@@ -397,11 +402,27 @@ public class AddComputerManually extends AppCompatActivity {
         String hostAddress = hostText.getText().toString().trim();
 
         if (hostAddress.length() == 0) {
-            Toast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_enter_ip), Toast.LENGTH_LONG).show();
+            setConnectionStage(getString(R.string.xr_connection_stage_failed),
+                    getString(R.string.addpc_enter_ip), false, true);
             return true;
         }
 
         computersToAdd.add(hostAddress);
         return false;
+    }
+
+    private void setConnectionStage(CharSequence title, CharSequence detail,
+                                    boolean busy, boolean error) {
+        runOnUiThread(() -> {
+            if (connectionStageTitle == null) {
+                return;
+            }
+            connectionStageTitle.setText(title);
+            connectionStageTitle.setTextColor(error ? 0xFFFF8A80 : 0xFFFFFFFF);
+            connectionStageDetail.setText(detail);
+            connectionProgress.setVisibility(busy ? View.VISIBLE : View.INVISIBLE);
+            addPcButton.setEnabled(!busy);
+            hostText.setEnabled(!busy);
+        });
     }
 }

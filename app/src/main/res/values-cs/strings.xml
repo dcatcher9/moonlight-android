@@ -46,7 +46,6 @@
     <string name="applist_menu_quit">Ukončit</string>
     <string name="applist_menu_quit_and_start">Ukončit současnou hru a spustit</string>
     <string name="applist_menu_cancel">Zrušit</string>
-    <string name="applist_menu_tv_channel">Přidat do kanálu</string>
     <string name="applist_refresh_title">Seznam aplikací</string>
     <string name="applist_menu_resume">Pokračovat</string>
     <string name="applist_menu_details">Zobrazit detaily</string>

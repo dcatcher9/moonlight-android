@@ -25,13 +25,12 @@ public class StreamConfiguration {
     private int remote;
     private MoonBridge.AudioConfiguration audioConfiguration;
     private int supportedVideoFormats;
-    private int attachedGamepadMask;
-    private int encryptionFlags;
     private int colorRange;
     private int colorSpace;
-    private boolean persistGamepadsAfterDisconnect;
     private boolean enableUltraLowLatency;
     private int initialSbsMode;
+    private String expectedHostSessionId;
+    private boolean requireHostIdleForLaunch;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -97,26 +96,6 @@ public class StreamConfiguration {
             return this;
         }
 
-        public StreamConfiguration.Builder setAttachedGamepadMask(int attachedGamepadMask) {
-            config.attachedGamepadMask = attachedGamepadMask;
-            return this;
-        }
-
-        public StreamConfiguration.Builder setAttachedGamepadMaskByCount(int gamepadCount) {
-            config.attachedGamepadMask = 0;
-            for (int i = 0; i < 4; i++) {
-                if (gamepadCount > i) {
-                    config.attachedGamepadMask |= 1 << i;
-                }
-            }
-            return this;
-        }
-
-        public StreamConfiguration.Builder setPersistGamepadsAfterDisconnect(boolean value) {
-            config.persistGamepadsAfterDisconnect = value;
-            return this;
-        }
-
         public StreamConfiguration.Builder setClientRefreshRateX100(int refreshRateX100) {
             config.clientRefreshRateX100 = refreshRateX100;
             return this;
@@ -155,6 +134,22 @@ public class StreamConfiguration {
             return this;
         }
 
+        public StreamConfiguration.Builder setExpectedHostSessionId(String hostSessionId) {
+            if (hostSessionId != null) {
+                hostSessionId = hostSessionId.trim();
+                if (hostSessionId.isEmpty() || "0".equals(hostSessionId)) {
+                    hostSessionId = null;
+                }
+            }
+            config.expectedHostSessionId = hostSessionId;
+            return this;
+        }
+
+        public StreamConfiguration.Builder requireHostIdleForLaunch(boolean requireHostIdle) {
+            config.requireHostIdleForLaunch = requireHostIdle;
+            return this;
+        }
+
         public StreamConfiguration build() {
             return config;
         }
@@ -176,7 +171,6 @@ public class StreamConfiguration {
         this.enableAdaptiveResolution = false;
         this.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_STEREO;
         this.supportedVideoFormats = MoonBridge.VIDEO_FORMAT_H264;
-        this.attachedGamepadMask = 0;
         this.enableUltraLowLatency = false;
         this.initialSbsMode = MoonBridge.SBS_MODE_OFF;
     }
@@ -245,14 +239,6 @@ public class StreamConfiguration {
         return supportedVideoFormats;
     }
 
-    public int getAttachedGamepadMask() {
-        return attachedGamepadMask;
-    }
-
-    public boolean getPersistGamepadsAfterDisconnect() {
-        return persistGamepadsAfterDisconnect;
-    }
-
     public int getClientRefreshRateX100() {
         return clientRefreshRateX100;
     }
@@ -271,5 +257,13 @@ public class StreamConfiguration {
 
     public int getInitialSbsMode() {
         return initialSbsMode;
+    }
+
+    public String getExpectedHostSessionId() {
+        return expectedHostSessionId;
+    }
+
+    public boolean getRequireHostIdleForLaunch() {
+        return requireHostIdleForLaunch;
     }
 }

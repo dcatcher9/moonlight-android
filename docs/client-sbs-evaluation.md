@@ -392,7 +392,7 @@ MiDaS buckets (`352 x 192`, `384 x 160`, and `448 x 128`) through the same packe
 
 > **Never run `connectedNonRoot_gameDebugAndroidTest` against the user's Galaxy XR.** Android
 > Gradle Plugin uninstalls the target package when that task finishes. That erases Artemis
-> preferences, certificates, host pairings, and profiles.
+> global defaults, current-session settings, certificates, and host pairings.
 
 On the physical headset:
 

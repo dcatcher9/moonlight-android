@@ -87,7 +87,6 @@
     <string name="applist_menu_cancel">Anulează</string>
     <string name="applist_menu_details">Vezi detalii</string>
     <string name="applist_menu_scut">Creează o scurtătură</string>
-    <string name="applist_menu_tv_channel">Adaugă la canal</string>
     <string name="applist_refresh_title">Lista de aplicații</string>
     <string name="applist_refresh_msg">Reîmprospătare aplicații…</string>
     <string name="applist_refresh_error_title">Eroare</string>

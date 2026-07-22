@@ -72,7 +72,6 @@
     <string name="applist_menu_quit_and_start_primarydisplay">Завершить игру и запустить на основном дисплее</string>
     <string name="applist_menu_cancel">Отмена</string>
     <string name="applist_menu_export_launcher">Экспортировать файл запуска</string>
-    <string name="applist_menu_tv_channel">Добавить в канал</string>
     <string name="applist_refresh_title">Список приложений</string>
     <string name="applist_refresh_msg">Обновление приложений…</string>
     <string name="applist_refresh_error_title">Ошибка</string>
@@ -559,11 +558,8 @@
     <string name="game_dialog_title_quit_confirm">Действительно хотите выйти?</string>
     <string name="game_dialog_message_quit_confirm">Убедитесь, что нет несохранённого прогресса. Завершение сессии закроет текущее приложение.</string>
     <string name="game_menu_quit_session">Завершить сессию</string>
-    <string name="game_menu_server_cmd">Команды сервера</string>
     <string name="game_menu_fetch_clipboard">Получить буфер обмена</string>
     <string name="game_menu_upload_clipboard">Отправить буфер обмена</string>
-    <string name="game_dialog_title_server_cmd_empty">Нет команд сервера</string>
-    <string name="game_dialog_message_server_cmd_empty">Убедитесь, что на сервере установлен Apollo и этому клиенту предоставлено разрешение Server Command.</string>
     <string name="vdisplay_not_ready">Виртуальный драйвер дисплея на сервере не готов. Пожалуйста, убедитесь, что драйвер SudoVDA установлен и включён.</string>
     <string name="clipboard_sync_unsupported">Этот сервер не поддерживает синхронизацию буфера. Установите или обновите сервер до последней версии Apollo.</string>
     <string name="send_clipboard_failed">Не удалось отправить буфер обмена:</string>

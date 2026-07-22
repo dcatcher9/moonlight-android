@@ -23,6 +23,12 @@ public class ConnectionContext {
 
     // This is the sessionUrl0 tag from /resume and /launch
     public String rtspSessionUrl;
+
+    // Apollo session capability. A resume request must present the locally persisted token,
+    // and a successful launch/resume publishes the token bound to this connection.
+    public String expectedHostSessionId;
+    public String hostSessionId;
+    public boolean resumedHostSession;
     
     public int negotiatedWidth, negotiatedHeight;
     public boolean negotiatedHdr;

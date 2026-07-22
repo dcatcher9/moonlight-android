@@ -25,7 +25,11 @@ public final class StreamPerformanceSnapshot {
     private final int estimatedRttMs;
     private final float hostProcessingAverageMs;
     private final float hostProcessingMaxMs;
+    private final String codecDescription;
     private final String decoderName;
+    private final boolean dedicatedLowLatencyDecoder;
+    private final boolean decoderLowLatencyRequested;
+    private final String outputPacingDescription;
     private final String videoRange;
 
     public StreamPerformanceSnapshot(long elapsedMs,
@@ -43,7 +47,11 @@ public final class StreamPerformanceSnapshot {
                                      int estimatedRttMs,
                                      float hostProcessingAverageMs,
                                      float hostProcessingMaxMs,
+                                     String codecDescription,
                                      String decoderName,
+                                     boolean dedicatedLowLatencyDecoder,
+                                     boolean decoderLowLatencyRequested,
+                                     String outputPacingDescription,
                                      String videoRange) {
         this.elapsedMs = elapsedMs;
         this.sourceWidth = sourceWidth;
@@ -60,7 +68,11 @@ public final class StreamPerformanceSnapshot {
         this.estimatedRttMs = estimatedRttMs;
         this.hostProcessingAverageMs = hostProcessingAverageMs;
         this.hostProcessingMaxMs = hostProcessingMaxMs;
+        this.codecDescription = codecDescription;
         this.decoderName = decoderName;
+        this.dedicatedLowLatencyDecoder = dedicatedLowLatencyDecoder;
+        this.decoderLowLatencyRequested = decoderLowLatencyRequested;
+        this.outputPacingDescription = outputPacingDescription;
         this.videoRange = videoRange;
     }
 
@@ -150,6 +162,29 @@ public final class StreamPerformanceSnapshot {
 
     public String getDecoderName() {
         return decoderName;
+    }
+
+    /** Negotiated wire codec/profile, independently of the Android decoder component. */
+    public String getCodecDescription() {
+        return codecDescription;
+    }
+
+    /** Whether Android selected a component whose name explicitly identifies it as low latency. */
+    public boolean isDedicatedLowLatencyDecoder() {
+        return dedicatedLowLatencyDecoder;
+    }
+
+    /**
+     * Whether at least one decoder low-latency key was present in the successfully configured
+     * {@code MediaFormat}. This reports what Artemis requested, not an unverifiable driver claim.
+     */
+    public boolean isDecoderLowLatencyRequested() {
+        return decoderLowLatencyRequested;
+    }
+
+    /** Artemis' output-buffer release policy, separate from the decoder's operating mode. */
+    public String getOutputPacingDescription() {
+        return outputPacingDescription;
     }
 
     public String getVideoRange() {

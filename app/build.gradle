@@ -123,6 +123,7 @@ android {
             resValue "string", "app_label", "Diana"
             resValue "string", "app_label_root", "Diana (Root)"
             resValue "string", "app_label_game", "Diana (Game)"
+            resValue "bool", "default_enable_perf_logging", "true"
 
             // minifyEnabled is OFF for debug for faster builds.
             minifyEnabled false
@@ -163,6 +164,7 @@ android {
             resValue "string", "app_label", "Artemis"
             resValue "string", "app_label_root", "Artemis (Root)"
             resValue "string", "app_label_game", "Artemis (Game)"
+            resValue "bool", "default_enable_perf_logging", "false"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

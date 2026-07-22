@@ -135,7 +135,6 @@
     <string name="applist_menu_cancel">Annuler</string>
     <string name="applist_menu_details">Voir les détails</string>
     <string name="applist_menu_scut">Créer un raccourci</string>
-    <string name="applist_menu_tv_channel">Ajouter à la liste de chaînes</string>
     <string name="applist_menu_hide_app">Cacher l\'application</string>
     <string name="applist_refresh_title">Liste des applications</string>
     <string name="applist_refresh_msg">Actualisation des applications…</string>
@@ -554,11 +553,8 @@
     <string name="game_dialog_title_quit_confirm">Voulez-vous vraiment quitter ?</string>
     <string name="game_dialog_message_quit_confirm">Veuillez vous assurer que vous n\'avez aucune progression non enregistrée. La quittance de la session mettra fin à l\'application en cours d\'exécution.</string>
     <string name="game_menu_quit_session">Quitter la session</string>
-    <string name="game_menu_server_cmd">Commandes du serveur</string>
     <string name="game_menu_fetch_clipboard">Récupérer le presse-papiers</string>
     <string name="game_menu_upload_clipboard">Télécharger le presse-papiers</string>
-    <string name="game_dialog_title_server_cmd_empty">Aucune commande de serveur</string>
-    <string name="game_dialog_message_server_cmd_empty">Veuillez vous assurer que vous utilisez Apollo comme logiciel serveur et que vous avez accordé à ce client l\'autorisation "Commande de serveur".</string>
     <string name="vdisplay_not_ready">Le pilote d\'affichage virtuel n\'est pas prêt sur le serveur. Veuillez vous assurer que le pilote SudoVDA est installé et activé.</string>
     <string name="vdisplay_not_supported"><![CDATA[L\'affichage virtuel n\'est pas pris en charge sur ce serveur. Veuillez utiliser <a href=\"https://github.com/ClassicOldSong/Apollo\">Apollo</a> comme logiciel de streaming hôte.]]></string>
     <string name="clipboard_sync_unsupported">Ce serveur ne prend pas en charge la synchronisation du presse-papiers. Veuillez installer ou mettre à jour votre serveur vers la dernière version d\'Apollo.</string>

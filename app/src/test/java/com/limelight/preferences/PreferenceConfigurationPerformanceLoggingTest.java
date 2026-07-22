@@ -9,8 +9,6 @@ import android.content.SharedPreferences;
 import androidx.preference.PreferenceManager;
 import androidx.test.core.app.ApplicationProvider;
 
-import com.limelight.profiles.ProfilesManager;
-
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -23,42 +21,37 @@ import org.robolectric.annotation.Config;
 })
 @RunWith(RobolectricTestRunner.class)
 public final class PreferenceConfigurationPerformanceLoggingTest {
-    private static final String PERFORMANCE_LOGGING_KEY = "checkbox_enable_perf_logging";
-
+    private static final String KEY = "checkbox_enable_perf_logging";
+    private static final String OVERLAY_KEY = "checkbox_enable_perf_overlay";
     private Context context;
     private SharedPreferences preferences;
 
     @Before
-    public void setUp() throws Exception {
+    public void setUp() {
         context = ApplicationProvider.getApplicationContext();
         preferences = PreferenceManager.getDefaultSharedPreferences(context);
         assertTrue(preferences.edit().clear().commit());
-
-        // Prevent an active settings profile from shadowing the base preference under test.
-        java.lang.reflect.Field instance = ProfilesManager.class.getDeclaredField("instance");
-        instance.setAccessible(true);
-        instance.set(null, null);
     }
 
     @Test
     public void performanceLoggingDefaultsToEnabled() {
-        assertFalse(preferences.contains(PERFORMANCE_LOGGING_KEY));
-
-        PreferenceConfiguration configuration =
-                PreferenceConfiguration.readPreferences(context);
-
-        assertTrue(configuration.enablePerfLogging);
+        assertFalse(preferences.contains(KEY));
+        assertTrue(PreferenceConfiguration.readPreferences(context).enablePerfLogging);
     }
 
     @Test
-    public void explicitlyDisabledPerformanceLoggingRemainsDisabled() {
-        assertTrue(preferences.edit()
-                .putBoolean(PERFORMANCE_LOGGING_KEY, false)
-                .commit());
+    public void explicitDisableIsPreserved() {
+        assertTrue(preferences.edit().putBoolean(KEY, false).commit());
+        assertFalse(PreferenceConfiguration.readPreferences(context).enablePerfLogging);
+    }
 
-        PreferenceConfiguration configuration =
-                PreferenceConfiguration.readPreferences(context);
+    @Test
+    public void inHeadsetStatsChoiceSurvivesConfigurationReload() {
+        PreferenceConfiguration.setPerformanceOverlayEnabled(context, true);
+        assertTrue(preferences.getBoolean(OVERLAY_KEY, false));
+        assertTrue(PreferenceConfiguration.readPreferences(context).enablePerfOverlay);
 
-        assertFalse(configuration.enablePerfLogging);
+        PreferenceConfiguration.setPerformanceOverlayEnabled(context, false);
+        assertFalse(PreferenceConfiguration.readPreferences(context).enablePerfOverlay);
     }
 }
