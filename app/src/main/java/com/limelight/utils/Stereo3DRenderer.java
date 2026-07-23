@@ -45,8 +45,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     // Constants
     private static final int GL_TEXTURE_EXTERNAL_OES = 0x8D65;
     private static final float[] QUAD_VERTICES = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
-    // Preserve the established depth/profile texture convention. OES sampling uses a separate
-    // canonical buffer because SurfaceTexture's matrix owns its crop/orientation.
+    // Preserve the established depth/profile texture convention: visual top maps to v=0, matching
+    // model tensor row 0 stored at depth-texture y=0. OES sampling uses a separate canonical buffer
+    // because SurfaceTexture's matrix owns its crop/orientation.
     private static final float[] TEXTURE_VERTICES = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
     private static final float[] OES_TEXTURE_VERTICES = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
     private static final long THERMAL_STATUS_POLL_INTERVAL_NS = 1_000_000_000L;
@@ -3515,21 +3516,32 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertex);
         if (vertexShader == 0) return 0;
         int fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragment);
-        if (fragmentShader == 0) return 0;
+        if (fragmentShader == 0) {
+            GLES20.glDeleteShader(vertexShader);
+            return 0;
+        }
 
         int program = GLES20.glCreateProgram();
-        if (program != 0) {
-            GLES20.glAttachShader(program, vertexShader);
-            GLES20.glAttachShader(program, fragmentShader);
-            GLES20.glLinkProgram(program);
-            int[] linkStatus = new int[1];
-            GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
-            if (linkStatus[0] != GLES20.GL_TRUE) {
-                LimeLog.severe("Could not link program: ");
-                LimeLog.severe(GLES20.glGetProgramInfoLog(program));
-                GLES20.glDeleteProgram(program);
-                program = 0;
-            }
+        if (program == 0) {
+            GLES20.glDeleteShader(vertexShader);
+            GLES20.glDeleteShader(fragmentShader);
+            return 0;
+        }
+
+        GLES20.glAttachShader(program, vertexShader);
+        GLES20.glAttachShader(program, fragmentShader);
+        GLES20.glLinkProgram(program);
+        int[] linkStatus = new int[1];
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
+        GLES20.glDetachShader(program, vertexShader);
+        GLES20.glDetachShader(program, fragmentShader);
+        GLES20.glDeleteShader(vertexShader);
+        GLES20.glDeleteShader(fragmentShader);
+        if (linkStatus[0] != GLES20.GL_TRUE) {
+            LimeLog.severe("Could not link program: ");
+            LimeLog.severe(GLES20.glGetProgramInfoLog(program));
+            GLES20.glDeleteProgram(program);
+            return 0;
         }
         return program;
     }

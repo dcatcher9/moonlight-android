@@ -376,8 +376,9 @@ depth.
 
 The central contract is:
 
-> Whoever owns presentation supplies the current `Surface` to
-> `MediaCodecDecoderRenderer.setRenderTarget()`.
+> Whoever owns presentation supplies the initial `Surface` through
+> `MediaCodecDecoderRenderer.setRenderTarget()` before codec setup, and supplies every live
+> replacement through the guarded `MediaCodecDecoderRenderer.setOutputSurface()` transaction.
 
 Mode switches are guarded asynchronous surface handoffs. Keep the decoder target, SceneCore surface
 size/stereo mode, renderer generation, and entity visibility synchronized. A stale callback from a

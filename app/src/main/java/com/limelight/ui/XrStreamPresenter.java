@@ -85,7 +85,9 @@ import java.util.Map;
  *
  * <p>Mirrors the contract {@code Stereo3DRenderer} exposes to {@link StreamContainer}: it
  * obtains a video {@link Surface} and notifies via {@link OnSurfaceReadyListener}, so
- * {@code StreamContainer} can wire {@code decoderRenderer.setRenderTarget(...)} identically.
+ * {@code StreamContainer} can supply the initial target through
+ * {@code decoderRenderer.setRenderTarget(...)} and guarded live replacements through
+ * {@code decoderRenderer.setOutputSurface(...)}.
  *
  * <p>This class is the <i>only</i> one that imports the Jetpack XR SDK, and it is constructed
  * exclusively behind {@code XrUtils.isXrDevice(...)}.

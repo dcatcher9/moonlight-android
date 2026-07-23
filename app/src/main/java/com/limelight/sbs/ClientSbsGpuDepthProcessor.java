@@ -86,6 +86,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             new HealthReadbackSlot(), new HealthReadbackSlot(), new HealthReadbackSlot()
     };
     private final int[] depthTextures = new int[2];
+    /** Scratch storage for thread-confined GL integer queries. */
+    private final int[] integerScratch = new int[1];
 
     private int depthInternalFormat;
     private boolean linearDepthFiltering;
@@ -892,10 +894,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
     }
 
-    private static int getInteger(int name) {
-        int[] value = new int[1];
-        GLES20.glGetIntegerv(name, value, 0);
-        return value[0];
+    private int getInteger(int name) {
+        integerScratch[0] = 0;
+        GLES20.glGetIntegerv(name, integerScratch, 0);
+        return integerScratch[0];
     }
 
     private static long unsignedIntToLong(int value) {

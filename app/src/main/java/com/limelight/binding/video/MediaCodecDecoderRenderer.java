@@ -571,6 +571,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return decoderInfo;
     }
 
+    /**
+     * Sets the initial output surface before MediaCodec is configured.
+     * Live XR surface handoffs must use {@link #setOutputSurface(Surface)}.
+     */
     public void setRenderTarget(Surface renderTarget) {
         this.renderTarget = renderTarget;
     }
@@ -1895,46 +1899,44 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
             // by holding onto them for too long. This also ensures we will have that 1 extra
             // frame of buffer to smooth over network/rendering jitter.
-            DecodedOutputBuffer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
-                try {
+            DecodedOutputBuffer nextOutputBuffer = null;
+            try {
+                while ((nextOutputBuffer = outputBufferQueue.poll()) != null) {
                     DecoderModeTransitionGate.OutputDecision outputDecision =
                             evaluatePresentationTransitionOutput(
                                     nextOutputBuffer.presentationTimeUs);
                     if (outputDecision == DecoderModeTransitionGate.OutputDecision.DROP) {
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer.index, false);
                         nextOutputBuffer = null;
+                        // A fresh transition frame may already be queued. Consume consecutive
+                        // stale buffers now instead of adding another display interval of latency.
+                        continue;
                     }
                     else if (outputDecision
                             == DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN) {
                         LimeLog.info("XR mode transition: fresh IDR output reached render gate");
                     }
 
-                    if (nextOutputBuffer != null) {
-                        boolean releasedForRender;
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                            releaseOutputBufferForRender(nextOutputBuffer.index, frameTimeNanos);
-                            releasedForRender = true;
-                        } else {
-                            releaseOutputBufferForRender(nextOutputBuffer.index);
-                            releasedForRender = true;
-                        }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        releaseOutputBufferForRender(nextOutputBuffer.index, frameTimeNanos);
+                    } else {
+                        releaseOutputBufferForRender(nextOutputBuffer.index);
+                    }
+                    lastRenderedFrameTimeNanos = frameTimeNanos;
 
-                        if (releasedForRender) {
-                            lastRenderedFrameTimeNanos = frameTimeNanos;
-                        }
+                    // Frame pacing renders at most one accepted output per display callback.
+                    break;
+                }
+            } catch (IllegalStateException ignored) {
+                try {
+                    // Try to avoid leaking the output buffer by releasing it without rendering
+                    if (nextOutputBuffer != null) {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer.index, false);
                     }
-                } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        if (nextOutputBuffer != null) {
-                            videoDecoder.releaseOutputBuffer(nextOutputBuffer.index, false);
-                        }
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
-                    }
+                } catch (IllegalStateException e) {
+                    // This will leak nextOutputBuffer, but there's really nothing else we can do
+                    e.printStackTrace();
+                    handleDecoderException(e);
                 }
             }
         }
@@ -2040,17 +2042,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
                                 // We just put all frames into the output buffer queue and let it handle things.
 
-                                // Discard the oldest buffer if we've exceeded our limit.
+                                // Discard the oldest buffer before adding if we've reached our limit.
                                 //
                                 // NB: We have to do this on the producer side because the consumer may not
                                 // run for a while (if there is a huge mismatch between stream FPS and display
-                                // refresh rate).
-                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
-                                    try {
+                                // refresh rate). poll() must remain nonblocking because the consumer can
+                                // drain the queue between the size check and removal.
+                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                    DecodedOutputBuffer oldestOutputBuffer =
+                                            outputBufferQueue.poll();
+                                    if (oldestOutputBuffer != null) {
                                         videoDecoder.releaseOutputBuffer(
-                                                outputBufferQueue.take().index, false);
-                                    } catch (InterruptedException e) {
-                                        return;
+                                                oldestOutputBuffer.index, false);
                                     }
                                 }
 
