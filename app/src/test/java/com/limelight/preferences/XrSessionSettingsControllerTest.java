@@ -416,6 +416,140 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void rawTransportBoundaryReconnectsWithIdenticalLogicalQuality() {
+        XrSessionSettingsController controller = controller();
+        assertEquals(SessionSettingsStore.PresenterMode.NORMAL, controller.getStartupMode());
+
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
+        assertFalse(controller.selectedModeRequiresReconnect());
+        assertFalse(controller.hasPendingChanges());
+
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+        assertFalse(controller.selectedModeRequiresReconnect());
+        assertFalse(controller.hasPendingChanges());
+
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        ModeStreamQualityModel raw = controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        assertTrue(raw.selected);
+        assertFalse(raw.hasPendingChanges());
+        assertTrue(raw.requiresReconnect());
+        assertTrue(controller.selectedModeRequiresReconnect());
+        assertTrue(controller.hasPendingChanges());
+
+        assertTrue(controller.commitPending());
+        XrSessionSettingsController rawController = controller();
+        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                rawController.getStartupMode());
+        assertFalse(rawController.selectedModeRequiresReconnect());
+        assertFalse(rawController.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW).requiresReconnect());
+
+        rawController.selectPresentationMode(SessionSettingsStore.PresenterMode.NORMAL);
+        assertTrue(rawController.selectedModeRequiresReconnect());
+        assertTrue(rawController.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.NORMAL).requiresReconnect());
+
+        rawController.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
+        assertTrue(rawController.selectedModeRequiresReconnect());
+        assertTrue(rawController.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_AI).requiresReconnect());
+    }
+
+    @Test
+    public void wideRawTransportPromotesForcedH264ToHevc() {
+        XrSessionSettingsController controller = controller();
+        controller.selectModeQualitySetting(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                SessionSettingsModel.Key.RESOLUTION,
+                "3840x2160");
+        controller.selectSharedSetting(SessionSettingsModel.Key.CODEC, "neverh265");
+
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        SessionSettingsModel.Value codec = controller.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.CODEC);
+        assertEquals("forceh265", codec.selectedChoiceId);
+        assertFalse(hasChoice(codec, "neverh265"));
+        assertTrue(controller.hasPendingChanges());
+    }
+
+    @Test
+    public void inheritedRawResolutionBeyondPackedLimitIsConstrainedTo4k() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "5120x2160")
+                .commit());
+        XrSessionSettingsController controller = controller();
+
+        assertFalse(controller.isRawSbsTransportSupported());
+        assertTrue(controller.constrainRawSbsTransportToSupportedPreset());
+        assertTrue(controller.isRawSbsTransportSupported());
+        assertEquals("3840x2160", controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
+    }
+
+    @Test
+    public void rawUseGlobalDefaultsCannotStageUnsupportedPackedWidth() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "5120x2160")
+                .commit());
+        assertTrue(store.edit(pc, app)
+                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                        "3840x2160", "5120x2160")
+                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .commit());
+        XrSessionSettingsController controller = controller();
+
+        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        assertTrue(controller.isRawSbsTransportSupported());
+        assertEquals("3840x2160", controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
+        assertTrue(controller.commitPending());
+        assertEquals("3840x2160", store.snapshot(pc, globals)
+                .preferencesForMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
+    }
+
+    @Test
+    public void startupModeOverrideFailsClosedWithoutChangingDurableRecord() {
+        assertTrue(store.edit(pc, app)
+                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .commit());
+        XrSessionSettingsController controller = new XrSessionSettingsController(
+                store, pc, app, globals, store.snapshot(pc, globals),
+                SessionSettingsStore.PresenterMode.NORMAL);
+
+        assertEquals(SessionSettingsStore.PresenterMode.NORMAL, controller.getStartupMode());
+        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                store.getCurrentSession(pc).getLastSuccessfulMode());
+    }
+
+    @Test
+    public void resumedWideRawH264RecordGetsOneTimeStartupRepair() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "neverh265")
+                .commit());
+        assertTrue(store.edit(pc, app)
+                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                        "3840x2160", "1920x1080")
+                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .commit());
+
+        XrSessionSettingsController controller = controller();
+
+        assertTrue(controller.hasStartupCodecCompatibilityAdjustment());
+        assertEquals("forceh265", controller.getStartupPreferences().getString(
+                PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, null));
+        assertTrue(controller.commitPending());
+        assertFalse(controller().hasStartupCodecCompatibilityAdjustment());
+    }
+
+    @Test
     public void automaticModeReconnectCommitsEveryStagedSettingAtomically() {
         XrSessionSettingsController controller = controller();
         stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,

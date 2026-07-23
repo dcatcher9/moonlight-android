@@ -2,6 +2,7 @@ package com.limelight.ui;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -205,6 +206,8 @@ public class XrStreamPresenter {
     private final StatsVisibilityListener statsVisibilityListener;
     private ControlActionListener controlActionListener;
     private final XrViewStateStore viewStateStore;
+    /** Apply-only handoff. Pose is intentionally not a durable per-PC preference. */
+    private final XrReconnectViewState reconnectViewState;
 
     private Session session;
     private SurfaceEntity surfaceEntity;
@@ -360,6 +363,13 @@ public class XrStreamPresenter {
         return isHostDepthPresenterMode(previousMode) != isHostDepthPresenterMode(nextMode);
     }
 
+    /** Raw uses a different negotiated base width, so it cannot share the live-switch path. */
+    static boolean requiresReconnectBeforeModeSwitch(
+            PresenterMode previousMode, PresenterMode nextMode) {
+        return (previousMode == PresenterMode.HOST_SBS_RAW)
+                != (nextMode == PresenterMode.HOST_SBS_RAW);
+    }
+
     /** True only when the decoder target or encoded dimensions change across the transition. */
     static boolean requiresDecoderTransition(PresenterMode previousMode, PresenterMode nextMode) {
         boolean crossesClientRenderer = (previousMode == PresenterMode.CLIENT_SBS_AI)
@@ -468,14 +478,8 @@ public class XrStreamPresenter {
      *  decoder confirms that the initial stream frame has reached the XR surface. */
     private boolean streamPresentationReady;
 
-    // Quad aspect ratios (width/height) for the presentations, so the image isn't stretched.
-    //  - fullAspect = w/h: the whole frame shown to both eyes (Normal/MONO), and the per-eye view
-    //    in Host SBS AI and Client SBS AI, whose packed frame is a
-    //    proportionally-scaled 2D so each eye keeps the 2D aspect.
-    //  - perEyeAspect: Raw host SBS only — its packed frame is a fixed 2W-wide side-by-side at the
-    //    negotiated width, so each eye is half as wide, (w/2)/h. (For the depth modes this is set
-    //    equal to fullAspect; see init.)
-    private float perEyeAspect;
+    // Logical resolution is per eye for every stereo mode, so the physical quad always keeps the
+    // selected W/H aspect even when the encoded buffer is packed at 2W x H.
     private float fullAspect;
     /** Kept so the resize affordance's bounds can be re-derived for the active mode's aspect. */
     private ResizableComponent resizable;
@@ -502,6 +506,13 @@ public class XrStreamPresenter {
         this.clientSbsModeSettingsModel = initialClientSbsModeSettingsModel(prefConfig);
         this.viewStateStore = new XrViewStateStore(activity, activity.getIntent());
         restoreViewState();
+        this.reconnectViewState = XrReconnectViewState.consumeFrom(activity.getIntent());
+        if (reconnectViewState != null) {
+            panelHeightMeters = reconnectViewState.panelHeightMeters;
+            LimeLog.info("XR: applying reconnect view handoff at height "
+                    + panelHeightMeters + " m"
+                    + (reconnectViewState.realWorldPose != null ? " with pose" : ""));
+        }
         // On a host-confirmed resume, restore direct Host/Raw presentation immediately. Client SBS
         // is deferred until after frame 1 because it requires a live decoder-to-GL handoff. A
         // fresh connection's state store returns Normal regardless of any older saved mode.
@@ -751,14 +762,10 @@ public class XrStreamPresenter {
         // selectMode
         // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
         //
-        // Quad aspect handling differs by host-SBS flavor:
-        //  - Host SBS AI: starts 2D (W x H) and switches to a packed SBS that is a
-        //    proportionally-scaled 2D, so the per-eye aspect equals the 2D aspect (full == per-eye);
-        //    the surface is re-pinned per mode (see setHostSurfaceSize).
-        //  - Raw host SBS: the frame is an already-packed 2W-wide side-by-side at the negotiated
-        //    width, so MONO shows the whole w/h frame and SBS shows each eye a half-width slot.
+        // Every mode's selected W x H is a logical per-eye resolution. Raw SBS negotiates an exact
+        // 2W x H buffer, while Host SBS AI creates its codec-capped packed buffer on the host.
+        // SceneCore therefore uses W/H for the physical quad in every mode.
         fullAspect = (float) prefConfig.width / prefConfig.height;
-        perEyeAspect = prefConfig.isHostDoubledWidthMode() ? fullAspect : (fullAspect / 2.0f);
         float panelWidthMeters = panelHeightMeters * aspectFor(currentPresenterMode);
         SurfaceEntity.Shape quad =
                 new SurfaceEntity.Shape.Quad(new FloatSize2d(panelWidthMeters, panelHeightMeters));
@@ -774,19 +781,36 @@ public class XrStreamPresenter {
                 stereoModeFor(currentPresenterMode),
                 SurfaceEntity.SuperSampling.NONE);
 
-        // A saved Host SBS AI preference asks Apollo to start packed SBS in the launch/resume HTTP
-        // transaction, so frame 1 must already target the matching packed surface size.
-        // Raw SBS uses the negotiated W x H frame and only changes compositor interpretation.
-        if (isHostDepthPresenterMode(currentPresenterMode)) {
-            surfaceEntity.setSurfacePixelDimensions(
-                    new IntSize2d(hostSbsPackedWidth(), hostSbsPackedHeight()));
-        } else {
-            surfaceEntity.setSurfacePixelDimensions(new IntSize2d(prefConfig.width, prefConfig.height));
-        }
+        // Frame 1 must target the exact startup buffer: codec-capped packed Host AI, exact 2W Raw,
+        // or ordinary W x H for Normal/Client.
+        int[] initialPixelDimensions = initialSurfacePixelDimensions(
+                currentPresenterMode, prefConfig.width, prefConfig.height, hostSbsVideoFormat);
+        surfaceEntity.setSurfacePixelDimensions(
+                new IntSize2d(initialPixelDimensions[0], initialPixelDimensions[1]));
         // Parent to the activity space (the rendered scene root) and make visibility explicit.
         // Without the explicit parent the entity isn't attached to the rendered scene graph, so the
         // quad never appears even though its surface is being fed/consumed.
         surfaceEntity.setParent(scene.getActivitySpace());
+        if (reconnectViewState != null) {
+            try {
+                float parentWorldScaleY = scene.getActivitySpace()
+                        .getNonUniformScale(Space.REAL_WORLD).getY();
+                panelHeightMeters = XrReconnectViewState.localHeight(
+                        reconnectViewState.panelHeightMeters, parentWorldScaleY);
+                surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(
+                        panelHeightMeters * aspectFor(currentPresenterMode),
+                        panelHeightMeters)));
+            } catch (Throwable error) {
+                LimeLog.warning("XR: reconnect world-scale restore failed: " + error);
+            }
+        }
+        if (reconnectViewState != null && reconnectViewState.realWorldPose != null) {
+            try {
+                surfaceEntity.setPose(reconnectViewState.realWorldPose, Space.REAL_WORLD);
+            } catch (Throwable error) {
+                LimeLog.warning("XR: reconnect pose restore failed: " + error);
+            }
+        }
         surfaceEntity.setEnabled(true);
         surfaceEntity.setAlpha(1.0f);
         LimeLog.info("XR: SurfaceEntity created; dimensions=" + surfaceEntity.getDimensions());
@@ -1358,6 +1382,16 @@ public class XrStreamPresenter {
             applyControlUiState(true, "mode tile");
         }
         if (action == XrControlUiState.ModeTileAction.SELECT_MODE) {
+            if (requiresReconnectBeforeModeSwitch(
+                    currentPresenterMode, item.selectsMode)) {
+                // Raw's negotiated base frame is already packed at 2W. Never feed that frame into
+                // Client AI or ask Host AI to double it again. Commit the target first and let the
+                // replacement connection start with the correct transport dimensions.
+                LimeLog.info("XR: reconnecting before Raw SBS transport boundary "
+                        + currentPresenterMode + " -> " + item.selectsMode);
+                controlActionListener.onPresentationModeCommitted(item.selectsMode);
+                return;
+            }
             selectMode(item);
         }
     }
@@ -3823,6 +3857,45 @@ public class XrStreamPresenter {
         viewStateStore.saveHeight(panelHeightMeters);
     }
 
+    /**
+     * Snapshots the live rendered geometry before Apply tears down SceneCore. The replacement
+     * Activity consumes this transient Intent state, preserving both physical size and apparent
+     * size from the screen's real-world distance.
+     */
+    public void captureReconnectViewState(Intent reconnectIntent) {
+        float shapeHeight = panelHeightMeters;
+        float realWorldScaleY = 1.0f;
+        Pose realWorldPose = null;
+        if (surfaceEntity != null && !surfaceEntity.isDisposed()) {
+            try {
+                SurfaceEntity.Shape shape = surfaceEntity.getShape();
+                if (shape instanceof SurfaceEntity.Shape.Quad) {
+                    shapeHeight = ((SurfaceEntity.Shape.Quad) shape)
+                            .getExtents().getHeight();
+                } else {
+                    shapeHeight = surfaceEntity.getDimensions().getHeight();
+                }
+                realWorldScaleY = surfaceEntity.getNonUniformScale(Space.REAL_WORLD).getY();
+            } catch (Throwable error) {
+                LimeLog.warning("XR: reconnect size snapshot failed: " + error);
+            }
+            try {
+                realWorldPose = surfaceEntity.getPose(Space.REAL_WORLD);
+            } catch (Throwable error) {
+                LimeLog.warning("XR: reconnect pose snapshot failed: " + error);
+            }
+        }
+
+        panelHeightMeters = XrReconnectViewState.effectiveHeight(
+                shapeHeight, realWorldScaleY, panelHeightMeters);
+        viewStateStore.saveHeight(panelHeightMeters);
+        new XrReconnectViewState(panelHeightMeters, realWorldPose)
+                .writeTo(reconnectIntent);
+        LimeLog.info("XR: captured reconnect view at height "
+                + panelHeightMeters + " m"
+                + (realWorldPose != null ? " with real-world pose" : ""));
+    }
+
     /** Host mode that must be part of launch/resume so decoder frame 1 matches the XR surface. */
     public int getInitialHostSbsWireMode() {
         return XrViewStateStore.desiredHostSbsWireMode(
@@ -3863,17 +3936,13 @@ public class XrStreamPresenter {
                 (lt.getZ() + rt.getZ()) / 2.0f), left.getRotation());
     }
 
-    /** Quad aspect (width/height). Only the host SBS presentation uses perEyeAspect, which differs
-     *  from fullAspect for Raw (half-width per eye); for Host SBS AI
-     *  perEyeAspect is set equal to fullAspect. Normal and Client SBS always use fullAspect, so the
-     *  quad keeps its physical size — only the surface resolution changes. */
+    /** Quad aspect (width/height). The configured resolution is logical per-eye in every mode. */
     private float aspectFor(PresenterMode mode) {
-        // Raw splits the host's single W-wide frame into two W/2 eyes -> half the aspect. Host SBS
-        // AI shows each eye a full-width per-eye view; Normal and Client show the full frame.
-        if (mode == PresenterMode.HOST_SBS_RAW) {
-            return fullAspect / 2.0f;
-        }
-        return isHostDepthPresenterMode(mode) ? perEyeAspect : fullAspect;
+        return presentationAspect(mode, fullAspect);
+    }
+
+    static float presentationAspect(PresenterMode mode, float logicalAspect) {
+        return logicalAspect;
     }
 
     private SurfaceEntity.StereoMode stereoModeFor(PresenterMode mode) {
@@ -4288,6 +4357,21 @@ public class XrStreamPresenter {
                 prefConfig.width, prefConfig.height, hostSbsVideoFormat)[1];
     }
 
+    static int[] initialSurfacePixelDimensions(PresenterMode mode,
+                                               int logicalWidth,
+                                               int logicalHeight,
+                                               int hostAiVideoFormat) {
+        if (mode == PresenterMode.HOST_SBS_RAW) {
+            return PreferenceConfiguration.rawSbsPackedDimensions(
+                    logicalWidth, logicalHeight);
+        }
+        if (isHostDepthPresenterMode(mode)) {
+            return PreferenceConfiguration.hostSbsPackedDimensions(
+                    logicalWidth, logicalHeight, hostAiVideoFormat);
+        }
+        return new int[] {logicalWidth, logicalHeight};
+    }
+
     /** Re-pin the XR surface for a host presentation: the packed SBS frame ({@code 2W' x H'}) when a
      *  host depth mode's SBS is active, or the plain 2D frame ({@code W x H}) for NORMAL. Re-fetches
      *  the surface in case the resize re-creates it. Main-thread only (SceneCore is Activity-bound). */
@@ -4295,8 +4379,20 @@ public class XrStreamPresenter {
         if (surfaceEntity == null || surfaceEntity.isDisposed()) {
             return;
         }
-        int w = sbs ? hostSbsPackedWidth() : prefConfig.width;
-        int h = sbs ? hostSbsPackedHeight() : prefConfig.height;
+        int w;
+        int h;
+        if (sbs) {
+            w = hostSbsPackedWidth();
+            h = hostSbsPackedHeight();
+        } else if (currentPresenterMode == PresenterMode.HOST_SBS_RAW) {
+            int[] raw = PreferenceConfiguration.rawSbsPackedDimensions(
+                    prefConfig.width, prefConfig.height);
+            w = raw[0];
+            h = raw[1];
+        } else {
+            w = prefConfig.width;
+            h = prefConfig.height;
+        }
         surfaceEntity.setSurfacePixelDimensions(new IntSize2d(w, h));
         videoSurface = surfaceEntity.getSurface();
     }

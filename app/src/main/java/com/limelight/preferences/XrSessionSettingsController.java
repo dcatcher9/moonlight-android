@@ -24,6 +24,11 @@ import java.util.Objects;
  * the sole authority for turning those values into a StreamConfiguration.
  */
 public final class XrSessionSettingsController {
+    private static final String CODEC_AUTO = "auto";
+    private static final String CODEC_AV1 = "forceav1";
+    private static final String CODEC_HEVC = "forceh265";
+    private static final String CODEC_H264 = "neverh265";
+    private static final String MAX_RAW_SBS_RESOLUTION = "3840x2160";
     private static final List<Integer> BITRATES = Arrays.asList(
             10000, 20000, 30000, 40000, 60000, 80000, 100000,
             120000, 130000, 150000, 200000, 250000, 300000);
@@ -44,10 +49,14 @@ public final class XrSessionSettingsController {
     private static final List<SessionSettingsModel.Choice> VIDEO_RANGE_CHOICES = choices(
             choice("false", "Limited"), choice("true", "Full"));
     private static final List<SessionSettingsModel.Choice> CODEC_CHOICES = choices(
-            choice("auto", "Auto"),
-            choice("forceav1", "AV1"),
-            choice("forceh265", "HEVC"),
-            choice("neverh265", "H.264"));
+            choice(CODEC_AUTO, "Auto"),
+            choice(CODEC_AV1, "AV1"),
+            choice(CODEC_HEVC, "HEVC"),
+            choice(CODEC_H264, "H.264"));
+    private static final List<SessionSettingsModel.Choice> WIDE_CODEC_CHOICES = choices(
+            choice(CODEC_AUTO, "Auto"),
+            choice(CODEC_AV1, "AV1"),
+            choice(CODEC_HEVC, "HEVC"));
     private static final List<SessionSettingsModel.Choice> PACING_CHOICES = choices(
             choice("latency", "Latency"),
             choice("balanced", "Balanced"),
@@ -113,6 +122,7 @@ public final class XrSessionSettingsController {
     private final SessionSettingsStore.PresenterMode startupMode;
     private final StreamQualityTuple liveStreamQuality;
     private final SharedPreferences startupPreferences;
+    private final boolean startupCodecCompatibilityAdjusted;
     private SessionSettingsStore.PresenterMode selectedMode;
     private String appliedClientModel;
     private String pendingClientModel;
@@ -126,6 +136,21 @@ public final class XrSessionSettingsController {
                                        SessionSettingsStore.AppIdentity app,
                                        SharedPreferences globalPreferences,
                                        SessionSettingsStore.Snapshot snapshot) {
+        this(store, pc, app, globalPreferences, snapshot, null);
+    }
+
+    /**
+     * Builds the current-session model, optionally forcing a safe in-memory startup mode when a
+     * guarded repair could not be persisted. The durable record remains the source for every
+     * ordinary launch.
+     */
+    public XrSessionSettingsController(
+            SessionSettingsStore store,
+            SessionSettingsStore.PcIdentity pc,
+            SessionSettingsStore.AppIdentity app,
+            SharedPreferences globalPreferences,
+            SessionSettingsStore.Snapshot snapshot,
+            SessionSettingsStore.PresenterMode startupModeOverride) {
         this.store = Objects.requireNonNull(store, "store");
         this.pc = Objects.requireNonNull(pc, "pc");
         this.app = Objects.requireNonNull(app, "app");
@@ -190,15 +215,23 @@ public final class XrSessionSettingsController {
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING)
                 ? SessionSettingsModel.Source.CURRENT_SESSION
                 : SessionSettingsModel.Source.GLOBAL;
-        startupMode = snapshot.getRecord() != null
-                ? snapshot.getRecord().getLastSuccessfulMode()
-                : SessionSettingsStore.PresenterMode.NORMAL;
+        startupMode = startupModeOverride != null
+                ? startupModeOverride
+                : snapshot.getRecord() != null
+                        ? snapshot.getRecord().getLastSuccessfulMode()
+                        : SessionSettingsStore.PresenterMode.NORMAL;
         selectedMode = startupMode;
         liveStreamQuality = qualityTuple(appliedModeQuality.get(startupMode));
-        startupPreferences = snapshot.preferencesForModeWithOverrides(startupMode,
-                Collections.singletonMap(
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                        appliedClientModel));
+        startupCodecCompatibilityAdjusted = ensureSelectedRawCodecCompatibility();
+        Map<String, Object> startupOverrides = new java.util.HashMap<>();
+        startupOverrides.put(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                appliedClientModel);
+        if (startupCodecCompatibilityAdjusted) {
+            startupOverrides.put(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING,
+                    pendingSharedValues.get(SessionSettingsModel.Key.CODEC));
+        }
+        startupPreferences = snapshot.preferencesForModeWithOverrides(
+                startupMode, startupOverrides);
 
     }
 
@@ -226,7 +259,8 @@ public final class XrSessionSettingsController {
         EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
         ModeStreamQualityModel.Builder builder = ModeStreamQualityModel.builder(
                 qualityTuple(applied), qualityTuple(pending), liveStreamQuality,
-                mode == selectedMode);
+                mode == selectedMode)
+                .setTransportReconnectRequired(crossesRawTransportBoundary(mode));
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
             if (key.isModeStreamQuality()) {
                 builder.put(key, valueForModel(key, applied.get(key), pending.get(key),
@@ -249,13 +283,43 @@ public final class XrSessionSettingsController {
         return selectedMode;
     }
 
+    /** True when an old Raw >4K transport record forced H.264 and needs a one-time HEVC repair. */
+    public boolean hasStartupCodecCompatibilityAdjustment() {
+        return startupCodecCompatibilityAdjusted;
+    }
+
     public StreamQualityTuple getLiveStreamQuality() {
         return liveStreamQuality;
+    }
+
+    /** Whether the pending Raw per-eye tuple fits the exact packed host transport. */
+    public boolean isRawSbsTransportSupported() {
+        int[] dimensions = parseResolution((String) pendingModeQuality.get(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW).get(
+                SessionSettingsModel.Key.RESOLUTION));
+        return PreferenceConfiguration.isRawSbsTransportSupported(
+                dimensions[0], dimensions[1]);
+    }
+
+    /**
+     * Repairs an inherited custom Raw tuple that cannot be packed exactly. The XR picker itself
+     * already tops out at 4K; this path handles legacy/global custom values without trapping the
+     * user outside Raw's settings pane.
+     */
+    public boolean constrainRawSbsTransportToSupportedPreset() {
+        if (isRawSbsTransportSupported()) {
+            return false;
+        }
+        pendingModeQuality.get(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .put(SessionSettingsModel.Key.RESOLUTION, MAX_RAW_SBS_RESOLUTION);
+        stageDefaultBitrate(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        return true;
     }
 
     /** Updates model state only. The caller decides when to perform Apply & reconnect. */
     public void selectPresentationMode(SessionSettingsStore.PresenterMode mode) {
         selectedMode = Objects.requireNonNull(mode, "mode");
+        ensureSelectedRawCodecCompatibility();
     }
 
     public ClientSbsModeSettingsModel getClientSbsModel() {
@@ -293,7 +357,7 @@ public final class XrSessionSettingsController {
                         !((Boolean) pendingSharedValues.get(key))));
                 break;
             case CODEC:
-                selectSharedSetting(key, nextChoiceId(CODEC_CHOICES,
+                selectSharedSetting(key, nextChoiceId(codecChoicesForSelectedMode(),
                         choiceId(key, pendingSharedValues.get(key))));
                 break;
             case FRAME_PACING:
@@ -357,6 +421,7 @@ public final class XrSessionSettingsController {
             return;
         }
         pendingSharedValues.put(key, selectedValue);
+        ensureSelectedRawCodecCompatibility();
     }
 
     public void selectModeQualitySetting(SessionSettingsStore.PresenterMode mode,
@@ -383,6 +448,9 @@ public final class XrSessionSettingsController {
                 || key == SessionSettingsModel.Key.FRAME_RATE) {
             stageDefaultBitrate(mode);
         }
+        if (mode == selectedMode) {
+            ensureSelectedRawCodecCompatibility();
+        }
     }
 
     public void useGlobalDefaults() {
@@ -399,6 +467,7 @@ public final class XrSessionSettingsController {
         copyValuesForScope(globalValues, pendingSharedValues, false);
         sharedInheritanceResetRequested = appliedSharedSources.containsValue(
                 SessionSettingsModel.Source.CURRENT_SESSION);
+        ensureSelectedRawCodecCompatibility();
     }
 
     /** Resets only one mode's quality tuple; Client SBS also resets its model family. */
@@ -418,6 +487,12 @@ public final class XrSessionSettingsController {
             pendingClientModel = globalClientModel;
             clientModelInheritanceResetRequested =
                     appliedClientModelSource == SessionSettingsModel.Source.CURRENT_SESSION;
+        }
+        if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            constrainRawSbsTransportToSupportedPreset();
+        }
+        if (mode == selectedMode) {
+            ensureSelectedRawCodecCompatibility();
         }
     }
 
@@ -441,6 +516,10 @@ public final class XrSessionSettingsController {
     public boolean commitPending() {
         if (expectedLocalSessionId == null) {
             return false;
+        }
+        if (selectedMode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            constrainRawSbsTransportToSupportedPreset();
+            ensureSelectedRawCodecCompatibility();
         }
         SessionSettingsStore.Editor editor = store.edit(pc, app, expectedLocalSessionId);
         for (Map.Entry<SessionSettingsModel.Key, String> entry : PREF_KEYS.entrySet()) {
@@ -467,12 +546,13 @@ public final class XrSessionSettingsController {
     }
 
     /**
-     * Returns whether the selected mode's staged quality tuple differs from the tuple currently
-     * backing the decoder. Callers use this only after the presentation surface handoff succeeds;
-     * an ordinary same-quality mode switch must remain live without restarting the connection.
+     * Returns whether the selected mode's staged quality tuple or transport geometry differs from
+     * the connection backing the live decoder. Raw SBS requests a {@code 2W x H} host stream, so
+     * entering or leaving it must reconnect even when its logical per-eye quality tuple is
+     * identical. Same-quality switches among the other modes remain live.
      */
     public boolean selectedModeRequiresReconnect() {
-        return !qualityTuple(pendingModeQuality.get(selectedMode)).equals(liveStreamQuality);
+        return modeRequiresReconnect(selectedMode);
     }
 
     public boolean hasPendingChanges() {
@@ -481,7 +561,7 @@ public final class XrSessionSettingsController {
                 || !modeInheritanceResetRequested.isEmpty()
                 || !pendingSharedValues.equals(appliedSharedValues)
                 || !pendingClientModel.equals(appliedClientModel)
-                || !qualityTuple(pendingModeQuality.get(selectedMode)).equals(liveStreamQuality)) {
+                || modeRequiresReconnect(selectedMode)) {
             return true;
         }
         for (SessionSettingsStore.PresenterMode mode
@@ -491,6 +571,44 @@ public final class XrSessionSettingsController {
             }
         }
         return false;
+    }
+
+    private boolean modeRequiresReconnect(SessionSettingsStore.PresenterMode mode) {
+        return crossesRawTransportBoundary(mode)
+                || !qualityTuple(pendingModeQuality.get(mode)).equals(liveStreamQuality);
+    }
+
+    private boolean crossesRawTransportBoundary(SessionSettingsStore.PresenterMode mode) {
+        return usesRawSbsTransport(startupMode) != usesRawSbsTransport(mode);
+    }
+
+    private static boolean usesRawSbsTransport(SessionSettingsStore.PresenterMode mode) {
+        return mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW;
+    }
+
+    /**
+     * H.264 cannot encode/decode a frame wider than 4096 here. Keep the setting simple by promoting
+     * an incompatible forced-H.264 Raw tuple to HEVC; Auto and AV1 remain valid choices.
+     */
+    private boolean ensureSelectedRawCodecCompatibility() {
+        if (!selectedRawRequiresWideCodec()
+                || !CODEC_H264.equals(
+                pendingSharedValues.get(SessionSettingsModel.Key.CODEC))) {
+            return false;
+        }
+        pendingSharedValues.put(SessionSettingsModel.Key.CODEC, CODEC_HEVC);
+        return true;
+    }
+
+    private boolean selectedRawRequiresWideCodec() {
+        if (selectedMode != SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            return false;
+        }
+        int[] dimensions = parseResolution((String) pendingModeQuality.get(selectedMode)
+                .get(SessionSettingsModel.Key.RESOLUTION));
+        return ((long) dimensions[0] * 2L)
+                > PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_H264
+                || dimensions[1] > PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_H264;
     }
 
     private void addSharedValues(SessionSettingsModel.Builder builder) {
@@ -606,13 +724,23 @@ public final class XrSessionSettingsController {
         return BITRATES.get(0);
     }
 
-    private static List<SessionSettingsModel.Choice> choicesFor(
+    private List<SessionSettingsModel.Choice> choicesFor(
             SessionSettingsModel.Key key, Object applied, Object pending) {
+        boolean restrictH264 = key == SessionSettingsModel.Key.CODEC
+                && selectedRawRequiresWideCodec();
         ArrayList<SessionSettingsModel.Choice> result =
-                new ArrayList<>(baseChoicesFor(key));
-        addCurrentChoice(result, key, applied);
-        addCurrentChoice(result, key, pending);
+                new ArrayList<>(restrictH264 ? WIDE_CODEC_CHOICES : baseChoicesFor(key));
+        if (!restrictH264 || !CODEC_H264.equals(choiceId(key, applied))) {
+            addCurrentChoice(result, key, applied);
+        }
+        if (!restrictH264 || !CODEC_H264.equals(choiceId(key, pending))) {
+            addCurrentChoice(result, key, pending);
+        }
         return result;
+    }
+
+    private List<SessionSettingsModel.Choice> codecChoicesForSelectedMode() {
+        return selectedRawRequiresWideCodec() ? WIDE_CODEC_CHOICES : CODEC_CHOICES;
     }
 
     private static List<SessionSettingsModel.Choice> baseChoicesFor(

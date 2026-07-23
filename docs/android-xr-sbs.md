@@ -14,8 +14,13 @@ headset's codec, Adreno, OpenCL, or SceneCore performance.
 `Game`, `StreamContainer`, and `XrStreamPresenter` maintain one active presentation owner:
 
 - **Normal** decodes directly into the SceneCore `SurfaceEntity` in mono mode.
-- **Host SBS Raw** decodes the host's packed SBS stream directly into the same entity with
-  `StereoMode.SIDE_BY_SIDE`.
+- **Host SBS Raw** treats its selected `W x H` resolution as a per-eye quality, negotiates an
+  untouched `2W x H` virtual desktop/stream from Apollo, and decodes that packed frame directly
+  into the same entity with `StereoMode.SIDE_BY_SIDE`. It is available only for a
+  virtual-display-backed launch, including Apollo's generated **Virtual Display** entry; a physical
+  desktop would only be aspect-fitted into a wide encoder surface rather than rendered at `2W`.
+  The logical per-eye width is limited to 4096 so the exact packed frame remains within the
+  8192-pixel HEVC/AV1 transport limit.
 - **Host SBS AI** uses the same direct stereo surface path; Apollo performs depth inference and SBS
   synthesis before encoding.
 - **Client SBS AI** decodes into an external-OES `SurfaceTexture`, runs the native LiteRT/GLES
@@ -33,11 +38,15 @@ requested `W x H` matched-color/per-eye target by upscaling that lower-resolutio
 Normal and both Host SBS modes are direct MediaCodec-to-SceneCore paths. Do not insert a GL bridge,
 copy, or Client SBS dependency into them.
 
-Normal and Host SBS Raw share the same negotiated decoder surface dimensions. Switching between
-them changes only SceneCore's mono/SBS interpretation; it must not resize or rebind MediaCodec.
-Only crossing the Host SBS AI packed-size boundary, or entering/leaving Client SBS ownership,
-requires a surface handoff. After a live `setOutputSurface()` handoff, reapply the requested surface
-frame rate because that metadata belongs to the replacement `Surface`.
+Raw SBS uses a different negotiated base width from every other mode. Entering or leaving Raw must
+commit the target mode and reconnect before changing SceneCore, MediaCodec, Client SBS ownership, or
+Apollo's Host AI wire mode. This prevents Client AI from consuming an already-packed `2W` frame and
+prevents Host AI from doubling an already-doubled base width. Live transitions among Normal, Host
+SBS AI, and Client SBS AI retain their guarded surface-handoff behavior. After a live
+`setOutputSurface()` handoff, reapply the requested surface frame rate because that metadata belongs
+to the replacement `Surface`. Artemis rejects Raw on a physical-capture session and directs the user
+to relaunch Apollo's Virtual Display instead of pretending that a wide aspect-fit is native `2W`
+rendering.
 
 The standard **Video frame pacing** list is the only decoder release-policy control. **Prefer lowest
 latency** nonblockingly drains ready MediaCodec outputs, discards superseded buffers, and immediately
@@ -374,11 +383,11 @@ Mode switches are guarded asynchronous surface handoffs. Keep the decoder target
 size/stereo mode, renderer generation, and entity visibility synchronized. A stale callback from a
 previous generation must not retarget the decoder or publish a depth result.
 
-Crossing Client SBS ownership or the Host SBS packed-size boundary also changes the decoder target
-or encoded dimensions. Before those transitions, close the compressed-frame gate and flush
+Crossing Client SBS ownership or the live Host SBS AI packed-size boundary changes the decoder
+target or encoded dimensions. Before those transitions, close the compressed-frame gate and flush
 MediaCodec through its all-thread recovery barrier. After the replacement surface is bound, request
-a new IDR and admit only a serial-newer IDR before reopening the gate. Normal and Raw SBS share the
-same decoder surface and dimensions, so switching between them must not flush or request an IDR.
+a new IDR and admit only a serial-newer IDR before reopening the gate. Raw SBS does not use this live
+path: every transition across its `2W x H` transport boundary reconnects first.
 
 On destroy or mode exit:
 
@@ -403,6 +412,9 @@ not duplicate Apollo's disconnect grace period with a client timer.
   tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
   required) succeeds.
 - Panel height is durable per machine and is restored independently of presentation mode.
+- Apply snapshots the live quad before SceneCore teardown and transiently hands its effective
+  height plus real-world pose to the replacement Activity. This preserves both physical size and
+  apparent size from the user's chosen distance; pose is not made a durable cross-session setting.
 - Transport, authentication, and pre-frame startup failures preserve the last successful mode;
   fresh launches still start Normal, and only a host-confirmed resume restores it.
 
@@ -420,10 +432,11 @@ rate, and bitrate**. Changing one mode's tuple never changes another mode. After
 handoff succeeds, selecting a mode whose saved or newly staged tuple differs from the tuple backing
 the live decoder automatically commits the complete staged session record and reconnects into the
 selected tuple. Committing the whole record ensures that shared or other-mode edits cannot be lost
-when the Activity is recreated. A same-tuple switch remains live and never restarts the connection;
-**Apply & reconnect** remains the explicit action when no mode-quality change already requires a
-restart. The Client SBS model is also mode-specific, and its aspect bucket is derived from the
-pending Client SBS resolution.
+when the Activity is recreated. A same-tuple switch among non-Raw modes remains live; entering or
+leaving Raw always reconnects because its logical `W x H` tuple maps to a `2W x H` transport.
+**Apply & reconnect** remains the explicit action when no mode-quality or transport change already
+requires a restart. The Client SBS model is also mode-specific, and its aspect bucket is derived
+from the pending Client SBS resolution.
 
 The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
 range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
@@ -684,7 +697,8 @@ For every mode/surface change, test:
   Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
 - Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
   A successfully selected mode whose tuple differs from the live decoder must reconnect into that
-  tuple automatically; a same-tuple switch must not reconnect. Any other staged edits must be
+  tuple automatically. Same-tuple non-Raw switches stay live, while every transition into or out
+  of Raw reconnects and negotiates the exact `2W x H` transport. Any other staged edits must be
   committed in the same atomic record before that automatic Activity recreation.
 - Normal and Host SBS remain direct and work when Client SBS initialization fails.
 - Test all six selectable models separately on Galaxy XR: the three canonical DA-V2 entries from

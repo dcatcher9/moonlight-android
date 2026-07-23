@@ -576,6 +576,8 @@
     <string name="xr_bar_normal">2D</string>
     <string name="xr_bar_client_sbs_ai">Client 3D</string>
     <string name="xr_bar_host_sbs_raw">Raw SBS</string>
+    <string name="xr_raw_requires_virtual_display">Raw SBS needs Apollo’s Virtual Display. Open Virtual Display from the Library, then select Raw SBS.</string>
+    <string name="xr_raw_resolution_adjusted">Raw SBS supports up to 4096 pixels per eye. This session was adjusted to 4K.</string>
     <string name="xr_bar_host_sbs_ai">Host 3D</string>
     <string name="xr_bar_machines">Machines</string>
     <string name="xr_home_subtitle">Choose a PC to open its XR application library.</string>

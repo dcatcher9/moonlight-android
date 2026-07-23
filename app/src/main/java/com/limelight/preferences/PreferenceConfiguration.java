@@ -255,6 +255,26 @@ public class PreferenceConfiguration {
         return new int[] {packedWidth, packedHeight};
     }
 
+    /**
+     * Raw SBS quality is expressed per eye. Unlike Host SBS AI, the host does not transform or
+     * codec-cap this frame: it renders the virtual display directly at {@code 2W x H}.
+     */
+    public static int[] rawSbsPackedDimensions(int eyeWidth, int eyeHeight) {
+        if (!isRawSbsTransportSupported(eyeWidth, eyeHeight)) {
+            throw new IllegalArgumentException(
+                    "Raw SBS exceeds the 8192-pixel transport limit: "
+                            + eyeWidth + "x" + eyeHeight);
+        }
+        return new int[] {eyeWidth * 2, eyeHeight};
+    }
+
+    public static boolean isRawSbsTransportSupported(int eyeWidth, int eyeHeight) {
+        return eyeWidth > 0
+                && eyeHeight > 0
+                && (long) eyeWidth * 2L <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1
+                && eyeHeight <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
+    }
+
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";

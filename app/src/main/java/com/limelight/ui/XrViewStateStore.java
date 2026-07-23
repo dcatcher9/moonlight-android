@@ -41,6 +41,7 @@ final class XrViewStateStore {
     private final SharedPreferences preferences;
     private final String key;
     private final boolean restorePresentationMode;
+    private final Mode startupModeOverride;
     private final SessionSettingsStore sessionSettingsStore;
     private final SessionSettingsStore.PcIdentity pcIdentity;
 
@@ -49,6 +50,7 @@ final class XrViewStateStore {
         key = buildKey(intent);
         restorePresentationMode = intent != null
                 && intent.getBooleanExtra(Game.EXTRA_RESUME_EXISTING_SESSION, false);
+        startupModeOverride = consumeStartupModeOverride(intent);
         sessionSettingsStore = new SessionSettingsStore(context);
         pcIdentity = buildPcIdentity(intent);
     }
@@ -62,7 +64,9 @@ final class XrViewStateStore {
         }
 
         Mode mode = Mode.NORMAL;
-        if (restorePresentationMode && pcIdentity != null) {
+        if (startupModeOverride != null) {
+            mode = startupModeOverride;
+        } else if (restorePresentationMode && pcIdentity != null) {
             SessionSettingsStore.SessionRecord record =
                     sessionSettingsStore.getCurrentSession(pcIdentity);
             if (record != null) {
@@ -74,6 +78,22 @@ final class XrViewStateStore {
             }
         }
         return new State(clampHeight(height), mode);
+    }
+
+    private static Mode consumeStartupModeOverride(Intent intent) {
+        if (intent == null) {
+            return null;
+        }
+        String value = intent.getStringExtra(Game.EXTRA_XR_STARTUP_MODE_OVERRIDE);
+        intent.removeExtra(Game.EXTRA_XR_STARTUP_MODE_OVERRIDE);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Mode.valueOf(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     void saveHeight(float panelHeightMeters) {

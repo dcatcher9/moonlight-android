@@ -2,6 +2,7 @@ package com.limelight.preferences;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 
 import com.limelight.nvstream.jni.MoonBridge;
 
@@ -36,5 +37,15 @@ public class HostSbsCodecGeometryTest {
         assertArrayEquals(new int[] {8192, 1728},
                 PreferenceConfiguration.hostSbsPackedDimensions(
                         5120, 2160, MoonBridge.VIDEO_FORMAT_AV1_MAIN8));
+    }
+
+    @Test
+    public void rawSbsUsesExactDoubleWidthWithinTransportLimit() {
+        assertArrayEquals(new int[] {7680, 2160},
+                PreferenceConfiguration.rawSbsPackedDimensions(3840, 2160));
+        assertArrayEquals(new int[] {8192, 2160},
+                PreferenceConfiguration.rawSbsPackedDimensions(4096, 2160));
+        assertThrows(IllegalArgumentException.class,
+                () -> PreferenceConfiguration.rawSbsPackedDimensions(5120, 2160));
     }
 }

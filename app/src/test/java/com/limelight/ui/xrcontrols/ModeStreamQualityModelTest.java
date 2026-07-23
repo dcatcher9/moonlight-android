@@ -32,6 +32,16 @@ public final class ModeStreamQualityModelTest {
     }
 
     @Test
+    public void selectedTransportBoundaryRequiresReconnectWithIdenticalLogicalTuple() {
+        ModeStreamQualityModel selected = model(LIVE, LIVE, LIVE, true, true);
+        ModeStreamQualityModel unselected = model(LIVE, LIVE, LIVE, false, true);
+
+        assertFalse(selected.hasPendingChanges());
+        assertTrue(selected.requiresReconnect());
+        assertFalse(unselected.requiresReconnect());
+    }
+
+    @Test
     public void builderRejectsSharedKeysAndIncompleteQuality() {
         ModeStreamQualityModel.Builder builder = ModeStreamQualityModel.builder(
                 LIVE, LIVE, LIVE, true);
@@ -44,7 +54,16 @@ public final class ModeStreamQualityModelTest {
                                                 StreamQualityTuple pending,
                                                 StreamQualityTuple live,
                                                 boolean selected) {
+        return model(applied, pending, live, selected, false);
+    }
+
+    private static ModeStreamQualityModel model(StreamQualityTuple applied,
+                                                StreamQualityTuple pending,
+                                                StreamQualityTuple live,
+                                                boolean selected,
+                                                boolean transportReconnectRequired) {
         return ModeStreamQualityModel.builder(applied, pending, live, selected)
+                .setTransportReconnectRequired(transportReconnectRequired)
                 .put(SessionSettingsModel.Key.RESOLUTION,
                         value(applied.resolution, pending.resolution))
                 .put(SessionSettingsModel.Key.FRAME_RATE,

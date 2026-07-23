@@ -12,13 +12,39 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class XrStreamPresenterTransitionTest {
     @Test
-    public void normalAndRawKeepTheSameHostSurfaceSize() {
-        assertFalse(XrStreamPresenter.requiresHostSurfaceResize(
+    public void rawBoundaryReconnectsBeforeAnyLiveSurfaceSwitch() {
+        assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.NORMAL,
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
-        assertFalse(XrStreamPresenter.requiresHostSurfaceResize(
+        assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
                 XrStreamPresenter.PresenterMode.NORMAL));
+        assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+        assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+    }
+
+    @Test
+    public void rawStartupUsesExactDoubleWidthAndLogicalPerEyeAspect() {
+        assertEquals(16.0f / 9.0f,
+                XrStreamPresenter.presentationAspect(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        16.0f / 9.0f),
+                0.0001f);
+        assertEquals(7680,
+                XrStreamPresenter.initialSurfacePixelDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264)[0]);
+        assertEquals(2160,
+                XrStreamPresenter.initialSurfacePixelDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264)[1]);
     }
 
     @Test

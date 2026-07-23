@@ -1,6 +1,7 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 
 import android.content.Context;
@@ -77,6 +78,19 @@ public class XrViewStateStoreTest {
         assertEquals(XrViewStateStore.Mode.NORMAL,
                 new XrViewStateStore(context, resumeIntent("machine-a", "app-b"))
                         .restore().presentationMode);
+    }
+
+    @Test
+    public void oneShotStartupOverrideFailsClosedToNormal() {
+        startSession("machine-a", "app-a");
+        setSessionMode("machine-a", "app-a",
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        Intent resume = resumeIntent("machine-a", "app-a")
+                .putExtra(Game.EXTRA_XR_STARTUP_MODE_OVERRIDE, "NORMAL");
+
+        assertEquals(XrViewStateStore.Mode.NORMAL,
+                new XrViewStateStore(context, resume).restore().presentationMode);
+        assertFalse(resume.hasExtra(Game.EXTRA_XR_STARTUP_MODE_OVERRIDE));
     }
 
     @Test

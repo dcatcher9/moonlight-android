@@ -9,8 +9,9 @@ import java.util.Objects;
  * Applied, staged, and live stream quality for one presentation mode.
  *
  * <p>{@link #requiresReconnect()} becomes true only for the selected mode when its pending tuple
- * differs from the tuple backing the live decoder connection. The Activity then atomically commits
- * the staged session record and reconnects after a successful presentation handoff.</p>
+ * differs from the tuple backing the live decoder connection, or when the presentation mode uses a
+ * different transport geometry. The Activity then atomically commits the staged session record and
+ * reconnects before entering a transport-incompatible mode.</p>
  */
 public final class ModeStreamQualityModel {
     private final Map<SessionSettingsModel.Key, SessionSettingsModel.Value> values;
@@ -18,16 +19,19 @@ public final class ModeStreamQualityModel {
     public final StreamQualityTuple pendingQuality;
     public final StreamQualityTuple liveQuality;
     public final boolean selected;
+    private final boolean transportReconnectRequired;
 
     private ModeStreamQualityModel(
             EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Value> values,
             StreamQualityTuple appliedQuality, StreamQualityTuple pendingQuality,
-            StreamQualityTuple liveQuality, boolean selected) {
+            StreamQualityTuple liveQuality, boolean selected,
+            boolean transportReconnectRequired) {
         this.values = Collections.unmodifiableMap(new EnumMap<>(values));
         this.appliedQuality = Objects.requireNonNull(appliedQuality, "appliedQuality");
         this.pendingQuality = Objects.requireNonNull(pendingQuality, "pendingQuality");
         this.liveQuality = Objects.requireNonNull(liveQuality, "liveQuality");
         this.selected = selected;
+        this.transportReconnectRequired = transportReconnectRequired;
     }
 
     public SessionSettingsModel.Value get(SessionSettingsModel.Key key) {
@@ -43,7 +47,8 @@ public final class ModeStreamQualityModel {
     }
 
     public boolean requiresReconnect() {
-        return selected && !liveQuality.equals(pendingQuality);
+        return selected
+                && (transportReconnectRequired || !liveQuality.equals(pendingQuality));
     }
 
     public static Builder builder(StreamQualityTuple appliedQuality,
@@ -60,6 +65,7 @@ public final class ModeStreamQualityModel {
         private final StreamQualityTuple pendingQuality;
         private final StreamQualityTuple liveQuality;
         private final boolean selected;
+        private boolean transportReconnectRequired;
 
         private Builder(StreamQualityTuple appliedQuality, StreamQualityTuple pendingQuality,
                         StreamQualityTuple liveQuality, boolean selected) {
@@ -67,6 +73,11 @@ public final class ModeStreamQualityModel {
             this.pendingQuality = Objects.requireNonNull(pendingQuality, "pendingQuality");
             this.liveQuality = Objects.requireNonNull(liveQuality, "liveQuality");
             this.selected = selected;
+        }
+
+        public Builder setTransportReconnectRequired(boolean required) {
+            transportReconnectRequired = required;
+            return this;
         }
 
         public Builder put(SessionSettingsModel.Key key,
@@ -86,7 +97,7 @@ public final class ModeStreamQualityModel {
                 }
             }
             return new ModeStreamQualityModel(values, appliedQuality, pendingQuality,
-                    liveQuality, selected);
+                    liveQuality, selected, transportReconnectRequired);
         }
     }
 }

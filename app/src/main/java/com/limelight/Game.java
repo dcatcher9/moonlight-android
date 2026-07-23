@@ -294,6 +294,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public static final String EXTRA_SERVER_CERT = "ServerCert";
     public static final String EXTRA_VDISPLAY = "VirtualDisplay";
     public static final String EXTRA_DISPLAY_ID = "DisplayID";
+    public static final String EXTRA_XR_STARTUP_MODE_OVERRIDE =
+            "XrStartupModeOverride";
+    private static final String APOLLO_VIRTUAL_DISPLAY_APP_NAME = "Virtual Display";
+    private static final String APOLLO_VIRTUAL_DISPLAY_APP_UUID =
+            "8902CB19-674A-403D-A587-41B092E900BA";
 
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
 
@@ -373,6 +378,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         String launchAppUuid = intent.getStringExtra(EXTRA_APP_UUID);
         int launchAppId = readAppId(intent);
         String publishedHostSessionId = intent.getStringExtra(EXTRA_HOST_SESSION_ID);
+        intent.removeExtra(EXTRA_XR_STARTUP_MODE_OVERRIDE);
 
         try {
             sessionPc = new SessionSettingsStore.PcIdentity(pcUuid, fallbackHost);
@@ -414,6 +420,46 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         SessionSettingsStore.Snapshot snapshot =
                 sessionSettingsStore.snapshot(sessionPc, globalPreferences);
+        SessionSettingsStore.PresenterMode startupModeOverride = null;
+        if (snapshot.getRecord() != null
+                && snapshot.getRecord().getLastSuccessfulMode()
+                == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            PreferenceConfiguration rawPreferences =
+                    PreferenceConfiguration.readPreferences(this,
+                            snapshot.preferencesForMode(
+                                    SessionSettingsStore.PresenterMode.HOST_SBS_RAW));
+            boolean virtualDisplayBacked = rawSbsHasVirtualDisplayBacking(
+                    intent.getBooleanExtra(EXTRA_VDISPLAY, false),
+                    launchAppName,
+                    launchAppUuid);
+            boolean transportSupported =
+                    PreferenceConfiguration.isRawSbsTransportSupported(
+                            rawPreferences.width, rawPreferences.height);
+            if (!virtualDisplayBacked || !transportSupported) {
+                LimeLog.warning(!virtualDisplayBacked
+                        ? "Raw SBS requires a virtual-display-backed host session; "
+                                + "restoring Normal for this physical capture"
+                        : "Raw SBS resolution exceeds the packed transport limit; "
+                                + "restoring Normal");
+                boolean repaired = sessionSettingsStore.edit(
+                                sessionPc, sessionApp,
+                                snapshot.getRecord().getLocalSessionId())
+                    .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.NORMAL)
+                    .commit();
+                if (repaired) {
+                    snapshot = sessionSettingsStore.snapshot(
+                            sessionPc, globalPreferences);
+                } else {
+                    // The guarded record changed or could not be written. Fail closed for this
+                    // launch even though the stale durable value still says Raw.
+                    startupModeOverride = SessionSettingsStore.PresenterMode.NORMAL;
+                    intent.putExtra(EXTRA_XR_STARTUP_MODE_OVERRIDE,
+                            SessionSettingsStore.PresenterMode.NORMAL.name());
+                    LimeLog.warning("Unable to persist the Raw SBS startup repair; "
+                            + "forcing Normal for this launch");
+                }
+            }
+        }
         sessionLocalSessionId = snapshot.getRecord() != null
                 ? snapshot.getRecord().getLocalSessionId() : null;
         SessionSettingsStore.ResumeMetadata resumeMetadata = snapshot.getRecord() != null
@@ -421,7 +467,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         sessionHostSessionId = resumeMetadata != null
                 ? resumeMetadata.getHostSessionId() : null;
         xrSessionSettingsController = new XrSessionSettingsController(
-                sessionSettingsStore, sessionPc, sessionApp, globalPreferences, snapshot);
+                sessionSettingsStore, sessionPc, sessionApp, globalPreferences, snapshot,
+                startupModeOverride);
+        if (xrSessionSettingsController.hasStartupCodecCompatibilityAdjustment()) {
+            LimeLog.warning("Raw SBS transport is wider than H.264 supports; "
+                    + "using HEVC for this session");
+            if (xrSessionSettingsController.commitPending()) {
+                snapshot = sessionSettingsStore.snapshot(sessionPc, globalPreferences);
+                xrSessionSettingsController = new XrSessionSettingsController(
+                        sessionSettingsStore, sessionPc, sessionApp,
+                        globalPreferences, snapshot);
+            } else {
+                LimeLog.warning("Unable to persist the Raw SBS HEVC compatibility adjustment");
+            }
+        }
 
         return xrSessionSettingsController.getStartupPreferences();
     }
@@ -530,6 +589,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void onPresentationModeCommitted(XrStreamPresenter.PresenterMode mode) {
                 SessionSettingsStore.PresenterMode selected = toSessionPresenterMode(mode);
+                if (selected == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+                    if (!rawSbsHasVirtualDisplayBacking(vDisplay, appName, appUUID)) {
+                        showCenteredStreamMessage(
+                                getString(R.string.xr_raw_requires_virtual_display),
+                                Toast.LENGTH_LONG);
+                        return;
+                    }
+                    if (xrSessionSettingsController
+                            .constrainRawSbsTransportToSupportedPreset()) {
+                        showCenteredStreamMessage(
+                                getString(R.string.xr_raw_resolution_adjusted),
+                                Toast.LENGTH_LONG);
+                    }
+                }
                 xrSessionSettingsController.selectPresentationMode(selected);
                 refreshXrSessionSettingsModels();
                 if (xrSessionSettingsController.selectedModeRequiresReconnect()) {
@@ -623,15 +696,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         reconnectScheduled = true;
         XrStreamPresenter presenter = streamContainer != null
                 ? streamContainer.getXrPresenter() : null;
-        if (presenter != null) {
-            presenter.setSessionControlsEnabled(false);
-        }
-        showCenteredStreamMessage(getString(R.string.xr_session_reconnecting),
-                Toast.LENGTH_SHORT);
         Intent reconnectIntent = new Intent(getIntent());
         reconnectIntent.setClass(this, Game.class);
         reconnectIntent.putExtra(EXTRA_RESUME_EXISTING_SESSION, true);
         reconnectIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        if (presenter != null) {
+            presenter.captureReconnectViewState(reconnectIntent);
+            presenter.setSessionControlsEnabled(false);
+        }
+        showCenteredStreamMessage(getString(R.string.xr_session_reconnecting),
+                Toast.LENGTH_SHORT);
 
         stopConnection();
         runAfterConnectionStop(() -> {
@@ -663,6 +737,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
      */
     static boolean shouldFinalizeStreamOnStop(boolean reconnectScheduled) {
         return !reconnectScheduled;
+    }
+
+    /**
+     * Maps a mode's logical quality to the dimensions negotiated with Apollo. Raw SBS stores one
+     * eye's {@code W x H}, but its untouched packed desktop is transported at {@code 2W x H}.
+     */
+    static int[] xrTransportDimensions(int logicalWidth, int logicalHeight,
+                                       SessionSettingsStore.PresenterMode mode) {
+        if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            return PreferenceConfiguration.rawSbsPackedDimensions(
+                    logicalWidth, logicalHeight);
+        }
+        return new int[] {logicalWidth, logicalHeight};
+    }
+
+    static boolean rawSbsHasVirtualDisplayBacking(
+            boolean virtualDisplayRequested, String appName, String appUuid) {
+        return virtualDisplayRequested
+                || (appName != null && APOLLO_VIRTUAL_DISPLAY_APP_NAME.equals(
+                appName.trim()))
+                || (appUuid != null && APOLLO_VIRTUAL_DISPLAY_APP_UUID.equalsIgnoreCase(
+                appUuid.trim()));
     }
 
     private static SessionSettingsStore.PresenterMode toSessionPresenterMode(
@@ -779,6 +875,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             displayWidth = shouldInvertDecoderResolution ? prefConfig.height : prefConfig.width;
             displayHeight = shouldInvertDecoderResolution ? prefConfig.width : prefConfig.height;
+            int[] transportDimensions = xrTransportDimensions(
+                    displayWidth, displayHeight,
+                    xrSessionSettingsController != null
+                            ? xrSessionSettingsController.getStartupMode()
+                            : SessionSettingsStore.PresenterMode.NORMAL);
+            displayWidth = transportDimensions[0];
+            displayHeight = transportDimensions[1];
+            LimeLog.info("XR transport resolution: logical "
+                    + prefConfig.width + "x" + prefConfig.height + ", encoded "
+                    + displayWidth + "x" + displayHeight);
 
             // Enter landscape unless we're on a square screen
             setPreferredOrientationForActivity();

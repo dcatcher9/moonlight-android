@@ -595,8 +595,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mRequestedEglDetachGeneration = 0;
         mCreatedEglAttachGeneration = 0;
         mExpectedEglOutputSurface = null;
-        // Client -> Normal/Raw goes directly to W x H; Client -> Host SBS AI goes directly to its
-        // packed target. There is no intermediate direct-decoder bind and second resize/handoff.
+        // Client -> Normal goes directly to W x H; Client -> Host SBS AI goes directly to its
+        // packed target. Raw transitions reconnect before reaching this live handoff path.
         mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
         Surface target = mXrPresenter.getVideoSurface();
         completeClientSbsSwitch(detachGeneration,
@@ -645,8 +645,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * ({@code W x H}) or the packed SBS frame ({@code 2W' x H'}) — and rebind the decoder to it.
      * Mirrors {@link #switchToClientSbs}'s dummy-surface handoff so MediaCodec never sees a
      * transient/garbage surface. The decoder's adaptive playback absorbs the host-driven
-     * resolution change that accompanies the switch. Only meaningful in the host depth modes
-     * (Host SBS AI, where the host doubles the width); Raw host SBS keeps a fixed-size frame.
+     * resolution change that accompanies the switch. Only meaningful in Host SBS AI; Raw SBS
+     * changes the negotiated base width and therefore reconnects before any live surface switch.
      */
     public boolean resizeHostSbsSurface(boolean sbs) {
         if (mXrPresenter == null || mDestroyed || mDummySurface == null
