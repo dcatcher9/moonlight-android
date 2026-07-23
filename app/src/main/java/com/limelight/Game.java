@@ -142,6 +142,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
 
@@ -480,8 +482,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (reconnectScheduled) {
                     return false;
                 }
-                xrSessionSettingsController.selectModeQualitySetting(
-                        toSessionPresenterMode(mode), key, choiceId);
+                try {
+                    xrSessionSettingsController.selectModeQualitySetting(
+                            toSessionPresenterMode(mode), key, choiceId);
+                }
+                catch (IllegalArgumentException e) {
+                    // A control update and a user gesture can cross on the main thread. Reject a
+                    // choice from the previous model instead of allowing stale UI state to crash
+                    // the streaming activity.
+                    LimeLog.warning("Rejected stale XR mode-quality choice "
+                            + key + "=" + choiceId + ": " + e.getMessage());
+                    refreshXrSessionSettingsModels();
+                    return false;
+                }
                 refreshXrSessionSettingsModels();
                 return true;
             }
@@ -991,44 +1004,45 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }));
         decoderRenderer.setPresentationModeTransitionListeners(
-                () -> runOnUiThread(() -> {
+                generation -> runOnUiThread(() -> {
                     if (streamContainer != null && streamContainer.getXrPresenter() != null) {
                         streamContainer.getXrPresenter()
-                                .onDecoderPresentationModeTransitionOpened();
+                                .onDecoderPresentationModeTransitionOpened(generation);
                     }
                 }),
-                () -> runOnUiThread(() -> {
+                generation -> runOnUiThread(() -> {
+                    boolean currentTransition = true;
                     if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                        streamContainer.getXrPresenter()
-                                .onDecoderPresentationModeTransitionTimedOut();
+                        currentTransition = streamContainer.getXrPresenter()
+                                .onDecoderPresentationModeTransitionTimedOut(generation);
                     }
-                    handleDecoderSurfaceSwitchFailure();
+                    if (currentTransition) {
+                        handleDecoderSurfaceSwitchFailure();
+                    }
                 }));
-        decoderRenderer.setActiveVideoFormatListener(videoFormat -> runOnUiThread(() -> {
-            if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().setHostSbsVideoFormat(videoFormat);
+        decoderRenderer.setActiveVideoFormatListener(videoFormat -> {
+            StreamContainer container = streamContainer;
+            if (container == null || container.getXrPresenter() == null) {
+                // Non-XR/legacy routes already installed their ordinary Surface. The
+                // codec-dependent SceneCore preparation is not applicable to them.
+                return;
             }
-        }));
+            // setup() invokes this before MediaCodec is configured. Complete SceneCore's
+            // codec-dependent Host-SBS resize synchronously, then replace the renderer's initial
+            // target so configure() cannot retain a Surface retired by that resize.
+            Surface preparedSurface = prepareHostSbsSurfaceForDecoder(videoFormat);
+            if (preparedSurface != null && preparedSurface.isValid()) {
+                decoderRenderer.setRenderTarget(preparedSurface);
+            } else {
+                // setup() rejects an invalid target after this listener returns. Never retain the
+                // pre-resize Surface when XR preparation failed or timed out.
+                decoderRenderer.setRenderTarget(null);
+            }
+        });
 
-// --- Force tight thresholds (prefConfig.forceTightThresholds) ---
-        try {
-            boolean forceTight = false;
-            if (prefConfig != null) {
-                try {
-                    java.lang.reflect.Field f = prefConfig.getClass().getDeclaredField("forceTightThresholds");
-                    f.setAccessible(true);
-                    Object v = f.get(prefConfig);
-                    if (v instanceof Boolean) forceTight = (Boolean) v;
-                } catch (Throwable ignored) {}
-            }
-            try { decoderRenderer.setForceTightThresholds(forceTight); } catch (Throwable ignored) {}
-            if (forceTight) {
-                LimeLog.info("ForceTightThresholds enabled: using vsync-based thresholds on all devices");
-            }
-        } catch (Throwable ignored) {}
-
-// Don't stream HDR if the decoder can't support it
-        if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
+// Don't stream HDR if the decoder for the preferred codec can't support it. A fallback codec's
+// Main10 profile must not keep HDR enabled when RTSP will prioritize an 8-bit forced codec.
+        if (willStreamHdr && !decoderRenderer.isPreferredMain10Hdr10Supported()) {
             willStreamHdr = false;
             Toast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
         }
@@ -1780,7 +1794,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // On M, we can explicitly set the optimal display mode
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Display.Mode bestMode = currentDisplay.getMode();
+            Display.Mode currentMode = currentDisplay.getMode();
+            Display.Mode bestMode = currentMode;
             boolean isNativeResolutionStream = PreferenceConfiguration.isNativeResolution(prefConfig.width, prefConfig.height);
             boolean refreshRateIsGood = isRefreshRateGoodMatch(bestMode.getRefreshRate());
             boolean refreshRateIsEqual = isRefreshRateEqualMatch(bestMode.getRefreshRate());
@@ -1798,7 +1813,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 LimeLog.info("Examining display mode: "+candidate.getPhysicalWidth()+"x"+
                         candidate.getPhysicalHeight()+"x"+candidate.getRefreshRate());
 
-                if (candidate.getPhysicalWidth() > 4096 && prefConfig.width <= 4096) {
+                if (shouldSkipWideDisplayMode(
+                        candidate.getPhysicalWidth(), candidate.getPhysicalHeight(),
+                        currentMode.getPhysicalWidth(), currentMode.getPhysicalHeight(),
+                        prefConfig.width)) {
                     // Avoid resolutions options above 4K to be safe
                     continue;
                 }
@@ -1807,8 +1825,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // 60 FPS, which may require a resolution reduction due to HDMI bandwidth limitations,
                 // or it's a native resolution stream.
                 if (prefConfig.width < 3840 && prefConfig.fps <= 60 && !isNativeResolutionStream) {
-                    if (currentDisplay.getMode().getPhysicalWidth() != candidate.getPhysicalWidth() ||
-                            currentDisplay.getMode().getPhysicalHeight() != candidate.getPhysicalHeight()) {
+                    if (currentMode.getPhysicalWidth() != candidate.getPhysicalWidth() ||
+                            currentMode.getPhysicalHeight() != candidate.getPhysicalHeight()) {
                         continue;
                     }
                 }
@@ -1869,14 +1887,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     bestMode.getPhysicalHeight()+"x"+bestMode.getRefreshRate());
 
             // Only apply new window layout parameters if we've actually changed the display mode
-            if (currentDisplay.getMode().getModeId() != bestMode.getModeId()) {
+            if (currentMode.getModeId() != bestMode.getModeId()) {
                 // If we only changed refresh rate and we're on an OS that supports Surface.setFrameRate()
                 // use that instead of using preferredDisplayModeId to avoid the possibility of triggering
                 // bugs that can cause the system to switch from 4K60 to 4K24 on Chromecast 4K.
                 if (prefConfig.enforceDisplayMode ||
                         Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                        currentDisplay.getMode().getPhysicalWidth() != bestMode.getPhysicalWidth() ||
-                        currentDisplay.getMode().getPhysicalHeight() != bestMode.getPhysicalHeight()) {
+                        currentMode.getPhysicalWidth() != bestMode.getPhysicalWidth() ||
+                        currentMode.getPhysicalHeight() != bestMode.getPhysicalHeight()) {
                     // Apply the display mode change
                     windowLayoutParams.preferredDisplayModeId = bestMode.getModeId();
                     getWindow().setAttributes(windowLayoutParams);
@@ -2094,11 +2112,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             String message = null;
             String selectedVideoFormat = "";
 
-            int averageEndToEndLat = decoderRenderer.getAverageEndToEndLatency();
+            int averageFrameDecodePipelineLat =
+                    decoderRenderer.getAverageFrameDecodePipelineLatency();
             int averageDecoderLat = decoderRenderer.getAverageDecoderLatency();
 
-            if (averageEndToEndLat > 0) {
-                message = getResources().getString(R.string.conn_client_latency) + " " + averageEndToEndLat + " ms";
+            if (averageFrameDecodePipelineLat > 0) {
+                message = getResources().getString(R.string.conn_client_latency)
+                        + " " + averageFrameDecodePipelineLat + " ms";
                 if (averageDecoderLat > 0) {
                     message += " (" + getResources().getString(R.string.conn_client_latency_hw) + " " + averageDecoderLat + " ms)";
                 }
@@ -3783,6 +3803,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
+    static boolean shouldSkipWideDisplayMode(int candidateWidth,
+                                             int candidateHeight,
+                                             int currentWidth,
+                                             int currentHeight,
+                                             int streamWidth) {
+        // XR compositor displays commonly expose a physical render target wider than 4K even for
+        // a 4K video surface. Permit refresh-only changes at that native geometry, but retain the
+        // legacy safety rule against switching a <=4K stream into a different ultrawide mode.
+        boolean refreshOnly = candidateWidth == currentWidth
+                && candidateHeight == currentHeight;
+        return candidateWidth > 4096 && streamWidth <= 4096 && !refreshOnly;
+    }
+
     private void stopConnection() {
         synchronized (connectionStopLock) {
             if (!connecting && !connected) {
@@ -4236,16 +4269,41 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
         if (!connecting && !connected) return;
+        runOnUiThread(() -> applyHdrModeChange(enabled, hdrMetadata));
+    }
+
+    private void applyHdrModeChange(boolean enabled, byte[] hdrMetadata) {
+        if ((!connecting && !connected) || decoderRenderer == null) {
+            return;
+        }
+        boolean transferChanged = streamHdrActive != enabled;
         LimeLog.info("Display HDR mode: " + (enabled ? "enabled" : "disabled"));
         streamHdrActive = enabled;
         streamHdrMaxContentLightLevel = enabled ? parseMaxContentLightLevel(hdrMetadata) : 0;
-        decoderRenderer.setHdrMode(enabled, hdrMetadata);
-        runOnUiThread(() -> {
-            if (isConnectionUiActive() && streamContainer != null
-                    && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onHdrModeChanged();
+
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        if (transferChanged && presenter != null
+                && presenter.canBeginClientSbsHdrTransition()) {
+            int transitionGeneration = decoderRenderer.beginPresentationModeTransition();
+            if (transitionGeneration > 0) {
+                if (presenter.beginClientSbsHdrTransition(enabled, transitionGeneration)) {
+                    // The existing decoder transition gate drops every pre-boundary output, while
+                    // the renderer remains hidden and transfer-pinned until its first post-IDR EGL
+                    // swap. The generation prevents a delayed completion from an earlier HDR flip
+                    // from opening this transaction.
+                    decoderRenderer.setHdrMode(enabled, hdrMetadata);
+                    decoderRenderer.completePresentationModeTransition();
+                    return;
+                }
+                decoderRenderer.cancelPresentationModeTransition();
             }
-        });
+        }
+
+        decoderRenderer.setHdrMode(enabled, hdrMetadata);
+        if (isConnectionUiActive() && presenter != null) {
+            presenter.onHdrModeChanged();
+        }
     }
 
     static int parseMaxContentLightLevel(byte[] hdrMetadata) {
@@ -4307,9 +4365,64 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return decoderRenderer != null && decoderRenderer.setOutputSurface(surface);
     }
 
-    public boolean beginDecoderPresentationModeTransition() {
+    /**
+     * SceneCore is Activity-bound, while DecoderRendererSetup runs on the connection thread.
+     * Serialize the codec-dependent initial Host-SBS resize onto main before setup continues.
+     */
+    private Surface prepareHostSbsSurfaceForDecoder(int videoFormat) {
+        StreamContainer container = streamContainer;
+        if (container == null) {
+            return null;
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return container.prepareHostSbsSurfaceForDecoder(videoFormat);
+        }
+
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicInteger state = new AtomicInteger(0); // 0=queued, 1=running, 2=cancelled, 3=done
+        Surface[] result = new Surface[1];
+        runOnUiThread(() -> {
+            if (!state.compareAndSet(0, 1)) {
+                completed.countDown();
+                return;
+            }
+            try {
+                if (streamContainer == container) {
+                    result[0] = container.prepareHostSbsSurfaceForDecoder(videoFormat);
+                }
+            } catch (RuntimeException error) {
+                LimeLog.severe("Host SBS startup surface preparation failed: " + error);
+            } finally {
+                state.set(3);
+                completed.countDown();
+            }
+        });
+
+        try {
+            if (!completed.await(2, TimeUnit.SECONDS)) {
+                if (state.compareAndSet(0, 2)) {
+                    LimeLog.severe("Timed out before Host SBS startup surface preparation began");
+                    return null;
+                }
+                // The main thread already entered the bounded SceneCore resize. Let that atomic
+                // operation finish instead of configuring MediaCodec against the retiring target.
+                if (!completed.await(2, TimeUnit.SECONDS)) {
+                    LimeLog.severe("Timed out during Host SBS startup surface preparation");
+                    return null;
+                }
+            }
+        } catch (InterruptedException error) {
+            state.compareAndSet(0, 2);
+            Thread.currentThread().interrupt();
+            LimeLog.severe("Interrupted during Host SBS startup surface preparation");
+            return null;
+        }
+        return result[0];
+    }
+
+    public int beginDecoderPresentationModeTransition() {
         return decoderRenderer != null
-                && decoderRenderer.beginPresentationModeTransition();
+                ? decoderRenderer.beginPresentationModeTransition() : 0;
     }
 
     public void completeDecoderPresentationModeTransition() {
@@ -4347,9 +4460,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return streamHdrMaxContentLightLevel;
     }
 
-    public int getStreamColorRange() {
+    public int getStreamEffectiveColorRange() {
         return decoderRenderer != null
-                ? decoderRenderer.getActualColorRange()
+                ? decoderRenderer.getEffectiveColorRange()
                 : MoonBridge.COLOR_RANGE_LIMITED;
     }
 

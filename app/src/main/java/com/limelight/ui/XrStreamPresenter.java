@@ -367,6 +367,82 @@ public class XrStreamPresenter {
         return crossesClientRenderer || requiresHostSurfaceResize(previousMode, nextMode);
     }
 
+    static boolean canSynchronizeClientSbsHdrTransition(
+            PresenterMode mode,
+            boolean streamReady,
+            boolean modeSwitchInProgress,
+            boolean hdrTransitionInProgress) {
+        return mode == PresenterMode.CLIENT_SBS_AI
+                && streamReady
+                && (!modeSwitchInProgress || hdrTransitionInProgress);
+    }
+
+    /**
+     * Binds decoder callbacks to the exact UI transaction that requested them. A newer transition
+     * supersedes the older generation before its posted main-thread callback can run.
+     */
+    static final class DecoderTransitionGenerationGate {
+        private int modeGeneration;
+        private int hdrGeneration;
+
+        boolean beginMode(int generation) {
+            if (generation <= 0) {
+                return false;
+            }
+            modeGeneration = generation;
+            hdrGeneration = 0;
+            return true;
+        }
+
+        boolean beginHdr(int generation) {
+            if (generation <= 0) {
+                return false;
+            }
+            hdrGeneration = generation;
+            modeGeneration = 0;
+            return true;
+        }
+
+        boolean dispatchModeIfCurrent(int generation, Runnable action) {
+            if (generation <= 0 || generation != modeGeneration || action == null) {
+                return false;
+            }
+            action.run();
+            return true;
+        }
+
+        boolean dispatchHdrIfCurrent(int generation, Runnable action) {
+            if (generation <= 0 || generation != hdrGeneration || action == null) {
+                return false;
+            }
+            action.run();
+            return true;
+        }
+
+        boolean dispatchAnyIfCurrent(int generation, Runnable action) {
+            if (generation <= 0
+                    || (generation != modeGeneration && generation != hdrGeneration)
+                    || action == null) {
+                return false;
+            }
+            action.run();
+            return true;
+        }
+
+        void clearMode() {
+            modeGeneration = 0;
+        }
+
+        void clearHdr() {
+            hdrGeneration = 0;
+        }
+
+        void clear() {
+            modeGeneration = 0;
+            hdrGeneration = 0;
+        }
+    }
+
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
     private PresenterMode currentPresenterMode = PresenterMode.NORMAL;
     /** A saved Client SBS presentation to re-apply once the decoder has produced a valid Normal
@@ -384,6 +460,10 @@ public class XrStreamPresenter {
     private boolean modeSwitchInProgress;
     /** Successful surface handoff awaiting the fresh-IDR output before it may be persisted/shown. */
     private PresenterMode pendingDecoderTransitionMode;
+    /** Client-SBS transfer flip awaiting a fresh decoder IDR and first new-format EGL swap. */
+    private boolean clientSbsHdrTransitionInProgress;
+    private final DecoderTransitionGenerationGate decoderTransitionGenerations =
+            new DecoderTransitionGenerationGate();
     /** Mode changes resize or hand off the decoder surface, so they remain disabled until the
      *  decoder confirms that the initial stream frame has reached the XR surface. */
     private boolean streamPresentationReady;
@@ -1867,13 +1947,14 @@ public class XrStreamPresenter {
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
         String bitrateId = qualityChoiceId(bitrate,
                 String.valueOf(model.pendingQuality.bitrateKbps));
-        if (!modeBitrateControl.setSelectedChoiceId(bitrateId)) {
-            modeBitrateControl.setChoices(choicesOrCurrent(bitrate, bitrateId), bitrateId,
-                    bitrate.pendingValue, choiceId ->
-                            controlActionListener.onModeQualitySettingSelected(mode,
-                                    SessionSettingsModel.Key.BITRATE, choiceId,
-                                    modeStreamQualityModels.get(mode)));
-        }
+        // Resolution and frame-rate changes can replace a computed custom bitrate (for example
+        // 4K90 -> 1080p90 -> 1080p30 briefly introduces 24 Mbps, then selects 10 Mbps). Always
+        // replace the complete choice model so the slider cannot retain and emit the stale value.
+        modeBitrateControl.setChoices(choicesOrCurrent(bitrate, bitrateId), bitrateId,
+                bitrate.pendingValue, choiceId ->
+                        controlActionListener.onModeQualitySettingSelected(mode,
+                                SessionSettingsModel.Key.BITRATE, choiceId,
+                                modeStreamQualityModels.get(mode)));
         modeBitrateControl.setEnabled(sessionControlsEnabled);
         modeQualityCueView.setText(modeQualityCue(model));
         modeQualityCueView.setTextColor(model.requiresReconnect()
@@ -3416,14 +3497,17 @@ public class XrStreamPresenter {
         com.limelight.Game game = activity instanceof com.limelight.Game
                 ? (com.limelight.Game) activity : null;
         boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode);
-        if (decoderTransitionRequired
-                && (game == null || !game.beginDecoderPresentationModeTransition())) {
-            lastModeSwitchMs = 0;
-            modeSwitchInProgress = false;
-            updateGlancePanel();
-            revealDockTemporarily();
-            reportModeSwitchFailure("decoder could not prepare for the transition");
-            return;
+        if (decoderTransitionRequired) {
+            int transitionGeneration = game != null
+                    ? game.beginDecoderPresentationModeTransition() : 0;
+            if (!decoderTransitionGenerations.beginMode(transitionGeneration)) {
+                lastModeSwitchMs = 0;
+                modeSwitchInProgress = false;
+                updateGlancePanel();
+                revealDockTemporarily();
+                reportModeSwitchFailure("decoder could not prepare for the transition");
+                return;
+            }
         }
 
         // Honor the native send result before committing the UI. Otherwise a failed reliable
@@ -3488,6 +3572,7 @@ public class XrStreamPresenter {
         boolean surfaceUsable = surfaceEntity != null && !surfaceEntity.isDisposed();
         if (!surfaceSwitchSucceeded || !surfaceUsable) {
             modeSwitchInProgress = false;
+            decoderTransitionGenerations.clearMode();
             updateGlancePanel();
             revealDockTemporarily();
             if (activity instanceof com.limelight.Game) {
@@ -3543,17 +3628,45 @@ public class XrStreamPresenter {
     }
 
     /** Decoder callback: the fresh transition IDR is now being released to the target Surface. */
-    public void onDecoderPresentationModeTransitionOpened() {
+    public void onDecoderPresentationModeTransitionOpened(int transitionGeneration) {
         PresenterMode pendingMode = pendingDecoderTransitionMode;
-        if (pendingMode == null) {
+        if (pendingMode != null) {
+            if (!decoderTransitionGenerations.dispatchModeIfCurrent(
+                    transitionGeneration, () -> finishPendingModeTransition(pendingMode))) {
+                LimeLog.warning("XR: ignoring superseded decoder completion generation "
+                        + transitionGeneration + " for mode " + pendingMode);
+            }
             return;
         }
+
+        if (clientSbsHdrTransitionInProgress) {
+            if (!decoderTransitionGenerations.dispatchHdrIfCurrent(
+                    transitionGeneration, this::openClientSbsHdrTransition)) {
+                LimeLog.warning("XR: ignoring superseded Client SBS HDR completion generation "
+                        + transitionGeneration);
+            }
+            return;
+        }
+
+        // A failed host control send can still complete the decoder flush on the unchanged
+        // Surface. Consume only the matching transaction and do not let it affect a later switch.
+        if (decoderTransitionGenerations.dispatchModeIfCurrent(
+                transitionGeneration, decoderTransitionGenerations::clearMode)) {
+            LimeLog.info("XR: completed decoder recovery for an aborted mode switch");
+        } else {
+            LimeLog.warning("XR: ignoring stale decoder completion generation "
+                    + transitionGeneration);
+        }
+    }
+
+    private void finishPendingModeTransition(PresenterMode pendingMode) {
         if (surfaceEntity == null || surfaceEntity.isDisposed()
                 || currentPresenterMode != pendingMode) {
             LimeLog.warning("XR: ignoring stale decoder transition completion for " + pendingMode);
             return;
         }
         pendingDecoderTransitionMode = null;
+        decoderTransitionGenerations.clearMode();
         surfaceEntity.setAlpha(1.0f);
         modeSwitchInProgress = false;
         persistPresentationState();
@@ -3563,14 +3676,68 @@ public class XrStreamPresenter {
         LimeLog.info("XR: fresh-IDR output completed mode " + pendingMode);
     }
 
+    private void openClientSbsHdrTransition() {
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        StreamContainer streamContainer = game != null
+                ? game.getStreamContainer() : null;
+        if (streamContainer == null) {
+            finishClientSbsHdrTransition(false);
+            return;
+        }
+
+        // The quad has remained hidden since the transition began. Install the target SceneCore
+        // interpretation before GL submits its first new-transfer buffer; setHdrInput() stays
+        // pinned until the renderer's generation commit below.
+        applyContentColorMetadata();
+        streamContainer.completeClientSbsHdrTransition(this::finishClientSbsHdrTransition);
+        LimeLog.info("XR: fresh-IDR output reached Client SBS HDR boundary; "
+                + "awaiting first new-format EGL swap");
+    }
+
     /** Decoder callback: preserve the last successful saved mode while the stream terminates. */
-    public void onDecoderPresentationModeTransitionTimedOut() {
-        if (pendingDecoderTransitionMode != null) {
-            LimeLog.severe("XR: mode " + pendingDecoderTransitionMode
-                    + " timed out before fresh-IDR output");
+    public boolean onDecoderPresentationModeTransitionTimedOut(int transitionGeneration) {
+        boolean current = decoderTransitionGenerations.dispatchAnyIfCurrent(
+                transitionGeneration, () -> {
+                    if (pendingDecoderTransitionMode != null) {
+                        LimeLog.severe("XR: mode " + pendingDecoderTransitionMode
+                                + " timed out before fresh-IDR output");
+                    } else if (clientSbsHdrTransitionInProgress) {
+                        LimeLog.severe("XR: Client SBS HDR transition timed out before "
+                                + "fresh-IDR output");
+                    } else {
+                        LimeLog.severe("XR: decoder recovery for an aborted mode switch timed out");
+                    }
+                });
+        if (!current) {
+            LimeLog.warning("XR: ignoring stale decoder timeout generation "
+                    + transitionGeneration);
         }
         // Keep both the pending mode and switch guard set while Game terminates the stream. This
         // prevents another tile tap and keeps onDestroy() from persisting the failed mode.
+        return current;
+    }
+
+    private void finishClientSbsHdrTransition(boolean success) {
+        if (!clientSbsHdrTransitionInProgress) {
+            return;
+        }
+        decoderTransitionGenerations.clearHdr();
+        if (!success || surfaceEntity == null || surfaceEntity.isDisposed()
+                || currentPresenterMode != PresenterMode.CLIENT_SBS_AI) {
+            LimeLog.severe("XR: Client SBS HDR transition failed before first output swap");
+            if (activity instanceof com.limelight.Game) {
+                ((com.limelight.Game) activity).handleDecoderSurfaceSwitchFailure();
+            }
+            return;
+        }
+
+        clientSbsHdrTransitionInProgress = false;
+        modeSwitchInProgress = false;
+        surfaceEntity.setAlpha(1.0f);
+        updateGlancePanel();
+        revealDockTemporarily();
+        LimeLog.info("XR: first frame-boundary-safe Client SBS HDR output is visible");
     }
 
     private static int wireModeFor(PresenterMode mode) {
@@ -3721,8 +3888,48 @@ public class XrStreamPresenter {
      */
     private boolean isColorMetadataExplicit = false;
 
+    public boolean canBeginClientSbsHdrTransition() {
+        return surfaceEntity != null && !surfaceEntity.isDisposed()
+                && canSynchronizeClientSbsHdrTransition(
+                currentPresenterMode,
+                streamPresentationReady,
+                modeSwitchInProgress,
+                clientSbsHdrTransitionInProgress);
+    }
+
+    /**
+     * Hide the retained old-transfer buffer and block Client-SBS capture before decoder recovery.
+     * A repeated host flip supersedes the pending target while keeping the quad hidden.
+     */
+    public boolean beginClientSbsHdrTransition(boolean enabled, int decoderTransitionGeneration) {
+        if (!canBeginClientSbsHdrTransition()
+                || decoderTransitionGeneration <= 0
+                || !(activity instanceof com.limelight.Game)) {
+            return false;
+        }
+        StreamContainer streamContainer =
+                ((com.limelight.Game) activity).getStreamContainer();
+        if (streamContainer == null
+                || !streamContainer.beginClientSbsHdrTransition(enabled)) {
+            return false;
+        }
+
+        decoderTransitionGenerations.beginHdr(decoderTransitionGeneration);
+        clientSbsHdrTransitionInProgress = true;
+        modeSwitchInProgress = true;
+        surfaceEntity.setAlpha(0.0f);
+        updateGlancePanel();
+        revealDockTemporarily();
+        LimeLog.info("XR: hiding Client SBS output until the "
+                + (enabled ? "HDR" : "SDR") + " frame boundary");
+        return true;
+    }
+
     /** Reapply color metadata immediately after a host SDR/HDR transition. Main thread only. */
     public void onHdrModeChanged() {
+        if (clientSbsHdrTransitionInProgress) {
+            return;
+        }
         applyContentColorMetadata();
     }
 
@@ -4046,10 +4253,26 @@ public class XrStreamPresenter {
 
     private int hostSbsVideoFormat = MoonBridge.VIDEO_FORMAT_H265;
 
+    static boolean hostSbsFormatChangeRequiresResize(
+            PresenterMode mode, int width, int height, int oldFormat, int newFormat) {
+        if (mode != PresenterMode.HOST_SBS_AI || oldFormat == newFormat) {
+            return false;
+        }
+        int[] oldDimensions = PreferenceConfiguration.hostSbsPackedDimensions(
+                width, height, oldFormat);
+        int[] newDimensions = PreferenceConfiguration.hostSbsPackedDimensions(
+                width, height, newFormat);
+        return oldDimensions[0] != newDimensions[0]
+                || oldDimensions[1] != newDimensions[1];
+    }
+
     /** Updates the host-SBS allocation from the codec actually selected by RTSP/MediaCodec. */
     public void setHostSbsVideoFormat(int videoFormat) {
+        boolean resizeRequired = hostSbsFormatChangeRequiresResize(
+                currentPresenterMode, prefConfig.width, prefConfig.height,
+                hostSbsVideoFormat, videoFormat);
         hostSbsVideoFormat = videoFormat;
-        if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
+        if (resizeRequired) {
             setHostSurfaceSize(true);
         }
     }
@@ -4156,6 +4379,9 @@ public class XrStreamPresenter {
         modeOptionsHost = null;
         auxiliaryContentHost = null;
         pendingDecoderTransitionMode = null;
+        clientSbsHdrTransitionInProgress = false;
+        modeSwitchInProgress = false;
+        decoderTransitionGenerations.clear();
         barItems.clear();
         controlUiState.close();
         session = null;

@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import android.media.MediaFormat;
+
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 
@@ -49,6 +51,58 @@ public class MediaCodecDecoderRendererTelemetryTest {
     public void directSubmitRemainsDisabledWhenCodecSupportsIt() {
         assertFalse(MediaCodecDecoderRenderer.shouldUseDirectSubmit(true));
         assertFalse(MediaCodecDecoderRenderer.shouldUseDirectSubmit(false));
+    }
+
+    @Test
+    public void inputBufferHangDeadlineIsEnforcedInsideTheDequeueLoop() {
+        assertFalse(MediaCodecDecoderRenderer.inputDequeueHangExpired(1_000, 5_999));
+        assertTrue(MediaCodecDecoderRenderer.inputDequeueHangExpired(1_000, 6_000));
+    }
+
+    @Test
+    public void absentDecoderColorRangeRemainsExplicitlyUnknown() {
+        MediaCodecDecoderRenderer.ActualColorRange range =
+                MediaCodecDecoderRenderer.resolveActualColorRange(null);
+
+        assertEquals(MediaCodecDecoderRenderer.ActualColorRange.UNKNOWN, range);
+        assertFalse(range.hasDecoderEvidence());
+        assertFalse(range.isKnown());
+    }
+
+    @Test
+    public void decoderColorRangeRequiresRecognizedOutputEvidence() {
+        MediaCodecDecoderRenderer.ActualColorRange full =
+                MediaCodecDecoderRenderer.resolveActualColorRange(MediaFormat.COLOR_RANGE_FULL);
+        MediaCodecDecoderRenderer.ActualColorRange limited =
+                MediaCodecDecoderRenderer.resolveActualColorRange(MediaFormat.COLOR_RANGE_LIMITED);
+        MediaCodecDecoderRenderer.ActualColorRange unrecognized =
+                MediaCodecDecoderRenderer.resolveActualColorRange(Integer.MAX_VALUE);
+
+        assertEquals(MediaCodecDecoderRenderer.ActualColorRange.FULL, full);
+        assertEquals(MediaCodecDecoderRenderer.ActualColorRange.LIMITED, limited);
+        assertEquals(MediaCodecDecoderRenderer.ActualColorRange.UNRECOGNIZED, unrecognized);
+        assertTrue(full.hasDecoderEvidence());
+        assertTrue(limited.hasDecoderEvidence());
+        assertTrue(unrecognized.hasDecoderEvidence());
+        assertTrue(full.isKnown());
+        assertTrue(limited.isKnown());
+        assertFalse(unrecognized.isKnown());
+    }
+
+    @Test
+    public void effectiveColorRangeMakesTheRequestedFallbackExplicit() {
+        assertEquals(MoonBridge.COLOR_RANGE_FULL,
+                MediaCodecDecoderRenderer.resolveEffectiveColorRange(
+                        MediaCodecDecoderRenderer.ActualColorRange.UNKNOWN,
+                        MoonBridge.COLOR_RANGE_FULL));
+        assertEquals(MoonBridge.COLOR_RANGE_LIMITED,
+                MediaCodecDecoderRenderer.resolveEffectiveColorRange(
+                        MediaCodecDecoderRenderer.ActualColorRange.UNRECOGNIZED,
+                        MoonBridge.COLOR_RANGE_LIMITED));
+        assertEquals(MoonBridge.COLOR_RANGE_LIMITED,
+                MediaCodecDecoderRenderer.resolveEffectiveColorRange(
+                        MediaCodecDecoderRenderer.ActualColorRange.LIMITED,
+                        MoonBridge.COLOR_RANGE_FULL));
     }
 
     @Test

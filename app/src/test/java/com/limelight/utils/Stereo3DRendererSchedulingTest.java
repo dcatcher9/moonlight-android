@@ -40,6 +40,37 @@ public class Stereo3DRendererSchedulingTest {
     }
 
     @Test
+    public void hdrTransitionBlocksUntilItsExactFreshFrameCommit() {
+        Stereo3DRenderer.HdrInputTransitionState state =
+                new Stereo3DRenderer.HdrInputTransitionState();
+
+        int hdrGeneration = state.begin(true);
+        assertTrue(state.isActive());
+        assertTrue(state.isBlockingFrames());
+        assertTrue(state.getTargetHdr());
+        assertFalse(state.commit(hdrGeneration + 1));
+        assertTrue(state.commit(hdrGeneration));
+        assertFalse(state.isBlockingFrames());
+        assertTrue(state.isCommitted(hdrGeneration));
+        assertTrue(state.finish(hdrGeneration));
+        assertFalse(state.isActive());
+    }
+
+    @Test
+    public void newerHdrTransitionSupersedesStaleCommitAndCompletion() {
+        Stereo3DRenderer.HdrInputTransitionState state =
+                new Stereo3DRenderer.HdrInputTransitionState();
+
+        int hdrGeneration = state.begin(true);
+        int sdrGeneration = state.begin(false);
+        assertFalse(state.getTargetHdr());
+        assertFalse(state.commit(hdrGeneration));
+        assertTrue(state.commit(sdrGeneration));
+        assertFalse(state.finish(hdrGeneration));
+        assertTrue(state.finish(sdrGeneration));
+    }
+
+    @Test
     public void shutdownControlWaitsForAFullQueueToDrain() throws Exception {
         BlockingQueue<String> queue = new ArrayBlockingQueue<>(1);
         assertTrue(queue.offer("frame"));

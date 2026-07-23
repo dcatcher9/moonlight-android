@@ -252,6 +252,35 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void chainedQualityChangesRemoveTransientComputedBitrate() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "3840x2160")
+                .putString(PreferenceConfiguration.FPS_PREF_STRING, "90")
+                .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 130000)
+                .commit());
+        XrSessionSettingsController controller = controller();
+        SessionSettingsStore.PresenterMode mode =
+                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI;
+
+        controller.selectModeQualitySetting(mode,
+                SessionSettingsModel.Key.RESOLUTION, "1920x1080");
+        SessionSettingsModel.Value bitrate = controller.getModeStreamQualityModel(mode)
+                .get(SessionSettingsModel.Key.BITRATE);
+        assertEquals("24000", bitrate.selectedChoiceId);
+        assertTrue(hasChoice(bitrate, "24000"));
+
+        controller.selectModeQualitySetting(mode,
+                SessionSettingsModel.Key.FRAME_RATE, "30");
+        bitrate = controller.getModeStreamQualityModel(mode)
+                .get(SessionSettingsModel.Key.BITRATE);
+        assertEquals("10000", bitrate.selectedChoiceId);
+        assertFalse(hasChoice(bitrate, "24000"));
+        assertThrows(IllegalArgumentException.class, () ->
+                controller.selectModeQualitySetting(mode,
+                        SessionSettingsModel.Key.BITRATE, "24000"));
+    }
+
+    @Test
     public void directSelectorsRejectUnknownIdsWithoutStagingChanges() {
         XrSessionSettingsController controller = controller();
 
@@ -631,5 +660,14 @@ public final class XrSessionSettingsControllerTest {
             }
         }
         throw new AssertionError("Missing choice: " + choiceId);
+    }
+
+    private static boolean hasChoice(SessionSettingsModel.Value value, String choiceId) {
+        for (SessionSettingsModel.Choice choice : value.choices) {
+            if (choice.id.equals(choiceId)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

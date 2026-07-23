@@ -47,11 +47,29 @@ import android.view.Choreographer;
 import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
-    // Force tight thresholds regardless of device refresh (use vsyncPeriodNs always)
-    private volatile boolean forceTightThresholds = false;
-    /** Toggle tight frame pacing thresholds globally. */
-    public void setForceTightThresholds(boolean v) { this.forceTightThresholds = v; }
-    // Toggle at runtime if needed
+    public enum ActualColorRange {
+        /** MediaCodec has not reported a usable output color range. */
+        UNKNOWN(false),
+        LIMITED(true),
+        FULL(true),
+        /** MediaCodec reported a color-range value that Android does not define. */
+        UNRECOGNIZED(true);
+
+        private final boolean decoderReported;
+
+        ActualColorRange(boolean decoderReported) {
+            this.decoderReported = decoderReported;
+        }
+
+        public boolean hasDecoderEvidence() {
+            return decoderReported;
+        }
+
+        public boolean isKnown() {
+            return this == LIMITED || this == FULL;
+        }
+    }
+
     // Expensive per-frame timing is opt-in. The Stats panel and explicit performance logging are
     // diagnostic tools; normal streaming must not pay for timestamp maps or their cross-thread
     // lock contention.
@@ -60,6 +78,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
     private static final int OUTPUT_DEQUEUE_TIMEOUT_US = 2000;
+    private static final int INPUT_DEQUEUE_HANG_TIMEOUT_MS = 5000;
     private static final String MEDIA_FORMAT_KEY_CROP_LEFT = "crop-left";
     private static final String MEDIA_FORMAT_KEY_CROP_TOP = "crop-top";
     private static final String MEDIA_FORMAT_KEY_CROP_RIGHT = "crop-right";
@@ -75,15 +94,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req",
             "vendor.rtc-ext-dec-low-latency.enable",
     };
-
-    private boolean isMinimumLatencyMode() {
-        return prefs != null
-                && prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
-    }
-
-    private int getOutputDequeueTimeoutUs() {
-        return isMinimumLatencyMode() ? 0 : OUTPUT_DEQUEUE_TIMEOUT_US;
-    }
 
     private void handleOutputFormatChanged() {
         LimeLog.info("Output format changed");
@@ -305,8 +315,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int modeTransitionWatchdogGeneration;
     private boolean modeTransitionWatchdogActive;
     private long modeTransitionWatchdogDeadlineMs;
-    private volatile Runnable modeTransitionOpenedListener;
-    private volatile Runnable modeTransitionTimedOutListener;
+    private int nextPresentationTransitionGeneration;
+    private int activePresentationTransitionGeneration;
+    private volatile IntConsumer modeTransitionOpenedListener;
+    private volatile IntConsumer modeTransitionTimedOutListener;
     private volatile IntConsumer activeVideoFormatListener;
     // Guarded by codecRecoveryMonitor. Presentation-mode recovery is expected and must not consume
     // the limited codec-error recovery budget.
@@ -492,7 +504,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // We need HEVC Main profile, so we could pass that constant to findProbableSafeDecoder, however
         // some decoders (at least Qualcomm's Snapdragon 805) don't properly report support
         // for even required levels of HEVC.
-        MediaCodecInfo hevcDecoderInfo = MediaCodecHelper.findProbableSafeDecoder("video/hevc", -1);
+        // Dedicated ".low_latency" components couple network drain to fragile synchronous codec
+        // behavior on Qualcomm XR devices. Use the standard HEVC component; we still request the
+        // platform low-latency feature through MediaFormat where the regular component supports it.
+        MediaCodecInfo hevcDecoderInfo =
+                MediaCodecHelper.findProbableSafeRegularDecoder("video/hevc", -1);
         if (hevcDecoderInfo != null) {
             if (!MediaCodecHelper.decoderIsWhitelistedForHevc(hevcDecoderInfo)) {
                 LimeLog.info("Found HEVC decoder, but it's not whitelisted - "+hevcDecoderInfo.getName());
@@ -568,7 +584,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /** Completion callbacks for the decoder side of an XR presentation-mode transaction. */
-    public void setPresentationModeTransitionListeners(Runnable opened, Runnable timedOut) {
+    public void setPresentationModeTransitionListeners(IntConsumer opened, IntConsumer timedOut) {
         modeTransitionOpenedListener = opened;
         modeTransitionTimedOutListener = timedOut;
     }
@@ -786,6 +802,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return false;
     }
 
+    static boolean isMain10Hdr10SupportedForPreference(
+            PreferenceConfiguration.FormatOption format,
+            boolean hevcMain10Supported,
+            boolean av1Main10Supported) {
+        switch (format) {
+            case FORCE_AV1:
+                return av1Main10Supported;
+            case AUTO:
+            case FORCE_HEVC:
+                return hevcMain10Supported;
+            case FORCE_H264:
+            default:
+                return false;
+        }
+    }
+
+    /** Main10 support for the codec this preference causes RTSP to prioritize. */
+    public boolean isPreferredMain10Hdr10Supported() {
+        return isMain10Hdr10SupportedForPreference(
+                prefs.videoFormat,
+                isHevcMain10Hdr10Supported(),
+                isAv1Main10Supported());
+    }
+
     public int getPreferredColorSpace() {
         // Default to Rec 709 which is probably better supported on modern devices.
         //
@@ -811,23 +851,72 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    public int getActualColorRange() {
-        if (outputFormat != null && outputFormat.containsKey(MediaFormat.KEY_COLOR_RANGE)) {
-            int range = outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE);
-            if (range == MediaFormat.COLOR_RANGE_FULL) {
-                return MoonBridge.COLOR_RANGE_FULL;
-            } else if (range == MediaFormat.COLOR_RANGE_LIMITED) {
-                return MoonBridge.COLOR_RANGE_LIMITED;
-            }
+    static ActualColorRange resolveActualColorRange(Integer decoderReportedRange) {
+        if (decoderReportedRange == null) {
+            return ActualColorRange.UNKNOWN;
         }
-        return getPreferredColorRange();
+        if (decoderReportedRange == MediaFormat.COLOR_RANGE_FULL) {
+            return ActualColorRange.FULL;
+        }
+        if (decoderReportedRange == MediaFormat.COLOR_RANGE_LIMITED) {
+            return ActualColorRange.LIMITED;
+        }
+        return ActualColorRange.UNRECOGNIZED;
+    }
+
+    /**
+     * Returns only the range reported in MediaCodec's output format. The requested input range is
+     * deliberately not used as a fallback because it is not evidence of the decoder's output.
+     */
+    public ActualColorRange getActualColorRange() {
+        MediaFormat currentOutputFormat = outputFormat;
+        return resolveActualColorRange(getOptionalFormatInteger(
+                currentOutputFormat, MediaFormat.KEY_COLOR_RANGE));
+    }
+
+    static int resolveEffectiveColorRange(ActualColorRange actualRange, int preferredRange) {
+        switch (actualRange) {
+            case FULL:
+                return MoonBridge.COLOR_RANGE_FULL;
+            case LIMITED:
+                return MoonBridge.COLOR_RANGE_LIMITED;
+            case UNKNOWN:
+            case UNRECOGNIZED:
+            default:
+                return preferredRange;
+        }
+    }
+
+    /**
+     * Returns the decoder-reported range when known, otherwise the requested range. Rendering code
+     * that must choose a concrete range should use this explicitly named fallback API.
+     */
+    public int getEffectiveColorRange() {
+        return resolveEffectiveColorRange(getActualColorRange(), getPreferredColorRange());
+    }
+
+    private String describeActualColorRange() {
+        switch (getActualColorRange()) {
+            case FULL:
+                return context.getString(R.string.video_range_full);
+            case LIMITED:
+                return context.getString(R.string.video_range_limited);
+            case UNRECOGNIZED:
+                return "Unknown (decoder reported an unsupported value)";
+            case UNKNOWN:
+            default:
+                String requestedRange = context.getString(
+                        getPreferredColorRange() == MoonBridge.COLOR_RANGE_FULL
+                                ? R.string.video_range_full : R.string.video_range_limited);
+                return "Unknown (decoder did not report; requested " + requestedRange + ")";
+        }
     }
 
     private static String colorRangeName(MediaFormat format) {
-        if (format == null || !format.containsKey(MediaFormat.KEY_COLOR_RANGE)) {
+        Integer range = getOptionalFormatInteger(format, MediaFormat.KEY_COLOR_RANGE);
+        if (range == null) {
             return "unset";
         }
-        int range = format.getInteger(MediaFormat.KEY_COLOR_RANGE);
         if (range == MediaFormat.COLOR_RANGE_FULL) {
             return "FULL";
         }
@@ -992,6 +1081,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
+        // A restarted/recreated decoder has not produced an output format yet. Never expose the
+        // previous codec instance's color-range report while this configure transaction runs.
+        outputFormat = null;
         videoDecoder.configure(format, renderTarget, null, 0);
         inputBufferCapacityLogged = false;
 
@@ -1202,6 +1294,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (formatListener != null) {
             formatListener.accept(format);
         }
+        if (renderTarget == null || !renderTarget.isValid()) {
+            LimeLog.severe("Decoder setup aborted because its prepared output surface is invalid");
+            return -4;
+        }
         this.refreshRate = redrawRate;
 
         return initializeDecoder(false);
@@ -1299,17 +1395,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * all-thread flush barrier. Qualcomm AV1 must not be flushed, restarted, reset, or recreated:
      * live lifecycle changes can leave its Codec2 buffer channel discarding every completed work.
      */
-    public boolean beginPresentationModeTransition() {
+    public int beginPresentationModeTransition() {
         synchronized (codecRecoveryMonitor) {
             if (videoDecoder == null || stopping) {
                 LimeLog.warning("Cannot prepare decoder for presentation-mode transition");
-                return false;
+                return 0;
             }
 
+            final int transitionGeneration;
             synchronized (modeTransitionStateLock) {
                 modeTransitionWatchdogGeneration++;
                 modeTransitionWatchdogActive = false;
                 modeTransitionFrameGate.begin(latestInputFrameNumber);
+                int nextGeneration = ++nextPresentationTransitionGeneration;
+                if (nextGeneration <= 0) {
+                    nextPresentationTransitionGeneration = nextGeneration = 1;
+                }
+                activePresentationTransitionGeneration = nextGeneration;
+                transitionGeneration = nextGeneration;
             }
             if (!shouldRecoverCodecForPresentationModeTransition(videoFormat)) {
                 LimeLog.info("XR mode transition: gating AV1 input/output without codec recovery");
@@ -1324,7 +1427,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 LimeLog.info("XR mode transition: gating compressed frames; decoder recovery "
                         + codecRecoveryType.get() + " already pending");
             }
-            return true;
+            return transitionGeneration;
         }
     }
 
@@ -1363,12 +1466,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         synchronized (modeTransitionStateLock) {
             modeTransitionWatchdogGeneration++;
             modeTransitionWatchdogActive = false;
+            activePresentationTransitionGeneration = 0;
             return modeTransitionFrameGate.cancel();
         }
     }
 
     private void runPresentationModeTransitionWatchdog(int generation) {
-        Runnable timedOut = null;
+        IntConsumer timedOut = null;
+        int timedOutTransitionGeneration = 0;
         boolean timeoutTriggered = false;
         boolean retry = false;
         synchronized (modeTransitionStateLock) {
@@ -1382,6 +1487,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 if (modeTransitionFrameGate.cancel()) {
                     timeoutTriggered = true;
                     timedOut = modeTransitionTimedOutListener;
+                    timedOutTransitionGeneration = activePresentationTransitionGeneration;
+                    activePresentationTransitionGeneration = 0;
                 }
             } else {
                 retry = true;
@@ -1390,8 +1497,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         if (timeoutTriggered) {
             LimeLog.severe("XR mode transition timed out waiting for the fresh IDR output");
-            if (timedOut != null) {
-                timedOut.run();
+            if (timedOut != null && timedOutTransitionGeneration > 0) {
+                timedOut.accept(timedOutTransitionGeneration);
             }
             return;
         }
@@ -1412,17 +1519,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     /** Publish transition completion only after MediaCodec accepts a render release. */
     private void acknowledgePresentationTransitionRendered() {
-        Runnable opened = null;
+        IntConsumer opened = null;
+        int openedTransitionGeneration = 0;
         synchronized (modeTransitionStateLock) {
             modeTransitionFrameGate.acknowledgeRenderedOutput();
             if (modeTransitionFrameGate.consumeCompletedTransition()) {
                 modeTransitionWatchdogActive = false;
                 modeTransitionWatchdogGeneration++;
                 opened = modeTransitionOpenedListener;
+                openedTransitionGeneration = activePresentationTransitionGeneration;
+                activePresentationTransitionGeneration = 0;
             }
         }
-        if (opened != null) {
-            opened.run();
+        if (opened != null && openedTransitionGeneration > 0) {
+            opened.accept(openedTransitionGeneration);
         }
     }
 
@@ -1864,24 +1974,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Boost thread priority to reduce decoding latency
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
 
-                int tryAgainStreak = 0;
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
-                        // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, getOutputDequeueTimeoutUs());
-
-                        if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                            // Avoid a hot spin while keeping the minimum-latency retry sub-millisecond.
-                            tryAgainStreak++;
-                            int backoffUs = (tryAgainStreak <= 2) ? 250 : 500;
-                            outIndex = videoDecoder.dequeueOutputBuffer(info, backoffUs);
-                            if (outIndex != MediaCodec.INFO_TRY_AGAIN_LATER) {
-                                tryAgainStreak = 0;
-                            }
-                        } else {
-                            tryAgainStreak = 0;
-                        }
+                        // MediaCodec wakes this call as soon as output is available. A small blocking
+                        // timeout therefore preserves minimum latency without polling the codec on an
+                        // urgent-display thread thousands of times per second between frames.
+                        int outIndex = videoDecoder.dequeueOutputBuffer(
+                                info, OUTPUT_DEQUEUE_TIMEOUT_US);
 
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
@@ -1996,8 +2096,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         try {
             // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping) {
+            while (nextInputBufferIndex < 0 && !stopping
+                    && !inputDequeueHangExpired(startTime, SystemClock.uptimeMillis())) {
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+            }
+            if (nextInputBufferIndex < 0 && !stopping
+                    && inputDequeueHangExpired(startTime, SystemClock.uptimeMillis())) {
+                handleDecoderException(new DecoderHungException(
+                        (int) (SystemClock.uptimeMillis() - startTime)));
             }
 
             // Get the backing ByteBuffer for the input buffer index
@@ -2040,17 +2146,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         if (nextInputBuffer == null) {
-            // We've been hung for 5 seconds and no other exception was reported,
-            // so generate a decoder hung exception
-            if (deltaMs >= 5000 && initialException == null) {
-                DecoderHungException decoderHungException = new DecoderHungException(deltaMs);
-                if (!reportedCrash) {
-                    reportedCrash = true;
-                    crashListener.notifyCrash(decoderHungException);
-                }
-                throw new RendererException(this, decoderHungException);
-            }
-
             return false;
         }
 
@@ -2060,6 +2155,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return true;
+    }
+
+    static boolean inputDequeueHangExpired(long startTimeMs, long nowMs) {
+        return nowMs - startTimeMs >= INPUT_DEQUEUE_HANG_TIMEOUT_MS;
     }
 
     @Override
@@ -2489,9 +2588,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             / 10.0f / completedWindowVideoStats.framesWithHostProcessingLatency;
                     hostProcessingMaxMs = completedWindowVideoStats.maxHostProcessingLatency / 10.0f;
                 }
-                String actualVideoRange = context.getString(
-                        getActualColorRange() == MoonBridge.COLOR_RANGE_FULL
-                                ? R.string.video_range_full : R.string.video_range_limited);
+                String actualVideoRange = describeActualColorRange();
                 DecodedVideoDimensions outputDimensions = currentOutputDimensions.get();
                 StreamPerformanceSnapshot performanceSnapshot = new StreamPerformanceSnapshot(
                         activeElapsedMs,
@@ -2551,15 +2648,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
                     sb.append("\t Range: ");
-                    sb.append(context.getString(getActualColorRange() == MoonBridge.COLOR_RANGE_FULL ?
-                            R.string.video_range_full : R.string.video_range_limited));
+                    sb.append(describeActualColorRange());
                 }else{
                     sb.append(context.getString(R.string.perf_overlay_streamdetails,
                             initialWidth + "x" + initialHeight, fps.totalFps));
                     sb.append('\n');
-                    sb.append(context.getString(R.string.perf_overlay_video_range, 
-                            context.getString(getActualColorRange() == MoonBridge.COLOR_RANGE_FULL ? 
-                                    R.string.video_range_full : R.string.video_range_limited))).append('\n');
+                    sb.append(context.getString(
+                            R.string.perf_overlay_video_range,
+                            describeActualColorRange())).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
@@ -2968,7 +3064,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return capabilities;
     }
 
-    public int getAverageEndToEndLatency() {
+    /**
+     * Packet assembly through MediaCodec output dequeue. This excludes Surface release,
+     * SceneCore composition, display vsync, and panel scanout.
+     */
+    public int getAverageFrameDecodePipelineLatency() {
         synchronized (videoStatsLock) {
             if (globalVideoStats.totalFramesReceived == 0) {
                 return 0;
@@ -3000,7 +3100,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return minDecodeTimeFullLog;
     }
 
-    static class DecoderHungException extends RuntimeException {
+    static class DecoderHungException extends IllegalStateException {
         private int hangTimeMs;
 
         DecoderHungException(int hangTimeMs) {
@@ -3129,7 +3229,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
             str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
             str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
-            str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
+            str += "Average frame decode-pipeline latency: "
+                    + renderer.getAverageFrameDecodePipelineLatency() + "ms" + DELIMITER;
             str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
             str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
 
@@ -3157,11 +3258,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void applySurfaceFrameRate(android.view.Surface surface, int targetFps) {
         if (surface == null) return;
         try {
-            // API 30+ supports Surface.setFrameRate; for older, attempt View-based call elsewhere.
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                surface.setFrameRate(
+                        (float) targetFps,
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                        android.view.Surface.CHANGE_FRAME_RATE_ALWAYS);
+                LimeLog.info("Applied fixed-source Surface frame rate: " + targetFps + " Hz");
+            } else if (android.os.Build.VERSION.SDK_INT >= 30) {
                 surface.setFrameRate((float) targetFps,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
-                LimeLog.info("Applied Surface frame rate: " + targetFps + " Hz");
+                        android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+                LimeLog.info("Applied fixed-source Surface frame rate: " + targetFps + " Hz");
             }
         } catch (Throwable t) {
             // best-effort

@@ -464,6 +464,11 @@ HDR presentation is negotiated and verified at runtime:
   10-bit, and the selected matched-color targets retain HDR precision end to end.
 - Otherwise tonemap the presentation to BT.709/sRGB/FULL. SDR input uses BT.709/SDR/FULL.
 
+An SDR/PQ change in Client SBS is a guarded frame boundary, not an immediate global shader toggle.
+Hide the video entity, invalidate old-transfer color/depth work, gate decoder input/output to a
+fresh IDR, install the target SceneCore metadata while hidden, and reveal only after GL swaps its
+first new-transfer packed output. Direct modes continue to follow per-buffer MediaCodec metadata.
+
 Reusing the source YUV limited/full flag would apply range interpretation twice after OES has
 already produced normalized RGB. Clear explicit Client SBS metadata before returning to a direct
 mode so SceneCore again follows the decoded `HardwareBuffer` metadata.

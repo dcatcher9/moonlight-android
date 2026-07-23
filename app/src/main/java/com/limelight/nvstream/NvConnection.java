@@ -338,10 +338,14 @@ public class NvConnection {
 
         context.serverCodecModeSupport = (int)h.getServerCodecModeSupport(serverInfo);
 
-        context.negotiatedHdr = (context.streamConfig.getSupportedVideoFormats() & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
-        if ((context.serverCodecModeSupport & 0x20200) == 0 && context.negotiatedHdr) {
-            context.connListener.displayTransientMessage("Your PC GPU does not support streaming HDR. The stream will be SDR.");
-            context.negotiatedHdr = false;
+        boolean hdrRequested = (context.streamConfig.getSupportedVideoFormats()
+                & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
+        context.negotiatedHdr = hdrRequested && isHdrLaunchEligible(
+                context.streamConfig.getSupportedVideoFormats(),
+                context.serverCodecModeSupport);
+        if (hdrRequested && !context.negotiatedHdr) {
+            context.connListener.displayTransientMessage(
+                    "The selected codec cannot negotiate HDR with this PC. The stream will be SDR.");
         }
         
         //
@@ -462,6 +466,29 @@ public class NvConnection {
 
     private static boolean hasIdentity(String identity) {
         return identity != null && !identity.trim().isEmpty();
+    }
+
+    /**
+     * Mirrors moonlight-common-c's codec priority before HTTP launch so the host HDR mode matches
+     * the profile RTSP will actually select. AV1 wins when both peers expose any AV1 mode; HEVC is
+     * considered only when AV1 is not common. A Main10 capability from the fallback codec must not
+     * make an 8-bit preferred codec launch an HDR desktop.
+     */
+    static boolean isHdrLaunchEligible(int clientVideoFormats, int serverCodecModeSupport) {
+        boolean commonAv1 = (clientVideoFormats & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0
+                && (serverCodecModeSupport & MoonBridge.SERVER_CODEC_MODE_MASK_AV1) != 0;
+        if (commonAv1) {
+            return (clientVideoFormats & MoonBridge.VIDEO_FORMAT_AV1_MAIN10) != 0
+                    && (serverCodecModeSupport
+                    & MoonBridge.SERVER_CODEC_MODE_AV1_MAIN10) != 0;
+        }
+
+        boolean commonHevc = (clientVideoFormats & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0
+                && (serverCodecModeSupport & MoonBridge.SERVER_CODEC_MODE_MASK_HEVC) != 0;
+        return commonHevc
+                && (clientVideoFormats & MoonBridge.VIDEO_FORMAT_H265_MAIN10) != 0
+                && (serverCodecModeSupport
+                & MoonBridge.SERVER_CODEC_MODE_HEVC_MAIN10) != 0;
     }
 
     static boolean isSameApplication(int runningAppId, String runningAppUuid, NvApp requestedApp) {

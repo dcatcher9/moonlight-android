@@ -19,6 +19,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 @RunWith(RobolectricTestRunner.class)
@@ -96,6 +97,37 @@ public final class XrBitrateControlTest {
         assertEquals("113000", control.getSelectedChoiceId());
         control.getChildAt(4).performClick();
         assertEquals("300000", control.getSelectedChoiceId());
+    }
+
+    @Test
+    public void replacingChoicesRemovesTransientBitrateAndUsesLatestListener() {
+        Context context = themedContext();
+        XrBitrateControl control = new XrBitrateControl(context);
+        AtomicInteger staleCalls = new AtomicInteger();
+        AtomicReference<String> selected = new AtomicReference<>();
+        control.setChoices(Arrays.asList(
+                        choice("10000", "10 Mbps"),
+                        choice("20000", "20 Mbps"),
+                        choice("24000", "24 Mbps"),
+                        choice("30000", "30 Mbps")),
+                "24000", null, value -> {
+                    staleCalls.incrementAndGet();
+                    return true;
+                });
+
+        control.setChoices(Arrays.asList(
+                        choice("10000", "10 Mbps"),
+                        choice("20000", "20 Mbps"),
+                        choice("30000", "30 Mbps")),
+                "10000", null, value -> {
+                    selected.set(value);
+                    return true;
+                });
+        control.getChildAt(4).performClick();
+
+        assertEquals(0, staleCalls.get());
+        assertEquals("20000", selected.get());
+        assertEquals("20000", control.getSelectedChoiceId());
     }
 
     private static SessionSettingsModel.Choice choice(String id, String label) {

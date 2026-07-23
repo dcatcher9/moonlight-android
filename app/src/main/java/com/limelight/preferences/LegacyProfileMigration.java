@@ -85,7 +85,6 @@ public final class LegacyProfileMigration {
             "checkbox_enforce_display_mode",
             "checkbox_force_device_motion",
             "checkbox_force_qwerty",
-            "checkbox_forceTightThresholds",
             "checkbox_full_screen",
             "checkbox_gamepad_enable_battery_report",
             "checkbox_gamepad_motion_fallback",

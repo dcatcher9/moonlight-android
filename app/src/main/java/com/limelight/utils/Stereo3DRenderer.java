@@ -69,6 +69,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
      *  PQ frame to SDR before feeding the selected SDR depth model. Set by the presenter. */
     private volatile boolean hdrInput;
+    private final HdrInputTransitionState hdrInputTransition =
+            new HdrInputTransitionState();
+    /** GL-thread state: reveal is acknowledged only after a new-format output has been swapped. */
+    private volatile Runnable hdrInputTransitionCompletion;
+    private volatile int hdrInputTransitionCompletionGeneration;
+    private volatile int hdrInputTransitionOutputGeneration;
 
     // Final Member Variables
     private final Context context;
@@ -301,6 +307,70 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         /** Fails an exact handoff/recovery generation whose EGL output size is unusable. */
         void onStereo3DOutputSurfaceValidationFailed(int surfaceGeneration, String reason);
+    }
+
+    /**
+     * Rare control-plane state for an SDR/PQ boundary. Frame callbacks only read volatile fields;
+     * begin/commit/finish serialize the two owning threads without adding a render-path lock.
+     */
+    static final class HdrInputTransitionState {
+        private int nextGeneration;
+        private volatile int generation;
+        private volatile boolean targetHdr;
+        private volatile boolean committed;
+
+        synchronized int begin(boolean targetHdr) {
+            int next = ++nextGeneration;
+            if (next <= 0) {
+                nextGeneration = next = 1;
+            }
+            this.targetHdr = targetHdr;
+            committed = false;
+            generation = next;
+            return next;
+        }
+
+        synchronized boolean commit(int expectedGeneration) {
+            if (expectedGeneration <= 0 || generation != expectedGeneration || committed) {
+                return false;
+            }
+            committed = true;
+            return true;
+        }
+
+        synchronized boolean finish(int expectedGeneration) {
+            if (expectedGeneration <= 0 || generation != expectedGeneration || !committed) {
+                return false;
+            }
+            generation = 0;
+            committed = false;
+            return true;
+        }
+
+        synchronized void cancel() {
+            generation = 0;
+            committed = false;
+        }
+
+        boolean isActive() {
+            return generation != 0;
+        }
+
+        boolean isBlockingFrames() {
+            return generation != 0 && !committed;
+        }
+
+        boolean isCommitted(int expectedGeneration) {
+            return generation == expectedGeneration && committed;
+        }
+
+        int getGeneration() {
+            return generation;
+        }
+
+        boolean getTargetHdr() {
+            return targetHdr;
+        }
     }
 
     private enum ColorTargetFormat {
@@ -879,6 +949,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     private boolean stopAiWorkers() {
         shuttingDown.set(true);
+        hdrInputTransition.cancel();
+        hdrInputTransitionCompletion = null;
+        hdrInputTransitionCompletionGeneration = 0;
+        hdrInputTransitionOutputGeneration = 0;
         invalidateQueuedFrameDrain();
         synchronized (frameLock) {
             frameAvailable.set(false);
@@ -1002,6 +1076,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             synchronized (frameLock) {
                 clientSbs = enabled;
                 clientSbsGeneration.incrementAndGet();
+                hdrInputTransition.cancel();
+                hdrInputTransitionCompletion = null;
+                hdrInputTransitionCompletionGeneration = 0;
+                hdrInputTransitionOutputGeneration = 0;
                 // Clear on both edges. A delayed callback from the previous decoder attachment
                 // must never become the first frame of a later Client-SBS generation.
                 frameAvailable.set(false);
@@ -1043,7 +1121,80 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     public void setHdrInput(boolean enabled) {
-        hdrInput = enabled;
+        // A host callback may cause other UI reconciliation while the decoder is still gated.
+        // Keep the transfer used by GL pinned until the fresh-IDR output boundary is committed.
+        if (!hdrInputTransition.isActive()) {
+            hdrInput = enabled;
+        }
+    }
+
+    /**
+     * Block capture/presentation and invalidate every old-transfer color/depth lease. Returns the
+     * renderer transition generation that must later be committed at the fresh-IDR output edge.
+     */
+    public int beginHdrInputTransition(boolean enabled) {
+        synchronized (glCallbackLifecycleLock) {
+            if (!clientSbs || shuttingDown.get()) {
+                return 0;
+            }
+            int transitionGeneration = hdrInputTransition.begin(enabled);
+            clientSbsGeneration.incrementAndGet();
+            hdrInputTransitionCompletion = null;
+            hdrInputTransitionCompletionGeneration = 0;
+            hdrInputTransitionOutputGeneration = 0;
+            invalidateQueuedFrameDrain();
+            synchronized (frameLock) {
+                frameAvailable.set(false);
+                pendingFrameGeneration = -1;
+            }
+            glSurfaceView.requestRender();
+            return transitionGeneration;
+        }
+    }
+
+    /**
+     * Apply the pending transfer on the GL thread after MediaCodec releases the fresh transition
+     * IDR. The completion runs only after the first new-format EGL buffer has been swapped.
+     */
+    public boolean completeHdrInputTransition(int transitionGeneration,
+                                              Runnable completionAfterSwap) {
+        if (transitionGeneration <= 0 || completionAfterSwap == null
+                || hdrInputTransition.getGeneration() != transitionGeneration
+                || shuttingDown.get()) {
+            return false;
+        }
+        try {
+            glSurfaceView.queueEvent(() -> commitHdrInputTransitionOnGlThread(
+                    transitionGeneration, completionAfterSwap));
+            return true;
+        } catch (RuntimeException error) {
+            LimeLog.warning("Unable to queue Client SBS HDR boundary commit: " + error);
+            return false;
+        }
+    }
+
+    private void commitHdrInputTransitionOnGlThread(int transitionGeneration,
+                                                     Runnable completionAfterSwap) {
+        synchronized (glCallbackLifecycleLock) {
+            if (shuttingDown.get() || !clientSbs
+                    || !hdrInputTransition.commit(transitionGeneration)) {
+                return;
+            }
+
+            hdrInput = hdrInputTransition.getTargetHdr();
+            int outputGeneration = clientSbsGeneration.incrementAndGet();
+            invalidateQueuedFrameDrain();
+            synchronized (frameLock) {
+                // A delayed callback from before the fresh-IDR release cannot become the first
+                // captured frame under the new transfer. The next decoder callback is authoritative.
+                frameAvailable.set(false);
+                pendingFrameGeneration = -1;
+            }
+            hdrInputTransitionCompletion = completionAfterSwap;
+            hdrInputTransitionCompletionGeneration = transitionGeneration;
+            hdrInputTransitionOutputGeneration = outputGeneration;
+            glSurfaceView.requestRender();
+        }
     }
 
     /** Whether Client SBS can pass PQ/BT.2020 through without an 8-bit intermediate or window. */
@@ -1143,6 +1294,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (!latchPendingVideoFrame()) {
             return;
         }
+        if (hdrInputTransition.isBlockingFrames()) {
+            // Keep SurfaceTexture drained while MediaCodec is gated, but never capture or present
+            // a buffer whose transfer precedes the fresh transition IDR.
+            return;
+        }
 
         if (!matchedOutputPresented || !hasPresentableDepth()
                 || activeClientSbsGeneration != clientSbsGeneration.get()
@@ -1162,7 +1318,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         boolean hasUncapturedFrame = hasFrameForActiveGeneration
                 && latchedFrameSequence > lastCapturedFrameSequence;
         if (engine == null || !engine.isInitialized() || !hasUncapturedFrame
-                || shuttingDown.get() || gpuShutdownRequested.get() || !clientSbs) {
+                || shuttingDown.get() || gpuShutdownRequested.get() || !clientSbs
+                || hdrInputTransition.isBlockingFrames()) {
             return false;
         }
 
@@ -1842,6 +1999,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         latchPendingVideoFrame();
 
+        if (hdrInputTransition.isBlockingFrames()) {
+            return;
+        }
+
         adoptLatestGpuInferenceResult();
 
         // Result adoption already tries to enqueue N+1 before N's depth postprocess. This second
@@ -1852,6 +2013,33 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         // Presentation is deliberately independent of delegate availability. A backend failure or
         // transition must not throw away the last valid matched stereo pair.
         presentClientSbs();
+        scheduleHdrInputTransitionCompletionAfterSwap();
+    }
+
+    private void scheduleHdrInputTransitionCompletionAfterSwap() {
+        Runnable completion = hdrInputTransitionCompletion;
+        int transitionGeneration = hdrInputTransitionCompletionGeneration;
+        int outputGeneration = hdrInputTransitionOutputGeneration;
+        if (completion == null || transitionGeneration <= 0
+                || outputGeneration != activeClientSbsGeneration
+                || !hasFrameForActiveGeneration
+                || !hdrInputTransition.isCommitted(transitionGeneration)) {
+            return;
+        }
+
+        // queueEvent() is serviced only after GLSurfaceView returns from this draw and swaps its
+        // EGL buffer. StreamContainer then posts the acknowledgement back to the main thread.
+        hdrInputTransitionCompletion = null;
+        hdrInputTransitionCompletionGeneration = 0;
+        hdrInputTransitionOutputGeneration = 0;
+        if (!hdrInputTransition.finish(transitionGeneration)) {
+            return;
+        }
+        try {
+            glSurfaceView.queueEvent(completion);
+        } catch (RuntimeException error) {
+            LimeLog.warning("Unable to queue Client SBS HDR swap acknowledgement: " + error);
+        }
     }
 
     private void presentClientSbs() {

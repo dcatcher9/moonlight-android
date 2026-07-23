@@ -499,7 +499,6 @@
     <string name="summary_checkbox_enforce_display_mode">Принудительно использовать оптимальный режим отображения.\nТребуется в некоторых системах (например, ColorOS) для корректной установки частоты/разрешения.\nНе включайте на ChromeCast 4K может вызвать ошибки.</string>
     <string name="title_checkbox_ultra_low_latency">Сверхнизкая задержка (экспериментально)</string>
     <string name="summary_checkbox_ultra_low_latency">Эффективно только на SD8Gen2 / 8(s)Gen3 / 8Elite</string>
-    <string name="summary_checkbox_forceTightThresholds">Более строгие пороги вертикальной синхронизации для снижения задержки; может увеличить количество сбоев.</string>
     <string name="title_checkbox_use_virtual_display">Использовать виртуальный дисплей</string>
     <string name="summary_checkbox_use_virtual_display">Использовать виртуальный дисплей по умолчанию.\nВиртуальный дисплей автоматически подбирает клиентское разрешение и частоту, обеспечивая плавный стрим.\nТребует Apollo на хосте.</string>
     <string name="title_checkbox_resume_without_confirm">Быстрое возобновление</string>
@@ -645,7 +644,6 @@
     <string name="perf_overlay_lite_net">%1$dмс</string>
     <string name="perf_overlay_lite_dectime">%1$.2fмс</string>
     <string name="category_perf_monitor_settings">Монитор производительности</string>
-    <string name="title_checkbox_forceTightThresholds">Агрессивная вертикальная синхронизация (эксперементально)</string>
     <string name="title_checkbox_full_screen">Включить полноэкранный режим</string>
     <string name="summary_checkbox_full_screen">Скрывать системные панели в режиме погружения</string>
 </resources>

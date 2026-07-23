@@ -22,6 +22,16 @@ public class MoonBridge {
     public static final int VIDEO_FORMAT_MASK_AV1 = 0xF000;
     public static final int VIDEO_FORMAT_MASK_10BIT = 0x2200;
 
+    public static final int SERVER_CODEC_MODE_H264 = 0x00000001;
+    public static final int SERVER_CODEC_MODE_HEVC = 0x00000100;
+    public static final int SERVER_CODEC_MODE_HEVC_MAIN10 = 0x00000200;
+    public static final int SERVER_CODEC_MODE_AV1_MAIN8 = 0x00010000;
+    public static final int SERVER_CODEC_MODE_AV1_MAIN10 = 0x00020000;
+    public static final int SERVER_CODEC_MODE_MASK_HEVC =
+            SERVER_CODEC_MODE_HEVC | SERVER_CODEC_MODE_HEVC_MAIN10;
+    public static final int SERVER_CODEC_MODE_MASK_AV1 =
+            SERVER_CODEC_MODE_AV1_MAIN8 | SERVER_CODEC_MODE_AV1_MAIN10;
+
     public static final int BUFFER_TYPE_PICDATA = 0;
     public static final int BUFFER_TYPE_SPS = 1;
     public static final int BUFFER_TYPE_PPS = 2;

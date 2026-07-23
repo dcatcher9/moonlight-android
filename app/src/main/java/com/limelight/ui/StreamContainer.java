@@ -138,6 +138,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private volatile int mClientSbsSwitchGeneration;
     private boolean mPendingClientSbsEnable;
     private boolean mPendingHostSbsTarget;
+    private SurfaceSwitchCallback mPendingClientSbsHdrSwitch;
+    private int mClientSbsHdrSwitchGeneration;
+    private int mRendererHdrTransitionGeneration;
     /** UI-thread request read by GLSurfaceView's EGL thread. */
     private volatile int mRequestedEglAttachGeneration;
     /** Exact generation whose XR window surface was created successfully on the EGL thread. */
@@ -178,6 +181,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     public void setClientSbsActive(boolean enabled) {
         if (mStereoRenderer != null) {
+            if (!enabled) {
+                mClientSbsHdrSwitchGeneration++;
+                mPendingClientSbsHdrSwitch = null;
+                mRendererHdrTransitionGeneration = 0;
+            }
             mStereoRenderer.setClientSbs(enabled);
             updateClientSbsPerformanceSampling();
         }
@@ -220,6 +228,67 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     public void setHdrInput(boolean enabled) {
         if (mStereoRenderer != null) {
             mStereoRenderer.setHdrInput(enabled);
+        }
+    }
+
+    /** Invalidate old-transfer Client-SBS work while the decoder waits for a fresh IDR. */
+    public boolean beginClientSbsHdrTransition(boolean enabled) {
+        if (mStereoRenderer == null || mDestroyed || !mStereoRenderer.isClientSbs()) {
+            return false;
+        }
+        int rendererGeneration = mStereoRenderer.beginHdrInputTransition(enabled);
+        if (rendererGeneration <= 0) {
+            return false;
+        }
+        mClientSbsHdrSwitchGeneration++;
+        mPendingClientSbsHdrSwitch = null;
+        mRendererHdrTransitionGeneration = rendererGeneration;
+        return true;
+    }
+
+    /**
+     * Commit the transfer at MediaCodec's fresh-IDR output edge and acknowledge only after the
+     * renderer swaps its first new-format packed buffer.
+     */
+    public void completeClientSbsHdrTransition(SurfaceSwitchCallback callback) {
+        if (callback == null) {
+            return;
+        }
+        final int switchGeneration = mClientSbsHdrSwitchGeneration;
+        final int rendererGeneration = mRendererHdrTransitionGeneration;
+        if (mStereoRenderer == null || mDestroyed || rendererGeneration <= 0
+                || !mStereoRenderer.isClientSbs()) {
+            callback.onComplete(false);
+            return;
+        }
+
+        mPendingClientSbsHdrSwitch = callback;
+        boolean queued = mStereoRenderer.completeHdrInputTransition(
+                rendererGeneration,
+                () -> post(() -> completeClientSbsHdrTransition(
+                        switchGeneration, true)));
+        if (!queued) {
+            completeClientSbsHdrTransition(switchGeneration, false);
+            return;
+        }
+        postDelayed(() -> {
+            if (switchGeneration == mClientSbsHdrSwitchGeneration
+                    && mPendingClientSbsHdrSwitch != null) {
+                LimeLog.severe("Timed out waiting for first Client SBS output after HDR transition");
+                completeClientSbsHdrTransition(switchGeneration, false);
+            }
+        }, 2000L);
+    }
+
+    private void completeClientSbsHdrTransition(int generation, boolean success) {
+        if (generation != mClientSbsHdrSwitchGeneration) {
+            return;
+        }
+        SurfaceSwitchCallback callback = mPendingClientSbsHdrSwitch;
+        mPendingClientSbsHdrSwitch = null;
+        mRendererHdrTransitionGeneration = 0;
+        if (callback != null) {
+            callback.onComplete(success);
         }
     }
 
@@ -667,6 +736,25 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mCurrentSurface;
     }
 
+    /**
+     * Refresh the codec-dependent initial Host-SBS Surface before MediaCodec configure(). The
+     * active-format callback blocks its connection thread until this main-thread method returns,
+     * so no live decoder producer exists yet and a dummy-surface handoff is unnecessary.
+     */
+    public Surface prepareHostSbsSurfaceForDecoder(int videoFormat) {
+        if (mDestroyed || mXrPresenter == null) {
+            return null;
+        }
+        mXrPresenter.setHostSbsVideoFormat(videoFormat);
+        Surface preparedSurface = mXrPresenter.getVideoSurface();
+        if (preparedSurface == null || !preparedSurface.isValid()) {
+            return null;
+        }
+        mCurrentSurface = preparedSurface;
+        mBoundDecoderSurface = preparedSurface;
+        return preparedSurface;
+    }
+
     public SurfaceView getSurfaceView() {
         return mSurfaceView;
     }
@@ -747,6 +835,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mDestroyed = true;
         mClientSbsSwitchGeneration++;
         mPendingClientSbsSwitch = null;
+        mClientSbsHdrSwitchGeneration++;
+        mPendingClientSbsHdrSwitch = null;
+        mRendererHdrTransitionGeneration = 0;
         mRequestedEglAttachGeneration = 0;
         mCreatedEglAttachGeneration = 0;
         mRequestedEglDetachGeneration = 0;
