@@ -139,8 +139,9 @@ public class PreferenceConfiguration {
 
     private static final String CHECKBOX_ENABLE_COMMIT_TEXT = "checkbox_enable_commit_text";
 
-    static final String DEFAULT_RESOLUTION = "1280x720";
-    static final String DEFAULT_FPS = "60";
+    static final String DEFAULT_RESOLUTION = "3840x2160";
+    static final String DEFAULT_FPS = "90";
+    static final int DEFAULT_BITRATE_KBPS = 130000;
     private static final boolean DEFAULT_ENABLE_ULTRA_LOW_LATENCY = false;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
     private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
@@ -149,13 +150,13 @@ public class PreferenceConfiguration {
     private static final int DEFAULT_RESOLUTION_SCALE_FACTOR = 100;
     private static final boolean DEFAULT_SOPS = true;
     private static final boolean DEFAULT_DISABLE_TOASTS = false;
-    private static final boolean DEFAULT_HOST_AUDIO = false;
+    static final boolean DEFAULT_HOST_AUDIO = false;
     private static final int DEFAULT_DEADZONE = 5;
     private static final int DEFAULT_OPACITY = 90;
     public static final String DEFAULT_LANGUAGE = "default";
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
-    private static final String DEFAULT_VIDEO_FORMAT = "auto";
+    static final String DEFAULT_VIDEO_FORMAT = "forceh265";
     public static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC =
             "depth-anything-v2-small-static-performance";
     private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY =
@@ -172,7 +173,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD = true;
     private static final boolean ONLY_L3_R3_DEFAULT = false;
     private static final boolean SHOW_GUIDE_BUTTON_DEFAULT = true;
-    private static final boolean DEFAULT_ENABLE_HDR = false;
+    static final boolean DEFAULT_ENABLE_HDR = true;
     private static final boolean DEFAULT_ENABLE_PIP = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_PERF_OVERLAY_BOTTOM = false;
@@ -188,13 +189,13 @@ public class PreferenceConfiguration {
     private static final int DEFAULT_VIBRATE_FALLBACK_STRENGTH = 100;
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
     private static final boolean DEFAULT_TOUCHSCREEN_TRACKPAD = true;
-    private static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
+    static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
     private static final boolean DEFAULT_LATENCY_TOAST = false;
-    private static final String DEFAULT_FRAME_PACING = "latency";
+    static final String DEFAULT_FRAME_PACING = "latency";
     private static final boolean DEFAULT_ABSOLUTE_MOUSE_MODE = false;
     private static final boolean DEFAULT_ENABLE_AUDIO_FX = false;
     private static final boolean DEFAULT_REDUCE_REFRESH_RATE = false;
-    public static final boolean DEFAULT_FULL_RANGE = false;
+    public static final boolean DEFAULT_FULL_RANGE = true;
     private static final boolean DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE = false;
     private static final boolean DEFAULT_GAMEPAD_MOTION_SENSORS = true;
     private static final boolean DEFAULT_GAMEPAD_MOTION_FALLBACK = false;
@@ -539,6 +540,12 @@ public class PreferenceConfiguration {
         int width = getWidthFromResolutionString(resString);
         int height = getHeightFromResolutionString(resString);
         int fps = Math.round(Float.parseFloat(fpsString));
+
+        // Galaxy XR validation established 130 Mbps as the stable 4K90 baseline. Keep this
+        // exact tuple explicit so resets and per-mode resolution changes restore that value.
+        if (width == 3840 && height == 2160 && fps == 90) {
+            return DEFAULT_BITRATE_KBPS;
+        }
 
         // This logic is shamelessly stolen from Moonlight Qt:
         // https://github.com/moonlight-stream/moonlight-qt/blob/master/app/settings/streamingpreferences.cpp

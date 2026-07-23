@@ -20,6 +20,10 @@ public final class StreamPerformanceSnapshot {
     private final float decoderPresentedFps;
     private final float decodeAverageMs;
     private final float decodeMaxMs;
+    private final float decoderQueueAverageMs;
+    private final float decoderQueueP95Ms;
+    private final float decoderQueueMaxMs;
+    private final int decoderQueueMaxDepth;
     private final float networkLossPercent;
     private final float bandwidthMbps;
     private final int estimatedRttMs;
@@ -29,6 +33,7 @@ public final class StreamPerformanceSnapshot {
     private final String decoderName;
     private final boolean dedicatedLowLatencyDecoder;
     private final boolean decoderLowLatencyRequested;
+    private final boolean directDecoderSubmission;
     private final String outputPacingDescription;
     private final String videoRange;
 
@@ -42,6 +47,10 @@ public final class StreamPerformanceSnapshot {
                                      float decoderPresentedFps,
                                      float decodeAverageMs,
                                      float decodeMaxMs,
+                                     float decoderQueueAverageMs,
+                                     float decoderQueueP95Ms,
+                                     float decoderQueueMaxMs,
+                                     int decoderQueueMaxDepth,
                                      float networkLossPercent,
                                      float bandwidthMbps,
                                      int estimatedRttMs,
@@ -51,6 +60,7 @@ public final class StreamPerformanceSnapshot {
                                      String decoderName,
                                      boolean dedicatedLowLatencyDecoder,
                                      boolean decoderLowLatencyRequested,
+                                     boolean directDecoderSubmission,
                                      String outputPacingDescription,
                                      String videoRange) {
         this.elapsedMs = elapsedMs;
@@ -63,6 +73,10 @@ public final class StreamPerformanceSnapshot {
         this.decoderPresentedFps = decoderPresentedFps;
         this.decodeAverageMs = decodeAverageMs;
         this.decodeMaxMs = decodeMaxMs;
+        this.decoderQueueAverageMs = decoderQueueAverageMs;
+        this.decoderQueueP95Ms = decoderQueueP95Ms;
+        this.decoderQueueMaxMs = decoderQueueMaxMs;
+        this.decoderQueueMaxDepth = decoderQueueMaxDepth;
         this.networkLossPercent = networkLossPercent;
         this.bandwidthMbps = bandwidthMbps;
         this.estimatedRttMs = estimatedRttMs;
@@ -72,6 +86,7 @@ public final class StreamPerformanceSnapshot {
         this.decoderName = decoderName;
         this.dedicatedLowLatencyDecoder = dedicatedLowLatencyDecoder;
         this.decoderLowLatencyRequested = decoderLowLatencyRequested;
+        this.directDecoderSubmission = directDecoderSubmission;
         this.outputPacingDescription = outputPacingDescription;
         this.videoRange = videoRange;
     }
@@ -119,6 +134,22 @@ public final class StreamPerformanceSnapshot {
 
     public float getDecodeMaxMs() {
         return decodeMaxMs;
+    }
+
+    public float getDecoderQueueAverageMs() {
+        return decoderQueueAverageMs;
+    }
+
+    public float getDecoderQueueP95Ms() {
+        return decoderQueueP95Ms;
+    }
+
+    public float getDecoderQueueMaxMs() {
+        return decoderQueueMaxMs;
+    }
+
+    public int getDecoderQueueMaxDepth() {
+        return decoderQueueMaxDepth;
     }
 
     /** Whether at least one valid MediaCodec enqueue-to-output-dequeue sample was observed. */
@@ -180,6 +211,11 @@ public final class StreamPerformanceSnapshot {
      */
     public boolean isDecoderLowLatencyRequested() {
         return decoderLowLatencyRequested;
+    }
+
+    /** Whether MediaCodec input submission runs synchronously on the native receive thread. */
+    public boolean isDirectDecoderSubmission() {
+        return directDecoderSubmission;
     }
 
     /** Artemis' output-buffer release policy, separate from the decoder's operating mode. */

@@ -767,11 +767,10 @@
     <string name="xr_home_apps">Applications</string>
     <string name="xr_home_current_session">Current session</string>
     <string name="xr_home_end_session">End session</string>
-    <string name="xr_home_resume_short">Resume</string>
-    <string name="xr_home_quit_short">Quit</string>
     <string name="xr_home_more">More</string>
     <string name="xr_home_more_symbol">&#x22EE;</string>
     <string name="xr_home_more_for_app">More actions for %1$s</string>
+    <string name="xr_home_quit_for_app">Quit session for %1$s</string>
     <string name="xr_home_status_running">Running</string>
     <string name="xr_home_open_library">Open library</string>
     <string name="xr_home_pair">Pair</string>

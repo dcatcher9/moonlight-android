@@ -46,6 +46,12 @@ public class MediaCodecDecoderRendererTelemetryTest {
     }
 
     @Test
+    public void directSubmitRemainsDisabledWhenCodecSupportsIt() {
+        assertFalse(MediaCodecDecoderRenderer.shouldUseDirectSubmit(true));
+        assertFalse(MediaCodecDecoderRenderer.shouldUseDirectSubmit(false));
+    }
+
+    @Test
     public void enablingTelemetryStartsACoherentWindowWithoutLosingAggregateStats() {
         VideoStats active = new VideoStats();
         active.measurementStartTimestamp = 100;
@@ -113,5 +119,26 @@ public class MediaCodecDecoderRendererTelemetryTest {
         assertFalse(MediaCodecDecoderRenderer.consumesIntentionalDiscontinuity(100, 100));
         assertTrue(MediaCodecDecoderRenderer.consumesIntentionalDiscontinuity(100, 105));
         assertEquals(0, MediaCodecDecoderRenderer.countMissingFrames(100, 105, true));
+    }
+
+    @Test
+    public void decoderQueueHistogramReportsTailLatencyWithoutPerFrameAllocation() {
+        VideoStats stats = new VideoStats();
+        for (int i = 0; i < 94; i++) {
+            stats.recordDecoderQueueLatency(1, 0);
+        }
+        for (int i = 0; i < 6; i++) {
+            stats.recordDecoderQueueLatency(20, 2);
+        }
+
+        assertEquals(20.0f, stats.getDecoderQueueP95Ms(), 0.0f);
+        assertEquals(20, stats.maxDecoderQueueTimeMs);
+        assertEquals(2, stats.maxPendingDecoderFrames);
+
+        VideoStats copy = new VideoStats();
+        copy.copy(stats);
+        assertEquals(20.0f, copy.getDecoderQueueP95Ms(), 0.0f);
+        copy.clear();
+        assertTrue(Float.isNaN(copy.getDecoderQueueP95Ms()));
     }
 }

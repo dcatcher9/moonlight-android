@@ -3,7 +3,6 @@ package com.limelight.grid;
 import android.content.Context;
 import android.graphics.BitmapFactory;
 import android.view.View;
-import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
@@ -30,11 +29,10 @@ import java.util.Set;
 @SuppressWarnings("unchecked")
 public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
     private static final int ART_WIDTH_PX = 300;
-    private static final int XR_ART_WIDTH_DP = 260;
+    private static final int XR_ART_WIDTH_DP = 240;
 
     public interface ActionListener {
         void onPrimaryAction(AppView.AppObject app, View anchor);
-        void onResumeSession(AppView.AppObject app);
         void onQuitSession(AppView.AppObject app);
         void onMoreActions(AppView.AppObject app, View anchor, View card);
     }
@@ -151,23 +149,12 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         this.actionListener = actionListener;
     }
 
-    /**
-     * Binds the two session-only buttons and fully resets recycled views. Kept package-visible so
-     * Robolectric can verify the active/inactive/offline state matrix without starting asset loads.
-     */
-    static void bindSessionActionButtons(View parentView, boolean running, boolean hostOnline,
-                                         Runnable resumeAction, Runnable quitAction) {
-        Button resume = parentView.findViewById(R.id.grid_resume_button);
-        Button quit = parentView.findViewById(R.id.grid_quit_button);
+    /** Binds the session-only corner close action and fully resets recycled app cards. */
+    static void bindSessionQuitButton(View parentView, boolean running, boolean hostOnline,
+                                      Runnable quitAction) {
+        View quit = parentView.findViewById(R.id.grid_quit_button);
         int visibility = running ? View.VISIBLE : View.GONE;
         boolean enabled = running && hostOnline;
-
-        resume.setVisibility(visibility);
-        resume.setEnabled(enabled);
-        resume.setOnClickListener(enabled && resumeAction != null
-                ? v -> resumeAction.run() : null);
-        resume.setClickable(enabled && resumeAction != null);
-        resume.setFocusable(enabled);
 
         quit.setVisibility(visibility);
         quit.setEnabled(enabled);
@@ -188,7 +175,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
             statusView.setVisibility(View.VISIBLE);
         }
         else if (running) {
-            gridMask.setBackgroundColor(0x66000000);
+            gridMask.setBackgroundColor(0x00000000);
             statusView.setText(R.string.xr_home_status_running);
             statusView.setVisibility(View.VISIBLE);
         }
@@ -271,6 +258,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         TextView statusView = parentView.findViewById(R.id.grid_status);
         TextView appNameView = parentView.findViewById(R.id.grid_app_name);
         View primaryAction = parentView.findViewById(R.id.grid_primary_action);
+        View quitSession = parentView.findViewById(R.id.grid_quit_button);
         View moreActions = parentView.findViewById(R.id.grid_more_button);
 
         // Let the cached asset loader handle it
@@ -303,17 +291,14 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
                 actionListener.onPrimaryAction(obj, v);
             }
         } : null);
-        bindSessionActionButtons(parentView, obj.isRunning, hostOnline,
-                () -> {
-                    if (actionListener != null) {
-                        actionListener.onResumeSession(obj);
-                    }
-                },
+        bindSessionQuitButton(parentView, obj.isRunning, hostOnline,
                 () -> {
                     if (actionListener != null) {
                         actionListener.onQuitSession(obj);
                     }
                 });
+        quitSession.setContentDescription(context.getString(
+                R.string.xr_home_quit_for_app, obj.app.getAppName()));
         moreActions.setVisibility(View.VISIBLE);
         moreActions.setEnabled(true);
         moreActions.setClickable(true);

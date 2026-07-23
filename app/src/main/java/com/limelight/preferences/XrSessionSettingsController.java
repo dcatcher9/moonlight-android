@@ -26,7 +26,7 @@ import java.util.Objects;
 public final class XrSessionSettingsController {
     private static final List<Integer> BITRATES = Arrays.asList(
             10000, 20000, 30000, 40000, 60000, 80000, 100000,
-            120000, 150000, 200000, 250000, 300000);
+            120000, 130000, 150000, 200000, 250000, 300000);
     private static final List<SessionSettingsModel.Choice> RESOLUTION_CHOICES = choices(
             choice("1280x720", "720p"),
             choice("1920x1080", "1080p"),
@@ -570,18 +570,23 @@ public final class XrSessionSettingsController {
                 PreferenceConfiguration.BITRATE_PREF_STRING,
                 PreferenceConfiguration.getDefaultBitrate(resolution, fps)));
         output.put(SessionSettingsModel.Key.HDR, preferences.getBoolean(
-                PreferenceConfiguration.ENABLE_HDR_PREF_STRING, false));
+                PreferenceConfiguration.ENABLE_HDR_PREF_STRING,
+                PreferenceConfiguration.DEFAULT_ENABLE_HDR));
         output.put(SessionSettingsModel.Key.VIDEO_RANGE, preferences.getBoolean(
                 PreferenceConfiguration.FULL_RANGE_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_FULL_RANGE));
         output.put(SessionSettingsModel.Key.CODEC, preferences.getString(
-                PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "auto"));
+                PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING,
+                PreferenceConfiguration.DEFAULT_VIDEO_FORMAT));
         output.put(SessionSettingsModel.Key.FRAME_PACING, preferences.getString(
-                PreferenceConfiguration.FRAME_PACING_PREF_STRING, "latency"));
+                PreferenceConfiguration.FRAME_PACING_PREF_STRING,
+                PreferenceConfiguration.DEFAULT_FRAME_PACING));
         output.put(SessionSettingsModel.Key.AUDIO_LAYOUT, preferences.getString(
-                PreferenceConfiguration.AUDIO_CONFIG_PREF_STRING, "2"));
+                PreferenceConfiguration.AUDIO_CONFIG_PREF_STRING,
+                PreferenceConfiguration.DEFAULT_AUDIO_CONFIG));
         output.put(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC, preferences.getBoolean(
-                PreferenceConfiguration.HOST_AUDIO_PREF_STRING, false));
+                PreferenceConfiguration.HOST_AUDIO_PREF_STRING,
+                PreferenceConfiguration.DEFAULT_HOST_AUDIO));
     }
 
     private void stageDefaultBitrate(SessionSettingsStore.PresenterMode mode) {

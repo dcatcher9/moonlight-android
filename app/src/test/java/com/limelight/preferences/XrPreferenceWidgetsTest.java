@@ -193,7 +193,8 @@ public final class XrPreferenceWidgetsTest {
         AppCompatButton fullHd = choices.findCardByResolutionId("1920x1080");
         fullHd.performClick();
 
-        int expected = PreferenceConfiguration.getDefaultBitrate("1920x1080", "60");
+        int expected = PreferenceConfiguration.getDefaultBitrate(
+                "1920x1080", PreferenceConfiguration.DEFAULT_FPS);
         assertEquals(expected, bitrate.getProgress());
         assertEquals(expected, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING, -1));

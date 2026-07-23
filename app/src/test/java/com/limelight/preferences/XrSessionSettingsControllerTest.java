@@ -43,6 +43,12 @@ public final class XrSessionSettingsControllerTest {
                 .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "1920x1080")
                 .putString(PreferenceConfiguration.FPS_PREF_STRING, "60")
                 .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 20000)
+                .putBoolean(PreferenceConfiguration.ENABLE_HDR_PREF_STRING, false)
+                .putBoolean(PreferenceConfiguration.FULL_RANGE_PREF_STRING, false)
+                .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "auto")
+                .putString(PreferenceConfiguration.FRAME_PACING_PREF_STRING, "latency")
+                .putString(PreferenceConfiguration.AUDIO_CONFIG_PREF_STRING, "2")
+                .putBoolean(PreferenceConfiguration.HOST_AUDIO_PREF_STRING, false)
                 .commit());
         assertTrue(context.getSharedPreferences(
                 SessionSettingsStore.PREFERENCES_NAME, Context.MODE_PRIVATE)

@@ -72,6 +72,20 @@ public class DecoderModeTransitionGateTest {
     }
 
     @Test
+    public void firstQueuedIdrAfterSurfaceReadyForcesNativeQueueRefresh() {
+        DecoderModeTransitionGate gate = new DecoderModeTransitionGate();
+        gate.begin(100);
+        assertTrue(gate.markTargetSurfaceReady());
+
+        assertEquals(DecoderModeTransitionGate.InputDecision.NEED_IDR,
+                gate.evaluateInput(101, true));
+        assertEquals(DecoderModeTransitionGate.InputDecision.DROP,
+                gate.evaluateInput(102, false));
+        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+                gate.evaluateInput(103, true));
+    }
+
+    @Test
     public void repeatedTransitionRearmsGateAtNewBoundary() {
         DecoderModeTransitionGate gate = new DecoderModeTransitionGate();
         gate.begin(10);
@@ -106,10 +120,12 @@ public class DecoderModeTransitionGateTest {
         gate.begin(Integer.MAX_VALUE);
         gate.markTargetSurfaceReady();
 
-        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+        assertEquals(DecoderModeTransitionGate.InputDecision.NEED_IDR,
                 gate.evaluateInput(Integer.MIN_VALUE, true));
-        assertTrue(gate.prepareIdrOutput(Integer.MIN_VALUE, true, 500));
-        assertTrue(gate.markIdrAccepted(Integer.MIN_VALUE, true, 500));
+        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+                gate.evaluateInput(Integer.MIN_VALUE + 1, true));
+        assertTrue(gate.prepareIdrOutput(Integer.MIN_VALUE + 1, true, 500));
+        assertTrue(gate.markIdrAccepted(Integer.MIN_VALUE + 1, true, 500));
     }
 
     @Test
@@ -139,8 +155,10 @@ public class DecoderModeTransitionGateTest {
         assertFalse(gate.isInputAdmissionCurrent(oldAdmission));
         long transitionAdmission = gate.getInputAdmissionGeneration();
         gate.markTargetSurfaceReady();
-        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+        assertEquals(DecoderModeTransitionGate.InputDecision.NEED_IDR,
                 gate.evaluateInput(102, true));
+        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+                gate.evaluateInput(103, true));
         assertTrue(gate.isInputAdmissionCurrent(transitionAdmission));
 
         gate.cancel();
@@ -164,10 +182,12 @@ public class DecoderModeTransitionGateTest {
 
         assertTrue(gate.markTargetSurfaceReady());
         long freshAdmission = gate.getInputAdmissionGeneration();
-        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+        assertEquals(DecoderModeTransitionGate.InputDecision.NEED_IDR,
                 gate.evaluateInput(102, true));
+        assertEquals(DecoderModeTransitionGate.InputDecision.ACCEPT,
+                gate.evaluateInput(103, true));
         assertEquals(DecoderModeTransitionGate.InputCommitDecision.COMMITTED_TRANSITION_IDR,
-                gate.commitInput(freshAdmission, 102, true, 2_000L,
+                gate.commitInput(freshAdmission, 103, true, 2_000L,
                         true, commits::incrementAndGet));
         assertEquals(1, commits.get());
     }

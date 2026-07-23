@@ -147,11 +147,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                         }
 
                         @Override
-                        public void onResumeSession(AppObject app) {
-                            resumeCurrentSession(app);
-                        }
-
-                        @Override
                         public void onQuitSession(AppObject app) {
                             endCurrentSession(app);
                         }
@@ -556,8 +551,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
     private void showAppActions(AppObject app, View anchor, View appCard) {
         PopupMenu popup = new PopupMenu(this, anchor);
-        // The card surface handles Start/Replace and the active card exposes Resume/Quit directly.
-        // Keep More limited to secondary actions while preserving the legacy context menu above.
+        // Tapping the active card resumes it and its corner close button ends the session. Keep More
+        // limited to secondary actions while preserving the legacy context menu above.
         populateAppActions(popup.getMenu(), app, appCard, false);
         popup.setOnMenuItemClickListener(item -> handleAppAction(item, app, appCard));
         popup.show();

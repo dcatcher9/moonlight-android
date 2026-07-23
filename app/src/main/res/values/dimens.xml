@@ -4,8 +4,10 @@
     <dimen name="activity_horizontal_margin">16dp</dimen>
     <dimen name="activity_vertical_margin">16dp</dimen>
     <dimen name="tv_channel_logo_height">80dp</dimen>
-    <dimen name="xr_app_card_width">280dp</dimen>
+    <dimen name="xr_app_card_width">240dp</dimen>
+    <dimen name="xr_app_card_height">320dp</dimen>
     <dimen name="xr_app_card_more_width">56dp</dimen>
+    <dimen name="xr_app_card_quit_size">56dp</dimen>
     <dimen name="xr_pc_hero_card_width">760dp</dimen>
     <dimen name="xr_pc_hero_card_height">250dp</dimen>
     <dimen name="xr_pc_hero_grid_height">278dp</dimen>

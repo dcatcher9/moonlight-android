@@ -2,11 +2,20 @@ package com.limelight.binding.video;
 
 import android.os.SystemClock;
 
+import java.util.Arrays;
+
 class VideoStats {
+    private static final int DECODER_QUEUE_HISTOGRAM_OVERFLOW_MS = 256;
 
     long decoderTimeNs;
     long maxDecoderTimeNs;
     int decoderLatencySamples;
+    long decoderQueueTimeMs;
+    long maxDecoderQueueTimeMs;
+    int decoderQueueLatencySamples;
+    int maxPendingDecoderFrames;
+    final int[] decoderQueueLatencyHistogram =
+            new int[DECODER_QUEUE_HISTOGRAM_OVERFLOW_MS + 1];
     long totalTimeMs;
     int totalFrames;
     int totalFramesReceived;
@@ -25,6 +34,15 @@ class VideoStats {
         this.decoderTimeNs += other.decoderTimeNs;
         this.maxDecoderTimeNs = Math.max(this.maxDecoderTimeNs, other.maxDecoderTimeNs);
         this.decoderLatencySamples += other.decoderLatencySamples;
+        this.decoderQueueTimeMs += other.decoderQueueTimeMs;
+        this.maxDecoderQueueTimeMs = Math.max(
+                this.maxDecoderQueueTimeMs, other.maxDecoderQueueTimeMs);
+        this.decoderQueueLatencySamples += other.decoderQueueLatencySamples;
+        this.maxPendingDecoderFrames = Math.max(
+                this.maxPendingDecoderFrames, other.maxPendingDecoderFrames);
+        for (int i = 0; i < this.decoderQueueLatencyHistogram.length; i++) {
+            this.decoderQueueLatencyHistogram[i] += other.decoderQueueLatencyHistogram[i];
+        }
         this.totalTimeMs += other.totalTimeMs;
         this.totalFrames += other.totalFrames;
         this.totalFramesReceived += other.totalFramesReceived;
@@ -54,6 +72,13 @@ class VideoStats {
         this.decoderTimeNs = other.decoderTimeNs;
         this.maxDecoderTimeNs = other.maxDecoderTimeNs;
         this.decoderLatencySamples = other.decoderLatencySamples;
+        this.decoderQueueTimeMs = other.decoderQueueTimeMs;
+        this.maxDecoderQueueTimeMs = other.maxDecoderQueueTimeMs;
+        this.decoderQueueLatencySamples = other.decoderQueueLatencySamples;
+        this.maxPendingDecoderFrames = other.maxPendingDecoderFrames;
+        System.arraycopy(other.decoderQueueLatencyHistogram, 0,
+                this.decoderQueueLatencyHistogram, 0,
+                this.decoderQueueLatencyHistogram.length);
         this.totalTimeMs = other.totalTimeMs;
         this.totalFrames = other.totalFrames;
         this.totalFramesReceived = other.totalFramesReceived;
@@ -73,6 +98,11 @@ class VideoStats {
         this.decoderTimeNs = 0;
         this.maxDecoderTimeNs = 0;
         this.decoderLatencySamples = 0;
+        this.decoderQueueTimeMs = 0;
+        this.maxDecoderQueueTimeMs = 0;
+        this.decoderQueueLatencySamples = 0;
+        this.maxPendingDecoderFrames = 0;
+        Arrays.fill(this.decoderQueueLatencyHistogram, 0);
         this.totalTimeMs = 0;
         this.totalFrames = 0;
         this.totalFramesReceived = 0;
@@ -86,6 +116,30 @@ class VideoStats {
         this.totalHostProcessingLatency = 0;
         this.framesWithHostProcessingLatency = 0;
         this.measurementStartTimestamp = 0;
+    }
+
+    void recordDecoderQueueLatency(long queueTimeMs, int pendingFrames) {
+        decoderQueueTimeMs += queueTimeMs;
+        maxDecoderQueueTimeMs = Math.max(maxDecoderQueueTimeMs, queueTimeMs);
+        decoderQueueLatencySamples++;
+        maxPendingDecoderFrames = Math.max(maxPendingDecoderFrames, pendingFrames);
+        int bucket = (int) Math.min(queueTimeMs, DECODER_QUEUE_HISTOGRAM_OVERFLOW_MS);
+        decoderQueueLatencyHistogram[bucket]++;
+    }
+
+    float getDecoderQueueP95Ms() {
+        if (decoderQueueLatencySamples == 0) {
+            return Float.NaN;
+        }
+        int target = (int) Math.ceil(decoderQueueLatencySamples * 0.95);
+        int cumulative = 0;
+        for (int i = 0; i < decoderQueueLatencyHistogram.length; i++) {
+            cumulative += decoderQueueLatencyHistogram[i];
+            if (cumulative >= target) {
+                return i;
+            }
+        }
+        return DECODER_QUEUE_HISTOGRAM_OVERFLOW_MS;
     }
 
     VideoStatsFps getFps() {

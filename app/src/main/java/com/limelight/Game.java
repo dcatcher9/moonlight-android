@@ -552,7 +552,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             @Override
             public boolean onEndSessionRequested() {
-                quit();
+                endSessionFromXrControls();
                 return true;
             }
         });
@@ -4810,15 +4810,35 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         builder.setMessage(R.string.game_dialog_message_quit_confirm);
 
         builder.setPositiveButton(getString(R.string.yes), (dialog, which) -> {
-            quitOnStop = true;
             dialog.dismiss();
-            finish();
+            finishAndQuitSession();
         });
 
         builder.setNegativeButton(getString(R.string.no), (dialog, which) -> dialog.dismiss());
 
         AlertDialog dialog = builder.create();
         dialog.show();
+    }
+
+    /**
+     * Ends the host session from the immersive XR control bar.
+     *
+     * <p>The regular quit confirmation is rendered in the Activity's 2D window, which is
+     * hidden while SceneCore owns presentation. The control is already behind the expanded
+     * actions button, so finish directly and let {@link #stopConnection()} send the host quit
+     * request during Activity teardown.</p>
+     */
+    public void endSessionFromXrControls() {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        LimeLog.info("XR control bar: end session requested");
+        finishAndQuitSession();
+    }
+
+    private void finishAndQuitSession() {
+        quitOnStop = true;
+        finish();
     }
 
     @Override

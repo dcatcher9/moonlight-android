@@ -234,6 +234,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
+    // Direct submission invokes MediaCodec from the native receive thread. A blocked codec input
+    // buffer then prevents that thread from draining UDP, so use moonlight-common-c's dedicated
+    // decoder thread and bounded queue instead. The selected hardware decoder and its low-latency
+    // MediaFormat options are unchanged.
+    private static final boolean ENABLE_DIRECT_SUBMIT = false;
+    private static final int DECODER_MAX_INPUT_SIZE_BYTES = 16 * 1024 * 1024;
+
     // Used on versions < 5.0
     private ByteBuffer[] legacyInputBuffers;
 
@@ -249,6 +256,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
+    private volatile boolean inputBufferCapacityLogged;
     // Decoder input is single-threaded. These two fields feed one preallocated commit callback so
     // the atomic transition-admission path does not allocate a capturing lambda for every frame.
     private long pendingInputCommitTimestampUs;
@@ -336,6 +344,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile int lastFrameNumber;
     /** Newest frame observed at submitDecodeUnit() entry, before any transition-gate decision. */
     private volatile int latestInputFrameNumber;
+    /** Input-thread-only queue sample captured at the first callback for each native frame. */
+    private boolean hasDecoderQueueSample;
+    private int decoderQueueSampleFrameNumber;
+    private long decoderQueueSampleTimeMs;
+    private int decoderQueueSamplePendingFrames;
     /** Input-thread-only: the next accepted serial gap was intentionally gated by a mode switch. */
     private boolean intentionalInputDiscontinuityPending;
     private int refreshRate;
@@ -686,7 +699,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         int avcOptimalSlicesPerFrame = 0;
         int hevcOptimalSlicesPerFrame = 0;
         if (avcDecoder != null) {
-            directSubmit = MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName());
+            directSubmit = shouldUseDirectSubmit(
+                    MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName()));
             refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), initialHeight);
             avcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(avcDecoder.getName());
 
@@ -698,6 +712,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
             LimeLog.info("Decoder "+avcDecoder.getName()+" wants "+avcOptimalSlicesPerFrame+" slices per frame");
         }
+        LimeLog.info("Video decoder submission: "
+                + (directSubmit ? "direct" : "buffered (network receive decoupled)"));
 
         if (hevcDecoder != null) {
             refFrameInvalidationHevc = MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
@@ -884,6 +900,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private MediaFormat createBaseMediaFormat(String mimeType) {
         MediaFormat videoFormat = MediaFormat.createVideoFormat(mimeType, initialWidth, initialHeight);
 
+        // Allow oversized UHQ/movie keyframes to remain a single access unit. This is a capacity
+        // hint only; it does not add queued frames or change the selected decoder's latency mode.
+        applyDecoderInputCapacity(videoFormat);
+
         // Avoid setting KEY_FRAME_RATE on Lollipop and earlier to reduce compatibility risk
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, refreshRate);
@@ -936,6 +956,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return videoFormat;
     }
 
+    static void applyDecoderInputCapacity(MediaFormat format) {
+        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, DECODER_MAX_INPUT_SIZE_BYTES);
+    }
+
     private void configureAndStartDecoder(MediaFormat format) {
         // Set HDR metadata if present
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -969,6 +993,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         LimeLog.info("Configuring with format: "+format);
 
         videoDecoder.configure(format, renderTarget, null, 0);
+        inputBufferCapacityLogged = false;
 
         try { applySurfaceFrameRate(renderTarget, targetFps); } catch (Throwable ignored) {}
 
@@ -1248,6 +1273,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     static boolean shouldDispatchPerformanceSnapshot(boolean overlayEnabled,
                                                      boolean loggingEnabled) {
         return overlayEnabled || loggingEnabled;
+    }
+
+    static boolean shouldUseDirectSubmit(boolean decoderSupportsDirectSubmit) {
+        return ENABLE_DIRECT_SUBMIT && decoderSupportsDirectSubmit;
     }
 
     static int countMissingFrames(int previousFrameNumber, int frameNumber,
@@ -2025,6 +2054,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         }
 
+        if (!inputBufferCapacityLogged) {
+            LimeLog.info("Decoder input buffer capacity: " + nextInputBuffer.capacity() + " bytes");
+            inputBufferCapacityLogged = true;
+        }
+
         return true;
     }
 
@@ -2300,6 +2334,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return MoonBridge.DR_OK;
         }
 
+        long decoderQueueTimeMs = -1;
+        int pendingDecoderFrames = -1;
+        if (performanceTelemetryEnabled) {
+            if (!hasDecoderQueueSample || decoderQueueSampleFrameNumber != frameNumber) {
+                long queueTimeMs = SystemClock.uptimeMillis() - enqueueTimeMs;
+                decoderQueueSampleTimeMs = queueTimeMs >= 0 && queueTimeMs < 10_000
+                        ? queueTimeMs : -1;
+                decoderQueueSamplePendingFrames = MoonBridge.getPendingVideoFrames();
+                decoderQueueSampleFrameNumber = frameNumber;
+                hasDecoderQueueSample = true;
+            }
+            if (decodeUnitType == MoonBridge.BUFFER_TYPE_PICDATA) {
+                decoderQueueTimeMs = decoderQueueSampleTimeMs;
+                pendingDecoderFrames = decoderQueueSamplePendingFrames;
+            }
+        }
+
         // Publish the boundary before consulting the transition gate. If beginTransition() races
         // immediately after this write, it snapshots this frame and therefore cannot later admit
         // the same already-in-flight IDR as a fresh post-transition frame.
@@ -2419,6 +2470,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         : Float.NaN;
                 float activeDecodeMaxMs = completedWindowVideoStats.decoderLatencySamples > 0
                         ? completedWindowVideoStats.maxDecoderTimeNs / 1_000_000.0f : Float.NaN;
+                float activeDecoderQueueAverageMs =
+                        completedWindowVideoStats.decoderQueueLatencySamples > 0
+                                ? (float) completedWindowVideoStats.decoderQueueTimeMs
+                                / completedWindowVideoStats.decoderQueueLatencySamples
+                                : Float.NaN;
+                float activeDecoderQueueMaxMs =
+                        completedWindowVideoStats.decoderQueueLatencySamples > 0
+                                ? completedWindowVideoStats.maxDecoderQueueTimeMs : Float.NaN;
                 float activeNetworkLossPercent = completedWindowVideoStats.totalFrames > 0
                         ? (float) completedWindowVideoStats.framesLost
                         / completedWindowVideoStats.totalFrames * 100.0f
@@ -2445,6 +2504,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         activeDecoderPresentedFps,
                         activeDecodeAverageMs,
                         activeDecodeMaxMs,
+                        activeDecoderQueueAverageMs,
+                        completedWindowVideoStats.getDecoderQueueP95Ms(),
+                        activeDecoderQueueMaxMs,
+                        completedWindowVideoStats.maxPendingDecoderFrames,
                         activeNetworkLossPercent,
                         bandwidthMbps,
                         estimatedRttMs,
@@ -2454,6 +2517,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         decoder,
                         MediaCodecHelper.isDedicatedLowLatencyDecoderName(decoder),
                         requestsDecoderLowLatency(configuredFormat),
+                        directSubmit,
                         describeOutputPacing(prefs.framePacing),
                         actualVideoRange);
                 boolean targetFpsMatched = ((int) smoothedFps == (int) prefs.fps);
@@ -2772,10 +2836,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             activeWindowVideoStats.totalFramesReceived++;
             activeWindowVideoStats.totalFrames++;
 
+            if (decoderQueueTimeMs >= 0) {
+                activeWindowVideoStats.recordDecoderQueueLatency(
+                        decoderQueueTimeMs, pendingDecoderFrames);
+            }
+
             if (!FRAME_RENDER_TIME_ONLY) {
                 // Count time from first packet received to enqueue time as receive time. We count
                 // DU queue time as part of decoding because it is caused by a slow decoder.
                 activeWindowVideoStats.totalTimeMs += enqueueTimeMs - receiveTimeMs;
+                if (decoderQueueTimeMs >= 0) {
+                    activeWindowVideoStats.totalTimeMs += decoderQueueTimeMs;
+                }
             }
         }
 

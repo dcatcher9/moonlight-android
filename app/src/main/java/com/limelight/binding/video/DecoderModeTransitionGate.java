@@ -68,12 +68,16 @@ final class DecoderModeTransitionGate {
         if (!targetSurfaceReady) {
             return InputDecision.DROP;
         }
-        if (idrFrame && isSerialNewer(frameNumber, boundaryFrameNumber)) {
-            return InputDecision.ACCEPT;
-        }
+        // Buffered decoder submission can leave frames in moonlight-common-c's native queue that
+        // were never visible when begin() captured boundaryFrameNumber. Force one native
+        // DR_NEED_IDR cycle after the target becomes ready; it flushes that queue and requests an
+        // IDR that is guaranteed to have been produced after the transition.
         if (!inputRefreshRequested) {
             inputRefreshRequested = true;
             return InputDecision.NEED_IDR;
+        }
+        if (idrFrame && isSerialNewer(frameNumber, boundaryFrameNumber)) {
+            return InputDecision.ACCEPT;
         }
         return InputDecision.DROP;
     }

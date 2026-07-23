@@ -430,6 +430,11 @@ range, audio layout, and play audio on the host PC**. The Session Settings pane 
 shared set. Global Settings provide the cross-session defaults for both the shared set and the
 quality baseline inherited independently by each mode.
 
+Fresh installs and reset modes use the verified Galaxy XR baseline: **3840 x 2160 at 90 FPS,
+130 Mbps, HEVC, HDR, Full range, and latency pacing**, with stereo audio, host audio off, and
+Depth Anything V2 as the Client SBS model. Existing explicit global or per-session choices remain
+unchanged.
+
 **Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, the Client
 SBS model, and the selected startup mode as one guarded record replacement. It then waits for
 decoder and deferred GPU/XR cleanup before recreating the singleTask `Game` activity in place. The
@@ -543,9 +548,11 @@ cannot fit, the entire control becomes a
 full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
 make the user scroll an enum sideways. Numeric values use an inline slider with direct step buttons.
 The Client SBS model is selected from the same kind of two-button group inside its existing Options
-row, without opening another panel. On a running application card, Resume and Quit Session are
-direct siblings of More; More is reserved for secondary actions such as details, hiding, and
-shortcut/export tools.
+row, without opening another panel. Tapping the running application card resumes it directly; a
+compact close button in its top-right corner ends the session. More stays in the bottom-right and is
+reserved for secondary actions such as details, hiding, and shortcut/export tools. The compact card
+aspect fits one complete row inside the Galaxy XR library viewport even while the current-session
+banner is visible, so a single row never creates a pointless vertical scroll range.
 
 After the first decoded frame, the dock may **soft-collapse** after eight seconds of true idle. This
 does not disable or move the dock `PanelEntity`: it hides only the full control row, dims the passive

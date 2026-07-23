@@ -8,7 +8,7 @@
         android:title="@string/category_xr_streaming_defaults">
 
         <com.limelight.preferences.InlineListPreference
-            android:defaultValue="1280x720"
+            android:defaultValue="3840x2160"
             android:entries="@array/xr_resolution_names"
             android:entryValues="@array/xr_resolution_values"
             android:key="list_resolution"
@@ -17,7 +17,7 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.InlineListPreference
-            android:defaultValue="60"
+            android:defaultValue="90"
             android:entries="@array/xr_fps_names"
             android:entryValues="@array/xr_fps_values"
             android:key="list_fps"
@@ -26,6 +26,7 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="130000"
             android:key="seekbar_bitrate_kbps"
             android:max="300000"
             android:summary="@string/summary_seekbar_bitrate"
@@ -38,21 +39,21 @@
             app:xrStep="500" />
 
         <SwitchPreferenceCompat
-            android:defaultValue="false"
+            android:defaultValue="true"
             android:key="checkbox_enable_hdr"
             android:summary="@string/summary_enable_hdr"
             android:title="@string/title_enable_hdr"
             app:iconSpaceReserved="false" />
 
         <SwitchPreferenceCompat
-            android:defaultValue="false"
+            android:defaultValue="true"
             android:key="checkbox_full_range"
             android:summary="@string/summary_full_range"
             android:title="@string/title_full_range"
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.InlineListPreference
-            android:defaultValue="auto"
+            android:defaultValue="forceh265"
             android:entries="@array/xr_video_format_names"
             android:entryValues="@array/xr_video_format_values"
             android:key="video_format"

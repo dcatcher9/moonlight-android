@@ -1363,7 +1363,7 @@ public class XrStreamPresenter {
     private void requestEndSession() {
         if (!controlActionListener.onEndSessionRequested()
                 && activity instanceof com.limelight.Game) {
-            ((com.limelight.Game) activity).quit();
+            ((com.limelight.Game) activity).endSessionFromXrControls();
         }
     }
 
@@ -2577,9 +2577,10 @@ public class XrStreamPresenter {
                     "ClientSbsPerf %.2fs"
                             + " | model=%s input=%dx%d backend=%s priority=%s"
                             + " | stream codec=%s decoder=%s dedicated_ll=%s"
-                            + " ll_requested=%s pacing=%s sequence=%.1f received=%.1f"
+                            + " ll_requested=%s submit=%s pacing=%s sequence=%.1f received=%.1f"
                             + " output=%.1f release=%.1f presented=%.1f"
-                            + " decode_ms=%.2f/%.2f"
+                            + " decode_ms=%.2f/%.2f queue_ms_avg_p95_max=%.2f/%.2f/%.2f"
+                            + " queue_depth_max=%d"
                             + " | client_fps latch=%.1f depth=%.1f output=%.1f"
                             + " | litert_ms=%.2f/%.2f depth_age_ms=%.2f/%.2f"
                             + " | gl_gpu_ms pack=%.2f color=%.2f profile=%.2f compose=%.2f"
@@ -2595,6 +2596,8 @@ public class XrStreamPresenter {
                     stream != null ? stream.getDecoderName() : "n/a",
                     stream != null && stream.isDedicatedLowLatencyDecoder(),
                     stream != null && stream.isDecoderLowLatencyRequested(),
+                    stream != null && stream.isDirectDecoderSubmission()
+                            ? "direct" : "buffered",
                     stream != null ? stream.getOutputPacingDescription() : "n/a",
                     stream != null ? stream.getStreamSequenceFps() : 0.0f,
                     stream != null ? stream.getReceivedFps() : 0.0f,
@@ -2603,6 +2606,10 @@ public class XrStreamPresenter {
                     stream != null ? stream.getDecoderPresentedFps() : Float.NaN,
                     stream != null ? stream.getDecodeAverageMs() : 0.0f,
                     stream != null ? stream.getDecodeMaxMs() : 0.0f,
+                    stream != null ? stream.getDecoderQueueAverageMs() : Float.NaN,
+                    stream != null ? stream.getDecoderQueueP95Ms() : Float.NaN,
+                    stream != null ? stream.getDecoderQueueMaxMs() : Float.NaN,
+                    stream != null ? stream.getDecoderQueueMaxDepth() : 0,
                     clientSbs.glLatchFps,
                     clientSbs.depthAdoptFps,
                     clientSbs.glOutputSubmitFps,
@@ -2629,15 +2636,17 @@ public class XrStreamPresenter {
         } else if (prefConfig.enablePerfLogging && stream != null) {
             LimeLog.info(String.format(Locale.US,
                     "DecoderPerf %.2fs | mode=%s codec=%s decoder=%s"
-                            + " dedicated_ll=%s ll_requested=%s pacing=%s"
+                            + " dedicated_ll=%s ll_requested=%s submit=%s pacing=%s"
                             + " | fps sequence=%.1f received=%.1f output=%.1f"
-                            + " release=%.1f presented=%.1f | decode_ms=%.2f/%.2f",
+                            + " release=%.1f presented=%.1f | decode_ms=%.2f/%.2f"
+                            + " queue_ms_avg_p95_max=%.2f/%.2f/%.2f queue_depth_max=%d",
                     stream.getElapsedMs() / 1000.0f,
                     presenterModeName(currentPresenterMode),
                     stream.getCodecDescription(),
                     stream.getDecoderName(),
                     stream.isDedicatedLowLatencyDecoder(),
                     stream.isDecoderLowLatencyRequested(),
+                    stream.isDirectDecoderSubmission() ? "direct" : "buffered",
                     stream.getOutputPacingDescription(),
                     stream.getStreamSequenceFps(),
                     stream.getReceivedFps(),
@@ -2645,7 +2654,11 @@ public class XrStreamPresenter {
                     stream.getDecoderReleaseFps(),
                     stream.getDecoderPresentedFps(),
                     stream.getDecodeAverageMs(),
-                    stream.getDecodeMaxMs()));
+                    stream.getDecodeMaxMs(),
+                    stream.getDecoderQueueAverageMs(),
+                    stream.getDecoderQueueP95Ms(),
+                    stream.getDecoderQueueMaxMs(),
+                    stream.getDecoderQueueMaxDepth()));
         }
 
 

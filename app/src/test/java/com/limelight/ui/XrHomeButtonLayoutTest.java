@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.GridView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -146,55 +147,63 @@ public final class XrHomeButtonLayoutTest {
     }
 
     @Test
-    public void activeAppActionsAreOrderedLargeAndSingleLine() {
+    public void activeAppCardUsesCompactTopCornerQuitWithoutBlockingPrimaryAction() {
         View card = inflate(R.layout.app_grid_item);
         View primary = card.findViewById(R.id.grid_primary_action);
-        ViewGroup actions = card.findViewById(R.id.grid_action_row);
-        Button resume = card.findViewById(R.id.grid_resume_button);
-        Button quit = card.findViewById(R.id.grid_quit_button);
+        View artworkHost = card.findViewById(R.id.grid_image_layout);
+        View artwork = card.findViewById(R.id.grid_image);
+        ImageButton quit = card.findViewById(R.id.grid_quit_button);
         Button more = card.findViewById(R.id.grid_more_button);
         float density = card.getResources().getDisplayMetrics().density;
 
-        resume.setVisibility(View.VISIBLE);
         quit.setVisibility(View.VISIBLE);
         int cardWidth = card.getResources().getDimensionPixelSize(R.dimen.xr_app_card_width);
-        int cardHeight = Math.round(388 * density);
+        int cardHeight = card.getResources().getDimensionPixelSize(R.dimen.xr_app_card_height);
         card.measure(View.MeasureSpec.makeMeasureSpec(cardWidth, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(cardHeight, View.MeasureSpec.EXACTLY));
         card.layout(0, 0, cardWidth, cardHeight);
 
         assertTrue(primary.isClickable());
         assertFalse(card.isClickable());
-        assertSame(resume, actions.getChildAt(0));
-        assertSame(quit, actions.getChildAt(1));
-        assertSame(more, actions.getChildAt(2));
-        assertNull(resume.getBackgroundTintList());
+        assertTrue(card.getClipToOutline());
+        assertSame(card, quit.getParent());
+        assertSame(card, more.getParent());
         assertNull(quit.getBackgroundTintList());
         assertNull(more.getBackgroundTintList());
-        assertBackgroundResource(resume, R.drawable.xr_home_primary_action_background);
-        assertBackgroundResource(quit, R.drawable.xr_home_destructive_action_background);
+        assertBackgroundResource(quit, R.drawable.xr_app_card_close_background);
         assertBackgroundResource(more, R.drawable.xr_home_action_background);
-        assertEquals(1, resume.getMaxLines());
-        assertEquals(1, quit.getMaxLines());
         assertEquals(1, more.getMaxLines());
         assertTrue(more.isSingleLine());
-        assertEquals(Math.round(56 * density), actions.getHeight());
-        assertEquals(resume.getTop(), quit.getTop());
-        assertEquals(resume.getTop(), more.getTop());
-        assertEquals(resume.getBottom(), quit.getBottom());
-        assertEquals(resume.getBottom(), more.getBottom());
-        assertEquals(resume.getWidth(), quit.getWidth());
-        assertTrue(resume.getWidth() >= Math.round(94 * density));
+        assertEquals(card.getPaddingLeft(), primary.getLeft());
+        assertEquals(card.getPaddingTop(), primary.getTop());
+        assertEquals(cardWidth - card.getPaddingRight(), primary.getRight());
+        assertEquals(cardHeight - card.getPaddingBottom(), primary.getBottom());
+        assertEquals(0, artworkHost.getLeft());
+        assertEquals(0, artworkHost.getTop());
+        assertEquals(primary.getWidth(), artworkHost.getWidth());
+        assertEquals(primary.getHeight(), artworkHost.getHeight());
+        assertEquals(artworkHost.getWidth(), artwork.getWidth());
+        assertEquals(artworkHost.getHeight(), artwork.getHeight());
+        assertEquals(Math.round(56 * density), quit.getWidth());
+        assertEquals(quit.getWidth(), quit.getHeight());
+        assertEquals(cardWidth - card.getPaddingRight() - Math.round(12 * density),
+                quit.getRight());
+        assertEquals(card.getPaddingTop() + Math.round(12 * density), quit.getTop());
+        assertTrue(quit.getDrawable() != null);
+        assertEquals(Math.round(24 * density), quit.getDrawable().getIntrinsicWidth());
         assertEquals(Math.round(56 * density), more.getWidth());
         assertEquals(more.getWidth(), more.getHeight());
-        assertEquals(Math.round(6 * density), quit.getLeft() - resume.getRight());
-        assertEquals(Math.round(6 * density), more.getLeft() - quit.getRight());
-        assertEquals(card.getResources().getString(R.string.xr_home_resume_short),
-                resume.getText().toString());
-        assertEquals(card.getResources().getString(R.string.xr_home_quit_short),
-                quit.getText().toString());
-        assertEquals(0, resume.getLayout().getEllipsisCount(0));
-        assertEquals(0, quit.getLayout().getEllipsisCount(0));
+        assertEquals(cardWidth - card.getPaddingRight() - Math.round(12 * density),
+                more.getRight());
+        assertEquals(cardHeight - card.getPaddingBottom() - Math.round(12 * density),
+                more.getBottom());
+        assertTrue(quit.getRight() <= primary.getRight());
+        assertTrue(more.getRight() <= primary.getRight());
+        assertTrue(quit.getBottom() <= primary.getBottom());
+        assertTrue(more.getBottom() <= primary.getBottom());
+        assertTrue(quit.getBottom() <= more.getTop());
+        assertEquals(card.getResources().getString(R.string.applist_menu_quit),
+                quit.getContentDescription().toString());
         assertEquals(card.getResources().getString(R.string.xr_home_more_symbol),
                 more.getText().toString());
         assertEquals(card.getResources().getString(R.string.xr_home_more),
@@ -202,15 +211,28 @@ public final class XrHomeButtonLayoutTest {
     }
 
     @Test
-    public void appGridUsesReadableWidenedCards() {
+    public void appGridUsesCompactCardsThatFitTheRunningSessionViewport() {
         GridView grid = (GridView) inflate(R.layout.app_grid_view);
+        View card = inflate(R.layout.app_grid_item);
         float density = grid.getResources().getDisplayMetrics().density;
-        grid.measure(View.MeasureSpec.makeMeasureSpec(Math.round(1200 * density),
+        // The live 1024 x 640 dp Galaxy XR AppView leaves 346 dp for the nested GridView when the
+        // current-session banner is visible. Robolectric's platform font metrics under-measure that
+        // weighted container, so exercise the verified device viewport directly.
+        grid.measure(View.MeasureSpec.makeMeasureSpec(Math.round(964 * density),
                         View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(Math.round(800 * density),
+                View.MeasureSpec.makeMeasureSpec(Math.round(346 * density),
                         View.MeasureSpec.EXACTLY));
 
-        assertTrue(grid.getColumnWidth() >= Math.round(280 * density));
+        int cardWidth = card.getResources().getDimensionPixelSize(R.dimen.xr_app_card_width);
+        int cardHeight = card.getResources().getDimensionPixelSize(R.dimen.xr_app_card_height);
+
+        assertEquals(Math.round(240 * density), cardWidth);
+        assertTrue(grid.getColumnWidth() >= cardWidth);
+        assertEquals(Math.round(320 * density), cardHeight);
+        int requiredRowHeight = cardHeight + grid.getPaddingTop() + grid.getPaddingBottom();
+        assertTrue("required row=" + requiredRowHeight
+                        + ", measured grid=" + grid.getMeasuredHeight(),
+                requiredRowHeight <= grid.getMeasuredHeight());
     }
 
     private static View inflate(int layout) {

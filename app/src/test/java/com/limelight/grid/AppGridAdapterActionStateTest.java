@@ -5,10 +5,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.graphics.drawable.ColorDrawable;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
@@ -43,49 +43,38 @@ public final class AppGridAdapterActionStateTest {
         assertEquals(View.VISIBLE, status.getVisibility());
         assertEquals(card.getResources().getString(R.string.xr_home_status_running),
                 status.getText().toString());
+        assertEquals(0x00000000, ((ColorDrawable) mask.getBackground()).getColor());
     }
 
     @Test
-    public void onlineRunningCardShowsAndDispatchesDirectActions() {
+    public void onlineRunningCardShowsAndDispatchesCornerQuit() {
         View card = inflateCard();
-        Button resume = card.findViewById(R.id.grid_resume_button);
-        Button quit = card.findViewById(R.id.grid_quit_button);
-        AtomicInteger resumeCount = new AtomicInteger();
+        ImageView quit = card.findViewById(R.id.grid_quit_button);
         AtomicInteger quitCount = new AtomicInteger();
 
-        AppGridAdapter.bindSessionActionButtons(card, true, true,
-                resumeCount::incrementAndGet, quitCount::incrementAndGet);
+        AppGridAdapter.bindSessionQuitButton(card, true, true, quitCount::incrementAndGet);
 
-        assertEquals(View.VISIBLE, resume.getVisibility());
         assertEquals(View.VISIBLE, quit.getVisibility());
-        assertTrue(resume.isEnabled());
         assertTrue(quit.isEnabled());
-        assertTrue(resume.performClick());
         assertTrue(quit.performClick());
-        assertEquals(1, resumeCount.get());
         assertEquals(1, quitCount.get());
     }
 
     @Test
     public void recycledInactiveCardClearsSessionActionsAndListeners() {
         View card = inflateCard();
-        Button resume = card.findViewById(R.id.grid_resume_button);
-        Button quit = card.findViewById(R.id.grid_quit_button);
-        Button more = card.findViewById(R.id.grid_more_button);
+        ImageView quit = card.findViewById(R.id.grid_quit_button);
+        View more = card.findViewById(R.id.grid_more_button);
         AtomicInteger callbackCount = new AtomicInteger();
 
-        AppGridAdapter.bindSessionActionButtons(card, true, true,
-                callbackCount::incrementAndGet, callbackCount::incrementAndGet);
-        AppGridAdapter.bindSessionActionButtons(card, false, true,
-                callbackCount::incrementAndGet, callbackCount::incrementAndGet);
+        AppGridAdapter.bindSessionQuitButton(card, true, true,
+                callbackCount::incrementAndGet);
+        AppGridAdapter.bindSessionQuitButton(card, false, true,
+                callbackCount::incrementAndGet);
 
-        assertEquals(View.GONE, resume.getVisibility());
         assertEquals(View.GONE, quit.getVisibility());
-        assertFalse(resume.isEnabled());
         assertFalse(quit.isEnabled());
-        assertFalse(resume.isClickable());
         assertFalse(quit.isClickable());
-        assertFalse(resume.hasOnClickListeners());
         assertFalse(quit.hasOnClickListeners());
         assertEquals(View.VISIBLE, more.getVisibility());
         assertTrue(more.isEnabled());
@@ -93,20 +82,15 @@ public final class AppGridAdapterActionStateTest {
     }
 
     @Test
-    public void offlineRunningCardKeepsActionsVisibleButDisabled() {
+    public void offlineRunningCardKeepsCornerQuitVisibleButDisabled() {
         View card = inflateCard();
-        Button resume = card.findViewById(R.id.grid_resume_button);
-        Button quit = card.findViewById(R.id.grid_quit_button);
+        ImageView quit = card.findViewById(R.id.grid_quit_button);
 
-        AppGridAdapter.bindSessionActionButtons(card, true, false, () -> { }, () -> { });
+        AppGridAdapter.bindSessionQuitButton(card, true, false, () -> { });
 
-        assertEquals(View.VISIBLE, resume.getVisibility());
         assertEquals(View.VISIBLE, quit.getVisibility());
-        assertFalse(resume.isEnabled());
         assertFalse(quit.isEnabled());
-        assertFalse(resume.isClickable());
         assertFalse(quit.isClickable());
-        assertFalse(resume.hasOnClickListeners());
         assertFalse(quit.hasOnClickListeners());
     }
 

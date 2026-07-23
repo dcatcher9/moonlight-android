@@ -1,0 +1,67 @@
+package com.limelight.preferences;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import androidx.preference.PreferenceManager;
+import androidx.test.core.app.ApplicationProvider;
+
+import com.limelight.nvstream.jni.MoonBridge;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
+
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = {33}, shadows = {
+        com.limelight.shadows.ShadowMoonBridge.class,
+        com.limelight.shadows.ShadowGameManager.class,
+})
+public final class PreferenceConfigurationXrDefaultsTest {
+    private Context context;
+
+    @Before
+    public void setUp() {
+        context = ApplicationProvider.getApplicationContext();
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        assertTrue(preferences.edit().clear().commit());
+    }
+
+    @Test
+    public void verifiedGalaxyXrDefaultsAreUsedWhenPreferencesAreUnset() {
+        PreferenceConfiguration configuration =
+                PreferenceConfiguration.readPreferences(context);
+
+        assertEquals(3840, configuration.width);
+        assertEquals(2160, configuration.height);
+        assertEquals(90f, configuration.fps, 0f);
+        assertEquals(130000, configuration.bitrate);
+        assertEquals(130000, configuration.meteredBitrate);
+        assertEquals(PreferenceConfiguration.FormatOption.FORCE_HEVC,
+                configuration.videoFormat);
+        assertTrue(configuration.enableHdr);
+        assertTrue(configuration.fullRange);
+        assertEquals(PreferenceConfiguration.FRAME_PACING_MIN_LATENCY,
+                configuration.framePacing);
+        assertSame(MoonBridge.AUDIO_CONFIGURATION_STEREO,
+                configuration.audioConfiguration);
+        assertFalse(configuration.playHostAudio);
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                configuration.clientSbsDepthModelId);
+    }
+
+    @Test
+    public void fourK90UsesExactVerifiedBitrateWithoutChangingOtherTuples() {
+        assertEquals(130000,
+                PreferenceConfiguration.getDefaultBitrate("3840x2160", "90"));
+        assertEquals(80000,
+                PreferenceConfiguration.getDefaultBitrate("3840x2160", "60"));
+    }
+}

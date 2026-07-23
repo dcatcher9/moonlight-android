@@ -1,27 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="@dimen/xr_app_card_width"
-    android:layout_height="388dp"
+    android:layout_height="@dimen/xr_app_card_height"
     android:background="@drawable/xr_home_card_background"
-    android:orientation="vertical"
-    android:padding="10dp">
+    android:clipToOutline="true"
+    android:padding="3dp">
 
-    <LinearLayout
+    <FrameLayout
         android:id="@+id/grid_primary_action"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="match_parent"
         android:clickable="true"
         android:focusable="true"
         android:focusableInTouchMode="true"
-        android:foreground="?android:attr/selectableItemBackground"
-        android:orientation="vertical">
+        android:foreground="?android:attr/selectableItemBackground">
 
         <RelativeLayout
             android:id="@+id/grid_image_layout"
             android:layout_width="match_parent"
-            android:layout_height="260dp">
+            android:layout_height="match_parent">
 
             <ImageView
                 android:id="@+id/grid_image"
@@ -43,7 +41,7 @@
                     android:ellipsize="end"
                     android:gravity="center"
                     android:maxLines="2"
-                    android:padding="12dp"
+                    android:padding="16dp"
                     android:textColor="#FFFFFFFF"
                     android:textSize="17sp"
                     android:textStyle="bold" />
@@ -55,108 +53,94 @@
                     android:layout_centerInParent="true"
                     android:contentDescription="@null" />
             </RelativeLayout>
+
+            <View
+                android:id="@+id/grid_artwork_scrim"
+                android:layout_width="match_parent"
+                android:layout_height="160dp"
+                android:layout_alignParentBottom="true"
+                android:background="@drawable/xr_app_artwork_scrim" />
+
+            <LinearLayout
+                android:id="@+id/grid_metadata"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_alignParentBottom="true"
+                android:layout_marginStart="14dp"
+                android:layout_marginEnd="76dp"
+                android:layout_marginBottom="16dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/grid_app_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:shadowColor="#CC000000"
+                    android:shadowDx="0"
+                    android:shadowDy="1"
+                    android:shadowRadius="3"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="19sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/grid_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:shadowColor="#CC000000"
+                    android:shadowDx="0"
+                    android:shadowDy="1"
+                    android:shadowRadius="2"
+                    android:textColor="#FFB8D5FF"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+            </LinearLayout>
         </RelativeLayout>
+    </FrameLayout>
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:gravity="center_vertical"
-            android:orientation="vertical"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp">
+    <ImageButton
+        android:id="@+id/grid_quit_button"
+        android:layout_width="@dimen/xr_app_card_quit_size"
+        android:layout_height="@dimen/xr_app_card_quit_size"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentTop="true"
+        android:layout_marginEnd="12dp"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/xr_app_card_close_background"
+        app:backgroundTint="@null"
+        android:contentDescription="@string/applist_menu_quit"
+        android:focusable="true"
+        android:padding="14dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_close"
+        android:tint="#FFFFB4AB"
+        android:visibility="gone" />
 
-            <TextView
-                android:id="@+id/grid_app_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#FFFFFFFF"
-                android:textSize="17sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/grid_status"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#FF8AB4F8"
-                android:textSize="14sp"
-                android:visibility="gone" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/grid_action_row"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:layout_marginTop="8dp"
-        android:gravity="end|center_vertical"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/grid_resume_button"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="@drawable/xr_home_primary_action_background"
-            app:backgroundTint="@null"
-            android:contentDescription="@string/applist_menu_resume"
-            android:ellipsize="end"
-            android:gravity="center"
-            android:maxLines="1"
-            android:minHeight="56dp"
-            android:minWidth="0dp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:text="@string/xr_home_resume_short"
-            android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
-            android:textSize="15sp"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/grid_quit_button"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/xr_home_destructive_action_background"
-            app:backgroundTint="@null"
-            android:contentDescription="@string/applist_menu_quit"
-            android:ellipsize="end"
-            android:gravity="center"
-            android:maxLines="1"
-            android:minHeight="56dp"
-            android:minWidth="0dp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:text="@string/xr_home_quit_short"
-            android:textAllCaps="false"
-            android:textColor="#FFFFB4AB"
-            android:textSize="15sp"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/grid_more_button"
-            android:layout_width="@dimen/xr_app_card_more_width"
-            android:layout_height="match_parent"
-            android:layout_marginStart="6dp"
-            android:background="@drawable/xr_home_action_background"
-            app:backgroundTint="@null"
-            android:contentDescription="@string/xr_home_more"
-            android:gravity="center"
-            android:maxLines="1"
-            android:minHeight="56dp"
-            android:minWidth="@dimen/xr_app_card_more_width"
-            android:padding="0dp"
-            android:singleLine="true"
-            android:text="@string/xr_home_more_symbol"
-            android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
-            android:textSize="24sp" />
-    </LinearLayout>
-</LinearLayout>
+    <Button
+        android:id="@+id/grid_more_button"
+        android:layout_width="@dimen/xr_app_card_more_width"
+        android:layout_height="@dimen/xr_app_card_more_width"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/xr_home_action_background"
+        app:backgroundTint="@null"
+        android:contentDescription="@string/xr_home_more"
+        android:gravity="center"
+        android:maxLines="1"
+        android:minHeight="@dimen/xr_app_card_more_width"
+        android:minWidth="@dimen/xr_app_card_more_width"
+        android:padding="0dp"
+        android:singleLine="true"
+        android:text="@string/xr_home_more_symbol"
+        android:textAllCaps="false"
+        android:textColor="#FFFFFFFF"
+        android:textSize="24sp" />
+</RelativeLayout>
