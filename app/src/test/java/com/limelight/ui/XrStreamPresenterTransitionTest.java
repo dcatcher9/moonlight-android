@@ -50,7 +50,7 @@ public class XrStreamPresenterTransitionTest {
                         16.0f / 9.0f,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF),
                 0.0001f);
-        assertEquals(32.0f / 9.0f,
+        assertEquals(16.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
                         16.0f / 9.0f,

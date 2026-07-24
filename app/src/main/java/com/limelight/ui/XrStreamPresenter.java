@@ -145,6 +145,7 @@ public class XrStreamPresenter {
     private static final float GLANCE_WIDTH_METERS = 1.48f;
     private static final float GLANCE_HEIGHT_METERS = 0.11f;
     private static final float GLANCE_GAP_METERS = 0.07f;
+    private static final float CINEMA_PRESET_DISTANCE_METERS = 2.0f;
     private static final long DOCK_AUTO_HIDE_DELAY_MS = 8000L;
 
     public interface OnSurfaceReadyListener {
@@ -258,9 +259,14 @@ public class XrStreamPresenter {
         }
     };
     private BarItem settingsItem;
+    private BarItem cinemaItem;
     private BarItem statsItem;
     private BarItem expansionItem;
     private boolean secondaryActionsExpanded;
+
+    private boolean cinemaViewExpanded;
+    private float cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+    private Pose cinemaRestorePose;
 
     /** Left-side PanelEntity for settings shared by every presentation mode in this session. */
     private PanelEntity auxiliaryPanel;
@@ -490,6 +496,7 @@ public class XrStreamPresenter {
     private static final long CONTROL_TOGGLE_DEBOUNCE_MS = 400L;
     private long lastModeSwitchMs;
     private long lastStatsTileTapMs;
+    private long lastCinemaTileTapMs;
     private long lastDockExpansionTapMs;
     private boolean modeSwitchInProgress;
     /** Successful surface handoff awaiting the fresh-IDR output before it may be persisted/shown. */
@@ -979,13 +986,14 @@ public class XrStreamPresenter {
         hostSbsRaw.onTap = () -> onModeTileTapped(hostSbsRaw);
         hostSbsAi.onTap = () -> onModeTileTapped(hostSbsAi);
         settings.onTap = this::toggleSessionSettings;
-        cinemaView.onTap = this::applyCinemaView;
+        cinemaView.onTap = this::onCinemaTileTapped;
         library.onTap = this::openLibrary;
         stats.onTap = this::onStatsTileTapped;
         dump.onTap = XrStreamPresenter::requestHostDebugDump;
         endSession.onTap = this::requestEndSession;
         expansion.onTap = this::toggleSecondaryActions;
         settingsItem = settings;
+        cinemaItem = cinemaView;
         statsItem = stats;
         expansionItem = expansion;
 
@@ -1527,6 +1535,33 @@ public class XrStreamPresenter {
         }
     }
 
+    private void onCinemaTileTapped() {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (!shouldAcceptControlToggle(now, lastCinemaTileTapMs)) {
+            return;
+        }
+        lastCinemaTileTapMs = now;
+        if (surfaceEntity == null || surfaceEntity.isDisposed()) {
+            cinemaViewExpanded = false;
+            cinemaRestorePose = null;
+            cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+            if (cinemaItem != null) {
+                cinemaItem.setSelected(false);
+            }
+            return;
+        }
+        revealDockTemporarily();
+        if (cinemaViewExpanded) {
+            restoreCinemaView();
+        }
+        else {
+            applyCinemaViewPreset();
+        }
+        if (cinemaItem != null) {
+            cinemaItem.setSelected(cinemaViewExpanded);
+        }
+    }
+
     /** Direct dock action: Stats remains independent of every contextual settings surface. */
     private void onStatsTileTapped() {
         long now = android.os.SystemClock.uptimeMillis();
@@ -1618,6 +1653,9 @@ public class XrStreamPresenter {
 
         if (settingsItem != null) {
             settingsItem.setSelected(visible == XrControlUiState.Surface.SESSION_SETTINGS);
+        }
+        if (cinemaItem != null) {
+            cinemaItem.setSelected(cinemaViewExpanded);
         }
         if (statsItem != null) {
             statsItem.setSelected(showStats);
@@ -4028,12 +4066,19 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Apply the large, close cinema preset to the video panel. This intentionally does not restore
-     * the panel's stream-start transform; the bar and stats panel follow the new placement.
+     * Cinema preset helper that toggles between the large preset and the last transform/height.
+     * The enlarged preset keeps the panel at the tuned cinematic distance and orientation.
      */
-    private void applyCinemaView() {
-        if (surfaceEntity == null) {
+    private void applyCinemaViewPreset() {
+        if (surfaceEntity == null || surfaceEntity.isDisposed()) {
             return;
+        }
+        cinemaRestoreHeightMeters = panelHeightMeters;
+        try {
+            cinemaRestorePose = surfaceEntity.getPose(Space.REAL_WORLD);
+        } catch (Throwable error) {
+            LimeLog.warning("XR cinema view: current pose capture failed (" + error + ")");
+            cinemaRestorePose = null;
         }
         surfaceEntity.setScale(1.0f);
         float aspect = aspectFor(currentPresenterMode);
@@ -4059,7 +4104,9 @@ public class XrStreamPresenter {
                 Pose level = new Pose(head.getTranslation(),
                         Quaternion.fromEulerAngles(0.0f, euler.getY(), 0.0f));
                 Pose inFront = level.compose(
-                        new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
+                        new Pose(
+                                new Vector3(0.0f, 0.0f, -CINEMA_PRESET_DISTANCE_METERS),
+                                Quaternion.Identity));
                 surfaceEntity.setPose(inFront, Space.REAL_WORLD);
                 placed = inFront;
             }
@@ -4067,10 +4114,40 @@ public class XrStreamPresenter {
             LimeLog.warning("XR cinema view: current head pose unavailable (" + t + ")");
         }
         if (placed == null) {
-            surfaceEntity.setPose(new Pose(new Vector3(0.0f, 0.0f, -2.0f), Quaternion.Identity));
+            surfaceEntity.setPose(new Pose(
+                    new Vector3(0.0f, 0.0f, -CINEMA_PRESET_DISTANCE_METERS),
+                    Quaternion.Identity));
         }
         repositionControlBar(height);
         viewStateStore.saveHeight(panelHeightMeters);
+        cinemaViewExpanded = true;
+    }
+
+    private void restoreCinemaView() {
+        if (surfaceEntity == null || surfaceEntity.isDisposed()) {
+            return;
+        }
+        surfaceEntity.setScale(1.0f);
+        float restoredHeight = cinemaRestoreHeightMeters > 0.0f
+                ? cinemaRestoreHeightMeters
+                : DEFAULT_PANEL_HEIGHT_METERS;
+        float aspect = aspectFor(currentPresenterMode);
+        panelHeightMeters = restoredHeight;
+        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(
+                panelHeightMeters * aspect, panelHeightMeters)));
+        applyResizeBounds(aspect);
+        if (cinemaRestorePose != null) {
+            surfaceEntity.setPose(cinemaRestorePose, Space.REAL_WORLD);
+        } else {
+            surfaceEntity.setPose(new Pose(
+                    new Vector3(0.0f, 0.0f, -CINEMA_PRESET_DISTANCE_METERS),
+                    Quaternion.Identity), Space.REAL_WORLD);
+        }
+        repositionControlBar(panelHeightMeters);
+        viewStateStore.saveHeight(panelHeightMeters);
+        cinemaRestorePose = null;
+        cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+        cinemaViewExpanded = false;
     }
 
     private void restoreViewState() {
@@ -4732,10 +4809,15 @@ public class XrStreamPresenter {
         videoSurface = null;
         statsTable = null;
         settingsItem = null;
+        cinemaItem = null;
         statsItem = null;
         expansionItem = null;
         secondaryBarItems.clear();
         secondaryActionsExpanded = false;
+        cinemaViewExpanded = false;
+        cinemaRestorePose = null;
+        cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+        lastCinemaTileTapMs = 0L;
         modeOptionsHost = null;
         modeOptionsContentRoot = null;
         modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
