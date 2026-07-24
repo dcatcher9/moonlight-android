@@ -31,6 +31,31 @@ public class PreferenceConfiguration {
         LEFT
     }
 
+    public enum RawSbsPerEyeResolution {
+        FULL("full", "Full", 2),
+        HALF("half", "Half", 1);
+
+        public final String preferenceValue;
+        public final String displayName;
+        private final int packedWidthMultiplier;
+
+        RawSbsPerEyeResolution(String preferenceValue, String displayName,
+                               int packedWidthMultiplier) {
+            this.preferenceValue = preferenceValue;
+            this.displayName = displayName;
+            this.packedWidthMultiplier = packedWidthMultiplier;
+        }
+
+        public static RawSbsPerEyeResolution fromPreferenceValue(String value) {
+            for (RawSbsPerEyeResolution resolution : values()) {
+                if (resolution.preferenceValue.equals(value)) {
+                    return resolution;
+                }
+            }
+            return FULL;
+        }
+    }
+
     public static final String CUSTOM_BITRATE_PREF_STRING = "edit_diy_bitrate";
     public static final String CUSTOM_REFRESH_RATE_PREF_STRING = "custom_refresh_rate";
     public static final String CUSTOM_RESOLUTION_PREF_STRING = "edit_diy_w_h";
@@ -63,6 +88,8 @@ public class PreferenceConfiguration {
     public static final String VIDEO_FORMAT_PREF_STRING = "video_format";
     public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
             "list_client_sbs_depth_model";
+    public static final String RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING =
+            "list_raw_sbs_per_eye_resolution";
     private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
     private static final String CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD = "checkbox_hide_osc_when_has_gamepad";
     private static final String ONLY_L3_R3_PREF_STRING = "checkbox_only_show_L3R3";
@@ -168,6 +195,8 @@ public class PreferenceConfiguration {
     public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
     private static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
             CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
+    public static final String DEFAULT_RAW_SBS_PER_EYE_RESOLUTION =
+            RawSbsPerEyeResolution.FULL.preferenceValue;
 
     private static final boolean DEFAULT_ONSCREEN_CONTROLLER = false;
     private static final boolean DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD = true;
@@ -256,22 +285,43 @@ public class PreferenceConfiguration {
     }
 
     /**
-     * Raw SBS quality is expressed per eye. Unlike Host SBS AI, the host does not transform or
-     * codec-cap this frame: it renders the virtual display directly at {@code 2W x H}.
+     * Raw SBS quality is expressed as the intended view resolution. Full transports two complete
+     * eye views at {@code 2W x H}; Half keeps the packed frame at {@code W x H}, giving each eye
+     * {@code W/2 x H} encoded pixels that SceneCore expands to the same physical view aspect.
      */
     public static int[] rawSbsPackedDimensions(int eyeWidth, int eyeHeight) {
-        if (!isRawSbsTransportSupported(eyeWidth, eyeHeight)) {
+        return rawSbsPackedDimensions(eyeWidth, eyeHeight, RawSbsPerEyeResolution.FULL);
+    }
+
+    public static int[] rawSbsPackedDimensions(
+            int eyeWidth, int eyeHeight, RawSbsPerEyeResolution perEyeResolution) {
+        if (!isRawSbsTransportSupported(eyeWidth, eyeHeight, perEyeResolution)) {
             throw new IllegalArgumentException(
-                    "Raw SBS exceeds the 8192-pixel transport limit: "
-                            + eyeWidth + "x" + eyeHeight);
+                    "Raw SBS dimensions cannot be packed within the 8192-pixel transport limit: "
+                            + eyeWidth + "x" + eyeHeight + " "
+                            + (perEyeResolution != null
+                                    ? perEyeResolution.displayName : "Unknown"));
         }
-        return new int[] {eyeWidth * 2, eyeHeight};
+        return new int[] {
+                eyeWidth * perEyeResolution.packedWidthMultiplier, eyeHeight
+        };
     }
 
     public static boolean isRawSbsTransportSupported(int eyeWidth, int eyeHeight) {
+        return isRawSbsTransportSupported(
+                eyeWidth, eyeHeight, RawSbsPerEyeResolution.FULL);
+    }
+
+    public static boolean isRawSbsTransportSupported(
+            int eyeWidth, int eyeHeight, RawSbsPerEyeResolution perEyeResolution) {
+        if (perEyeResolution == null) {
+            return false;
+        }
+        long packedWidth = (long) eyeWidth * perEyeResolution.packedWidthMultiplier;
         return eyeWidth > 0
                 && eyeHeight > 0
-                && (long) eyeWidth * 2L <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1
+                && packedWidth <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1
+                && (packedWidth & 1L) == 0L
                 && eyeHeight <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
     }
 
@@ -293,6 +343,9 @@ public class PreferenceConfiguration {
     public FormatOption videoFormat;
     /** Experimental categorical A/B choice, captured once when a stream starts. */
     public String clientSbsDepthModelId;
+    /** Raw SBS packing choice, captured once when the stream starts. */
+    public RawSbsPerEyeResolution rawSbsPerEyeResolution =
+            RawSbsPerEyeResolution.FULL;
     public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
     public int oscOpacity;
@@ -912,6 +965,16 @@ public class PreferenceConfiguration {
             clientSbsDepthModel = DEFAULT_CLIENT_SBS_DEPTH_MODEL;
         }
         config.clientSbsDepthModelId = clientSbsDepthModel;
+        String rawSbsPerEyeResolution;
+        try {
+            rawSbsPerEyeResolution = prefs.getString(
+                    RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                    DEFAULT_RAW_SBS_PER_EYE_RESOLUTION);
+        } catch (ClassCastException invalidStoredType) {
+            rawSbsPerEyeResolution = DEFAULT_RAW_SBS_PER_EYE_RESOLUTION;
+        }
+        config.rawSbsPerEyeResolution =
+                RawSbsPerEyeResolution.fromPreferenceValue(rawSbsPerEyeResolution);
         config.framePacing = getFramePacingValue(prefs);
 
 

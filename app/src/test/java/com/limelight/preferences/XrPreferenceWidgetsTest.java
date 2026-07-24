@@ -172,11 +172,24 @@ public final class XrPreferenceWidgetsTest {
                 PreferenceConfiguration.RESOLUTION_PREF_STRING);
         SeekBarPreference bitrate = fragment.findPreference(
                 PreferenceConfiguration.BITRATE_PREF_STRING);
+        InlineListPreference rawPerEyeResolution = fragment.findPreference(
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING);
         assertTrue(fragment.findPreference(PreferenceConfiguration.ENABLE_HDR_PREF_STRING)
                 instanceof SwitchPreferenceCompat);
         assertTrue(fragment.findPreference(
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING)
                 instanceof InlineListPreference);
+        assertTrue(rawPerEyeResolution instanceof InlineListPreference);
+        assertEquals(PreferenceConfiguration.DEFAULT_RAW_SBS_PER_EYE_RESOLUTION,
+                rawPerEyeResolution.getValue());
+        assertEquals(2, rawPerEyeResolution.getEntries().length);
+        assertEquals("Full", rawPerEyeResolution.getEntries()[0].toString());
+        assertEquals("Half", rawPerEyeResolution.getEntries()[1].toString());
+        assertEquals("full", rawPerEyeResolution.getEntryValues()[0].toString());
+        assertEquals("half", rawPerEyeResolution.getEntryValues()[1].toString());
+        XrChoiceGroup rawChoices = bindChoices(rawPerEyeResolution);
+        assertEquals(2, rawChoices.getChildCount());
+        assertEquals("full", rawChoices.getSelectedValue());
         assertNull(fragment.findPreference("category_xr_3d_settings"));
 
         ViewGroup navigation = (ViewGroup) activity.findViewById(

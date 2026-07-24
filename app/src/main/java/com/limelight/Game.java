@@ -48,6 +48,7 @@ import com.limelight.ui.StreamContainer;
 import com.limelight.ui.XrStreamPresenter;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
+import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
@@ -434,7 +435,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     launchAppUuid);
             boolean transportSupported =
                     PreferenceConfiguration.isRawSbsTransportSupported(
-                            rawPreferences.width, rawPreferences.height);
+                            rawPreferences.width, rawPreferences.height,
+                            rawPreferences.rawSbsPerEyeResolution);
             if (!virtualDisplayBacked || !transportSupported) {
                 LimeLog.warning(!virtualDisplayBacked
                         ? "Raw SBS requires a virtual-display-backed host session; "
@@ -587,6 +589,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             @Override
+            public boolean onRawSbsPerEyeResolutionSelected(
+                    String resolutionId, RawSbsModeSettingsModel current) {
+                if (reconnectScheduled) {
+                    return false;
+                }
+                try {
+                    xrSessionSettingsController.selectRawSbsPerEyeResolution(
+                            resolutionId);
+                }
+                catch (IllegalArgumentException e) {
+                    LimeLog.warning("Rejected stale Raw SBS per-eye resolution "
+                            + resolutionId + ": " + e.getMessage());
+                    refreshXrSessionSettingsModels();
+                    return false;
+                }
+                refreshXrSessionSettingsModels();
+                return true;
+            }
+
+            @Override
             public void onPresentationModeCommitted(XrStreamPresenter.PresenterMode mode) {
                 SessionSettingsStore.PresenterMode selected = toSessionPresenterMode(mode);
                 if (selected == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
@@ -671,6 +693,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         presenter.setSettingsModels(xrSessionSettingsController.getSharedSessionModel(),
                 qualityModels, xrSessionSettingsController.getClientSbsModel(),
+                xrSessionSettingsController.getRawSbsModel(),
                 xrSessionSettingsController.hasPendingChanges());
     }
 
@@ -740,16 +763,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     /**
-     * Maps a mode's logical quality to the dimensions negotiated with Apollo. Raw SBS stores one
-     * eye's {@code W x H}, but its untouched packed desktop is transported at {@code 2W x H}.
+     * Maps a mode's logical quality to the dimensions negotiated with Apollo. Full Raw SBS
+     * transports {@code 2W x H}; Half Raw SBS keeps the packed desktop at {@code W x H}.
      */
     static int[] xrTransportDimensions(int logicalWidth, int logicalHeight,
-                                       SessionSettingsStore.PresenterMode mode) {
+                                       SessionSettingsStore.PresenterMode mode,
+                                       PreferenceConfiguration.RawSbsPerEyeResolution
+                                               perEyeResolution) {
         if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
             return PreferenceConfiguration.rawSbsPackedDimensions(
-                    logicalWidth, logicalHeight);
+                    logicalWidth, logicalHeight, perEyeResolution);
         }
         return new int[] {logicalWidth, logicalHeight};
+    }
+
+    /** Backward-compatible Full Raw geometry for callers without an explicit packing choice. */
+    static int[] xrTransportDimensions(int logicalWidth, int logicalHeight,
+                                       SessionSettingsStore.PresenterMode mode) {
+        return xrTransportDimensions(logicalWidth, logicalHeight, mode,
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL);
     }
 
     static boolean rawSbsHasVirtualDisplayBacking(
@@ -879,7 +911,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     displayWidth, displayHeight,
                     xrSessionSettingsController != null
                             ? xrSessionSettingsController.getStartupMode()
-                            : SessionSettingsStore.PresenterMode.NORMAL);
+                            : SessionSettingsStore.PresenterMode.NORMAL,
+                    prefConfig.rawSbsPerEyeResolution);
             displayWidth = transportDimensions[0];
             displayHeight = transportDimensions[1];
             LimeLog.info("XR transport resolution: logical "

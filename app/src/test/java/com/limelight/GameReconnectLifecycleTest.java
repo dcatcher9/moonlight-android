@@ -4,6 +4,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
 
 import org.junit.Test;
@@ -32,6 +33,18 @@ public final class GameReconnectLifecycleTest {
         assertArrayEquals(new int[] {7680, 2160},
                 Game.xrTransportDimensions(3840, 2160,
                         SessionSettingsStore.PresenterMode.HOST_SBS_RAW));
+        assertArrayEquals(new int[] {7680, 2160},
+                Game.xrTransportDimensions(3840, 2160,
+                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
+    }
+
+    @Test
+    public void rawSbsHalfKeepsLogicalTransportWidth() {
+        assertArrayEquals(new int[] {3840, 2160},
+                Game.xrTransportDimensions(3840, 2160,
+                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
     }
 
     @Test
@@ -41,7 +54,8 @@ public final class GameReconnectLifecycleTest {
                         SessionSettingsStore.PresenterMode.NORMAL));
         assertArrayEquals(new int[] {3840, 2160},
                 Game.xrTransportDimensions(3840, 2160,
-                        SessionSettingsStore.PresenterMode.HOST_SBS_AI));
+                        SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
     }
 
     @Test

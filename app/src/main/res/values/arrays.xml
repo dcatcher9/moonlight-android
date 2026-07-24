@@ -194,6 +194,15 @@
         <item>midas-v2-float</item>
     </string-array>
 
+    <string-array name="xr_raw_sbs_per_eye_resolution_names">
+        <item>@string/xr_raw_per_eye_full</item>
+        <item>@string/xr_raw_per_eye_half</item>
+    </string-array>
+    <string-array name="xr_raw_sbs_per_eye_resolution_values" translatable="false">
+        <item>full</item>
+        <item>half</item>
+    </string-array>
+
     <string-array name="xr_video_frame_pacing_names">
         <item>@string/xr_pacing_latency</item>
         <item>@string/xr_pacing_balanced</item>

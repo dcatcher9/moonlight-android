@@ -41,7 +41,8 @@ public final class LegacyProfileMigration {
     private static final Set<String> RETAINED_XR_KEYS = new HashSet<>(Arrays.asList(
             "list_resolution", "list_fps", "seekbar_bitrate_kbps",
             "checkbox_enable_hdr", "checkbox_full_range", "video_format", "frame_pacing",
-            "list_client_sbs_depth_model", "list_audio_config", "checkbox_host_audio",
+            "list_client_sbs_depth_model", "list_raw_sbs_per_eye_resolution",
+            "list_audio_config", "checkbox_host_audio",
             "seekbar_deadzone", "checkbox_enable_rumble", "checkbox_flip_face_buttons",
             "checkbox_gamepad_touchpad_as_mouse", "checkbox_mouse_emulation",
             "checkbox_absolute_mouse_mode", "checkbox_mouse_local_cursor",

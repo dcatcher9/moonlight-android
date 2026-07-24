@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.PreferenceConfiguration;
 
 import org.junit.Test;
 
@@ -31,20 +32,37 @@ public class XrStreamPresenterTransitionTest {
     }
 
     @Test
-    public void rawStartupUsesExactDoubleWidthAndLogicalPerEyeAspect() {
+    public void rawStartupUsesSelectedPackingAndLogicalPerEyeAspect() {
         assertEquals(16.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
                         16.0f / 9.0f),
                 0.0001f);
+        assertEquals(32.0f / 9.0f,
+                XrStreamPresenter.presentationAspect(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        32.0f / 9.0f),
+                0.0001f);
         assertEquals(7680,
                 XrStreamPresenter.initialSurfacePixelDimensions(
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264)[0]);
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL)[0]);
         assertEquals(2160,
                 XrStreamPresenter.initialSurfacePixelDimensions(
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264)[1]);
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL)[1]);
+        assertEquals(3840,
+                XrStreamPresenter.initialSurfacePixelDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF)[0]);
+        assertEquals(2160,
+                XrStreamPresenter.initialSurfacePixelDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF)[1]);
     }
 
     @Test

@@ -55,6 +55,34 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertFalse(configuration.playHostAudio);
         assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
                 configuration.clientSbsDepthModelId);
+        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                configuration.rawSbsPerEyeResolution);
+    }
+
+    @Test
+    public void rawSbsPerEyeResolutionParsesHalfAndFallsBackToFull() {
+        SharedPreferences preferences =
+                PreferenceManager.getDefaultSharedPreferences(context);
+
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue)
+                .commit());
+        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                PreferenceConfiguration.readPreferences(context).rawSbsPerEyeResolution);
+
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        "unsupported")
+                .commit());
+        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                PreferenceConfiguration.readPreferences(context).rawSbsPerEyeResolution);
+
+        assertTrue(preferences.edit()
+                .putInt(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, 1)
+                .commit());
+        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                PreferenceConfiguration.readPreferences(context).rawSbsPerEyeResolution);
     }
 
     @Test

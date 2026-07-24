@@ -14,13 +14,15 @@ headset's codec, Adreno, OpenCL, or SceneCore performance.
 `Game`, `StreamContainer`, and `XrStreamPresenter` maintain one active presentation owner:
 
 - **Normal** decodes directly into the SceneCore `SurfaceEntity` in mono mode.
-- **Host SBS Raw** treats its selected `W x H` resolution as a per-eye quality, negotiates an
-  untouched `2W x H` virtual desktop/stream from Apollo, and decodes that packed frame directly
-  into the same entity with `StereoMode.SIDE_BY_SIDE`. It is available only for a
+- **Host SBS Raw** treats its selected `W x H` resolution as the intended view aspect. Its
+  **Per-Eye Resolution** choice defaults to **Full**, which negotiates an untouched `2W x H`
+  virtual desktop/stream and preserves `W x H` encoded pixels per eye. **Half** keeps the packed
+  desktop/stream at `W x H`, so each encoded eye is `W/2 x H` and SceneCore expands it
+  anamorphically onto the same `W:H` physical quad. Both decode directly into the same entity with
+  `StereoMode.SIDE_BY_SIDE`. Raw is available only for a
   virtual-display-backed launch, including Apollo's generated **Virtual Display** entry; a physical
-  desktop would only be aspect-fitted into a wide encoder surface rather than rendered at `2W`.
-  The logical per-eye width is limited to 4096 so the exact packed frame remains within the
-  8192-pixel HEVC/AV1 transport limit.
+  desktop would only be aspect-fitted into the encoder surface rather than rendered at the selected
+  geometry. The exact packed width must remain within the 8192-pixel HEVC/AV1 transport limit.
 - **Host SBS AI** uses the same direct stereo surface path; Apollo performs depth inference and SBS
   synthesis before encoding.
 - **Client SBS AI** decodes into an external-OES `SurfaceTexture`, runs the native LiteRT/GLES
@@ -38,14 +40,15 @@ requested `W x H` matched-color/per-eye target by upscaling that lower-resolutio
 Normal and both Host SBS modes are direct MediaCodec-to-SceneCore paths. Do not insert a GL bridge,
 copy, or Client SBS dependency into them.
 
-Raw SBS uses a different negotiated base width from every other mode. Entering or leaving Raw must
-commit the target mode and reconnect before changing SceneCore, MediaCodec, Client SBS ownership, or
-Apollo's Host AI wire mode. This prevents Client AI from consuming an already-packed `2W` frame and
-prevents Host AI from doubling an already-doubled base width. Live transitions among Normal, Host
+Raw SBS can use a different negotiated base width from every other mode. Entering or leaving Raw,
+or changing Full/Half while Raw is live, must commit the target mode and reconnect before changing
+SceneCore, MediaCodec, Client SBS ownership, or Apollo's Host AI wire mode. This prevents Client AI
+from consuming an already-packed stereo frame and prevents Host AI from repacking it. Live
+transitions among Normal, Host
 SBS AI, and Client SBS AI retain their guarded surface-handoff behavior. After a live
 `setOutputSurface()` handoff, reapply the requested surface frame rate because that metadata belongs
 to the replacement `Surface`. Artemis rejects Raw on a physical-capture session and directs the user
-to relaunch Apollo's Virtual Display instead of pretending that a wide aspect-fit is native `2W`
+to relaunch Apollo's Virtual Display instead of pretending that a wide aspect-fit is native Raw
 rendering.
 
 The standard **Video frame pacing** list is the only decoder release-policy control. **Prefer lowest
@@ -388,7 +391,7 @@ Crossing Client SBS ownership or the live Host SBS AI packed-size boundary chang
 target or encoded dimensions. Before those transitions, close the compressed-frame gate and flush
 MediaCodec through its all-thread recovery barrier. After the replacement surface is bound, request
 a new IDR and admit only a serial-newer IDR before reopening the gate. Raw SBS does not use this live
-path: every transition across its `2W x H` transport boundary reconnects first.
+path: every transition across its packed transport boundary reconnects first.
 
 On destroy or mode exit:
 
@@ -434,10 +437,12 @@ handoff succeeds, selecting a mode whose saved or newly staged tuple differs fro
 the live decoder automatically commits the complete staged session record and reconnects into the
 selected tuple. Committing the whole record ensures that shared or other-mode edits cannot be lost
 when the Activity is recreated. A same-tuple switch among non-Raw modes remains live; entering or
-leaving Raw always reconnects because its logical `W x H` tuple maps to a `2W x H` transport.
+leaving Raw always reconnects because its logical `W x H` tuple maps to a mode-specific packed
+transport. Changing Raw's Full/Half choice while Raw is live also reconnects.
 **Apply & reconnect** remains the explicit action when no mode-quality or transport change already
 requires a restart. The Client SBS model is also mode-specific, and its aspect bucket is derived
-from the pending Client SBS resolution.
+from the pending Client SBS resolution. Raw's Full/Half choice is likewise mode-specific, persists
+with the current session, and inherits its default from Global Settings.
 
 The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
 range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
@@ -446,8 +451,8 @@ quality baseline inherited independently by each mode.
 
 Fresh installs and reset modes use the verified Galaxy XR baseline: **3840 x 2160 at 90 FPS,
 130 Mbps, HEVC, HDR, Full range, and latency pacing**, with stereo audio, host audio off, and
-Depth Anything V2 as the Client SBS model. Existing explicit global or per-session choices remain
-unchanged.
+Depth Anything V2 as the Client SBS model and Full as Raw SBS per-eye resolution. Existing explicit
+global or per-session choices remain unchanged.
 
 **Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, the Client
 SBS model, and the selected startup mode as one guarded record replacement. It then waits for
@@ -539,7 +544,7 @@ Normal and Host SBS rows also show their presentation/source status. Client SBS 
 choice, resolution-derived fixed aspect bucket, and live GPU backend status; it has no strength,
 convergence, balance, movie-mode, or depth-inference cadence controls. Restoring global defaults is
 scoped: the shared pane resets only shared values, while a mode row resets only that mode's quality
-tuple (and the Client SBS model for the Client row).
+tuple (plus the Client SBS model or Raw Full/Half choice for its corresponding row).
 
 The Settings tile opens the left side panel for values shared by every mode in the current PC
 session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
@@ -567,7 +572,9 @@ cannot fit, the entire control becomes a
 full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
 make the user scroll an enum sideways. Numeric values use an inline slider with direct step buttons.
 The Client SBS model is selected from the same kind of two-button group inside its existing Options
-row, without opening another panel. Tapping the running application card resumes it directly; a
+row, without opening another panel. Raw SBS uses an equivalent direct two-button **Full / Half**
+group labeled **Per-Eye Resolution**; it also shows the derived encoded-per-eye and packed-stream
+dimensions so the choice is visible rather than merely numeric. Tapping the running application card resumes it directly; a
 compact close button in its top-right corner ends the session. More stays in the bottom-right and is
 reserved for secondary actions such as details, hiding, and shortcut/export tools. The compact card
 aspect fits one complete row inside the Galaxy XR library viewport even while the current-session
@@ -699,7 +706,8 @@ For every mode/surface change, test:
 - Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
   A successfully selected mode whose tuple differs from the live decoder must reconnect into that
   tuple automatically. Same-tuple non-Raw switches stay live, while every transition into or out
-  of Raw reconnects and negotiates the exact `2W x H` transport. Any other staged edits must be
+  of Raw reconnects and negotiates its exact Full (`2W x H`) or Half (`W x H`) transport. Changing
+  Full/Half during Raw also reconnects. Any other staged edits must be
   committed in the same atomic record before that automatic Activity recreation.
 - Normal and Host SBS remain direct and work when Client SBS initialization fails.
 - Test all six selectable models separately on Galaxy XR: the three canonical DA-V2 entries from

@@ -1,6 +1,7 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
@@ -10,8 +11,12 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 
+import androidx.appcompat.widget.AppCompatButton;
+
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.XrChoiceGroup;
+import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 
 import org.junit.Test;
@@ -30,6 +35,67 @@ import java.lang.reflect.Method;
         com.limelight.shadows.ShadowGameManager.class,
 })
 public final class XrStreamPresenterViewTest {
+    @Test
+    public void rawModePaneUsesConnectedFullHalfButtonsAndEmitsHalfChoice()
+            throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+
+        PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(activity);
+        prefs.rawSbsPerEyeResolution =
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
+        String[] selectedResolution = new String[1];
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, prefs, surface -> { }, visible -> { });
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override
+            public boolean onRawSbsPerEyeResolutionSelected(
+                    String resolutionId, RawSbsModeSettingsModel current) {
+                selectedResolution[0] = resolutionId;
+                return true;
+            }
+        });
+        FrameLayout host = new FrameLayout(activity);
+        setField(presenter, "modeOptionsHost", host);
+        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
+        state.toggleModeOptions(XrStreamPresenter.PresenterMode.HOST_SBS_RAW.name());
+
+        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+        render.invoke(presenter);
+
+        XrChoiceGroup group = (XrChoiceGroup) getField(
+                presenter, "rawSbsPerEyeResolutionChoiceGroup");
+        assertEquals(2, group.getChildCount());
+        assertTrue(group.getChildAt(0) instanceof AppCompatButton);
+        assertTrue(group.getChildAt(1) instanceof AppCompatButton);
+        assertEquals("Full", group.getButtonAt(0).getText().toString());
+        assertEquals("Half", group.getButtonAt(1).getText().toString());
+        assertEquals(RawSbsModeSettingsModel.FULL_ID, group.getButtonAt(0).getTag());
+        assertEquals(RawSbsModeSettingsModel.HALF_ID, group.getButtonAt(1).getTag());
+        assertEquals(RawSbsModeSettingsModel.FULL_ID, group.getSelectedValue());
+        assertTrue(group.getButtonAt(0).isActivated());
+
+        int width = dp(activity, 720);
+        group.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        group.layout(0, 0, group.getMeasuredWidth(), group.getMeasuredHeight());
+        assertEquals(group.getButtonAt(0).getTop(), group.getButtonAt(1).getTop());
+        assertEquals(group.getButtonAt(0).getRight(), group.getButtonAt(1).getLeft());
+        assertEquals(group.getMeasuredWidth(), group.getButtonAt(1).getRight());
+
+        group.getButtonAt(1).performClick();
+        assertEquals(RawSbsModeSettingsModel.HALF_ID, selectedResolution[0]);
+        assertEquals(RawSbsModeSettingsModel.HALF_ID, group.getSelectedValue());
+
+        state.toggleModeOptions(XrStreamPresenter.PresenterMode.NORMAL.name());
+        render.invoke(presenter);
+        assertNull(getField(presenter, "rawSbsPerEyeResolutionChoiceGroup"));
+        controller.destroy();
+    }
+
     @Test
     public void clientModePaneUsesWholePaneVerticalOverflowAtConstrainedHeight()
             throws Exception {

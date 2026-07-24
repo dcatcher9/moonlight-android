@@ -14,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider;
 import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
+import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
@@ -157,6 +158,240 @@ public final class XrSessionSettingsControllerTest {
                                 null));
         assertFalse(snapshot.sharedPreferences().contains(
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
+    }
+
+    @Test
+    public void rawPerEyeResolutionDefaultsToFullAndInheritsGlobalHalf() {
+        RawSbsModeSettingsModel initial = controller().getRawSbsModel();
+
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                initial.appliedResolution);
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                initial.pendingResolution);
+        assertEquals(RawSbsModeSettingsModel.FULL_ID, initial.selectedChoiceId);
+        assertEquals(SessionSettingsModel.Source.GLOBAL, initial.source);
+        assertFalse(initial.hasPendingChange());
+
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue)
+                .commit());
+        assertTrue(store.startNewSession(pc, app, null, 2L));
+
+        RawSbsModeSettingsModel inherited = controller().getRawSbsModel();
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                inherited.appliedResolution);
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                inherited.pendingResolution);
+        assertEquals(RawSbsModeSettingsModel.HALF_ID, inherited.selectedChoiceId);
+        assertEquals(SessionSettingsModel.Source.GLOBAL, inherited.source);
+        assertFalse(inherited.hasPendingChange());
+    }
+
+    @Test
+    public void rawPerEyeResolutionStagesHalf() {
+        XrSessionSettingsController controller = controller();
+
+        controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
+
+        RawSbsModeSettingsModel model = controller.getRawSbsModel();
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                model.appliedResolution);
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                model.pendingResolution);
+        assertEquals("Full", model.appliedResolutionName);
+        assertEquals("Half", model.pendingResolutionName);
+        assertEquals(RawSbsModeSettingsModel.HALF_ID, model.selectedChoiceId);
+        assertEquals(SessionSettingsModel.Source.CURRENT_SESSION, model.source);
+        assertTrue(model.hasPendingChange());
+        assertTrue(controller.hasPendingChanges());
+    }
+
+    @Test
+    public void rawHalfPersistsOnlyInRawModeAndRestoresOnResume() {
+        XrSessionSettingsController controller = controller();
+        controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        assertTrue(controller.commitPending());
+
+        SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
+        assertTrue(snapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertFalse(snapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.NORMAL,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertFalse(snapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertFalse(snapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertEquals(RawSbsModeSettingsModel.HALF_ID,
+                snapshot.preferencesForMode(
+                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW).getString(
+                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, null));
+
+        XrSessionSettingsController resumed = controller();
+        RawSbsModeSettingsModel resumedModel = resumed.getRawSbsModel();
+        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                resumed.getStartupMode());
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                resumedModel.appliedResolution);
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                resumedModel.pendingResolution);
+        assertEquals(SessionSettingsModel.Source.CURRENT_SESSION, resumedModel.source);
+        assertEquals(RawSbsModeSettingsModel.HALF_ID,
+                resumed.getStartupPreferences().getString(
+                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, null));
+        assertFalse(resumed.selectedModeRequiresReconnect());
+        assertFalse(resumed.hasPendingChanges());
+    }
+
+    @Test
+    public void rawUseGlobalModeDefaultsClearsPerEyeResolutionOverride() {
+        assertTrue(store.edit(pc, app)
+                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        RawSbsModeSettingsModel.HALF_ID, RawSbsModeSettingsModel.FULL_ID)
+                .commit());
+        XrSessionSettingsController controller = controller();
+        assertEquals(SessionSettingsModel.Source.CURRENT_SESSION,
+                controller.getRawSbsModel().source);
+
+        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        RawSbsModeSettingsModel staged = controller.getRawSbsModel();
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                staged.pendingResolution);
+        assertEquals(SessionSettingsModel.Source.GLOBAL, staged.source);
+        assertTrue(staged.hasPendingChange());
+        assertTrue(controller.hasPendingChanges());
+        assertTrue(controller.commitPending());
+
+        SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
+        assertFalse(snapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        RawSbsModeSettingsModel restored = controller().getRawSbsModel();
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                restored.appliedResolution);
+        assertEquals(SessionSettingsModel.Source.GLOBAL, restored.source);
+    }
+
+    @Test
+    public void rawExplicitSelectionUndoesPendingGlobalReset() {
+        assertTrue(store.edit(pc, app)
+                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        RawSbsModeSettingsModel.HALF_ID, RawSbsModeSettingsModel.FULL_ID)
+                .commit());
+        XrSessionSettingsController controller = controller();
+        assertFalse(controller.hasPendingChanges());
+
+        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        assertTrue(controller.hasPendingChanges());
+        controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
+
+        RawSbsModeSettingsModel restored = controller.getRawSbsModel();
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                restored.appliedResolution);
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                restored.pendingResolution);
+        assertEquals(RawSbsModeSettingsModel.HALF_ID, restored.selectedChoiceId);
+        assertEquals(SessionSettingsModel.Source.CURRENT_SESSION, restored.source);
+        assertFalse(restored.hasPendingChange());
+        assertFalse(controller.hasPendingChanges());
+    }
+
+    @Test
+    public void rawPackingChangeAloneRequiresReconnectWhenRawIsLive() {
+        assertTrue(store.edit(pc, app)
+                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .commit());
+        XrSessionSettingsController controller = controller();
+        ModeStreamQualityModel quality = controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        assertFalse(quality.hasPendingChanges());
+        assertFalse(quality.requiresReconnect());
+        assertFalse(controller.selectedModeRequiresReconnect());
+
+        controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
+
+        quality = controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        assertFalse(quality.hasPendingChanges());
+        assertTrue(quality.requiresReconnect());
+        assertTrue(controller.selectedModeRequiresReconnect());
+        assertTrue(controller.hasPendingChanges());
+    }
+
+    @Test
+    public void fourKRawFullPromotesForcedH264WhileHalfKeepsIt() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "3840x2160")
+                .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "neverh265")
+                .commit());
+        XrSessionSettingsController fullController = controller();
+
+        fullController.selectPresentationMode(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        assertEquals("forceh265", fullController.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
+
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        RawSbsModeSettingsModel.HALF_ID)
+                .commit());
+        assertTrue(store.startNewSession(pc, app, null, 2L));
+        XrSessionSettingsController halfController = controller();
+
+        halfController.selectPresentationMode(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        assertEquals(RawSbsModeSettingsModel.HALF_ID,
+                halfController.getRawSbsModel().selectedChoiceId);
+        assertEquals("neverh265", halfController.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
+    }
+
+    @Test
+    public void rawHalfCustomWidthUsesExactH264BoundaryWithoutClamping() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "5120x2160")
+                .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "neverh265")
+                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        RawSbsModeSettingsModel.HALF_ID)
+                .commit());
+        XrSessionSettingsController wideController = controller();
+
+        wideController.selectPresentationMode(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        assertTrue(wideController.isRawSbsTransportSupported());
+        assertEquals("5120x2160", wideController.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
+        assertEquals("forceh265", wideController.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
+
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "4096x2160")
+                .commit());
+        assertTrue(store.startNewSession(pc, app, null, 2L));
+        XrSessionSettingsController boundaryController = controller();
+
+        boundaryController.selectPresentationMode(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+
+        assertTrue(boundaryController.isRawSbsTransportSupported());
+        assertEquals("4096x2160", boundaryController.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
+        assertEquals("neverh265", boundaryController.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
     }
 
     @Test
@@ -657,6 +892,38 @@ public final class XrSessionSettingsControllerTest {
                 resumed.getLiveStreamQuality());
         assertQuality(resumedSnapshot, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                 "3840x2160", "90", 100000);
+    }
+
+    @Test
+    public void rawHalfSurvivesStoreRestartAndConfirmedResume() {
+        assertTrue(store.startNewSession(pc, app, "host-session-raw-half", 2L));
+        XrSessionSettingsController controller = controller();
+        controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        assertTrue(controller.commitPending());
+
+        SessionSettingsStore restartedStore = new SessionSettingsStore(context);
+        assertTrue(restartedStore.confirmHostResume(
+                pc, app, "host-session-raw-half", 3L) != null);
+        SessionSettingsStore.Snapshot resumedSnapshot =
+                restartedStore.snapshot(pc, globals);
+        XrSessionSettingsController resumed = new XrSessionSettingsController(
+                restartedStore, pc, app, globals, resumedSnapshot);
+
+        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                resumed.getStartupMode());
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                resumed.getRawSbsModel().appliedResolution);
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                resumed.getRawSbsModel().pendingResolution);
+        assertEquals(RawSbsModeSettingsModel.HALF_ID,
+                resumed.getStartupPreferences().getString(
+                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, null));
+        assertTrue(resumedSnapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertFalse(resumed.selectedModeRequiresReconnect());
+        assertFalse(resumed.hasPendingChanges());
     }
 
     @Test

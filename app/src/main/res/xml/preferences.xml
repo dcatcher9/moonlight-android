@@ -17,6 +17,15 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.InlineListPreference
+            android:defaultValue="full"
+            android:entries="@array/xr_raw_sbs_per_eye_resolution_names"
+            android:entryValues="@array/xr_raw_sbs_per_eye_resolution_values"
+            android:key="list_raw_sbs_per_eye_resolution"
+            android:summary="@string/summary_raw_sbs_per_eye_resolution"
+            android:title="@string/title_raw_sbs_per_eye_resolution"
+            app:iconSpaceReserved="false" />
+
+        <com.limelight.preferences.InlineListPreference
             android:defaultValue="90"
             android:entries="@array/xr_fps_names"
             android:entryValues="@array/xr_fps_values"

@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
+import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
@@ -119,6 +120,9 @@ public final class XrSessionSettingsController {
 
     private final String globalClientModel;
     private final SessionSettingsModel.Source appliedClientModelSource;
+    private final PreferenceConfiguration.RawSbsPerEyeResolution
+            globalRawSbsPerEyeResolution;
+    private final SessionSettingsModel.Source appliedRawSbsPerEyeResolutionSource;
     private final SessionSettingsStore.PresenterMode startupMode;
     private final StreamQualityTuple liveStreamQuality;
     private final SharedPreferences startupPreferences;
@@ -126,8 +130,13 @@ public final class XrSessionSettingsController {
     private SessionSettingsStore.PresenterMode selectedMode;
     private String appliedClientModel;
     private String pendingClientModel;
+    private PreferenceConfiguration.RawSbsPerEyeResolution
+            appliedRawSbsPerEyeResolution;
+    private PreferenceConfiguration.RawSbsPerEyeResolution
+            pendingRawSbsPerEyeResolution;
     private boolean sharedInheritanceResetRequested;
     private boolean clientModelInheritanceResetRequested;
+    private boolean rawSbsPerEyeResolutionInheritanceResetRequested;
     private final EnumSet<SessionSettingsStore.PresenterMode> modeInheritanceResetRequested =
             EnumSet.noneOf(SessionSettingsStore.PresenterMode.class);
 
@@ -215,6 +224,18 @@ public final class XrSessionSettingsController {
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING)
                 ? SessionSettingsModel.Source.CURRENT_SESSION
                 : SessionSettingsModel.Source.GLOBAL;
+        globalRawSbsPerEyeResolution =
+                readRawSbsPerEyeResolution(globalPreferences);
+        SharedPreferences rawPreferences = snapshot.preferencesForMode(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        appliedRawSbsPerEyeResolution =
+                readRawSbsPerEyeResolution(rawPreferences);
+        pendingRawSbsPerEyeResolution = appliedRawSbsPerEyeResolution;
+        appliedRawSbsPerEyeResolutionSource = snapshot.isModeOverridden(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING)
+                ? SessionSettingsModel.Source.CURRENT_SESSION
+                : SessionSettingsModel.Source.GLOBAL;
         startupMode = startupModeOverride != null
                 ? startupModeOverride
                 : snapshot.getRecord() != null
@@ -260,7 +281,8 @@ public final class XrSessionSettingsController {
         ModeStreamQualityModel.Builder builder = ModeStreamQualityModel.builder(
                 qualityTuple(applied), qualityTuple(pending), liveStreamQuality,
                 mode == selectedMode)
-                .setTransportReconnectRequired(crossesRawTransportBoundary(mode));
+                .setTransportReconnectRequired(crossesRawTransportBoundary(mode)
+                        || rawPackingChangeRequiresReconnect(mode));
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
             if (key.isModeStreamQuality()) {
                 builder.put(key, valueForModel(key, applied.get(key), pending.get(key),
@@ -298,7 +320,7 @@ public final class XrSessionSettingsController {
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW).get(
                 SessionSettingsModel.Key.RESOLUTION));
         return PreferenceConfiguration.isRawSbsTransportSupported(
-                dimensions[0], dimensions[1]);
+                dimensions[0], dimensions[1], pendingRawSbsPerEyeResolution);
     }
 
     /**
@@ -319,6 +341,9 @@ public final class XrSessionSettingsController {
     /** Updates model state only. The caller decides when to perform Apply & reconnect. */
     public void selectPresentationMode(SessionSettingsStore.PresenterMode mode) {
         selectedMode = Objects.requireNonNull(mode, "mode");
+        if (selectedMode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            constrainRawSbsTransportToSupportedPreset();
+        }
         ensureSelectedRawCodecCompatibility();
     }
 
@@ -341,6 +366,18 @@ public final class XrSessionSettingsController {
                 "GPU-only \u00b7 initializes on first use",
                 clientModelChoices(appliedClientModel, pendingClientModel),
                 pendingClientModel);
+    }
+
+    public RawSbsModeSettingsModel getRawSbsModel() {
+        SessionSettingsModel.Source source =
+                pendingRawSbsPerEyeResolution == globalRawSbsPerEyeResolution
+                        ? SessionSettingsModel.Source.GLOBAL
+                        : SessionSettingsModel.Source.CURRENT_SESSION;
+        if (pendingRawSbsPerEyeResolution == appliedRawSbsPerEyeResolution) {
+            source = appliedRawSbsPerEyeResolutionSource;
+        }
+        return new RawSbsModeSettingsModel(
+                appliedRawSbsPerEyeResolution, pendingRawSbsPerEyeResolution, source);
     }
 
     public void cycle(SessionSettingsModel.Key key) {
@@ -470,7 +507,7 @@ public final class XrSessionSettingsController {
         ensureSelectedRawCodecCompatibility();
     }
 
-    /** Resets only one mode's quality tuple; Client SBS also resets its model family. */
+    /** Resets one mode's quality tuple and any settings that belong only to that mode. */
     public void useGlobalModeDefaults(SessionSettingsStore.PresenterMode mode) {
         Objects.requireNonNull(mode, "mode");
         EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
@@ -489,6 +526,10 @@ public final class XrSessionSettingsController {
                     appliedClientModelSource == SessionSettingsModel.Source.CURRENT_SESSION;
         }
         if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            pendingRawSbsPerEyeResolution = globalRawSbsPerEyeResolution;
+            rawSbsPerEyeResolutionInheritanceResetRequested =
+                    appliedRawSbsPerEyeResolutionSource
+                            == SessionSettingsModel.Source.CURRENT_SESSION;
             constrainRawSbsTransportToSupportedPreset();
         }
         if (mode == selectedMode) {
@@ -510,6 +551,33 @@ public final class XrSessionSettingsController {
             throw new IllegalArgumentException("Unsupported Client SBS model: " + modelId);
         }
         pendingClientModel = modelId;
+    }
+
+    /** Stages the Raw SBS packing density for the current session. */
+    public void selectRawSbsPerEyeResolution(String resolutionId) {
+        Objects.requireNonNull(resolutionId, "resolutionId");
+        PreferenceConfiguration.RawSbsPerEyeResolution resolution;
+        if (PreferenceConfiguration.RawSbsPerEyeResolution.FULL.preferenceValue.equals(
+                resolutionId)) {
+            resolution = PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
+        }
+        else if (PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue.equals(
+                resolutionId)) {
+            resolution = PreferenceConfiguration.RawSbsPerEyeResolution.HALF;
+        }
+        else {
+            throw new IllegalArgumentException(
+                    "Unsupported Raw SBS per-eye resolution: " + resolutionId);
+        }
+        if (pendingRawSbsPerEyeResolution == resolution) {
+            return;
+        }
+        pendingRawSbsPerEyeResolution = resolution;
+        // An explicit choice replaces a staged "inherit global" action. In particular, selecting
+        // the applied session override again must fully undo Use global defaults.
+        rawSbsPerEyeResolutionInheritanceResetRequested = false;
+        constrainRawSbsTransportToSupportedPreset();
+        ensureSelectedRawCodecCompatibility();
     }
 
     /** Commits all pending shared, per-mode quality, and Client SBS settings atomically. */
@@ -541,15 +609,19 @@ public final class XrSessionSettingsController {
         editor.setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
                 pendingClientModel, globalClientModel);
+        editor.setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                pendingRawSbsPerEyeResolution.preferenceValue,
+                globalRawSbsPerEyeResolution.preferenceValue);
         editor.setLastSuccessfulMode(selectedMode);
         return editor.commit();
     }
 
     /**
      * Returns whether the selected mode's staged quality tuple or transport geometry differs from
-     * the connection backing the live decoder. Raw SBS requests a {@code 2W x H} host stream, so
-     * entering or leaving it must reconnect even when its logical per-eye quality tuple is
-     * identical. Same-quality switches among the other modes remain live.
+     * the connection backing the live decoder. Raw SBS uses a packed stereo host stream, so
+     * entering/leaving Raw or changing its Full/Half packing must reconnect even when the selected
+     * quality tuple is identical. Same-quality switches among the other modes remain live.
      */
     public boolean selectedModeRequiresReconnect() {
         return modeRequiresReconnect(selectedMode);
@@ -558,9 +630,11 @@ public final class XrSessionSettingsController {
     public boolean hasPendingChanges() {
         if (sharedInheritanceResetRequested
                 || clientModelInheritanceResetRequested
+                || rawSbsPerEyeResolutionInheritanceResetRequested
                 || !modeInheritanceResetRequested.isEmpty()
                 || !pendingSharedValues.equals(appliedSharedValues)
                 || !pendingClientModel.equals(appliedClientModel)
+                || pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution
                 || modeRequiresReconnect(selectedMode)) {
             return true;
         }
@@ -575,7 +649,15 @@ public final class XrSessionSettingsController {
 
     private boolean modeRequiresReconnect(SessionSettingsStore.PresenterMode mode) {
         return crossesRawTransportBoundary(mode)
+                || rawPackingChangeRequiresReconnect(mode)
                 || !qualityTuple(pendingModeQuality.get(mode)).equals(liveStreamQuality);
+    }
+
+    private boolean rawPackingChangeRequiresReconnect(
+            SessionSettingsStore.PresenterMode mode) {
+        return startupMode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW
+                && mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW
+                && pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution;
     }
 
     private boolean crossesRawTransportBoundary(SessionSettingsStore.PresenterMode mode) {
@@ -606,9 +688,14 @@ public final class XrSessionSettingsController {
         }
         int[] dimensions = parseResolution((String) pendingModeQuality.get(selectedMode)
                 .get(SessionSettingsModel.Key.RESOLUTION));
-        return ((long) dimensions[0] * 2L)
-                > PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_H264
-                || dimensions[1] > PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_H264;
+        if (!PreferenceConfiguration.isRawSbsTransportSupported(
+                dimensions[0], dimensions[1], pendingRawSbsPerEyeResolution)) {
+            return true;
+        }
+        int[] packed = PreferenceConfiguration.rawSbsPackedDimensions(
+                dimensions[0], dimensions[1], pendingRawSbsPerEyeResolution);
+        return packed[0] > PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_H264
+                || packed[1] > PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_H264;
     }
 
     private void addSharedValues(SessionSettingsModel.Builder builder) {
@@ -705,6 +792,20 @@ public final class XrSessionSettingsController {
         output.put(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC, preferences.getBoolean(
                 PreferenceConfiguration.HOST_AUDIO_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_HOST_AUDIO));
+    }
+
+    private static PreferenceConfiguration.RawSbsPerEyeResolution
+            readRawSbsPerEyeResolution(SharedPreferences preferences) {
+        String value;
+        try {
+            value = preferences.getString(
+                    PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                    PreferenceConfiguration.DEFAULT_RAW_SBS_PER_EYE_RESOLUTION);
+        }
+        catch (ClassCastException invalidStoredType) {
+            value = PreferenceConfiguration.DEFAULT_RAW_SBS_PER_EYE_RESOLUTION;
+        }
+        return PreferenceConfiguration.RawSbsPerEyeResolution.fromPreferenceValue(value);
     }
 
     private void stageDefaultBitrate(SessionSettingsStore.PresenterMode mode) {
