@@ -510,9 +510,12 @@ public final class XrSessionSettingsControllerTest {
                 .get(SessionSettingsModel.Key.BITRATE);
         assertEquals("10000", bitrate.selectedChoiceId);
         assertFalse(hasChoice(bitrate, "24000"));
-        assertThrows(IllegalArgumentException.class, () ->
-                controller.selectModeQualitySetting(mode,
-                        SessionSettingsModel.Key.BITRATE, "24000"));
+        controller.selectModeQualitySetting(mode,
+                SessionSettingsModel.Key.BITRATE, "24000");
+        bitrate = controller.getModeStreamQualityModel(mode)
+                .get(SessionSettingsModel.Key.BITRATE);
+        assertEquals("24000", bitrate.selectedChoiceId);
+        assertTrue(hasChoice(bitrate, "24000"));
     }
 
     @Test

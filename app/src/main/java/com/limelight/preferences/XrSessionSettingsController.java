@@ -469,6 +469,31 @@ public final class XrSessionSettingsController {
         if (!key.isModeStreamQuality()) {
             throw new IllegalArgumentException(key + " is shared by all presentation modes");
         }
+        if (key == SessionSettingsModel.Key.BITRATE) {
+            int bitrate;
+            try {
+                bitrate = Integer.parseInt(choiceId);
+            }
+            catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "Invalid bitrate choice: " + choiceId, e);
+            }
+            if (bitrate <= 0) {
+                throw new IllegalArgumentException("Unsupported choice for " + key + ": "
+                        + choiceId);
+            }
+
+            EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
+            if (Objects.equals(bitrate, pending.get(key))) {
+                return;
+            }
+            pending.put(key, bitrate);
+            if (mode == selectedMode) {
+                ensureSelectedRawCodecCompatibility();
+            }
+            return;
+        }
+
         EnumMap<SessionSettingsModel.Key, Object> applied = appliedModeQuality.get(mode);
         EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
         if (!containsChoice(choicesFor(key, applied.get(key), pending.get(key)), choiceId)) {
