@@ -29,6 +29,8 @@ public final class XrSessionSettingsController {
     private static final String CODEC_AV1 = "forceav1";
     private static final String CODEC_HEVC = "forceh265";
     private static final String CODEC_H264 = "neverh265";
+    private static final String CLIENT_SBS_DEFAULT_RESOLUTION = "1920x1080";
+    private static final String CLIENT_SBS_DEFAULT_FPS = "30";
     private static final String MAX_RAW_SBS_RESOLUTION = "3840x2160";
     private static final List<Integer> BITRATES = Arrays.asList(
             10000, 20000, 30000, 40000, 60000, 80000, 100000,
@@ -97,12 +99,15 @@ public final class XrSessionSettingsController {
     private final SessionSettingsStore store;
     private final SessionSettingsStore.PcIdentity pc;
     private final SessionSettingsStore.AppIdentity app;
+    private final SharedPreferences globalPreferences;
     private final String expectedLocalSessionId;
     private final EnumMap<SessionSettingsModel.Key, Object> globalValues =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, Object> appliedSharedValues =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, Object> pendingSharedValues =
+            new EnumMap<>(SessionSettingsModel.Key.class);
+    private final EnumMap<SessionSettingsModel.Key, Object> sessionSharedModeQuality =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source>
             appliedSharedSources =
@@ -163,7 +168,7 @@ public final class XrSessionSettingsController {
         this.store = Objects.requireNonNull(store, "store");
         this.pc = Objects.requireNonNull(pc, "pc");
         this.app = Objects.requireNonNull(app, "app");
-        Objects.requireNonNull(globalPreferences, "globalPreferences");
+        this.globalPreferences = Objects.requireNonNull(globalPreferences, "globalPreferences");
         Objects.requireNonNull(snapshot, "snapshot");
         expectedLocalSessionId = snapshot.getRecord() != null
                 ? snapshot.getRecord().getLocalSessionId() : null;
@@ -173,6 +178,12 @@ public final class XrSessionSettingsController {
         EnumMap<SessionSettingsModel.Key, Object> effectiveSharedValues =
                 new EnumMap<>(SessionSettingsModel.Key.class);
         readSharedValues(effective, effectiveSharedValues);
+        for (Map.Entry<SessionSettingsModel.Key, Object> entry
+                : effectiveSharedValues.entrySet()) {
+            if (entry.getKey().isModeStreamQuality()) {
+                sessionSharedModeQuality.put(entry.getKey(), entry.getValue());
+            }
+        }
         for (Map.Entry<SessionSettingsModel.Key, String> entry : PREF_KEYS.entrySet()) {
             SessionSettingsModel.Key key = entry.getKey();
             if (!key.isModeStreamQuality()) {
@@ -188,7 +199,8 @@ public final class XrSessionSettingsController {
                 : SessionSettingsStore.PresenterMode.values()) {
             EnumMap<SessionSettingsModel.Key, Object> effectiveModeValues =
                     new EnumMap<>(SessionSettingsModel.Key.class);
-            readSharedValues(snapshot.preferencesForMode(mode), effectiveModeValues);
+            readModeValues(snapshot, mode, snapshot.preferencesForMode(mode),
+                    effectiveModeValues);
             EnumMap<SessionSettingsModel.Key, Object> applied =
                     new EnumMap<>(SessionSettingsModel.Key.class);
             EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source> sources =
@@ -212,7 +224,7 @@ public final class XrSessionSettingsController {
         }
         globalClientModel = globalPreferences.getString(
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC);
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2);
         SharedPreferences clientPreferences = snapshot.preferencesForMode(
                 SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
         appliedClientModel = clientPreferences.getString(
@@ -329,11 +341,15 @@ public final class XrSessionSettingsController {
      * user outside Raw's settings pane.
      */
     public boolean constrainRawSbsTransportToSupportedPreset() {
+        EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        String priorResolution = (String) pending.get(SessionSettingsModel.Key.RESOLUTION);
+        Integer priorBitrate = (Integer) pending.get(SessionSettingsModel.Key.BITRATE);
+
         if (isRawSbsTransportSupported()) {
             return false;
         }
-        pendingModeQuality.get(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
-                .put(SessionSettingsModel.Key.RESOLUTION, MAX_RAW_SBS_RESOLUTION);
+        pending.put(SessionSettingsModel.Key.RESOLUTION, MAX_RAW_SBS_RESOLUTION);
         stageDefaultBitrate(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
         return true;
     }
@@ -482,7 +498,6 @@ public final class XrSessionSettingsController {
                 throw new IllegalArgumentException("Unsupported choice for " + key + ": "
                         + choiceId);
             }
-
             EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
             if (Objects.equals(bitrate, pending.get(key))) {
                 return;
@@ -506,10 +521,6 @@ public final class XrSessionSettingsController {
             return;
         }
         pending.put(key, selectedValue);
-        if (key == SessionSettingsModel.Key.RESOLUTION
-                || key == SessionSettingsModel.Key.FRAME_RATE) {
-            stageDefaultBitrate(mode);
-        }
         if (mode == selectedMode) {
             ensureSelectedRawCodecCompatibility();
         }
@@ -529,6 +540,8 @@ public final class XrSessionSettingsController {
         copyValuesForScope(globalValues, pendingSharedValues, false);
         sharedInheritanceResetRequested = appliedSharedSources.containsValue(
                 SessionSettingsModel.Source.CURRENT_SESSION);
+        sessionSharedModeQuality.clear();
+        copyValuesForScope(globalValues, sessionSharedModeQuality, true);
         ensureSelectedRawCodecCompatibility();
     }
 
@@ -536,8 +549,42 @@ public final class XrSessionSettingsController {
     public void useGlobalModeDefaults(SessionSettingsStore.PresenterMode mode) {
         Objects.requireNonNull(mode, "mode");
         EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
+        EnumMap<SessionSettingsModel.Key, Object> source = new EnumMap<>(SessionSettingsModel.Key.class);
+        copyValuesForScope(globalValues, source, true);
         pending.clear();
-        copyValuesForScope(globalValues, pending, true);
+        copyModeValuesForScope(source, pending, mode);
+        if (appliedModeQualitySources.get(mode).containsValue(
+                SessionSettingsModel.Source.CURRENT_SESSION)) {
+            modeInheritanceResetRequested.add(mode);
+        }
+        else {
+            modeInheritanceResetRequested.remove(mode);
+        }
+        if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI) {
+            pendingClientModel = globalClientModel;
+            clientModelInheritanceResetRequested =
+                    appliedClientModelSource == SessionSettingsModel.Source.CURRENT_SESSION;
+        }
+        if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            pendingRawSbsPerEyeResolution = globalRawSbsPerEyeResolution;
+            rawSbsPerEyeResolutionInheritanceResetRequested =
+                    appliedRawSbsPerEyeResolutionSource
+                            == SessionSettingsModel.Source.CURRENT_SESSION;
+            constrainRawSbsTransportToSupportedPreset();
+        }
+        if (mode == selectedMode) {
+            ensureSelectedRawCodecCompatibility();
+        }
+    }
+
+    /** Resets one mode's quality tuple from the current shared session settings. */
+    public void useSessionModeDefaults(SessionSettingsStore.PresenterMode mode) {
+        Objects.requireNonNull(mode, "mode");
+        EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
+        EnumMap<SessionSettingsModel.Key, Object> source = new EnumMap<>(SessionSettingsModel.Key.class);
+        copyValuesForScope(sessionSharedModeQuality, source, true);
+        pending.clear();
+        copyModeValuesForScope(source, pending, mode);
         if (appliedModeQualitySources.get(mode).containsValue(
                 SessionSettingsModel.Source.CURRENT_SESSION)) {
             modeInheritanceResetRequested.add(mode);
@@ -779,6 +826,17 @@ public final class XrSessionSettingsController {
         }
     }
 
+    private static void copyModeValuesForScope(
+            EnumMap<SessionSettingsModel.Key, Object> source,
+            EnumMap<SessionSettingsModel.Key, Object> target,
+            SessionSettingsStore.PresenterMode mode) {
+        copyValuesForScope(source, target, true);
+        if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI) {
+            target.put(SessionSettingsModel.Key.RESOLUTION, CLIENT_SBS_DEFAULT_RESOLUTION);
+            target.put(SessionSettingsModel.Key.FRAME_RATE, CLIENT_SBS_DEFAULT_FPS);
+        }
+    }
+
     private static StreamQualityTuple qualityTuple(
             EnumMap<SessionSettingsModel.Key, Object> values) {
         return new StreamQualityTuple(
@@ -787,18 +845,68 @@ public final class XrSessionSettingsController {
                 (Integer) values.get(SessionSettingsModel.Key.BITRATE));
     }
 
+    private static int normalizeBitrate(int bitrate, String resolution, String fps) {
+        return isSupportedBitrate(bitrate)
+                ? bitrate
+                : PreferenceConfiguration.getDefaultBitrate(resolution, fps);
+    }
+
+    private static boolean isSupportedBitrate(int bitrate) {
+        return BITRATES.contains(bitrate);
+    }
+
     private static void readSharedValues(SharedPreferences preferences,
                                          EnumMap<SessionSettingsModel.Key, Object> output) {
+        readSharedValues(preferences, output, PreferenceConfiguration.DEFAULT_RESOLUTION,
+                PreferenceConfiguration.DEFAULT_FPS);
+    }
+
+    private static void readModeValues(SessionSettingsStore.Snapshot snapshot,
+                                       SessionSettingsStore.PresenterMode mode,
+                                       SharedPreferences preferences,
+                                       EnumMap<SessionSettingsModel.Key, Object> output) {
+        boolean clientSbsMode = mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI;
+        boolean usesClientSbsDefaults = clientSbsMode
+                && !snapshot.isModeOverridden(mode, PreferenceConfiguration.RESOLUTION_PREF_STRING)
+                && !snapshot.isSharedOverridden(PreferenceConfiguration.RESOLUTION_PREF_STRING);
+        boolean usesClientFpsDefaults = clientSbsMode
+                && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
+                && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
+
         String resolution = preferences.getString(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_RESOLUTION);
         String fps = preferences.getString(PreferenceConfiguration.FPS_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_FPS);
+        if (usesClientSbsDefaults) {
+            resolution = CLIENT_SBS_DEFAULT_RESOLUTION;
+        }
+        if (usesClientFpsDefaults) {
+            fps = CLIENT_SBS_DEFAULT_FPS;
+        }
+
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
-        output.put(SessionSettingsModel.Key.BITRATE, preferences.getInt(
+        output.put(SessionSettingsModel.Key.BITRATE, normalizeBitrate(preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING,
-                PreferenceConfiguration.getDefaultBitrate(resolution, fps)));
+                PreferenceConfiguration.getDefaultBitrate(resolution, fps)),
+                resolution, fps));
+    }
+
+    private static void readSharedValues(SharedPreferences preferences,
+                                        EnumMap<SessionSettingsModel.Key, Object> output,
+                                        String resolutionDefault, String fpsDefault) {
+        String resolution = preferences.getString(
+                PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                resolutionDefault);
+        String fps = preferences.getString(PreferenceConfiguration.FPS_PREF_STRING,
+                fpsDefault);
+        output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
+        output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
+        output.put(SessionSettingsModel.Key.BITRATE, normalizeBitrate(preferences.getInt(
+                PreferenceConfiguration.BITRATE_PREF_STRING,
+                PreferenceConfiguration.getDefaultBitrate(resolution, fps)),
+                resolution, fps));
         output.put(SessionSettingsModel.Key.HDR, preferences.getBoolean(
                 PreferenceConfiguration.ENABLE_HDR_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_ENABLE_HDR));

@@ -280,6 +280,8 @@ public class XrStreamPresenter {
     private boolean sessionControlsEnabled = true;
     private final EnumMap<SessionSettingsModel.Key, XrChoiceGroup> sessionChoiceGroups =
             new EnumMap<>(SessionSettingsModel.Key.class);
+    private final EnumMap<SessionSettingsModel.Key, XrBitrateControl> sessionBitrateControls =
+            new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, TextView> sessionSourceViews =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, TextView> sessionPendingViews =
@@ -627,6 +629,9 @@ public class XrStreamPresenter {
         if (modeBitrateControl != null) {
             modeBitrateControl.setEnabled(enabled);
         }
+        for (XrBitrateControl control : sessionBitrateControls.values()) {
+            control.setEnabled(enabled);
+        }
         if (modeDefaultsButton != null) {
             modeDefaultsButton.setEnabled(enabled);
         }
@@ -741,7 +746,7 @@ public class XrStreamPresenter {
             PreferenceConfiguration prefConfig) {
         String id = prefConfig.clientSbsDepthModelId != null
                 ? prefConfig.clientSbsDepthModelId
-                : PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
+                : PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
         boolean midas = PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id);
         String name = midas ? "MiDaS 2.1 Small" : "Depth Anything V2 Small";
         return new ClientSbsModeSettingsModel(id, name, id, name,
@@ -1886,7 +1891,8 @@ public class XrStreamPresenter {
         footer.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         footer.setPadding(0, dp(10), 0, 0);
 
-        modeDefaultsButton = compactButton(activity.getString(R.string.xr_session_use_global));
+        modeDefaultsButton = compactButton(
+                activity.getString(R.string.xr_session_use_session));
         modeDefaultsButton.setEnabled(sessionControlsEnabled);
         modeDefaultsButton.setOnClickListener(v -> controlActionListener
                 .onUseModeGlobalDefaultsRequested(mode, modeStreamQualityModels.get(mode)));
@@ -1911,7 +1917,13 @@ public class XrStreamPresenter {
             return value.choices;
         }
         List<SessionSettingsModel.Choice> fallback = new ArrayList<>();
-        fallback.add(new SessionSettingsModel.Choice(choiceId, value.pendingValue));
+        String safeChoiceId = value.selectedChoiceId != null
+                ? value.selectedChoiceId
+                : (choiceId != null ? choiceId : "0");
+        String safeLabel = value.pendingValue != null
+                ? value.pendingValue
+                : safeChoiceId;
+        fallback.add(new SessionSettingsModel.Choice(safeChoiceId, safeLabel));
         return fallback;
     }
 
@@ -2173,9 +2185,8 @@ public class XrStreamPresenter {
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
         String bitrateId = qualityChoiceId(bitrate,
                 String.valueOf(model.pendingQuality.bitrateKbps));
-        // Resolution and frame-rate changes can replace a computed custom bitrate (for example
-        // 4K90 -> 1080p90 -> 1080p30 briefly introduces 24 Mbps, then selects 10 Mbps). Always
-        // replace the complete choice model so the slider cannot retain and emit the stale value.
+        // Keep bitrate independent from resolution/fps. Rebuild the choice model so the slider
+        // remains in sync with the latest pending value and any out-of-preset entry.
         modeBitrateControl.setChoices(choicesOrCurrent(bitrate, bitrateId), bitrateId,
                 bitrate.pendingValue, choiceId ->
                         controlActionListener.onModeQualitySettingSelected(mode,
@@ -2353,7 +2364,7 @@ public class XrStreamPresenter {
         LinearLayout deliveryColumn = sessionSettingsColumn(
                 activity.getString(R.string.xr_session_delivery_group));
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
-            if (key.isModeStreamQuality()) {
+            if (key.isModeStreamQuality() && key != SessionSettingsModel.Key.BITRATE) {
                 continue;
             }
             SessionSettingsModel.Value value = sessionSettingsModel.get(key);
@@ -2414,6 +2425,7 @@ public class XrStreamPresenter {
             case FRAME_PACING:
             case AUDIO_LAYOUT:
             case PLAY_AUDIO_ON_PC:
+            case BITRATE:
                 return 1;
             default:
                 throw new IllegalArgumentException("Mode quality does not belong in this pane: "
@@ -2423,6 +2435,9 @@ public class XrStreamPresenter {
 
     private View buildSessionSettingRow(SessionSettingsModel.Key key,
                                         SessionSettingsModel.Value value) {
+        if (key == SessionSettingsModel.Key.BITRATE) {
+            return buildSessionBitrateSettingRow(key, value);
+        }
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(18), dp(16), dp(18), dp(16));
@@ -2460,6 +2475,53 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         choiceParams.topMargin = dp(7);
         row.addView(choices, choiceParams);
+
+        TextView pending = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        pending.setPadding(0, dp(4), 0, 0);
+        sessionPendingViews.put(key, pending);
+        row.addView(pending);
+        updateSessionPendingView(pending, value);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(12);
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    private View buildSessionBitrateSettingRow(SessionSettingsModel.Key key,
+                                               SessionSettingsModel.Value value) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(18), dp(16), dp(18), dp(16));
+        row.setBackground(controlSurfaceBackground(
+                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+
+        LinearLayout heading = new LinearLayout(activity);
+        heading.setOrientation(LinearLayout.HORIZONTAL);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = controlText(sessionSettingLabel(key),
+                SESSION_ROW_TITLE_TEXT_SP, Color.WHITE);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        heading.addView(title, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+        String source = value.source == SessionSettingsModel.Source.GLOBAL
+                ? activity.getString(R.string.xr_setting_source_global)
+                : activity.getString(R.string.xr_setting_source_session);
+        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        sessionSourceViews.put(key, sourceView);
+        heading.addView(sourceView);
+        row.addView(heading);
+
+        XrBitrateControl bitrateControl = new XrBitrateControl(activity);
+        bitrateControl.setChoices(choicesOrCurrent(value, value.selectedChoiceId),
+                value.selectedChoiceId, value.pendingValue, choiceId ->
+                        controlActionListener.onSharedSettingSelected(
+                                key, choiceId, sessionSettingsModel));
+        bitrateControl.setEnabled(sessionControlsEnabled);
+        sessionBitrateControls.put(key, bitrateControl);
+        row.addView(bitrateControl, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         TextView pending = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
         pending.setPadding(0, dp(4), 0, 0);
@@ -2579,27 +2641,43 @@ public class XrStreamPresenter {
         sessionSourceViews.clear();
         sessionPendingViews.clear();
         sessionGlyphViews.clear();
+        sessionBitrateControls.clear();
         sessionDefaultsButton = null;
         sessionApplyButton = null;
     }
 
     private void updateSessionSettingsView() {
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
-            if (key.isModeStreamQuality()) {
+            if (key.isModeStreamQuality() && key != SessionSettingsModel.Key.BITRATE) {
                 continue;
             }
             SessionSettingsModel.Value value = sessionSettingsModel.get(key);
-            XrChoiceGroup group = sessionChoiceGroups.get(key);
-            if (value == null || group == null) {
+            if (value == null) {
                 continue;
             }
-            if (!group.setSelectedValue(value.selectedChoiceId)) {
-                configureChoiceGroup(group, value.choices, value.selectedChoiceId,
-                        value.pendingValue, choiceId ->
-                                controlActionListener.onSharedSettingSelected(
-                                        key, choiceId, sessionSettingsModel));
+            if (key == SessionSettingsModel.Key.BITRATE) {
+                XrBitrateControl bitrateControl = sessionBitrateControls.get(key);
+                if (bitrateControl != null) {
+                    bitrateControl.setChoices(choicesOrCurrent(value, value.selectedChoiceId),
+                            value.selectedChoiceId, value.pendingValue, choiceId ->
+                                    controlActionListener.onSharedSettingSelected(
+                                            key, choiceId, sessionSettingsModel));
+                    bitrateControl.setEnabled(sessionControlsEnabled);
+                }
             }
-            group.setEnabled(sessionControlsEnabled);
+            else {
+                XrChoiceGroup group = sessionChoiceGroups.get(key);
+                if (group == null) {
+                    continue;
+                }
+                if (!group.setSelectedValue(value.selectedChoiceId)) {
+                    configureChoiceGroup(group, value.choices, value.selectedChoiceId,
+                            value.pendingValue, choiceId ->
+                                    controlActionListener.onSharedSettingSelected(
+                                            key, choiceId, sessionSettingsModel));
+                }
+                group.setEnabled(sessionControlsEnabled);
+            }
             TextView sourceView = sessionSourceViews.get(key);
             if (sourceView != null) {
                 sourceView.setText(value.source == SessionSettingsModel.Source.GLOBAL

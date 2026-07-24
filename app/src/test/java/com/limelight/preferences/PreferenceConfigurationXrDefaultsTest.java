@@ -42,8 +42,8 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertEquals(3840, configuration.width);
         assertEquals(2160, configuration.height);
         assertEquals(90f, configuration.fps, 0f);
-        assertEquals(130000, configuration.bitrate);
-        assertEquals(130000, configuration.meteredBitrate);
+        assertEquals(200000, configuration.bitrate);
+        assertEquals(200000, configuration.meteredBitrate);
         assertEquals(PreferenceConfiguration.FormatOption.FORCE_HEVC,
                 configuration.videoFormat);
         assertTrue(configuration.enableHdr);
@@ -53,7 +53,7 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertSame(MoonBridge.AUDIO_CONFIGURATION_STEREO,
                 configuration.audioConfiguration);
         assertFalse(configuration.playHostAudio);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 configuration.clientSbsDepthModelId);
         assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
                 configuration.rawSbsPerEyeResolution);
@@ -86,10 +86,10 @@ public final class PreferenceConfigurationXrDefaultsTest {
     }
 
     @Test
-    public void fourK90UsesExactVerifiedBitrateWithoutChangingOtherTuples() {
-        assertEquals(130000,
+    public void fixedBitrateDefaultIgnoresResolutionAndFps() {
+        assertEquals(200000,
                 PreferenceConfiguration.getDefaultBitrate("3840x2160", "90"));
-        assertEquals(80000,
+        assertEquals(200000,
                 PreferenceConfiguration.getDefaultBitrate("3840x2160", "60"));
     }
 }

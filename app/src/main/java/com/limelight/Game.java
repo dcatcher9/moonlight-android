@@ -415,8 +415,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
         else {
-            sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
-                    System.currentTimeMillis());
+            SessionSettingsStore.SessionRecord existingRecord =
+                    sessionSettingsStore.getCurrentSession(sessionPc);
+            boolean reusedRecord = false;
+            if (existingRecord != null
+                    && existingRecord.getCurrentApp().isSameApplication(sessionApp)) {
+                reusedRecord = sessionSettingsStore.edit(sessionPc, sessionApp,
+                                existingRecord.getLocalSessionId())
+                        .setResumeMetadata(new SessionSettingsStore.ResumeMetadata(
+                                false, null, System.currentTimeMillis()))
+                        .commit();
+            }
+
+            if (!reusedRecord) {
+                sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
+                        System.currentTimeMillis());
+            }
         }
 
         SessionSettingsStore.Snapshot snapshot =
@@ -530,7 +544,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (reconnectScheduled) {
                     return;
                 }
-                xrSessionSettingsController.useGlobalSharedDefaults();
+                xrSessionSettingsController.useGlobalDefaults();
                 refreshXrSessionSettingsModels();
             }
 
@@ -567,7 +581,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (reconnectScheduled) {
                     return;
                 }
-                xrSessionSettingsController.useGlobalModeDefaults(
+                xrSessionSettingsController.useSessionModeDefaults(
                         toSessionPresenterMode(mode));
                 refreshXrSessionSettingsModels();
             }
@@ -691,7 +705,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             qualityModels.put(mode, xrSessionSettingsController.getModeStreamQualityModel(
                     toSessionPresenterMode(mode)));
         }
-        presenter.setSettingsModels(xrSessionSettingsController.getSharedSessionModel(),
+        presenter.setSettingsModels(xrSessionSettingsController.getSessionModel(),
                 qualityModels, xrSessionSettingsController.getClientSbsModel(),
                 xrSessionSettingsController.getRawSbsModel(),
                 xrSessionSettingsController.hasPendingChanges());
@@ -3994,11 +4008,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                             expectedHostSessionId);
                                     if (sessionEnded && sessionSettingsStore != null
                                             && sessionPc != null) {
-                                        if (expectedLocalSessionId != null
-                                                && expectedHostSessionId != null) {
-                                            sessionSettingsStore.clearCurrentSession(
-                                                    sessionPc, expectedLocalSessionId,
-                                                    expectedHostSessionId);
+                                        if (sessionApp != null && expectedLocalSessionId != null) {
+                                            sessionSettingsStore.edit(sessionPc, sessionApp,
+                                                    expectedLocalSessionId)
+                                                    .setResumeMetadata(
+                                                            new SessionSettingsStore.ResumeMetadata(
+                                                                    false, null,
+                                                                    System.currentTimeMillis()))
+                                                    .commit();
                                         }
                                     }
                                     Game.this.runOnUiThread(() -> {

@@ -168,7 +168,7 @@ public class PreferenceConfiguration {
 
     static final String DEFAULT_RESOLUTION = "3840x2160";
     static final String DEFAULT_FPS = "90";
-    static final int DEFAULT_BITRATE_KBPS = 130000;
+    static final int DEFAULT_BITRATE_KBPS = 200000;
     private static final boolean DEFAULT_ENABLE_ULTRA_LOW_LATENCY = false;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
     private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
@@ -194,7 +194,7 @@ public class PreferenceConfiguration {
             "depth-anything-v2-small-static-350";
     public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
     private static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
-            CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
+            CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
     public static final String DEFAULT_RAW_SBS_PER_EYE_RESOLUTION =
             RawSbsPerEyeResolution.FULL.preferenceValue;
 
@@ -609,72 +609,28 @@ public class PreferenceConfiguration {
     }
 
     public static int getDefaultBitrate(String resString, String fpsString) {
-        int width = getWidthFromResolutionString(resString);
-        int height = getHeightFromResolutionString(resString);
-        int fps = Math.round(Float.parseFloat(fpsString));
+        return DEFAULT_BITRATE_KBPS;
+    }
 
-        // Galaxy XR validation established 130 Mbps as the stable 4K90 baseline. Keep this
-        // exact tuple explicit so resets and per-mode resolution changes restore that value.
-        if (width == 3840 && height == 2160 && fps == 90) {
-            return DEFAULT_BITRATE_KBPS;
-        }
+    private static int normalizeBitrate(int bitrate, String resString, String fpsString) {
+        return isXrBitrateSupported(bitrate)
+                ? bitrate
+                : getDefaultBitrate(resString, fpsString);
+    }
 
-        // This logic is shamelessly stolen from Moonlight Qt:
-        // https://github.com/moonlight-stream/moonlight-qt/blob/master/app/settings/streamingpreferences.cpp
-
-        // Don't scale bitrate linearly beyond 60 FPS. It's definitely not a linear
-        // bitrate increase for frame rate once we get to values that high.
-        double frameRateFactor = (fps <= 60 ? fps : (Math.sqrt(fps / 60.f) * 60.f)) / 30.f;
-
-        // TODO: Collect some empirical data to see if these defaults make sense.
-        // We're just using the values that the Shield used, as we have for years.
-        int[] pixelVals = {
-            640 * 360,
-            854 * 480,
-            1280 * 720,
-            1920 * 1080,
-            2560 * 1440,
-            3840 * 2160,
-            -1,
-        };
-        int[] factorVals = {
-            1,
-            2,
-            5,
-            10,
-            20,
-            40,
-            -1
-        };
-
-        // Calculate the resolution factor by linear interpolation of the resolution table
-        float resolutionFactor;
-        int pixels = width * height;
-        for (int i = 0; ; i++) {
-            if (pixels == pixelVals[i]) {
-                // We can bail immediately for exact matches
-                resolutionFactor = factorVals[i];
-                break;
-            }
-            else if (pixels < pixelVals[i]) {
-                if (i == 0) {
-                    // Never go below the lowest resolution entry
-                    resolutionFactor = factorVals[i];
-                }
-                else {
-                    // Interpolate between the entry greater than the chosen resolution (i) and the entry less than the chosen resolution (i-1)
-                    resolutionFactor = ((float)(pixels - pixelVals[i-1]) / (pixelVals[i] - pixelVals[i-1])) * (factorVals[i] - factorVals[i-1]) + factorVals[i-1];
-                }
-                break;
-            }
-            else if (pixelVals[i] == -1) {
-                // Never go above the highest resolution entry
-                resolutionFactor = factorVals[i-1];
-                break;
-            }
-        }
-
-        return (int)Math.round(resolutionFactor * frameRateFactor) * 1000;
+    private static boolean isXrBitrateSupported(int bitrate) {
+        return bitrate == 10000
+                || bitrate == 20000
+                || bitrate == 30000
+                || bitrate == 40000
+                || bitrate == 60000
+                || bitrate == 80000
+                || bitrate == 100000
+                || bitrate == 120000
+                || bitrate == 150000
+                || bitrate == 200000
+                || bitrate == 250000
+                || bitrate == 300000;
     }
 
     public static int getDefaultBitrate(Context context) {
@@ -921,11 +877,15 @@ public class PreferenceConfiguration {
         }
 
         // This must happen after the preferences migration to ensure the preferences are populated
-        config.bitrate = prefs.getInt(BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
+        int defaultBitrate = getDefaultBitrate(
+                getResolutionString(config.width, config.height), String.valueOf(config.fps));
+        config.bitrate = prefs.getInt(
+                BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
         if (config.bitrate == 0) {
-            config.bitrate = getDefaultBitrate(
-                    getResolutionString(config.width, config.height), Float.toString(config.fps));
+            config.bitrate = defaultBitrate;
         }
+        config.bitrate = normalizeBitrate(config.bitrate,
+                getResolutionString(config.width, config.height), String.valueOf(config.fps));
 
         // Android XR exposes one authoritative bitrate in both Global Defaults and the current
         // session panel. A hidden legacy metered override would make the reconnect preview lie.

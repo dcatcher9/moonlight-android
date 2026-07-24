@@ -846,6 +846,7 @@
     <string name="xr_mode_starts_when_selected">Starts when this mode is selected</string>
     <string name="xr_session_settings_title">Session settings</string>
     <string name="xr_session_use_global">Use global defaults</string>
+    <string name="xr_session_use_session">Use session settings</string>
     <string name="xr_session_settings_summary">Shared by all presentation modes for this PC\'s current session.</string>
     <string name="xr_session_video_group">Video</string>
     <string name="xr_session_delivery_group">Delivery</string>

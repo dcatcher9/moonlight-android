@@ -35,7 +35,7 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.SeekBarPreference
-            android:defaultValue="130000"
+            android:defaultValue="200000"
             android:key="seekbar_bitrate_kbps"
             android:max="300000"
             android:summary="@string/summary_seekbar_bitrate"
