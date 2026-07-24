@@ -38,10 +38,23 @@ public class XrStreamPresenterTransitionTest {
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
                         16.0f / 9.0f),
                 0.0001f);
+        assertEquals(8.0f / 9.0f,
+                XrStreamPresenter.presentationAspect(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        16.0f / 9.0f,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF),
+                0.0001f);
+        assertEquals(16.0f / 9.0f,
+                XrStreamPresenter.presentationAspect(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        16.0f / 9.0f,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF),
+                0.0001f);
         assertEquals(32.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                        32.0f / 9.0f),
+                        16.0f / 9.0f,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL),
                 0.0001f);
         assertEquals(7680,
                 XrStreamPresenter.initialSurfacePixelDimensions(

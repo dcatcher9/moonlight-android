@@ -17,9 +17,9 @@ headset's codec, Adreno, OpenCL, or SceneCore performance.
 - **Host SBS Raw** treats its selected `W x H` resolution as the intended view aspect. Its
   **Per-Eye Resolution** choice defaults to **Full**, which negotiates an untouched `2W x H`
   virtual desktop/stream and preserves `W x H` encoded pixels per eye. **Half** keeps the packed
-  desktop/stream at `W x H`, so each encoded eye is `W/2 x H` and SceneCore expands it
-  anamorphically onto the same `W:H` physical quad. Both decode directly into the same entity with
-  `StereoMode.SIDE_BY_SIDE`. Raw is available only for a
+  desktop/stream at `W x H`, so each encoded eye is `W/2 x H` and SceneCore presents that same
+  source on a matching `W/(2H)` physical quad to preserve per-eye proportions. Both decode directly
+  into the same entity with `StereoMode.SIDE_BY_SIDE`. Raw is available only for a
   virtual-display-backed launch, including Apollo's generated **Virtual Display** entry; a physical
   desktop would only be aspect-fitted into the encoder surface rather than rendered at the selected
   geometry. The exact packed width must remain within the 8192-pixel HEVC/AV1 transport limit.

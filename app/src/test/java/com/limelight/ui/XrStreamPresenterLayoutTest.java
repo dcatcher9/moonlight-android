@@ -167,6 +167,25 @@ public class XrStreamPresenterLayoutTest {
     }
 
     @Test
+    public void modeOptionsHeightExpandsAndShrinksWithinBounds() {
+        assertEquals(0.8667f,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        0.52f, 300, 500,
+                        0.52f, 0.90f),
+                0.0001f);
+        assertEquals(0.52f,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        0.90f, 400, 200,
+                        0.52f, 0.90f),
+                0.0001f);
+        assertEquals(0.90f,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        0.52f, 200, 600,
+                        0.52f, 0.90f),
+                0.0001f);
+    }
+
+    @Test
     public void modeOptionsPanelTiltsTowardFaceAndAnchorsBelowLevelControls() {
         float controlY = -1.24f;
         float controlHeight = 0.21f;

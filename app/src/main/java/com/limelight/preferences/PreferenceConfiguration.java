@@ -287,7 +287,7 @@ public class PreferenceConfiguration {
     /**
      * Raw SBS quality is expressed as the intended view resolution. Full transports two complete
      * eye views at {@code 2W x H}; Half keeps the packed frame at {@code W x H}, giving each eye
-     * {@code W/2 x H} encoded pixels that SceneCore expands to the same physical view aspect.
+     * {@code W/2 x H} encoded pixels presented on a matching half-width physical view.
      */
     public static int[] rawSbsPackedDimensions(int eyeWidth, int eyeHeight) {
         return rawSbsPackedDimensions(eyeWidth, eyeHeight, RawSbsPerEyeResolution.FULL);

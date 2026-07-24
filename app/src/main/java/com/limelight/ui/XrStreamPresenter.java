@@ -110,7 +110,8 @@ public class XrStreamPresenter {
     // beneath the quad as it changes size on a mode switch or a user resize.
     private static final float BAR_HEIGHT_METERS = 0.21f;     // also the per-tile size (square tiles)
     /** Taller independent pane fits per-mode quality controls without moving the level dock. */
-    private static final float MODE_OPTIONS_HEIGHT_METERS = 0.52f;
+    private static final float MODE_OPTIONS_MIN_HEIGHT_METERS = 0.52f;
+    private static final float MODE_OPTIONS_MAX_HEIGHT_METERS = 0.90f;
     private static final float BAR_DIVIDER_METERS = 0.05f;    // extra width for the group divider
     private static final float BAR_GAP_METERS = 0.24f;        // quad bottom -> bar center
     private static final float BAR_Z_METERS = 0.02f;          // nudge toward viewer vs. the quad
@@ -233,6 +234,16 @@ public class XrStreamPresenter {
     /** Reused contextual View hierarchy hosted by one independently tilted panel. */
     private FrameLayout modeOptionsHost;
     private PanelEntity modeOptionsPanel;
+    private float modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
+    private View modeOptionsContentRoot;
+    private boolean modeOptionsFitScheduled;
+    private final Runnable modeOptionsFitRunnable = new Runnable() {
+        @Override
+        public void run() {
+            modeOptionsFitScheduled = false;
+            fitModeOptionsPanelToContent();
+        }
+    };
     private final XrControlUiState controlUiState = new XrControlUiState();
     private final android.os.Handler modeOptionsStatusHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
@@ -491,8 +502,8 @@ public class XrStreamPresenter {
      *  decoder confirms that the initial stream frame has reached the XR surface. */
     private boolean streamPresentationReady;
 
-    // The selected resolution defines the intended eye/view aspect, so the physical quad always
-    // keeps W/H even when Raw uses Half packing or another stereo mode uses a 2W buffer.
+    // The selected resolution defines the Full eye/view aspect. Raw Half uses half that physical
+    // width so SceneCore does not stretch each W/2 x H encoded eye back to W/H.
     private float fullAspect;
     /** Kept so the resize affordance's bounds can be re-derived for the active mode's aspect. */
     private ResizableComponent resizable;
@@ -795,9 +806,9 @@ public class XrStreamPresenter {
         // selectMode
         // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
         //
-        // Every mode's selected W x H defines the intended eye/view aspect. Raw SBS negotiates
-        // either an exact 2W x H Full buffer or a W x H Half buffer, while Host SBS AI creates its
-        // codec-capped packed buffer on the host. SceneCore uses W/H for every physical quad.
+        // Every mode's selected W x H defines the Full eye/view aspect. Raw SBS negotiates either
+        // an exact 2W x H Full buffer or a W x H Half buffer; Half uses a W/(2H) physical quad so
+        // SceneCore preserves the encoded eye aspect instead of stretching it.
         fullAspect = (float) prefConfig.width / prefConfig.height;
         float panelWidthMeters = panelHeightMeters * aspectFor(currentPresenterMode);
         SurfaceEntity.Shape quad =
@@ -1083,9 +1094,10 @@ public class XrStreamPresenter {
         modeOptionsHost = new FrameLayout(activity);
         modeOptionsHost.setBackground(controlSurfaceBackground(
                 PANEL_BACKGROUND_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+        modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
         modeOptionsPanel = PanelEntity.create(
                 session, modeOptionsHost,
-                new FloatSize2d(layout.widthMeters, MODE_OPTIONS_HEIGHT_METERS),
+                new FloatSize2d(layout.widthMeters, modeOptionsHeightMeters),
                 "xr-mode-options", modeOptionsPose(videoHeightMeters), surfaceEntity);
         modeOptionsPanel.setEnabled(false);
 
@@ -1709,9 +1721,11 @@ public class XrStreamPresenter {
         scroll.setVerticalScrollBarEnabled(true);
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        modeOptionsContentRoot = root;
         modeOptionsHost.removeAllViews();
         modeOptionsHost.addView(scroll, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        scheduleModeOptionsPanelFit();
     }
 
     private void addModeQualityControls(LinearLayout root, PresenterMode mode) {
@@ -2085,6 +2099,9 @@ public class XrStreamPresenter {
         rawSbsPerEyeResolutionSourceView = null;
         rawSbsPerEyeResolutionPendingView = null;
         rawSbsGeometryView = null;
+        modeOptionsContentRoot = null;
+        modeOptionsFitScheduled = false;
+        modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
     }
 
     private void updateModeOptionsView() {
@@ -2138,6 +2155,7 @@ public class XrStreamPresenter {
         else if (mode == PresenterMode.HOST_SBS_RAW) {
             updateRawSbsOptionsView();
         }
+        scheduleModeOptionsPanelFit();
     }
 
     private void updateRawSbsOptionsView() {
@@ -3414,6 +3432,69 @@ public class XrStreamPresenter {
                 anchorZ - rotatedOffsetZ, pitchDegrees);
     }
 
+    static float calculateModeOptionsHeightMeters(float currentHeightMeters,
+                                                 int currentHeightPixels,
+                                                 int contentHeightPixels,
+                                                 float minHeightMeters,
+                                                 float maxHeightMeters) {
+        float safeCurrentHeightMeters = Float.isFinite(currentHeightMeters)
+                ? Math.max(0.0f, currentHeightMeters) : MODE_OPTIONS_MIN_HEIGHT_METERS;
+        int safeCurrentHeightPx = Math.max(1, currentHeightPixels);
+        int safeContentHeightPx = Math.max(0, contentHeightPixels);
+        float minHeight = Math.max(0.0f, minHeightMeters);
+        float maxHeight = Math.max(minHeight, maxHeightMeters);
+        if (safeContentHeightPx <= 0) {
+            return minHeight;
+        }
+        float targetHeight = safeCurrentHeightMeters * (float) safeContentHeightPx
+                / (float) safeCurrentHeightPx;
+        if (!Float.isFinite(targetHeight)) {
+            return minHeight;
+        }
+        return Math.max(minHeight, Math.min(maxHeight, targetHeight));
+    }
+
+    private void scheduleModeOptionsPanelFit() {
+        if (modeOptionsPanel == null || modeOptionsPanel.isDisposed()
+                || modeOptionsHost == null || modeOptionsContentRoot == null) {
+            return;
+        }
+        if (modeOptionsFitScheduled) {
+            return;
+        }
+        modeOptionsFitScheduled = true;
+        modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
+        modeOptionsStatusHandler.post(modeOptionsFitRunnable);
+    }
+
+    private void fitModeOptionsPanelToContent() {
+        if (modeOptionsPanel == null || modeOptionsPanel.isDisposed()
+                || modeOptionsHost == null || modeOptionsContentRoot == null) {
+            return;
+        }
+        int hostWidth = modeOptionsHost.getWidth();
+        int hostHeight = modeOptionsHost.getHeight();
+        if (hostWidth <= 0 || hostHeight <= 0) {
+            scheduleModeOptionsPanelFit();
+            return;
+        }
+        modeOptionsContentRoot.measure(
+                View.MeasureSpec.makeMeasureSpec(hostWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int contentHeightPx = modeOptionsContentRoot.getMeasuredHeight() + dp(4);
+        float targetHeightMeters = calculateModeOptionsHeightMeters(
+                modeOptionsHeightMeters, hostHeight, contentHeightPx,
+                MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
+        if (Math.abs(targetHeightMeters - modeOptionsHeightMeters) < 0.001f) {
+            return;
+        }
+        XrControlPanelLayout layout = controlBarLayout(panelHeightMeters);
+        modeOptionsPanel.setSize(new FloatSize2d(layout.widthMeters, targetHeightMeters));
+        modeOptionsHeightMeters = targetHeightMeters;
+        modeOptionsPanel.setPose(modeOptionsPose(panelHeightMeters));
+        modeOptionsHost.requestLayout();
+    }
+
     /** Local pose of the unchanged, level mode-button panel. */
     private Pose barPose(float videoHeightMeters) {
         XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
@@ -3431,7 +3512,7 @@ public class XrStreamPresenter {
         XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
         Vector3 viewer = statsViewerPositionLocal();
         ModeOptionsPanelPlacement placement = calculateModeOptionsPanelPlacement(
-                layout.primaryRowCenterY, BAR_HEIGHT_METERS, MODE_OPTIONS_HEIGHT_METERS,
+                layout.primaryRowCenterY, BAR_HEIGHT_METERS, modeOptionsHeightMeters,
                 MODE_OPTIONS_GAP_METERS, BAR_Z_METERS, viewer.getY(), viewer.getZ());
         Quaternion rotation = Quaternion.fromAxisAngle(
                 new Vector3(1.0f, 0.0f, 0.0f), placement.pitchDegrees);
@@ -4095,12 +4176,24 @@ public class XrStreamPresenter {
                 (lt.getZ() + rt.getZ()) / 2.0f), left.getRotation());
     }
 
-    /** Quad aspect (width/height). The configured resolution is logical per-eye in every mode. */
+    /** Quad aspect (width/height), including Raw Half's narrower encoded eye geometry. */
     private float aspectFor(PresenterMode mode) {
-        return presentationAspect(mode, fullAspect);
+        return presentationAspect(mode, fullAspect, prefConfig.rawSbsPerEyeResolution);
     }
 
     static float presentationAspect(PresenterMode mode, float logicalAspect) {
+        return presentationAspect(mode, logicalAspect,
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL);
+    }
+
+    static float presentationAspect(
+            PresenterMode mode, float logicalAspect,
+            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution) {
+        if (mode == PresenterMode.HOST_SBS_RAW
+                && rawPerEyeResolution
+                == PreferenceConfiguration.RawSbsPerEyeResolution.HALF) {
+            return logicalAspect / 2.0f;
+        }
         return logicalAspect;
     }
 
@@ -4644,6 +4737,9 @@ public class XrStreamPresenter {
         secondaryBarItems.clear();
         secondaryActionsExpanded = false;
         modeOptionsHost = null;
+        modeOptionsContentRoot = null;
+        modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
+        modeOptionsFitScheduled = false;
         auxiliaryContentHost = null;
         pendingDecoderTransitionMode = null;
         clientSbsHdrTransitionInProgress = false;
