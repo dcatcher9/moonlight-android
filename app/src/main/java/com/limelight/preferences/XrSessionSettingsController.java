@@ -845,16 +845,6 @@ public final class XrSessionSettingsController {
                 (Integer) values.get(SessionSettingsModel.Key.BITRATE));
     }
 
-    private static int normalizeBitrate(int bitrate, String resolution, String fps) {
-        return isSupportedBitrate(bitrate)
-                ? bitrate
-                : PreferenceConfiguration.getDefaultBitrate(resolution, fps);
-    }
-
-    private static boolean isSupportedBitrate(int bitrate) {
-        return BITRATES.contains(bitrate);
-    }
-
     private static void readSharedValues(SharedPreferences preferences,
                                          EnumMap<SessionSettingsModel.Key, Object> output) {
         readSharedValues(preferences, output, PreferenceConfiguration.DEFAULT_RESOLUTION,
@@ -887,10 +877,9 @@ public final class XrSessionSettingsController {
 
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
-        output.put(SessionSettingsModel.Key.BITRATE, normalizeBitrate(preferences.getInt(
+        output.put(SessionSettingsModel.Key.BITRATE, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING,
-                PreferenceConfiguration.getDefaultBitrate(resolution, fps)),
-                resolution, fps));
+                PreferenceConfiguration.getDefaultBitrate(resolution, fps)));
     }
 
     private static void readSharedValues(SharedPreferences preferences,
@@ -903,10 +892,9 @@ public final class XrSessionSettingsController {
                 fpsDefault);
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
-        output.put(SessionSettingsModel.Key.BITRATE, normalizeBitrate(preferences.getInt(
+        output.put(SessionSettingsModel.Key.BITRATE, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING,
-                PreferenceConfiguration.getDefaultBitrate(resolution, fps)),
-                resolution, fps));
+                PreferenceConfiguration.getDefaultBitrate(resolution, fps)));
         output.put(SessionSettingsModel.Key.HDR, preferences.getBoolean(
                 PreferenceConfiguration.ENABLE_HDR_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_ENABLE_HDR));

@@ -612,27 +612,6 @@ public class PreferenceConfiguration {
         return DEFAULT_BITRATE_KBPS;
     }
 
-    private static int normalizeBitrate(int bitrate, String resString, String fpsString) {
-        return isXrBitrateSupported(bitrate)
-                ? bitrate
-                : getDefaultBitrate(resString, fpsString);
-    }
-
-    private static boolean isXrBitrateSupported(int bitrate) {
-        return bitrate == 10000
-                || bitrate == 20000
-                || bitrate == 30000
-                || bitrate == 40000
-                || bitrate == 60000
-                || bitrate == 80000
-                || bitrate == 100000
-                || bitrate == 120000
-                || bitrate == 150000
-                || bitrate == 200000
-                || bitrate == 250000
-                || bitrate == 300000;
-    }
-
     public static int getDefaultBitrate(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         return getDefaultBitrate(
@@ -877,15 +856,12 @@ public class PreferenceConfiguration {
         }
 
         // This must happen after the preferences migration to ensure the preferences are populated
-        int defaultBitrate = getDefaultBitrate(
-                getResolutionString(config.width, config.height), String.valueOf(config.fps));
         config.bitrate = prefs.getInt(
                 BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
         if (config.bitrate == 0) {
-            config.bitrate = defaultBitrate;
+            config.bitrate = getDefaultBitrate(
+                    getResolutionString(config.width, config.height), String.valueOf(config.fps));
         }
-        config.bitrate = normalizeBitrate(config.bitrate,
-                getResolutionString(config.width, config.height), String.valueOf(config.fps));
 
         // Android XR exposes one authoritative bitrate in both Global Defaults and the current
         // session panel. A hidden legacy metered override would make the reconnect preview lie.

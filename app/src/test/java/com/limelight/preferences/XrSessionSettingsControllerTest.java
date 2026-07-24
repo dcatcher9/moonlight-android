@@ -452,12 +452,12 @@ public final class XrSessionSettingsControllerTest {
 
         SessionSettingsModel.Value initial = controller.getSessionModel()
                 .get(SessionSettingsModel.Key.BITRATE);
-        assertEquals("200000", initial.selectedChoiceId);
-        assertEquals("200 Mbps", choiceLabel(initial, "200000"));
+        assertEquals("113000", initial.selectedChoiceId);
+        assertEquals("113 Mbps", choiceLabel(initial, "113000"));
 
         controller.cycle(SessionSettingsModel.Key.BITRATE);
 
-        assertEquals("250000", controller.getSessionModel()
+        assertEquals("120000", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
     }
 
@@ -472,7 +472,7 @@ public final class XrSessionSettingsControllerTest {
 
         assertEquals("1440p", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
-        assertEquals("200 Mbps", controller.getSessionModel()
+        assertEquals("24 Mbps", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.BITRATE).pendingValue);
         assertTrue(controller.commitPending());
 
@@ -483,8 +483,8 @@ public final class XrSessionSettingsControllerTest {
         PreferenceConfiguration effective = PreferenceConfiguration.readPreferences(
                 context, snapshot.preferencesForMode(
                         SessionSettingsStore.PresenterMode.NORMAL));
-        assertEquals(200000, effective.bitrate);
-        assertEquals(200000, effective.meteredBitrate);
+        assertEquals(24000, effective.bitrate);
+        assertEquals(24000, effective.meteredBitrate);
     }
 
     @Test
@@ -531,7 +531,7 @@ public final class XrSessionSettingsControllerTest {
 
         controller.selectSharedSetting(SessionSettingsModel.Key.RESOLUTION, "1920x1080");
 
-        assertEquals("200 Mbps", controller.getSessionModel()
+        assertEquals("25 Mbps", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.BITRATE).pendingValue);
     }
 
