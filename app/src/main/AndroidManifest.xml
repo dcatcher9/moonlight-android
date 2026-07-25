@@ -59,6 +59,17 @@
         android:theme="@style/AppTheme"
         >
 
+        <!--
+            Hexagon NPU (QNN HTP) depends on the compute-DSP RPC transport, which lives on the
+            vendor partition. Since Android 12 an app must DECLARE vendor native libraries here to
+            get them in its linker namespace; without this, dlopen("libcdsprpc.so") fails with
+            "library not found" even though the library exists and is listed in
+            /vendor/etc/public.libraries.txt, and QNN falls back with
+            "loadRemoteSymbols failed with err 4000". required=false so the app still installs and
+            runs normally on devices with no Hexagon DSP; the GPU path is unaffected.
+        -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+
         <receiver android:name=".StartExternalDisplayControlReceiver" />
         <!-- Samsung multi-window support -->
         <uses-library
