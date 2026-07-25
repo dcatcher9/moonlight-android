@@ -200,14 +200,45 @@ weighted edge fraction across representative client content before trusting the 
 the host did. Applying the host's *old* 0.007/0.016 endpoints to client content without measuring is
 what produced the current inert controller.
 
-## Model note: DA-V2 vs MiDaS v2
+## Model note: DA-V2 vs MiDaS v2 — verified
+
+**There is no separate MiDaS path.** `midas` appears only in `ClientSbsModelManifest` and the
+preference/UI classes; there is not one line of MiDaS-specific code in `com.limelight.sbs` or in
+either shader file. `createMidasStaticManifest` and `createDepthAnythingStaticManifest` differ only
+in tensor names and dimension constraints — both produce
+`directFullFrameResize=true, dynamicSpatialShape=false, AUTOMATIC_FP16`. Both feed the same
+`ClientSbsGpuDepthProcessor` and the same two warp programs, so any change here lands on both.
+
+Per-model geometry flows correctly: `Stereo3DRenderer` constructs the processor from
+`aiModel.getOutputWidth()/getOutputHeight()`, and `spatialThresholdScale` is derived from those, so
+MiDaS `352x192` resolves to 2.26 and DA-V2 `322x182` to 2.38 with no per-model constants.
 
 Everything above is model-independent — it operates on the *normalized* depth map, after
-`RESOLVE_RAW_RANGE` has mapped whatever the model emits into [0,1] via its own P2/P98 range. The two
-models therefore need no separate parameter sets for the band, anchor, warp, or cut logic. The one
-place model identity leaks through is the adaptive-pop edge-density calibration in class 3 above,
-because edge density is a property of the model's output sharpness. Validate that statistic
-per model family; validate nothing else per model.
+`RESOLVE_RAW_RANGE` has mapped whatever the model emits into [0,1] via its own P2/P98 range. Two
+places where model identity does leak through:
+
+1. **Adaptive-pop edge-density calibration** (class 3 above). Edge density is a property of output
+   sharpness, so validate the weighted edge fraction per model family before trusting 0.04/0.20.
+2. **Depth polarity is an undocumented, untested assumption.** The client has no polarity transform
+   and no per-model flag, where Apollo has an explicit "transform model output into high-is-near
+   convention" pipeline step. It currently works because MiDaS v2 emits inverse depth and DA-V2's
+   output is disparity-like, so both are high-is-near — but nothing enforces or tests it. The
+   subject percentile scans from bin 255 as "near" and `bestv2RawShift` maps higher shaped depth to
+   larger positive shift, so an opposite-polarity model would render the whole scene inside-out with
+   nothing catching it. A one-off startup check (correlate a coarse depth statistic against a known
+   near/far test pattern, or simply assert the manifest declares a polarity) is cheap insurance
+   before a third model is ever added.
+
+## Search radius is coupled to the pop ceiling
+
+The probe radius constant is the adaptive-pop **maximum**, not the resolved ratio. Raising the band
+to 2.00 therefore requires raising the radius multiplier from 1.30 to 2.00 in both warp templates,
+or a high-pop scene's displacement leaves the search window and the probe misses crossings.
+
+That widening does not under-sample: at a 1920-wide 16:9 source (`parallaxWidth` 854,
+`outputScale` 1.333) the radius is 0.0243 in normalized U, and the fixed 32 probes give ~0.40 depth
+texels of spacing against the host's 1.22 target — still roughly 3x oversampled. The lattice work in
+P2 reclaims that (32 -> ~13 probes) rather than being required for correctness.
 
 ## Suggested order
 
