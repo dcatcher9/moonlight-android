@@ -278,14 +278,23 @@ final class ClientSbsGpuDepthShaders {
             + EXTERNAL_SCENE_CUT + lines(
             "layout(local_size_x = 1) in;",
             "uniform float uRangeAlpha;",
-            "float percentileValue(float percentile, float minimumValue, float binWidth) {",
+            // Take the crossing bin's OUTER edge, not its centre. A percentile only excludes its
+            // nominal fraction when the distribution is smooth across that bin; when a large atom
+            // sits there -- sky, a far wall, a flat background -- a centred bound cuts through the
+            // atom and clips a large share of the frame to a single depth. An outer edge can only
+            // widen the range, so it clips at most the nominal fraction, for at most one bin of
+            // precision. This matters MORE on the client: with ~6x fewer pixels the per-bin
+            // quantization is coarser.
+            "float percentileValue(float percentile, float minimumValue, float binWidth,",
+            "        float edge) {",
             "    float target = percentile * float(rawValidCount);",
             "    uint cumulative = 0u;",
             "    for (uint bin = 0u; bin < 256u; ++bin) {",
             "        cumulative += rawHistogram[bin];",
-            "        if (float(cumulative) >= target) return minimumValue + (float(bin) + 0.5) * binWidth;",
+            "        if (float(cumulative) >= target)",
+            "            return minimumValue + (float(bin) + edge) * binWidth;",
             "    }",
-            "    return minimumValue + 255.5 * binWidth;",
+            "    return minimumValue + (255.0 + edge) * binWidth;",
             "}",
             "void applyExternalCutRange() {",
             "    if (stateFlags.x != 0u && externalSceneCutRequested()) {",
@@ -314,8 +323,8 @@ final class ClientSbsGpuDepthShaders {
             "    float frameHigh = maximumValue;",
             "    if (rawRange > 0.0) {",
             "        float binWidth = rawRange / 256.0;",
-            "        float lowCandidate = percentileValue(0.02, minimumValue, binWidth);",
-            "        float highCandidate = percentileValue(0.98, minimumValue, binWidth);",
+            "        float lowCandidate = percentileValue(0.02, minimumValue, binWidth, 0.0);",
+            "        float highCandidate = percentileValue(0.98, minimumValue, binWidth, 1.0);",
             "        if (highCandidate - lowCandidate > 1.0e-9) {",
             "            frameLow = lowCandidate;",
             "            frameHigh = highCandidate;",
@@ -341,7 +350,15 @@ final class ClientSbsGpuDepthShaders {
             "        rangeState.zw = vec2(frameLow, frameHigh);",
             "        stateFlags.x = 1u;",
             "    } else {",
-            "        rangeState.zw = mix(rangeState.zw, vec2(frameLow, frameHigh), uRangeAlpha);",
+            // Attack fast, release slow. A symmetric EMA lags the live percentiles, and any frame
+            // whose smoothed range is NARROWER than this frame's clips the difference away -- lag
+            // becomes clipped depth. Expanding immediately makes that impossible; contraction still
+            // decays at uRangeAlpha. Expansion is also the stability-safe direction: the range is a
+            // multiplicative gain, so growing it LOWERS the gain, and it is fast shrinking that
+            // makes the depth scale breathe.
+            "        vec2 smoothed = mix(rangeState.zw, vec2(frameLow, frameHigh), uRangeAlpha);",
+            "        rangeState.z = min(smoothed.x, frameLow);",
+            "        rangeState.w = max(smoothed.y, frameHigh);",
             "    }",
             "    rangeState.xy = vec2(frameLow, frameHigh);",
             "    stateFlags.z = firstFrame ? 1u : 0u;",
@@ -485,16 +502,20 @@ final class ClientSbsGpuDepthShaders {
             "layout(rgba32f, binding = 1) uniform writeonly highp image2D uProfileTexture;",
             "uniform int uPixelCount;",
             "uniform float uSubjectAlpha;",
+            "uniform float uBandAlpha;",
             "uniform float uSpatialThresholdScale;",
             "uniform int uReferenceFrameAdvance;",
-            "float depthPercentile(float percentile) {",
+            // `edge` selects the crossing bin's lower (0.0), centre (0.5) or upper (1.0) bound.
+            // Band BOUNDS use outer edges so a large atom is not cut through; the median is a point
+            // estimate, not a bound, so it keeps the centre.
+            "float depthPercentile(float percentile, float edge) {",
             "    float target = percentile * float(uPixelCount);",
             "    uint cumulative = 0u;",
             "    for (uint bin = 0u; bin < 256u; ++bin) {",
             "        cumulative += depthHistogram[bin];",
-            "        if (float(cumulative) >= target) return (float(bin) + 0.5) / 256.0;",
+            "        if (float(cumulative) >= target) return (float(bin) + edge) / 256.0;",
             "    }",
-            "    return 255.5 / 256.0;",
+            "    return (255.0 + edge) / 256.0;",
             "}",
             // Must shape identically to the warp's shapedDepth(), or the anchor stops describing
             // the plane the warp renders. Same single clamp, same order.
@@ -540,9 +561,13 @@ final class ClientSbsGpuDepthShaders {
             "        return;",
             "    }",
             "    float subjectCandidate = subjectNearPercentile();",
-            "    float stretchLow = depthPercentile(0.05);",
-            "    float stretchHigh = depthPercentile(0.95);",
-            "    float stretchInverse = 1.0 / max(stretchHigh - stretchLow, 1.0e-4);",
+            // P2/P98, not P5/P95. A hard band edge maps every out-of-band pixel onto one shaped
+            // depth, and the parallax field is a pure function of shaped depth, so they all render
+            // at an identical disparity -- a flat plane with no relief. Widening the band removes
+            // that; softening its edge was measured host-side and REJECTED, because it keeps the
+            // same over-clipping and charges the band interior for it.
+            "    float stretchLow = depthPercentile(0.02, 0.0);",
+            "    float stretchHigh = depthPercentile(0.98, 1.0);",
             // A one-texel silhouette occupies a larger fraction of a coarser map. Normalize the
             // density back to Apollo's 434px-short-side calibration before adaptive-pop gating.
             "    float edgeFraction = float(edgeCount) / (float(uPixelCount) * 256.0)",
@@ -561,6 +586,17 @@ final class ClientSbsGpuDepthShaders {
             // cuts use this frame's range and bypass old-scene history in the current dispatch.
             "    bool internalCut = stateFlags.w != 0u && !externalCut;",
             "    bool hardCut = wasInitialized && (externalCut || internalCut);",
+            // Damp the band. lo/inverse form a MULTIPLICATIVE gain, so an unsmoothed band makes the
+            // depth mapping breathe between cuts and that wobble is then multiplied by pop
+            // strength. Same attack-fast/release-slow rule as the raw range, smoothed in (lo, hi)
+            // space rather than on the reciprocal.
+            "    if (wasInitialized && !hardCut) {",
+            "        float smoothLow = mix(profileA.x, stretchLow, uBandAlpha);",
+            "        float smoothHigh = mix(profileA.y, stretchHigh, uBandAlpha);",
+            "        stretchLow = min(smoothLow, stretchLow);",
+            "        stretchHigh = max(smoothHigh, stretchHigh);",
+            "    }",
+            "    float stretchInverse = 1.0 / max(stretchHigh - stretchLow, 1.0e-4);",
             "    if (!cutReady && wasInitialized && sceneAge >= 8) {",
             "        cutState = 1;",
             "        cutReady = true;",
@@ -588,7 +624,7 @@ final class ClientSbsGpuDepthShaders {
             "            && previousAge < 8 && sceneAge >= 8;",
             "    float anchorShift = profileB.z;",
             "    if (!wasInitialized || hardCut || settledNow) {",
-            "        float medianDepth = depthPercentile(0.50);",
+            "        float medianDepth = depthPercentile(0.50, 0.5);",
             "        anchorShift = bestv2RawShift(",
             "                shapedDepth(medianDepth, stretchLow, stretchInverse, recenter));",
             "    }",

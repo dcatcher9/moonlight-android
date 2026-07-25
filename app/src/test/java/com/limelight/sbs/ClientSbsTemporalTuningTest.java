@@ -46,8 +46,10 @@ public class ClientSbsTemporalTuningTest {
                 ClientSbsTemporalTuning.spatialThresholdScale(350, 196), 0.0001f);
         assertEquals(434.0f / 168.0f,
                 ClientSbsTemporalTuning.spatialThresholdScale(392, 168), 0.0001f);
-        // Apollo's 1008px long-side limit reduces its 32:9 grid to 980x280.
-        assertEquals(2.0f,
+        // Apollo's long-side limit still binds at 32:9, but at 1036 rather than 1008 it now
+        // reduces the grid to 1036x294 instead of 980x280 -- a finer predicted host grid, hence a
+        // larger scale. 16:9 and 21:9 are unaffected because neither reaches the bound.
+        assertEquals(294.0f / 140.0f,
                 ClientSbsTemporalTuning.spatialThresholdScale(490, 140), 0.0001f);
         assertEquals(1.0f,
                 ClientSbsTemporalTuning.spatialThresholdScale(770, 434), 0.0001f);

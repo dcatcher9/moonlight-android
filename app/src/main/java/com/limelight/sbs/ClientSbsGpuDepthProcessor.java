@@ -124,6 +124,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int accumulateSpatialScaleUniform;
     private int resolvePixelCountUniform;
     private int resolveSubjectAlphaUniform;
+    private int resolveBandAlphaUniform;
     private int resolveSpatialScaleUniform;
     private int resolveReferenceFrameAdvanceUniform;
 
@@ -296,6 +297,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 0.625f, processIntervalNs, temporalReferenceHz);
         float subjectAlpha = ClientSbsTemporalTuning.alphaForInterval(
                 0.20f, processIntervalNs, temporalReferenceHz);
+        // Only the RELEASE side of the band envelope has a time constant; the attack side is a
+        // min/max and is instantaneous by construction.
+        float bandAlpha = ClientSbsTemporalTuning.alphaForInterval(
+                0.18f, processIntervalNs, temporalReferenceHz);
         int referenceFrameAdvance = ClientSbsTemporalTuning.referenceFrameAdvance(
                 processIntervalNs, temporalReferenceHz);
         try {
@@ -374,6 +379,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                     externalSceneCutByteOffset);
             GLES20.glUniform1i(resolvePixelCountUniform, outputWidth * outputHeight);
             GLES20.glUniform1f(resolveSubjectAlphaUniform, subjectAlpha);
+            GLES20.glUniform1f(resolveBandAlphaUniform, bandAlpha);
             GLES20.glUniform1f(resolveSpatialScaleUniform, spatialThresholdScale);
             GLES20.glUniform1i(resolveReferenceFrameAdvanceUniform, referenceFrameAdvance);
             GLES31.glBindImageTexture(PROFILE_IMAGE_BINDING, profileTexture, 0, false, 0,
@@ -643,6 +649,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 accumulateProfileProgram, "uSpatialThresholdScale");
         resolvePixelCountUniform = requiredUniform(resolveProfileProgram, "uPixelCount");
         resolveSubjectAlphaUniform = requiredUniform(resolveProfileProgram, "uSubjectAlpha");
+        resolveBandAlphaUniform = requiredUniform(resolveProfileProgram, "uBandAlpha");
         resolveSpatialScaleUniform = requiredUniform(
                 resolveProfileProgram, "uSpatialThresholdScale");
         resolveReferenceFrameAdvanceUniform = requiredUniform(

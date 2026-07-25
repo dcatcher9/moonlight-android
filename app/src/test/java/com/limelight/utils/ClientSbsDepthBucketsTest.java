@@ -76,9 +76,9 @@ public class ClientSbsDepthBucketsTest {
         // PROBE_STEPS literal substituted into the shader SOURCE is bucket-derived.
         assertEquals(ClientSbsShaders.probeStepsForAspect(16.0f / 9.0f),
                 ClientSbsShaders.probeStepsForAspect(16.0f / 10.0f));
-        assertEquals(32, ClientSbsShaders.probeStepsForAspect(1920f / 1080f));
-        assertEquals(24, ClientSbsShaders.probeStepsForAspect(2560f / 1080f));
-        assertEquals(16, ClientSbsShaders.probeStepsForAspect(3840f / 1080f));
+        assertEquals(19, ClientSbsShaders.probeStepsForAspect(1920f / 1080f));
+        assertEquals(14, ClientSbsShaders.probeStepsForAspect(2560f / 1080f));
+        assertEquals(12, ClientSbsShaders.probeStepsForAspect(3840f / 1080f));
     }
 
     @Test

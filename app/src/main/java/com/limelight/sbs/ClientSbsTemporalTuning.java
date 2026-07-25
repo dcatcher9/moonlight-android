@@ -4,7 +4,11 @@ package com.limelight.sbs;
 final class ClientSbsTemporalTuning {
     static final float APOLLO_REFERENCE_HZ = 60.0f;
     static final int APOLLO_REQUESTED_DEPTH_SHORT_SIDE = 434;
-    static final int APOLLO_MAX_DEPTH_LONG_SIDE = 1008;
+    // Apollo raised its TensorRT profile bound from 1008 to 1036 (74 patches) so the two
+    // ultrawide production cases reach the configured short side instead of dropping a patch
+    // row: 21:9 now resolves to 1036x434 and 5K2K to 1022x434, where both previously fell to
+    // a 420 short side. This constant only exists to replicate that choice, so it must track.
+    static final int APOLLO_MAX_DEPTH_LONG_SIDE = 1036;
     static final int DEPTH_PATCH_SIZE = 14;
 
     private static final double NANOS_PER_SECOND = 1_000_000_000.0;

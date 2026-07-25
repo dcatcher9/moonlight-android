@@ -271,20 +271,79 @@ final class ClientSbsShaders {
             "}");
 
     /**
-     * Chooses one immutable probe budget with the same multiplicative-aspect buckets as depth.
-     * The 16:9, 21:9, and 32:9 graphs use 32, 24, and 16 steps respectively. Wider frames cover
-     * more source distance per depth texel, so lowering the count there retains a bounded mobile
-     * work budget while the common 16:9 path receives Apollo's higher-quality solve.
+     * Sizes the probe budget from the DEPTH grid rather than from a fixed per-aspect count.
+     *
+     * <p>Apollo pins probe SPACING, not step count: {@code BESTV2_TARGET_DEPTH_TEXELS / depthWidth},
+     * with the target at 1.22 depth texels. That is where the probe grid matches the resolution of
+     * the signal it samples — finer merely oversamples a bilinear map, and coarser breaks the
+     * one-breakpoint-per-probe-interval argument the inverse solve relies on. Porting Apollo's step
+     * count directly would be wrong, because the client's depth map is 2.4–3.4x coarser on the short
+     * side; the correct port is the spacing rule, which then yields FEWER probes here.</p>
+     *
+     * <p>The fixed 32/24/16 budget oversampled by roughly 3x: at 16:9 the radius is about 0.0243 in
+     * normalized source U, so 32 probes sat 0.40 depth texels apart.</p>
+     *
+     * <p>{@code parallaxWidth} is taken as the 854 calibration width, which holds for every stream
+     * at or above that width — i.e. every realistic XR resolution. A narrower source would widen the
+     * in-shader radius and leave these probes coarser than the 1.22 target.</p>
      */
     static int probeStepsForAspect(float sourceAspect) {
         if (!Float.isFinite(sourceAspect) || sourceAspect <= 0.0f) {
             throw new IllegalArgumentException("Source aspect must be finite and positive");
         }
         ClientSbsDepthInputShape bucket = ClientSbsDepthInputShape.select(sourceAspect);
+        // Widest model input for this bucket: MiDaS runs a larger grid than DA-V2 at every aspect,
+        // and the wider grid needs the finer spacing, so sizing for it is the safe direction.
+        int depthWidth = Math.max(bucket.getWidth(), widestModelWidthFor(bucket));
+        // Size from the bucket's NARROWEST aspect, not the caller's. Two streams in the same bucket
+        // must produce byte-identical shader source so the compiled program can be shared, and the
+        // narrowest aspect is the worst case because outputScale is REFERENCE/aspect — it yields the
+        // widest radius and therefore the finest spacing requirement in that bucket.
+        float worstAspect = narrowestAspectFor(bucket);
+        float outputScale = Math.max(0.5f, Math.min(REFERENCE_ASPECT_RATIO / worstAspect, 3.0f));
+        float radius = outputScale * ADAPTIVE_POP_CEILING
+                * (0.004f + 12.51f * 0.35f / CALIBRATION_WIDTH_PX);
+        float spacing = TARGET_DEPTH_TEXELS / depthWidth;
+        int steps = (int) Math.ceil(2.0f * radius / spacing);
+        return Math.max(8, Math.min(steps, 48));
+    }
+
+    private static final float REFERENCE_ASPECT_RATIO = 5120.0f / 2160.0f;
+    private static final float CALIBRATION_WIDTH_PX = 854.0f;
+    /** Must track the adaptive-pop ceiling the warp radius is built from. */
+    private static final float ADAPTIVE_POP_CEILING = 2.00f;
+    private static final float TARGET_DEPTH_TEXELS = 1.22f;
+
+    /**
+     * Narrowest source aspect that still selects this bucket. Buckets are chosen by least
+     * multiplicative distortion, so the boundary between adjacent buckets is their geometric mean.
+     * The widest bucket's lower bound is 4:3, the narrowest realistic landscape stream.
+     */
+    private static float narrowestAspectFor(ClientSbsDepthInputShape bucket) {
+        float wide = aspectOf(ClientSbsDepthInputShape.ASPECT_16_9);
+        float mid = aspectOf(ClientSbsDepthInputShape.ASPECT_21_9);
+        float ultra = aspectOf(ClientSbsDepthInputShape.ASPECT_32_9);
         if (bucket.equals(ClientSbsDepthInputShape.ASPECT_16_9)) {
-            return 32;
+            return 4.0f / 3.0f;
         }
-        return bucket.equals(ClientSbsDepthInputShape.ASPECT_21_9) ? 24 : 16;
+        if (bucket.equals(ClientSbsDepthInputShape.ASPECT_21_9)) {
+            return (float) Math.sqrt(wide * mid);
+        }
+        return (float) Math.sqrt(mid * ultra);
+    }
+
+    private static float aspectOf(ClientSbsDepthInputShape bucket) {
+        return bucket.getWidth() / (float) bucket.getHeight();
+    }
+
+    private static int widestModelWidthFor(ClientSbsDepthInputShape bucket) {
+        if (bucket.equals(ClientSbsDepthInputShape.ASPECT_16_9)) {
+            return ClientSbsModelManifest.MIDAS_V2_STATIC_16_9.getInputWidth();
+        }
+        if (bucket.equals(ClientSbsDepthInputShape.ASPECT_21_9)) {
+            return ClientSbsModelManifest.MIDAS_V2_STATIC_21_9.getInputWidth();
+        }
+        return ClientSbsModelManifest.MIDAS_V2_STATIC_32_9.getInputWidth();
     }
 
     static String createReprojectionFragment(float sourceAspect) {

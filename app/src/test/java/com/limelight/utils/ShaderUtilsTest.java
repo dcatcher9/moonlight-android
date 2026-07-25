@@ -19,7 +19,7 @@ public class ShaderUtilsTest {
     @Test
     public void reprojectionUsesBestv2AndFrontmostInverseProbe() {
         String shader = ClientSbsShaders.REPROJECTION_FRAGMENT;
-        assertTrue(shader.contains("const int PROBE_STEPS = 32"));
+        assertTrue(shader.contains("const int PROBE_STEPS = 19"));
         assertTrue(shader.contains("bestv2RawShift"));
         assertTrue(shader.contains("float anchorShift = stereoProfile.x;"));
         assertFalse(shader.contains("0.5 * subjectShift"));
@@ -42,7 +42,7 @@ public class ShaderUtilsTest {
     @Test
     public void warpMapCachesTheSameInverseSolveForBothEyes() {
         String shader = ClientSbsShaders.WARP_MAP_FRAGMENT;
-        assertTrue(shader.contains("const int PROBE_STEPS = 32"));
+        assertTrue(shader.contains("const int PROBE_STEPS = 19"));
         assertTrue(shader.contains("bestv2RawShift"));
         assertTrue(shader.contains("float anchorShift = stereoProfile.x;"));
         assertFalse(shader.contains("0.5 * subjectShift"));
@@ -64,13 +64,13 @@ public class ShaderUtilsTest {
 
     @Test
     public void probeBudgetIsSelectedOnceFromTheStreamAspectBucket() {
-        assertEquals(32, ClientSbsShaders.probeStepsForAspect(16.0f / 9.0f));
-        assertEquals(24, ClientSbsShaders.probeStepsForAspect(21.0f / 9.0f));
-        assertEquals(16, ClientSbsShaders.probeStepsForAspect(32.0f / 9.0f));
+        assertEquals(19, ClientSbsShaders.probeStepsForAspect(16.0f / 9.0f));
+        assertEquals(14, ClientSbsShaders.probeStepsForAspect(21.0f / 9.0f));
+        assertEquals(12, ClientSbsShaders.probeStepsForAspect(32.0f / 9.0f));
         assertTrue(ClientSbsShaders.createReprojectionFragment(21.0f / 9.0f)
-                .contains("const int PROBE_STEPS = 24;"));
+                .contains("const int PROBE_STEPS = 14;"));
         assertTrue(ClientSbsShaders.createWarpMapFragment(32.0f / 9.0f)
-                .contains("const int PROBE_STEPS = 16;"));
+                .contains("const int PROBE_STEPS = 12;"));
         assertFalse(ClientSbsShaders.createWarpMapFragment(16.0f / 9.0f)
                 .contains("const int PROBE_STEPS = 12;"));
     }
