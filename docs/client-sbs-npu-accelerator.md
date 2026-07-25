@@ -78,6 +78,32 @@ setters covering log level, HTP preference, quantization behaviour, weight shari
 FoldReLU, graph IO memory type and performance modes, with nothing for process domains. Even if the
 device would accept a signed PD, there is no way to ask for one through this runtime.
 
+### Who restricts it, with proof
+
+The restriction is explicit in the device's own policy, in two independent layers that agree:
+
+```
+/vendor/etc/selinux/vendor_sepolicy.cil:
+  (allow appdomain vendor_qdsp_device (chr_file (ioctl read))     <- no write
+
+/dev/adsprpc-smd:  crw-rw-r--  system system  u:object_r:vendor_qdsp_device:s0
+```
+
+App domains get `ioctl` + `read`; FastRPC needs read/write. The Unix permissions say the same
+thing. Two layers granting exactly read-only is a deliberate setting, not a missing rule.
+
+The DSP itself is in active use on the device — `libperception_htp_lifecycle_manager.so` runs XR
+perception on HTP, and Gemini Nano runs locally on the NPU — but those are system uid, which owns
+the node `rw`. The hardware and stack work; only third-party uids are excluded.
+
+Mechanically this is the **OEM vendor image**, since `/vendor/etc/selinux` is built by the OEM with
+Qualcomm's BSP — not Google's framework, whose `<uses-native-library>` mechanism worked exactly as
+documented. Directionally it matches Google's Android XR posture, which gives third-party apps
+derived data (skeletal coordinates, scene mesh) rather than raw camera access specifically so they
+cannot run their own CV models. Do not assert which organisation originated the decision; the
+evidence only shows where it is enforced. Note many retail Snapdragon phones DO grant apps DSP
+write access, which is how QNN apps ship on them, so this is a per-device choice.
+
 ### What would change the answer
 
 * **LiteRT exposing the signed-PD option.** This is the most likely unlock and is purely upstream;
