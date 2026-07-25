@@ -147,12 +147,20 @@ Same two temporal/quantization defects as the band:
 |---|---|---|
 | per-pixel depth-change threshold | 0.05 | 0.12 |
 | depth cut | `changeFraction >= 0.65` | `>= 0.58`, or `>= 0.42 && distributionShift >= 0.10` |
-| colour cut | `colorChangeFraction >= 0.70` on normalized model input | **absent** |
+| colour cut | `colorChangeFraction >= 0.70` on normalized model input | present, and richer — see below |
 | rearm | `(change < 0.35 && colour < 0.50) \|\| age >= 2` | `change < 0.35 \|\| age >= 2` |
 
-The missing colour detector is the substantive gap: the host arms it as soon as one prior model
-input exists, whereas depth-change detection must wait 8 updates for normalization to settle. Without
-it the client is blind to a similar-depth shot cut for its entire settle window.
+**Correction to an earlier reading of this file:** the client is NOT missing colour cut detection.
+`ClientSbsGpuSceneCutDetector` is a dedicated GPU detector over the model-input texture — Rec.709
+luma reduced per 16x16 tile, compared against persistent history, combining spatially broad change,
+mean-compensated structural change and coarse histogram change, explicitly built to reject ordinary
+object motion. It publishes one uint32 that reaches both `RESOLVE_RAW_RANGE` and `RESOLVE_PROFILE`
+through `externalSceneCutRequested()`. That is a richer detector than the host's per-pixel
+`colorChangeFraction >= 0.70`, and it covers the same gap: being blind to a similar-depth shot cut
+during the 8-update depth settle window.
+
+What remains is only threshold parity on the depth-side detector (0.12 vs 0.05 per-pixel, 0.58 vs
+0.65 frame fraction). Those are secondary while the colour path carries hard cuts.
 
 ## P3 — stale host geometry constant
 

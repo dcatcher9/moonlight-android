@@ -138,6 +138,8 @@ final class ClientSbsModelManifest {
     private static ClientSbsModelManifest createDepthAnythingStaticManifest(
             String id, String assetName, String assetSha256,
             ClientSbsDepthInputShape shape) {
+        // DA-V2's output is disparity-like: larger value = nearer.
+        requireHighIsNearDepth(id, true);
         return new ClientSbsModelManifest(
                 id,
                 DEPTH_ANYTHING_V2_MODEL_ARCHIVE_ASSET,
@@ -159,6 +161,8 @@ final class ClientSbsModelManifest {
         if (width % 32 != 0 || height % 32 != 0) {
             throw new IllegalArgumentException("MiDaS static dimensions must be divisible by 32");
         }
+        // MiDaS v2 emits inverse depth: larger value = nearer.
+        requireHighIsNearDepth(id, true);
         return new ClientSbsModelManifest(
                 id,
                 modelArchiveAssetName,
@@ -246,6 +250,23 @@ final class ClientSbsModelManifest {
     private final boolean directFullFrameResize;
     private final boolean dynamicSpatialShape;
     private final GpuExecutionPolicy gpuExecutionPolicy;
+
+    /**
+     * The whole SBS chain assumes the model emits HIGH-IS-NEAR relative depth: the subject estimate
+     * scans the histogram from bin 255 as "near", and bestv2RawShift maps higher shaped depth to a
+     * larger positive shift. Apollo has an explicit conversion step for this; the client has none,
+     * so a low-is-near graph would render every scene inside-out with nothing catching it. Both
+     * shipped families satisfy it — MiDaS v2 emits inverse depth and DA-V2's output is
+     * disparity-like — but the assumption was previously implicit and untested. Fail at manifest
+     * construction rather than silently inverting a future model.
+     */
+    private static void requireHighIsNearDepth(String id, boolean highIsNearDepth) {
+        if (!highIsNearDepth) {
+            throw new IllegalArgumentException(
+                    "Model " + id + " declares low-is-near depth, which the client SBS chain does "
+                            + "not implement: it would render inverted stereo");
+        }
+    }
 
     private ClientSbsModelManifest(String id, String modelArchiveAssetName, String assetName,
                                    String assetSha256,
