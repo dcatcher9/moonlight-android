@@ -197,6 +197,26 @@ public class XrStreamPresenter {
         default void onPresentationModeCommitted(PresenterMode mode) {
         }
 
+        /**
+         * A live video-mode change (0x3007) has been accepted by the running stream. The listener
+         * owns the durable/session-model bookkeeping; the presenter has already updated
+         * {@code PreferenceConfiguration} and the XR geometry.
+         */
+        default void onLiveStreamQualityApplied(PresenterMode mode, StreamQualityTuple applied) {
+        }
+
+        /** A live video-mode change was rejected; the stream still carries the previous tuple. */
+        default void onLiveStreamQualityFailed() {
+        }
+
+        /**
+         * The host reports the requested mode is valid but only reachable by reconnecting. The
+         * listener should commit the staged record and restart the stream immediately rather than
+         * leaving the user waiting on a timeout.
+         */
+        default void onLiveStreamQualityNeedsReconnect() {
+        }
+
         default void onLibraryRequested() {
         }
 
@@ -276,7 +296,23 @@ public class XrStreamPresenter {
             new EnumMap<>(PresenterMode.class);
     private ClientSbsModeSettingsModel clientSbsModeSettingsModel;
     private RawSbsModeSettingsModel rawSbsModeSettingsModel;
+    /** Anything staged differs from the live connection (the Apply button's enabled state). */
     private boolean reconnectPending;
+    /** Whether applying that staged state must reconnect rather than change the stream live. */
+    private boolean applyRequiresReconnect = true;
+    /** Guards a live video-mode change so it cannot interleave with another transaction. */
+    private boolean liveQualityChangeInProgress;
+    /** The decoder already produced a fresh IDR at the pinned geometry (second confirmation). */
+    private boolean liveQualityDecoderConfirmed;
+    private StreamQualityTuple pendingLiveQuality;
+    private StreamQualityTuple previousLiveQuality;
+    /** Opaque u16 correlation token for the outstanding 0x3007 request; -1 when there is none. */
+    private int pendingVideoModeRequestId = -1;
+    private int videoModeRequestCounter;
+    private static final long LIVE_QUALITY_ACK_TIMEOUT_MS = 4000L;
+    private final android.os.Handler liveQualityHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable liveQualityAckTimeoutRunnable = this::onLiveQualityAckTimeout;
     private boolean sessionControlsEnabled = true;
     private final EnumMap<SessionSettingsModel.Key, XrChoiceGroup> sessionChoiceGroups =
             new EnumMap<>(SessionSettingsModel.Key.class);
@@ -395,11 +431,41 @@ public class XrStreamPresenter {
         return isHostDepthPresenterMode(previousMode) != isHostDepthPresenterMode(nextMode);
     }
 
-    /** Raw uses a different negotiated base width, so it cannot share the live-switch path. */
+    /**
+     * True only for Raw Full, whose {@code 2W x H} frame is a transport no other mode uses.
+     *
+     * <p>Raw Half packs at {@code W x H} ({@code rawSbsPackedDimensions} multiplies the per-eye
+     * width by 1 for Half, 2 for Full), which is byte-for-byte the same stream Normal negotiates,
+     * sent with {@code sbs_mode 0} — {@link #wireModeFor} already maps Raw to
+     * {@code SBS_MODE_OFF}. The host cannot distinguish the two.</p>
+     */
+    static boolean usesRawPackedTransport(
+            PresenterMode mode,
+            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
+        return mode == PresenterMode.HOST_SBS_RAW
+                && perEyeResolution == PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
+    }
+
+    /** Conservative default for callers that do not know the session's Raw packing. */
     static boolean requiresReconnectBeforeModeSwitch(
             PresenterMode previousMode, PresenterMode nextMode) {
-        return (previousMode == PresenterMode.HOST_SBS_RAW)
-                != (nextMode == PresenterMode.HOST_SBS_RAW);
+        return requiresReconnectBeforeModeSwitch(previousMode, nextMode,
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL);
+    }
+
+    /**
+     * Whether a mode switch crosses a negotiated transport boundary and must therefore reconnect.
+     *
+     * <p>Only Raw Full renegotiates. Entering or leaving Raw <em>Half</em> changes nothing on the
+     * wire, so it is a pure client-side presentation change: flip the SceneCore stereo mode and
+     * re-apply the quad aspect. The packing itself cannot change without a reconnect, so one
+     * value applies to both sides of the comparison.</p>
+     */
+    static boolean requiresReconnectBeforeModeSwitch(
+            PresenterMode previousMode, PresenterMode nextMode,
+            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
+        return usesRawPackedTransport(previousMode, perEyeResolution)
+                != usesRawPackedTransport(nextMode, perEyeResolution);
     }
 
     /** True only when the decoder target or encoded dimensions change across the transition. */
@@ -583,7 +649,22 @@ public class XrStreamPresenter {
                                   Map<PresenterMode, ModeStreamQualityModel> qualityModels,
                                   ClientSbsModeSettingsModel clientModel,
                                   RawSbsModeSettingsModel rawModel,
-                                  boolean reconnectPending) {
+                                  boolean applyPending) {
+        setSettingsModels(sessionModel, qualityModels, clientModel, rawModel, applyPending, true);
+    }
+
+    /**
+     * @param applyPending          anything staged differs from the live connection
+     * @param applyRequiresReconnect applying it must tear down and re-establish the stream
+     */
+    public void setSettingsModels(SessionSettingsModel sessionModel,
+                                  Map<PresenterMode, ModeStreamQualityModel> qualityModels,
+                                  ClientSbsModeSettingsModel clientModel,
+                                  RawSbsModeSettingsModel rawModel,
+                                  boolean applyPending,
+                                  boolean applyRequiresReconnect) {
+        boolean reconnectPending = applyPending;
+        this.applyRequiresReconnect = applyRequiresReconnect;
         sessionSettingsModel = java.util.Objects.requireNonNull(sessionModel, "sessionModel");
         java.util.Objects.requireNonNull(qualityModels, "qualityModels");
         modeStreamQualityModels.clear();
@@ -1244,7 +1325,8 @@ public class XrStreamPresenter {
                         : activity.getString(R.string.xr_glance_sdr)));
 
         boolean liveStatus = streamPresentationReady && sessionControlsEnabled
-                && !modeSwitchInProgress && pendingDecoderTransitionMode == null
+                && !modeSwitchInProgress && !liveQualityChangeInProgress
+                && pendingDecoderTransitionMode == null
                 && !isDepthBusy() && !reconnectPending;
         int statusText;
         if (!streamPresentationReady) {
@@ -1307,7 +1389,7 @@ public class XrStreamPresenter {
     private boolean canAutoCollapseDock() {
         return shouldAutoCollapseDock(streamPresentationReady, sessionControlsEnabled,
                 controlUiState.getVisibleSurface(), controlUiState.isStatsVisible(),
-                reconnectPending, modeSwitchInProgress,
+                reconnectPending, modeSwitchInProgress || liveQualityChangeInProgress,
                 pendingDecoderTransitionMode != null, isDepthBusy(),
                 dockHoverTarget != null, dockFocusTarget != null,
                 secondaryActionsExpanded);
@@ -1442,10 +1524,11 @@ public class XrStreamPresenter {
         }
         if (action == XrControlUiState.ModeTileAction.SELECT_MODE) {
             if (requiresReconnectBeforeModeSwitch(
-                    currentPresenterMode, item.selectsMode)) {
-                // Raw's negotiated base frame is already packed stereo, at either Full or Half
-                // width. Never feed it into Client AI or ask Host AI to pack it again. Commit the
-                // target first and let the replacement connection use the correct dimensions.
+                    currentPresenterMode, item.selectsMode,
+                    prefConfig.rawSbsPerEyeResolution)) {
+                // Raw Full negotiates a 2W x H base frame that no other mode uses, so the
+                // replacement connection has to renegotiate it. Raw Half is W x H — the same
+                // stream as Normal — and switches live through selectMode() below.
                 LimeLog.info("XR: reconnecting before Raw SBS transport boundary "
                         + currentPresenterMode + " -> " + item.selectsMode);
                 controlActionListener.onPresentationModeCommitted(item.selectsMode);
@@ -1898,7 +1981,7 @@ public class XrStreamPresenter {
                 .onUseModeGlobalDefaultsRequested(mode, modeStreamQualityModels.get(mode)));
         footer.addView(modeDefaultsButton);
 
-        modeApplyButton = compactButton(activity.getString(R.string.xr_session_apply_reconnect));
+        modeApplyButton = compactButton(applyButtonLabel());
         modeApplyButton.setBackgroundResource(R.drawable.xr_home_primary_action_background);
         modeApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
         modeApplyButton.setOnClickListener(v -> controlActionListener
@@ -1936,6 +2019,9 @@ public class XrStreamPresenter {
         String live = formatQualityTuple(model.liveQuality);
         if (model.requiresReconnect()) {
             return activity.getString(R.string.xr_mode_quality_reconnect, source, live);
+        }
+        if (model.appliesLive()) {
+            return activity.getString(R.string.xr_mode_quality_apply_live, source, live);
         }
         if (model.hasPendingChanges()) {
             return activity.getString(R.string.xr_mode_quality_pending, source, live);
@@ -2197,6 +2283,7 @@ public class XrStreamPresenter {
         modeQualityCueView.setTextColor(model.requiresReconnect()
                 ? STATS_WARN_COLOR : STATS_LABEL_COLOR);
         modeDefaultsButton.setEnabled(sessionControlsEnabled);
+        modeApplyButton.setText(applyButtonLabel());
         modeApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
         if (mode == PresenterMode.CLIENT_SBS_AI) {
             updateClientSbsOptionsView();
@@ -2388,9 +2475,7 @@ public class XrStreamPresenter {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
-        sessionApplyButton = compactButton(reconnectPending
-                ? activity.getString(R.string.xr_session_apply_reconnect)
-                : activity.getString(R.string.xr_session_no_reconnect_changes));
+        sessionApplyButton = compactButton(applyButtonLabel());
         sessionApplyButton.setBackgroundResource(R.drawable.xr_home_primary_action_background);
         sessionApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
         sessionApplyButton.setOnClickListener(v -> controlActionListener
@@ -2511,6 +2596,13 @@ public class XrStreamPresenter {
         sessionSourceViews.put(key, sourceView);
         heading.addView(sourceView);
         row.addView(heading);
+
+        // Unlike the other rows in this pane, bitrate is stored per presentation mode.
+        TextView scopeNote = controlText(
+                activity.getString(R.string.xr_session_bitrate_scope),
+                SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        scopeNote.setPadding(0, dp(2), 0, dp(4));
+        row.addView(scopeNote);
 
         XrBitrateControl bitrateControl = new XrBitrateControl(activity);
         bitrateControl.setChoices(choicesOrCurrent(value, value.selectedChoiceId),
@@ -2712,10 +2804,18 @@ public class XrStreamPresenter {
         if (sessionApplyButton == null) {
             return;
         }
-        sessionApplyButton.setText(reconnectPending
-                ? activity.getString(R.string.xr_session_apply_reconnect)
-                : activity.getString(R.string.xr_session_no_reconnect_changes));
+        sessionApplyButton.setText(applyButtonLabel());
         sessionApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
+    }
+
+    /** Three-state Apply label: nothing pending / apply live / apply &amp; reconnect. */
+    private String applyButtonLabel() {
+        if (!reconnectPending) {
+            return activity.getString(R.string.xr_session_no_reconnect_changes);
+        }
+        return applyRequiresReconnect
+                ? activity.getString(R.string.xr_session_apply_reconnect)
+                : activity.getString(R.string.xr_session_apply_live);
     }
 
     private LinearLayout panelColumn() {
@@ -3866,7 +3966,8 @@ public class XrStreamPresenter {
     private void selectMode(BarItem item) {
         if (!streamPresentationReady || item.selectsMode == null || surfaceEntity == null
                 || surfaceEntity.isDisposed()
-                || item.selectsMode == currentPresenterMode || modeSwitchInProgress) {
+                || item.selectsMode == currentPresenterMode || modeSwitchInProgress
+                || liveQualityChangeInProgress) {
             return;
         }
         // A switch kicks off an async surface handoff (GL pause/resume + resize); ignore a second
@@ -3946,6 +4047,506 @@ public class XrStreamPresenter {
 
         finishModeSwitch(item, previousMode, nextMode, previousWireMode, nextWireMode,
                 wasClientSbs, isClientSbs, streamContainer, true);
+    }
+
+    /**
+     * Applies a stream-quality tuple to the running stream with no reconnect.
+     *
+     * <p>Bitrate-only and frame-rate-only deltas take the fast path: one reliable control message,
+     * no surface transaction and no IDR gate. A resolution delta reuses the proven mode-switch
+     * transaction verbatim — close the frame gate, hide the quad, ask the host, re-pin the
+     * SceneCore surface through the dummy-surface handoff, then reveal once the fresh transition
+     * IDR reaches the new target.</p>
+     *
+     * <p>Main-thread only: every SceneCore call below is Activity-bound.</p>
+     */
+    public void applyLiveStreamQuality(StreamQualityTuple target) {
+        if (target == null || !streamPresentationReady || surfaceEntity == null
+                || surfaceEntity.isDisposed() || modeSwitchInProgress
+                || liveQualityChangeInProgress || pendingDecoderTransitionMode != null
+                || clientSbsHdrTransitionInProgress) {
+            return;
+        }
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        if (game == null) {
+            return;
+        }
+
+        int currentFps = Math.round(prefConfig.fps);
+        int[] size = parseResolutionSize(target.resolution);
+        int fps = parseFrameRate(target.frameRate, currentFps);
+        int fpsX100 = frameRateX100(target.frameRate, currentFps);
+        if (size == null || fps <= 0 || fpsX100 <= 0) {
+            LimeLog.warning("XR: ignoring unparseable live stream quality " + target);
+            return;
+        }
+        StreamQualityTuple previous = new StreamQualityTuple(
+                prefConfig.width + "x" + prefConfig.height,
+                String.valueOf(currentFps), prefConfig.bitrate);
+        boolean resolutionChanged = size[0] != prefConfig.width || size[1] != prefConfig.height;
+        if (resolutionChanged && !supportsLiveResolutionChange(
+                currentPresenterMode, prefConfig.rawSbsPerEyeResolution)) {
+            // Raw Full's 2W x H transport is negotiated at connect and must reconnect. The
+            // controller classifies this too — refuse here as well so a mode/controller mismatch
+            // cannot corrupt state.
+            LimeLog.warning("XR: refusing a live resolution change in " + currentPresenterMode);
+            reportLiveQualityFailure(currentPresenterMode + " cannot resize live");
+            return;
+        }
+
+        int requestId = nextVideoModeRequestId();
+
+        if (!resolutionChanged) {
+            // Fast path: nothing client-side is sized by bitrate or frame rate, so apply
+            // optimistically and let the ack resynchronize to whatever the host actually ran.
+            if (MoonBridge.sendSetVideoMode(prefConfig.width, prefConfig.height,
+                    fpsX100, requestId, target.bitrateKbps) <= 0) {
+                reportLiveQualityFailure("host request could not be queued");
+                return;
+            }
+            pendingVideoModeRequestId = requestId;
+            pendingLiveQuality = target;
+            previousLiveQuality = previous;
+            prefConfig.fps = fps;
+            prefConfig.bitrate = target.bitrateKbps;
+            game.updateDecoderStreamGeometry(prefConfig.width, prefConfig.height, fps);
+            controlActionListener.onLiveStreamQualityApplied(currentPresenterMode, target);
+            armLiveQualityAckTimeout();
+            updateGlancePanel();
+            revealDockTemporarily();
+            LimeLog.info("XR: applied live stream quality " + target
+                    + " (request " + requestId + ", awaiting ack)");
+            return;
+        }
+
+        liveQualityChangeInProgress = true;
+        liveQualityDecoderConfirmed = false;
+        previousLiveQuality = previous;
+        pendingLiveQuality = target;
+        updateGlancePanel();
+        revealDockTemporarily();
+
+        int transitionGeneration = game.beginDecoderPresentationModeTransition();
+        if (!decoderTransitionGenerations.beginMode(transitionGeneration)) {
+            clearLiveQualityChange();
+            reportLiveQualityFailure("decoder could not prepare for the transition");
+            return;
+        }
+
+        // Honor the native send result before touching any client geometry, exactly as the SBS
+        // mode switch does. A failed reliable send leaves the stream untouched.
+        if (MoonBridge.sendSetVideoMode(size[0], size[1], fpsX100, requestId,
+                target.bitrateKbps) <= 0) {
+            // No surface changed, so the existing target is immediately safe for the replacement
+            // IDR that completes the decoder flush.
+            game.completeDecoderPresentationModeTransition();
+            clearLiveQualityChange();
+            reportLiveQualityFailure("host request could not be queued");
+            return;
+        }
+        pendingVideoModeRequestId = requestId;
+
+        surfaceEntity.setAlpha(0.0f);
+        // Size the client for what we asked. If the ack later reports a clamped apply, the
+        // geometry is re-pinned to the applied values before the quad is revealed.
+        if (!applyLiveStreamGeometry(game, size[0], size[1], fps, target.bitrateKbps)) {
+            // Put the client back on the geometry the host is still sending.
+            applyLiveStreamGeometry(game, previous, currentFps);
+            game.completeDecoderPresentationModeTransition();
+            surfaceEntity.setAlpha(1.0f);
+            clearLiveQualityChange();
+            reportLiveQualityFailure("the XR surface could not be resized");
+            return;
+        }
+
+        game.completeDecoderPresentationModeTransition();
+        armLiveQualityAckTimeout();
+        LimeLog.info("XR: awaiting ack/fresh-IDR output for live quality " + target
+                + " (request " + requestId + ")");
+    }
+
+    /** What a 0x3008 ack means for the outstanding request. */
+    enum VideoModeAckOutcome {
+        /** Not for the outstanding request (or none is outstanding); drop it. */
+        IGNORE_STALE,
+        /** The host is running the applied values; adopt them, clamped or not. */
+        ADOPT_APPLIED,
+        /** Valid but only reachable by reconnecting; stop waiting and restart the stream. */
+        NEEDS_RECONNECT,
+        /** Failed validation; revert the staged UI and do not retry the same request. */
+        REJECTED_NO_RETRY,
+        /** Transient failure, already rolled back on the host; revert, retry is permitted. */
+        FAILED_RETRYABLE,
+    }
+
+    /**
+     * Correlates an ack strictly by {@code requestId}. An ack for any other id — including one
+     * arriving after the outstanding request has already been settled or timed out — is stale.
+     */
+    static VideoModeAckOutcome videoModeAckOutcome(int outstandingRequestId, int ackRequestId,
+                                                   int status) {
+        if (outstandingRequestId <= 0 || ackRequestId != outstandingRequestId) {
+            return VideoModeAckOutcome.IGNORE_STALE;
+        }
+        switch (status) {
+            case MoonBridge.VIDEO_MODE_ACK_APPLIED:
+                return VideoModeAckOutcome.ADOPT_APPLIED;
+            case MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT:
+                return VideoModeAckOutcome.NEEDS_RECONNECT;
+            case MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID:
+                return VideoModeAckOutcome.REJECTED_NO_RETRY;
+            case MoonBridge.VIDEO_MODE_ACK_FAILED:
+            default:
+                // An unknown status is treated as a transient failure rather than silently
+                // adopting a mode the host may not be running.
+                return VideoModeAckOutcome.FAILED_RETRYABLE;
+        }
+    }
+
+    private int nextVideoModeRequestId() {
+        // Opaque u16 correlation token with wraparound; zero is reserved for "no request".
+        videoModeRequestCounter = (videoModeRequestCounter % 0xFFFF) + 1;
+        return videoModeRequestCounter;
+    }
+
+    /**
+     * Host answer to a live video-mode request (0x3008).
+     *
+     * <p>Correlation is strictly by {@code requestId}; an ack for any other id is stale and
+     * dropped. The {@code applied*} values are authoritative — the host legitimately clamps an
+     * oversized width to the codec ceiling and scales height to preserve aspect, so a clamped
+     * apply is adopted rather than treated as a failure.</p>
+     *
+     * <p>Main-thread only.</p>
+     */
+    public void onVideoModeAck(int requestId, int status, int appliedWidth, int appliedHeight,
+                               int appliedFramerateX100, int appliedBitrateKbps) {
+        VideoModeAckOutcome outcome = videoModeAckOutcome(
+                pendingVideoModeRequestId, requestId, status);
+        if (outcome == VideoModeAckOutcome.IGNORE_STALE) {
+            LimeLog.info("XR: dropping stale video-mode ack " + requestId
+                    + " (outstanding request " + pendingVideoModeRequestId + ")");
+            return;
+        }
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        if (game == null) {
+            clearLiveQualityChange();
+            return;
+        }
+        cancelLiveQualityAckTimeout();
+        pendingVideoModeRequestId = -1;
+
+        StreamQualityTuple appliedTuple = appliedTuple(appliedWidth, appliedHeight,
+                appliedFramerateX100, appliedBitrateKbps);
+        if (outcome != VideoModeAckOutcome.ADOPT_APPLIED) {
+            handleVideoModeRefusal(game, status, appliedTuple);
+            return;
+        }
+
+        // Adopt the applied values as authoritative, re-pinning geometry when the host clamped.
+        if (appliedTuple != null) {
+            LimeLog.info("XR: host applied " + appliedTuple + " for request " + requestId);
+            applyAcknowledgedQuality(game, appliedTuple);
+        }
+        settleLiveQualityChange(game, appliedTuple != null ? appliedTuple : pendingLiveQuality);
+    }
+
+    /**
+     * Adopts the host's applied tuple. Resolution differences re-run the geometry path; frame
+     * rate and the host's post-budget encoder bitrate are recorded either way.
+     */
+    private void applyAcknowledgedQuality(com.limelight.Game game, StreamQualityTuple applied) {
+        int[] size = parseResolutionSize(applied.resolution);
+        int fps = parseFrameRate(applied.frameRate, Math.round(prefConfig.fps));
+        if (size == null) {
+            return;
+        }
+        if (size[0] != prefConfig.width || size[1] != prefConfig.height) {
+            LimeLog.info("XR: host clamped the request to " + applied
+                    + "; adopting it as authoritative");
+            applyLiveStreamGeometry(game, size[0], size[1], fps, applied.bitrateKbps);
+            return;
+        }
+        prefConfig.fps = fps;
+        prefConfig.bitrate = applied.bitrateKbps;
+        game.updateDecoderStreamGeometry(size[0], size[1], fps);
+    }
+
+    private void handleVideoModeRefusal(com.limelight.Game game, int status,
+                                        StreamQualityTuple stillInEffect) {
+        // On a refusal the applied* values describe the mode that remains in effect, so
+        // resynchronize the client to them rather than to what was optimistically staged.
+        if (stillInEffect != null) {
+            applyAcknowledgedQuality(game, stillInEffect);
+        }
+        boolean wasResolutionTransaction = liveQualityChangeInProgress;
+        if (wasResolutionTransaction && surfaceEntity != null && !surfaceEntity.isDisposed()) {
+            surfaceEntity.setAlpha(1.0f);
+        }
+        decoderTransitionGenerations.clearMode();
+        clearLiveQualityChange();
+
+        if (status == MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT) {
+            // The whole point of the ack: take the reconnect immediately instead of making the
+            // user sit through the watchdog timeout.
+            LimeLog.info("XR: host reports the requested mode needs a reconnect");
+            controlActionListener.onLiveStreamQualityNeedsReconnect();
+            return;
+        }
+        LimeLog.severe("XR: host refused the live video mode (status " + status + ")");
+        reportLiveQualityFailure(status == MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID
+                ? "the PC rejected the request as invalid"
+                : "the PC could not complete the change");
+    }
+
+    /**
+     * The host's applied mode as a stream-quality tuple. {@code width}/{@code height} are base
+     * per-eye values before any SBS doubling, and {@code bitrateKbps} is the host's post-budget
+     * encoder value rather than the requested wire budget. Null when the host reported nothing
+     * usable.
+     */
+    static StreamQualityTuple appliedTuple(int width, int height, int framerateX100,
+                                           int bitrateKbps) {
+        if (width <= 0 || height <= 0 || framerateX100 <= 0 || bitrateKbps <= 0) {
+            return null;
+        }
+        return new StreamQualityTuple(width + "x" + height,
+                String.valueOf(Math.round(framerateX100 / 100f)), bitrateKbps);
+    }
+
+    private boolean applyLiveStreamGeometry(com.limelight.Game game, StreamQualityTuple tuple,
+                                            int fps) {
+        int[] size = parseResolutionSize(tuple.resolution);
+        return size != null
+                && applyLiveStreamGeometry(game, size[0], size[1], fps, tuple.bitrateKbps);
+    }
+
+    /**
+     * Re-pins every dimension-derived piece of client state to a new stream size: the cached
+     * aspect, the SceneCore surface (through {@code StreamContainer}'s dummy-surface handoff so
+     * MediaCodec never sees a transient target), the quad, and the dependent panel poses.
+     */
+    private boolean applyLiveStreamGeometry(com.limelight.Game game, int width, int height,
+                                            int fps, int bitrateKbps) {
+        StreamContainer streamContainer = game.getStreamContainer();
+        if (streamContainer == null || surfaceEntity == null || surfaceEntity.isDisposed()) {
+            return false;
+        }
+        prefConfig.width = width;
+        prefConfig.height = height;
+        prefConfig.fps = fps;
+        prefConfig.bitrate = bitrateKbps;
+        // The only cached dimension-derived field in this class.
+        fullAspect = (float) width / height;
+        game.updateDecoderStreamGeometry(width, height, fps);
+
+        // Client SBS owns its own GL color targets and presents a packed 2W x H swapchain, so it
+        // resizes through the renderer rather than the host-surface dummy-park handoff.
+        boolean resized = currentPresenterMode == PresenterMode.CLIENT_SBS_AI
+                ? streamContainer.resizeClientSbsSurface(width, height)
+                : streamContainer.resizeHostSbsSurface(
+                        prefConfig.isHostDoubledWidthMode()
+                                && isHostDepthPresenterMode(currentPresenterMode));
+        if (!resized) {
+            return false;
+        }
+
+        float aspect = aspectFor(currentPresenterMode);
+        SurfaceEntity.Shape shape = surfaceEntity.getShape();
+        float quadHeight = (shape instanceof SurfaceEntity.Shape.Quad)
+                ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight()
+                : DEFAULT_PANEL_HEIGHT_METERS;
+        surfaceEntity.setShape(
+                new SurfaceEntity.Shape.Quad(new FloatSize2d(quadHeight * aspect, quadHeight)));
+        applyResizeBounds(aspect);
+        // Also repositions the stats panel.
+        repositionControlBar(quadHeight);
+        updateGlancePanel();
+        return true;
+    }
+
+    /**
+     * Decoder callback path: the fresh IDR at the new geometry has reached the target surface.
+     *
+     * <p>This is the second, independent confirmation. The ack rides reliable ENet while video
+     * rides RTP, so the two can arrive in either order; whichever lands first settles the change
+     * and the other is a no-op through {@link #liveQualityChangeInProgress}.</p>
+     */
+    private void finishPendingLiveQualityChange() {
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        if (!liveQualityChangeInProgress || game == null || surfaceEntity == null
+                || surfaceEntity.isDisposed()) {
+            decoderTransitionGenerations.clearMode();
+            clearLiveQualityChange();
+            return;
+        }
+        decoderTransitionGenerations.clearMode();
+        liveQualityDecoderConfirmed = true;
+
+        // The decoder can only confirm against the geometry currently pinned on the client, which
+        // is the requested tuple until an ack reports a clamped apply.
+        int[] expected = initialSurfacePixelDimensions(currentPresenterMode,
+                prefConfig.width, prefConfig.height, hostSbsVideoFormat,
+                prefConfig.rawSbsPerEyeResolution);
+        int[] actual = game.getDecoderOutputDimensions();
+        if (actual != null && actual[0] == expected[0] && actual[1] == expected[1]) {
+            settleLiveQualityChange(game, pendingLiveQuality);
+            return;
+        }
+
+        // A mismatch is not yet a failure: the host may have clamped, and its ack carries the
+        // authoritative applied values. Keep waiting; the ack timeout is the backstop.
+        LimeLog.info("XR: decoder output "
+                + (actual == null ? "unknown" : actual[0] + "x" + actual[1])
+                + " does not match the requested " + expected[0] + "x" + expected[1]
+                + "; waiting for the host ack");
+    }
+
+    /** Completes an in-flight live change exactly once, whichever confirmation arrived first. */
+    private void settleLiveQualityChange(com.limelight.Game game, StreamQualityTuple applied) {
+        if (!liveQualityChangeInProgress) {
+            // Fast path (no surface transaction), or an already-settled resolution change. The
+            // ack still resynchronizes the durable model to the host's applied values.
+            if (applied != null) {
+                controlActionListener.onLiveStreamQualityApplied(currentPresenterMode, applied);
+            }
+            clearLiveQualityChange();
+            return;
+        }
+        if (surfaceEntity != null && !surfaceEntity.isDisposed()) {
+            surfaceEntity.setAlpha(1.0f);
+        }
+        decoderTransitionGenerations.clearMode();
+        clearLiveQualityChange();
+        if (applied != null) {
+            controlActionListener.onLiveStreamQualityApplied(currentPresenterMode, applied);
+        }
+        updateGlancePanel();
+        revealDockTemporarily();
+        LimeLog.info("XR: live quality settled at " + applied);
+    }
+
+    /**
+     * Backstop for a host that acknowledges nothing. The decoder's own mode-transition watchdog
+     * covers a missing IDR; this covers a missing ack after the IDR already landed, and the fast
+     * path which has no decoder transaction at all.
+     */
+    private void onLiveQualityAckTimeout() {
+        if (pendingVideoModeRequestId <= 0) {
+            return;
+        }
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        pendingVideoModeRequestId = -1;
+        if (game == null) {
+            clearLiveQualityChange();
+            return;
+        }
+        if (!liveQualityChangeInProgress) {
+            // The optimistic fast-path values stand; nothing was gated on the ack.
+            LimeLog.warning("XR: no video-mode ack for the live bitrate/frame-rate change");
+            clearLiveQualityChange();
+            return;
+        }
+        if (liveQualityDecoderConfirmed) {
+            // The decoder never matched the requested geometry and no ack explained why.
+            LimeLog.severe("XR: no video-mode ack explained the decoder geometry mismatch");
+        } else {
+            LimeLog.severe("XR: no video-mode ack and no fresh-IDR output");
+        }
+        StreamQualityTuple previous = previousLiveQuality;
+        if (previous != null) {
+            applyLiveStreamGeometry(game, previous,
+                    parseFrameRate(previous.frameRate, Math.round(prefConfig.fps)));
+        }
+        if (surfaceEntity != null && !surfaceEntity.isDisposed()) {
+            surfaceEntity.setAlpha(1.0f);
+        }
+        decoderTransitionGenerations.clearMode();
+        clearLiveQualityChange();
+        reportLiveQualityFailure("the PC did not answer the request");
+    }
+
+    private void armLiveQualityAckTimeout() {
+        liveQualityHandler.removeCallbacks(liveQualityAckTimeoutRunnable);
+        liveQualityHandler.postDelayed(liveQualityAckTimeoutRunnable,
+                LIVE_QUALITY_ACK_TIMEOUT_MS);
+    }
+
+    private void cancelLiveQualityAckTimeout() {
+        liveQualityHandler.removeCallbacks(liveQualityAckTimeoutRunnable);
+    }
+
+    private void clearLiveQualityChange() {
+        cancelLiveQualityAckTimeout();
+        liveQualityChangeInProgress = false;
+        liveQualityDecoderConfirmed = false;
+        pendingVideoModeRequestId = -1;
+        pendingLiveQuality = null;
+        previousLiveQuality = null;
+        updateGlancePanel();
+        revealDockTemporarily();
+    }
+
+    private void reportLiveQualityFailure(String reason) {
+        LimeLog.severe("XR live stream quality change failed: " + reason);
+        if (activity instanceof com.limelight.Game) {
+            ((com.limelight.Game) activity).displayMessage(
+                    activity.getString(R.string.xr_session_live_change_failed));
+        }
+        controlActionListener.onLiveStreamQualityFailed();
+    }
+
+    /**
+     * Frame rate on the wire is hundredths of a Hz, so fractional rates (2997 = 29.97) survive
+     * the round trip even though the XR picker currently only offers whole values.
+     */
+    static int frameRateX100(String frameRate, int fallbackFps) {
+        float fps;
+        try {
+            fps = Float.parseFloat(frameRate.trim());
+        } catch (RuntimeException e) {
+            fps = fallbackFps;
+        }
+        return Math.max(0, Math.min(0xFFFF, Math.round(fps * 100f)));
+    }
+
+    static int parseFrameRate(String frameRate, int fallback) {
+        try {
+            return Math.round(Float.parseFloat(frameRate.trim()));
+        } catch (RuntimeException e) {
+            return fallback;
+        }
+    }
+
+    /**
+     * Modes whose decoded frame size can change live. Raw <em>Full</em> is the only exclusion:
+     * its {@code 2W x H} packed transport is negotiated at connect and 0x3007 cannot renegotiate
+     * it. Raw Half streams {@code W x H} exactly like Normal and resizes live. Client SBS resizes
+     * through {@code Stereo3DRenderer}, which refuses a change that would move the depth bucket.
+     */
+    static boolean supportsLiveResolutionChange(
+            PresenterMode mode,
+            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
+        return !usesRawPackedTransport(mode, perEyeResolution);
+    }
+
+    /** Parses a {@code WxH} stream-quality resolution id; null when it is not usable. */
+    static int[] parseResolutionSize(String resolution) {
+        if (resolution == null) {
+            return null;
+        }
+        try {
+            String[] parts = resolution.split("x", 2);
+            int width = Integer.parseInt(parts[0].trim());
+            int height = Integer.parseInt(parts[1].trim());
+            return (width > 0 && height > 0) ? new int[] {width, height} : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private void finishModeSwitch(BarItem item, PresenterMode previousMode, PresenterMode nextMode,
@@ -4029,6 +4630,15 @@ public class XrStreamPresenter {
             return;
         }
 
+        if (liveQualityChangeInProgress) {
+            if (!decoderTransitionGenerations.dispatchModeIfCurrent(
+                    transitionGeneration, this::finishPendingLiveQualityChange)) {
+                LimeLog.warning("XR: ignoring superseded live-quality completion generation "
+                        + transitionGeneration);
+            }
+            return;
+        }
+
         if (clientSbsHdrTransitionInProgress) {
             if (!decoderTransitionGenerations.dispatchHdrIfCurrent(
                     transitionGeneration, this::openClientSbsHdrTransition)) {
@@ -4091,6 +4701,11 @@ public class XrStreamPresenter {
                 transitionGeneration, () -> {
                     if (pendingDecoderTransitionMode != null) {
                         LimeLog.severe("XR: mode " + pendingDecoderTransitionMode
+                                + " timed out before fresh-IDR output");
+                    } else if (liveQualityChangeInProgress) {
+                        // Keep liveStreamQuality untouched: the listener is never told the change
+                        // succeeded, so the staged tuple stays pending while Game terminates.
+                        LimeLog.severe("XR: live quality " + pendingLiveQuality
                                 + " timed out before fresh-IDR output");
                     } else if (clientSbsHdrTransitionInProgress) {
                         LimeLog.severe("XR: Client SBS HDR transition timed out before "

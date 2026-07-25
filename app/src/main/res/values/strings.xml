@@ -345,6 +345,9 @@
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="resolution_4k">4K</string>
+    <string name="resolution_uw_1080p">UW 1080p</string>
+    <string name="resolution_uw_1440p">UW 1440p</string>
+    <string name="resolution_5k2k">5K2K</string>
 
     <string name="fps_30">30 FPS</string>
     <string name="fps_60">60 FPS</string>
@@ -848,11 +851,15 @@
     <string name="xr_session_use_global">Use global defaults</string>
     <string name="xr_session_use_session">Use session settings</string>
     <string name="xr_session_settings_summary">Shared by all presentation modes for this PC\'s current session.</string>
+    <string name="xr_session_bitrate_scope">Applies to the current presentation mode; other modes keep their own bitrate.</string>
     <string name="xr_session_video_group">Video</string>
     <string name="xr_session_delivery_group">Delivery</string>
     <string name="xr_session_current_pc">Current PC</string>
     <string name="xr_session_apply_reconnect">Apply &amp; reconnect</string>
+    <string name="xr_session_apply_live">Apply</string>
     <string name="xr_session_no_reconnect_changes">No reconnect changes</string>
+    <string name="xr_session_live_change_failed">The PC could not change the stream live. The previous settings are still active.</string>
+    <string name="xr_session_live_change_needs_reconnect">This mode needs a reconnect. Restarting the stream…</string>
     <string name="xr_session_stale_settings">The PC session changed. Reopen its settings and try again.</string>
     <string name="xr_session_reconnecting">Applying session settings and reconnecting…</string>
     <string name="xr_setting_source_global">Global</string>
@@ -861,6 +868,7 @@
     <string name="xr_mode_quality_live">%1$s &#x00B7; Live %2$s</string>
     <string name="xr_mode_quality_pending">%1$s &#x00B7; Live %2$s &#x00B7; Staged change</string>
     <string name="xr_mode_quality_reconnect">%1$s &#x00B7; Live %2$s &#x00B7; Reconnect required</string>
+    <string name="xr_mode_quality_apply_live">%1$s &#x00B7; Live %2$s &#x00B7; Applies without reconnect</string>
     <string name="xr_mode_quality_heading">Stream quality</string>
     <string name="xr_glance_stream">%1$s &#x00B7; %2$s FPS &#x00B7; %3$s</string>
     <string name="xr_glance_hdr" translatable="false">HDR</string>

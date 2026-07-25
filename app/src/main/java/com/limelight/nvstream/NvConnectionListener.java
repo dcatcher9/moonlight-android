@@ -25,6 +25,17 @@ public interface NvConnectionListener {
     // 1 = process-wide depth-engine preparation, 2 = ready, 3 = per-stream GPU pipeline setup.
     void depthStatus(int phase);
 
+    /**
+     * Host answer to a live video-mode request (Apollo extension). {@code requestId} is echoed
+     * verbatim and is the only correlation key. {@code status} is one of the
+     * {@code MoonBridge.VIDEO_MODE_ACK_*} values. The {@code applied*} values report what the host
+     * is actually running — a clamped apply is a success, not a failure — with
+     * {@code appliedWidth}/{@code appliedHeight} being base per-eye values before any SBS doubling
+     * and {@code appliedBitrateKbps} being the host's post-budget encoder value.
+     */
+    void videoModeAck(int requestId, int status, int appliedWidth, int appliedHeight,
+                      int appliedFramerateX100, int appliedBitrateKbps);
+
     /** Called after Apollo has accepted launch/resume and returned the bound session token. */
     void hostSessionEstablished(String hostSessionId, boolean resumed);
 }

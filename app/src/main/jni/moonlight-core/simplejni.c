@@ -21,6 +21,16 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass cl
     return LiSendSetSbsMode((uint8_t) mode);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_sendSetVideoMode(JNIEnv *env, jclass clazz,
+                                                            jint width, jint height,
+                                                            jint framerateX100, jint requestId,
+                                                            jint bitrateKbps) {
+    return LiSendSetVideoMode((uint16_t) width, (uint16_t) height,
+                              (uint16_t) framerateX100, (uint16_t) requestId,
+                              (uint32_t) bitrateKbps);
+}
+
 JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_requestIdrFrame(JNIEnv *env, jclass clazz) {
     LiRequestIdrFrame();

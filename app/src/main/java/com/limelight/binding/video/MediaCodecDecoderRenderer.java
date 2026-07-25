@@ -77,6 +77,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
+    // Largest resolution the XR mode rows can select. Mirrors XrResolutionSelector's
+    // 1080p/1440p/4K/UW-1080p/UW-1440p/5K2K cards; keep the two in sync. 5K2K (5120x2160) is the
+    // widest and 4K/5K2K jointly set the tallest.
+    static final int MAX_LIVE_STREAM_WIDTH = 5120;
+    static final int MAX_LIVE_STREAM_HEIGHT = 2160;
+
     private static final int OUTPUT_DEQUEUE_TIMEOUT_US = 2000;
     private static final int INPUT_DEQUEUE_HANG_TIMEOUT_MS = 5000;
     private static final String MEDIA_FORMAT_KEY_CROP_LEFT = "crop-left";
@@ -287,6 +293,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int initialWidth, initialHeight;
     private final AtomicReference<DecodedVideoDimensions> currentOutputDimensions =
             new AtomicReference<>(new DecodedVideoDimensions(0, 0));
+    // KEY_MAX_WIDTH/KEY_MAX_HEIGHT written into the configured MediaFormat. Zero until a codec
+    // has been configured with adaptive playback.
+    private volatile int adaptiveEnvelopeWidth;
+    private volatile int adaptiveEnvelopeHeight;
+    // Pre-size the envelope for live video-mode changes. Cleared when a decoder refuses it so the
+    // very next configuration attempt uses exactly the pre-live-change (launch-sized) envelope.
+    private boolean extendedAdaptiveEnvelope = true;
     private boolean invertResolution;
     private int videoFormat;
     private Surface renderTarget;
@@ -1004,19 +1017,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Populate keys for adaptive playback
         if (adaptivePlayback) {
-            // Host depth SBS makes the host switch the encoded frame from W x H (2D) to a packed
-            // 2W' x H' side-by-side frame on the fly. Pre-size the adaptive-playback max so
-            // MediaCodec absorbs it without a reconfigure. The packed width is capped at the
-            // selected codec's packed-width ceiling, and the packed height never exceeds
-            // the 2D height, so max height stays initialHeight.
-            int maxWidth = initialWidth;
-            if (prefs != null && prefs.isHostDoubledWidthMode()) {
-                maxWidth = Math.min(initialWidth * 2,
-                        PreferenceConfiguration.maxHostSbsPackedWidthForVideoFormat(
-                                getActiveVideoFormat()));
-            }
-            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, maxWidth);
-            videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
+            videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, adaptiveEnvelopeWidth);
+            videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, adaptiveEnvelopeHeight);
         }
 
         // Android 7.0 adds color options to the MediaFormat
@@ -1051,6 +1053,142 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     static void applyDecoderInputCapacity(MediaFormat format) {
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, DECODER_MAX_INPUT_SIZE_BYTES);
+    }
+
+    /**
+     * Computes the adaptive-playback envelope.
+     *
+     * <p>Two independent things can raise the encoded frame size without a reconfigure:</p>
+     * <ul>
+     *   <li>Host depth SBS switches the encoded frame from {@code W x H} to a packed
+     *       {@code 2W' x H'} side-by-side frame.</li>
+     *   <li>A live video-mode change ({@code LiSendSetVideoMode}) raises the stream resolution
+     *       with no reconnect. Because {@code KEY_MAX_*} is fixed for the life of the configured
+     *       codec, the envelope must be pre-sized at launch to the largest resolution the XR mode
+     *       rows can select — {@link #MAX_LIVE_STREAM_WIDTH} x {@link #MAX_LIVE_STREAM_HEIGHT},
+     *       mirroring {@code XrResolutionSelector}'s 1080p/1440p/4K/ultrawide rows. With host
+     *       doubling that reaches 10240, above every codec ceiling, so the clamp below caps
+     *       HEVC/AV1 at 8192 — the host clamps its packed width to match.</li>
+     * </ul>
+     *
+     * <p>{@code extended == false} reproduces the pre-live-change behavior byte for byte, so a
+     * decoder that refuses the larger envelope simply falls back to it.</p>
+     */
+    static int[] adaptivePlaybackEnvelope(int initialWidth, int initialHeight,
+                                          boolean hostDoubledWidth, int videoFormat,
+                                          boolean extended,
+                                          int decoderMaxWidth, int decoderMaxHeight) {
+        // Same per-codec ceiling used for host SBS packing: 4096 for H.264, 8192 for HEVC/AV1.
+        int codecCap = PreferenceConfiguration.maxHostSbsPackedWidthForVideoFormat(videoFormat);
+        int width = initialWidth;
+        int height = initialHeight;
+        if (extended) {
+            width = Math.max(width, MAX_LIVE_STREAM_WIDTH);
+            height = Math.max(height, MAX_LIVE_STREAM_HEIGHT);
+        }
+        if (hostDoubledWidth) {
+            width = Math.min(width * 2, codecCap);
+        }
+        width = Math.min(width, codecCap);
+        height = Math.min(height, codecCap);
+        if (decoderMaxWidth > 0) {
+            width = Math.min(width, decoderMaxWidth);
+        }
+        if (decoderMaxHeight > 0) {
+            height = Math.min(height, decoderMaxHeight);
+        }
+        // The launch geometry must always fit, even if a device advertises a smaller range.
+        return new int[] {Math.max(width, initialWidth), Math.max(height, initialHeight)};
+    }
+
+    private void computeAdaptivePlaybackEnvelope(MediaCodecInfo decoderInfo, String mimeType) {
+        int decoderMaxWidth = 0;
+        int decoderMaxHeight = 0;
+        try {
+            MediaCodecInfo.VideoCapabilities caps = decoderInfo.getCapabilitiesForType(mimeType)
+                    .getVideoCapabilities();
+            if (caps != null) {
+                decoderMaxWidth = caps.getSupportedWidths().getUpper();
+                decoderMaxHeight = caps.getSupportedHeights().getUpper();
+            }
+        } catch (Exception e) {
+            // Capability introspection is advisory; the configure-time fallback still applies.
+            LimeLog.info("Decoder size capabilities unavailable: " + e);
+        }
+        int[] envelope = adaptivePlaybackEnvelope(initialWidth, initialHeight,
+                prefs != null && prefs.isHostDoubledWidthMode(), getActiveVideoFormat(),
+                extendedAdaptiveEnvelope, decoderMaxWidth, decoderMaxHeight);
+        adaptiveEnvelopeWidth = envelope[0];
+        adaptiveEnvelopeHeight = envelope[1];
+        LimeLog.info("Adaptive playback envelope: " + adaptiveEnvelopeWidth + "x"
+                + adaptiveEnvelopeHeight + (extendedAdaptiveEnvelope ? "" : " (launch-sized)"));
+    }
+
+    /**
+     * Largest {@code W x H} a live video-mode change can request, as configured on the codec.
+     * Returns zero when the envelope cannot absorb any change (no adaptive playback, or no codec
+     * configured yet), which callers must treat as "resolution changes need a reconnect".
+     */
+    public int getConfiguredAdaptiveMaxWidth() {
+        return adaptivePlayback && videoDecoder != null ? adaptiveEnvelopeWidth : 0;
+    }
+
+    public int getConfiguredAdaptiveMaxHeight() {
+        return adaptivePlayback && videoDecoder != null ? adaptiveEnvelopeHeight : 0;
+    }
+
+    /** Current visible decoder output size as {@code {width, height}}; zeros before the first format. */
+    public int[] getCurrentOutputDimensions() {
+        DecodedVideoDimensions dimensions = currentOutputDimensions.get();
+        return new int[] {dimensions.width, dimensions.height};
+    }
+
+    /**
+     * Adopts a live video-mode change that the host has already been asked to perform.
+     *
+     * <p>{@code initialWidth}/{@code initialHeight}/{@code refreshRate}/{@code targetFps} and the
+     * retained {@code configuredFormat} are replayed by the codec-recovery paths
+     * ({@code configureAndStartDecoder(configuredFormat)} on RESTART/RESET, and
+     * {@code initializeDecoder(true)} on recreation), so they must all move together. This holds
+     * {@code codecRecoveryMonitor} — the same monitor {@link #setOutputSurface} uses — so a
+     * recovery can never observe half-updated geometry.</p>
+     */
+    public void updateStreamGeometry(int width, int height, int fps) {
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        synchronized (codecRecoveryMonitor) {
+            int newWidth = invertResolution ? height : width;
+            int newHeight = invertResolution ? width : height;
+            if (adaptivePlayback && adaptiveEnvelopeWidth > 0
+                    && (newWidth > adaptiveEnvelopeWidth || newHeight > adaptiveEnvelopeHeight)) {
+                LimeLog.severe("Refusing live geometry " + newWidth + "x" + newHeight
+                        + " outside the configured adaptive envelope " + adaptiveEnvelopeWidth
+                        + "x" + adaptiveEnvelopeHeight);
+                return;
+            }
+
+            boolean fpsChanged = fps > 0 && fps != targetFps;
+            initialWidth = newWidth;
+            initialHeight = newHeight;
+            if (fps > 0) {
+                refreshRate = fps;
+                targetFps = fps;
+            }
+            if (configuredFormat != null) {
+                configuredFormat.setInteger(MediaFormat.KEY_WIDTH, newWidth);
+                configuredFormat.setInteger(MediaFormat.KEY_HEIGHT, newHeight);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && fps > 0) {
+                    configuredFormat.setInteger(MediaFormat.KEY_FRAME_RATE, refreshRate);
+                }
+            }
+            if (fpsChanged) {
+                // Frame-rate metadata belongs to the Surface, not the codec.
+                applySurfaceFrameRate(renderTarget, targetFps);
+            }
+            LimeLog.info("Live stream geometry now " + newWidth + "x" + newHeight
+                    + " @ " + targetFps + " FPS");
+        }
     }
 
     private void configureAndStartDecoder(MediaFormat format) {
@@ -1258,6 +1396,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         adaptivePlayback = MediaCodecHelper.decoderSupportsAdaptivePlayback(selectedDecoderInfo, mimeType);
         fusedIdrFrame = MediaCodecHelper.decoderSupportsFusedIdrFrame(selectedDecoderInfo, mimeType);
 
+        computeAdaptivePlaybackEnvelope(selectedDecoderInfo, mimeType);
+
         for (int tryNumber = 0;; tryNumber++) {
             LimeLog.info("Decoder configuration try: "+tryNumber);
 
@@ -1271,13 +1411,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 //            for (int colorFormat : colorFormats) {
 //                LimeLog.info("Decoder configuration colorFormats: "+colorFormat);
 //            }
-            // Throw the underlying codec exception on the last attempt if the caller requested it
-            if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat, !newFormat && throwOnCodecError)) {
+            // Throw the underlying codec exception on the last attempt if the caller requested it.
+            // The extended adaptive envelope still has a fallback left, so it is never the last one.
+            boolean lastAttempt = !newFormat && !extendedAdaptiveEnvelope;
+            if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat,
+                    lastAttempt && throwOnCodecError)) {
                 // Success!
                 break;
             }
 
             if (!newFormat) {
+                if (extendedAdaptiveEnvelope) {
+                    // This codec/device cannot be configured with an envelope pre-sized for live
+                    // resolution changes. Fall back to exactly the launch-sized envelope used
+                    // before live video-mode changes existed; live resolution changes then report
+                    // as unsupported through getConfiguredAdaptiveMax*() and reconnect instead.
+                    LimeLog.warning("Retrying decoder configuration with the launch-sized "
+                            + "adaptive playback envelope");
+                    extendedAdaptiveEnvelope = false;
+                    computeAdaptivePlaybackEnvelope(selectedDecoderInfo, mimeType);
+                    tryNumber = -1;
+                    continue;
+                }
                 // We couldn't even configure a decoder without any low latency options
                 return -5;
             }

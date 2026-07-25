@@ -13,22 +13,50 @@ public final class ModeStreamQualityModelTest {
             new StreamQualityTuple("3840x2160", "90", 100000);
 
     @Test
-    public void selectedSavedTupleRequiresReconnectWithoutNewlyStagedEdit() {
+    public void selectedSavedTupleRequiresApplyWithoutNewlyStagedEdit() {
         ModeStreamQualityModel selected = model(SAVED, SAVED, LIVE, true);
         ModeStreamQualityModel unselected = model(SAVED, SAVED, LIVE, false);
 
         assertFalse(selected.hasPendingChanges());
-        assertTrue(selected.requiresReconnect());
+        assertTrue(selected.requiresApply());
         assertFalse(unselected.hasPendingChanges());
+        assertFalse(unselected.requiresApply());
         assertFalse(unselected.requiresReconnect());
     }
 
     @Test
-    public void stagedSelectedTupleReportsPendingAndReconnect() {
+    public void stagedSelectedTupleReportsPendingAndApply() {
         ModeStreamQualityModel model = model(LIVE, SAVED, LIVE, true);
 
         assertTrue(model.hasPendingChanges());
+        assertTrue(model.requiresApply());
+    }
+
+    @Test
+    public void liveApplicableDeltaAppliesWithoutReconnect() {
+        ModeStreamQualityModel model = model(LIVE, SAVED, LIVE, true, false, false);
+
+        assertTrue(model.requiresApply());
+        assertFalse(model.requiresReconnect());
+        assertTrue(model.appliesLive());
+    }
+
+    @Test
+    public void deltaThatCannotBeAppliedLiveRequiresReconnect() {
+        ModeStreamQualityModel model = model(LIVE, SAVED, LIVE, true, false, true);
+
+        assertTrue(model.requiresApply());
         assertTrue(model.requiresReconnect());
+        assertFalse(model.appliesLive());
+    }
+
+    @Test
+    public void transportBoundaryIsAlwaysReconnectEvenWithNoQualityDelta() {
+        ModeStreamQualityModel model = model(LIVE, LIVE, LIVE, true, true, false);
+
+        assertTrue(model.requiresApply());
+        assertTrue(model.requiresReconnect());
+        assertFalse(model.appliesLive());
     }
 
     @Test
@@ -62,8 +90,18 @@ public final class ModeStreamQualityModelTest {
                                                 StreamQualityTuple live,
                                                 boolean selected,
                                                 boolean transportReconnectRequired) {
+        return model(applied, pending, live, selected, transportReconnectRequired, true);
+    }
+
+    private static ModeStreamQualityModel model(StreamQualityTuple applied,
+                                                StreamQualityTuple pending,
+                                                StreamQualityTuple live,
+                                                boolean selected,
+                                                boolean transportReconnectRequired,
+                                                boolean qualityDeltaRequiresReconnect) {
         return ModeStreamQualityModel.builder(applied, pending, live, selected)
                 .setTransportReconnectRequired(transportReconnectRequired)
+                .setQualityDeltaRequiresReconnect(qualityDeltaRequiresReconnect)
                 .put(SessionSettingsModel.Key.RESOLUTION,
                         value(applied.resolution, pending.resolution))
                 .put(SessionSettingsModel.Key.FRAME_RATE,

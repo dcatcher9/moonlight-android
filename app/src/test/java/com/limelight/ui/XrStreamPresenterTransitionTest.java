@@ -12,23 +12,82 @@ import org.junit.Test;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class XrStreamPresenterTransitionTest {
+    private static final PreferenceConfiguration.RawSbsPerEyeResolution FULL =
+            PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
+    private static final PreferenceConfiguration.RawSbsPerEyeResolution HALF =
+            PreferenceConfiguration.RawSbsPerEyeResolution.HALF;
+
     @Test
-    public void rawBoundaryReconnectsBeforeAnyLiveSurfaceSwitch() {
+    public void rawFullBoundaryReconnectsBeforeAnyLiveSurfaceSwitch() {
+        // Raw Full negotiates 2W x H, which no other mode uses.
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.NORMAL));
+                XrStreamPresenter.PresenterMode.NORMAL, FULL));
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, FULL));
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
         assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
                 XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, FULL));
+    }
+
+    @Test
+    public void rawHalfCrossesNoTransportBoundaryAtAll() {
+        // Raw Half is W x H, byte-for-byte the stream Normal negotiates, sent with sbs_mode 0.
+        // Entering or leaving it renegotiates nothing, so it switches live.
+        assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+        assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                XrStreamPresenter.PresenterMode.NORMAL, HALF));
+        assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+        assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, HALF));
+    }
+
+    @Test
+    public void onlyRawFullOwnsItsOwnTransport() {
+        assertTrue(XrStreamPresenter.usesRawPackedTransport(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+        assertFalse(XrStreamPresenter.usesRawPackedTransport(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+        assertFalse(XrStreamPresenter.usesRawPackedTransport(
+                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+    }
+
+    @Test
+    public void rawHalfResizesLiveWhileRawFullDoesNot() {
+        assertTrue(XrStreamPresenter.supportsLiveResolutionChange(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+        assertFalse(XrStreamPresenter.supportsLiveResolutionChange(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+        assertTrue(XrStreamPresenter.supportsLiveResolutionChange(
+                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+        assertTrue(XrStreamPresenter.supportsLiveResolutionChange(
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, FULL));
+    }
+
+    @Test
+    public void normalToRawHalfNeedsNoDecoderTransitionOrHostMessage() {
+        // Both modes are sbs_mode 0 at W x H, so nothing about the stream changes: no IDR gate,
+        // no surface resize, no 0x3003/0x3007 round trip. Only the SceneCore stereo mode and the
+        // quad aspect move, and finishModeSwitch already applies both live.
+        assertFalse(XrStreamPresenter.requiresDecoderTransition(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+        assertFalse(XrStreamPresenter.requiresHostSurfaceResize(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
     }
 
     @Test

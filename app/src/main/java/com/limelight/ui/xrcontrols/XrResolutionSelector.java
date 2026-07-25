@@ -33,16 +33,29 @@ import java.util.Objects;
  * narrow panels.</p>
  */
 public final class XrResolutionSelector extends ViewGroup {
-    public static final String RESOLUTION_720P = "1280x720";
     public static final String RESOLUTION_1080P = "1920x1080";
     public static final String RESOLUTION_1440P = "2560x1440";
     public static final String RESOLUTION_4K = "3840x2160";
+    public static final String RESOLUTION_UW_1080P = "2560x1080";
+    public static final String RESOLUTION_UW_1440P = "3440x1440";
+    public static final String RESOLUTION_5K2K = "5120x2160";
 
+    /**
+     * Two aspect families, widescreen first then ultrawide, each in ascending size order. The flow
+     * layout wraps them into a clean 3 x 2 grid on the panel, so the row break falls exactly on the
+     * family boundary and the grouping reads without needing a heading.
+     *
+     * <p>The family matters beyond looks: in Client SBS the 16:9 entries select the
+     * {@code ASPECT_16_9} depth bucket and the 21:9 entries select {@code ASPECT_21_9}, so moving
+     * between families crosses a bucket and reconnects, while moving within one stays live.</p>
+     */
     private static final ResolutionOption[] STANDARD_OPTIONS = {
-            new ResolutionOption(RESOLUTION_720P, "720p", 1280, 720, false),
             new ResolutionOption(RESOLUTION_1080P, "1080p", 1920, 1080, false),
             new ResolutionOption(RESOLUTION_1440P, "1440p", 2560, 1440, false),
             new ResolutionOption(RESOLUTION_4K, "4K", 3840, 2160, false),
+            new ResolutionOption(RESOLUTION_UW_1080P, "UW 1080p", 2560, 1080, false),
+            new ResolutionOption(RESOLUTION_UW_1440P, "UW 1440p", 3440, 1440, false),
+            new ResolutionOption(RESOLUTION_5K2K, "5K2K", 5120, 2160, false),
     };
 
     public interface OnResolutionSelectedListener {
@@ -406,15 +419,23 @@ public final class XrResolutionSelector extends ViewGroup {
             return width / (float) height;
         }
 
+        /**
+         * Banded by height, the axis the two aspect families share.
+         *
+         * <p>Total pixel count would rank UW 1080p above 1080p and below 1440p, which reads as a
+         * tier it is not: the ultrawide entries are the same vertical class as their widescreen
+         * namesakes and only differ in width, which the glyph already shows through its aspect.
+         * Height banding keeps the cue monotonic within each family and consistent across them,
+         * and leaves the retained 16:9 cards on exactly the levels they had before.</p>
+         */
         int densityLevel() {
-            long pixels = (long) width * height;
-            if (pixels <= 1280L * 720L) {
+            if (height <= 720) {
                 return 1;
             }
-            if (pixels <= 1920L * 1080L) {
+            if (height <= 1080) {
                 return 2;
             }
-            if (pixels <= 2560L * 1440L) {
+            if (height <= 1440) {
                 return 3;
             }
             return 4;

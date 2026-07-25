@@ -382,6 +382,21 @@ public class MoonBridge {
         }
     }
 
+    // Host answer to a sendSetVideoMode() request (Apollo extension 0x3008). requestId is echoed
+    // verbatim and is the only correlation key. The applied* values report what the host is
+    // actually running, which may legitimately differ from the request (a clamped apply is still
+    // a success); appliedWidth/appliedHeight are base per-eye values before any SBS doubling and
+    // appliedBitrateKbps is the host's post-budget encoder value.
+    public static void bridgeClVideoModeAck(int requestId, int status, int appliedWidth,
+                                            int appliedHeight, int appliedFramerateX100,
+                                            int appliedBitrateKbps) {
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.videoModeAck(requestId, status, appliedWidth,
+                    appliedHeight, appliedFramerateX100, appliedBitrateKbps);
+        }
+    }
+
     public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         bridgeSession = new BridgeSession(videoRenderer, audioRenderer, connectionListener);
     }
@@ -412,6 +427,26 @@ public class MoonBridge {
     // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
     /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
     public static native int sendSetSbsMode(int mode);
+
+    // Video-mode acknowledgement statuses. Must match the VIDEO_MODE_ACK_* values in Limelight.h.
+    /** The requested mode is live on the host. */
+    public static final int VIDEO_MODE_ACK_APPLIED = 0;
+    /** Failed host validation; do not retry the same request. */
+    public static final int VIDEO_MODE_ACK_REJECTED_INVALID = 1;
+    /** Valid, but only reachable by reconnecting (no virtual display, or mode not advertised). */
+    public static final int VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT = 2;
+    /** Transient failure; the host attempted the change and rolled it back. Retry allowed. */
+    public static final int VIDEO_MODE_ACK_FAILED = 3;
+
+    // Ask the host (Apollo protocol extension) to change the live video mode mid-stream with no
+    // reconnect. framerateX100 is hundredths of a Hz (6000 = 60 fps, 2997 = 29.97 fps) so
+    // fractional rates survive the wire. bitrateKbps is the total wire budget in the same units
+    // the client advertises as maximumBitrateKbps in RTSP ANNOUNCE; the host applies its own
+    // clamp and FEC/audio deduction. requestId is an opaque correlation token echoed verbatim in
+    // the resulting videoModeAck; the host never interprets it.
+    /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
+    public static native int sendSetVideoMode(int width, int height, int framerateX100,
+                                              int requestId, int bitrateKbps);
 
     /** Request a fresh video IDR after a client-side decoder/surface transition. */
     public static native void requestIdrFrame();

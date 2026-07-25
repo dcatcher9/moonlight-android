@@ -58,7 +58,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final ClientSbsModelManifest aiModel;
     private final int modelInputHeight;
     private final int modelInputWidth;
-    private final float sourceAspect;
+    /**
+     * Stream aspect. Not final: a live resolution change may move it, but only within the same
+     * depth bucket — see {@link #requestLiveStreamResize}, which is the invariant's enforcement
+     * point. Everything derived from it is bucket-derived, so a same-bucket move is a no-op for
+     * the model, the depth/warp targets and the compiled shader source.
+     */
+    private volatile float sourceAspect;
+    /** Tolerance for the exact-aspect fallback used by non-direct-full-frame models. */
+    private static final float ASPECT_EPSILON = 1e-3f;
     /** Compiled once from the same static aspect bucket as the selected depth model. */
     private final int reprojectionProbeSteps;
     private long latchedFrameSequence;
@@ -1150,6 +1158,107 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
             glSurfaceView.requestRender();
             return transitionGeneration;
+        }
+    }
+
+    /**
+     * Whether a live resolution change to {@code width x height} can be absorbed without
+     * rebuilding the depth pipeline.
+     *
+     * <p>The binding constraint is <em>depth-bucket identity</em>, not exact aspect. In the
+     * production path everything derived from {@link #sourceAspect} is bucket-derived:</p>
+     * <ul>
+     *   <li>{@code ClientSbsShaders.probeStepsForAspect} routes through the same
+     *       {@code ClientSbsDepthInputShape.select} buckets and returns 32/24/16, so the
+     *       {@code PROBE_STEPS} literal substituted into the reprojection and warp-map shader
+     *       source is identical for any two aspects in one bucket. No program is regenerated.</li>
+     *   <li>{@code ClientSbsModelManifest.forStream} selects the same model.</li>
+     *   <li>{@code getDepthOutputWidth/Height} return the model's fixed output size whenever the
+     *       model uses a direct full-frame resize — which every production manifest does — so
+     *       {@code depthMapWidth/Height} and the warp-map targets do not move at all.</li>
+     *   <li>{@code ClientSbsGpuDepthProcessor} pins {@code contentScale} to 1.0 when reflected
+     *       padding is not removed, which is likewise the production configuration.</li>
+     * </ul>
+     *
+     * <p>A model that does <em>not</em> use a direct full-frame resize would size its depth output
+     * continuously from the aspect and would compile a live {@code u_sourceAspect} uniform, so
+     * this narrows to exact-aspect-unchanged for that case rather than reallocating targets that
+     * are entangled with the inference pipeline.</p>
+     */
+    public boolean canResizeStreamLive(int width, int height) {
+        if (!clientSbs || width <= 0 || height <= 0 || shuttingDown.get()) {
+            return false;
+        }
+        float newAspect = (float) width / Math.max(height, 1);
+        if (!aiModel.usesDirectFullFrameResize()) {
+            // Depth output dims and the model-input aspect uniform both vary continuously here.
+            return Math.abs(newAspect - sourceAspect) <= ASPECT_EPSILON;
+        }
+        return ClientSbsDepthInputShape.select(newAspect)
+                .equals(ClientSbsDepthInputShape.select(sourceAspect));
+    }
+
+    /**
+     * Re-pins the resolution-derived color targets to a new stream size on the GL thread.
+     *
+     * <p>Deliberately touches only {@code colorFrameWidth/Height} and the color-frame FBO/texture
+     * slots. The depth targets, the RG16F warp map, the model-input FBO and every compiled shader
+     * program are left alone because none of them is resolution-derived.</p>
+     *
+     * @return false when the change needs a reconnect instead (see {@link #canResizeStreamLive})
+     */
+    public boolean requestLiveStreamResize(int width, int height) {
+        if (!canResizeStreamLive(width, height)) {
+            return false;
+        }
+        try {
+            glSurfaceView.queueEvent(() -> resizeStreamOnGlThread(width, height));
+            return true;
+        } catch (RuntimeException error) {
+            LimeLog.warning("Unable to queue Client SBS live resize: " + error);
+            return false;
+        }
+    }
+
+    private void resizeStreamOnGlThread(int width, int height) {
+        synchronized (glCallbackLifecycleLock) {
+            if (shuttingDown.get() || !clientSbs || prefConfig == null) {
+                return;
+            }
+            int previousProbeSteps = reprojectionProbeSteps;
+            float newAspect = (float) width / Math.max(height, 1);
+
+            // Invalidate first so no in-flight result can be adopted into the retired color slots,
+            // then drain every outstanding lease exactly like a same-context generation reset.
+            int resizedGeneration = clientSbsGeneration.incrementAndGet();
+            resetPresentationForGeneration(resizedGeneration);
+
+            releaseColorFrameTargets();
+            prefConfig.width = width;
+            prefConfig.height = height;
+            sourceAspect = newAspect;
+            if (!initializeColorFrameSlots()) {
+                LimeLog.severe("Client SBS live resize could not recreate color targets");
+                requestGpuShutdown("color target resize failed");
+                return;
+            }
+
+            // Probe steps are bucket-invariant by construction, so no program is recompiled here.
+            // Assert it rather than assume it: a change would mean the shader source is now stale.
+            int probeSteps = ClientSbsShaders.probeStepsForAspect(sourceAspect);
+            if (probeSteps != previousProbeSteps) {
+                LimeLog.severe("Client SBS live resize crossed a probe-step boundary ("
+                        + previousProbeSteps + " -> " + probeSteps
+                        + "); compiled shaders are stale");
+                requestGpuShutdown("probe-step boundary crossed by a live resize");
+                return;
+            }
+
+            LimeLog.info("Client SBS live resize to " + width + "x" + height
+                    + " (aspect " + sourceAspect + ", bucket unchanged, "
+                    + probeSteps + " probes, depth " + depthMapWidth + "x" + depthMapHeight
+                    + " unchanged)");
+            glSurfaceView.requestRender();
         }
     }
 

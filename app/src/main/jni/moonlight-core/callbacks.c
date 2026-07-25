@@ -37,6 +37,7 @@ static jmethodID BridgeClRumbleTriggersMethod;
 static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
 static jmethodID BridgeClDepthStatusMethod;
+static jmethodID BridgeClVideoModeAckMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
 
@@ -102,6 +103,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
     BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(I)V");
+    BridgeClVideoModeAckMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClVideoModeAck", "(IIIIII)V");
 }
 
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
@@ -375,6 +377,21 @@ void BridgeClDepthStatus(uint8_t phase) {
     }
 }
 
+void BridgeClVideoModeAck(uint16_t requestId, uint16_t status,
+                          uint16_t appliedWidth, uint16_t appliedHeight,
+                          uint16_t appliedFramerateX100, uint32_t appliedBitrateKbps) {
+    JNIEnv* env = GetThreadEnv();
+
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClVideoModeAckMethod,
+                                 (jint)requestId, (jint)status, (jint)appliedWidth,
+                                 (jint)appliedHeight, (jint)appliedFramerateX100,
+                                 (jint)appliedBitrateKbps);
+    if ((*env)->ExceptionCheck(env)) {
+        // We will crash here
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
 void BridgeClRumbleTriggers(unsigned short controllerNumber, unsigned short leftTrigger, unsigned short rightTrigger) {
     JNIEnv* env = GetThreadEnv();
 
@@ -447,6 +464,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .setMotionEventState = BridgeClSetMotionEventState,
         .setControllerLED = BridgeClSetControllerLED,
         .depthStatus = BridgeClDepthStatus,
+        .videoModeAck = BridgeClVideoModeAck,
 };
 
 JNIEXPORT jint JNICALL

@@ -331,6 +331,25 @@ public class PreferenceConfiguration {
     public static final String RES_1080P = "1920x1080";
     public static final String RES_1440P = "2560x1440";
     public static final String RES_4K = "3840x2160";
+    // 21:9 ultrawide ladder.
+    public static final String RES_UW_1080P = "2560x1080";
+    public static final String RES_UW_1440P = "3440x1440";
+    public static final String RES_5K2K = "5120x2160";
+
+    /**
+     * Lowest selectable resolution since 720p was retired from the XR ladder.
+     *
+     * <p>A persisted {@code 1280x720} — from global prefs, a per-machine/app session record, or a
+     * legacy profile string — would otherwise leave an install pointing at a value the selector no
+     * longer offers. Everything that reads a stored resolution runs it through
+     * {@link #migrateRetiredResolution} so it lands on the new floor instead.</p>
+     */
+    public static final String MIN_SELECTABLE_RESOLUTION = RES_1080P;
+
+    /** Maps a retired resolution onto the current ladder. Other values pass through unchanged. */
+    public static String migrateRetiredResolution(String resolution) {
+        return RES_720P.equals(resolution) ? MIN_SELECTABLE_RESOLUTION : resolution;
+    }
     public static final String RES_NATIVE = "Native";
 
     public int width, height, bitrate;
@@ -565,7 +584,8 @@ public class PreferenceConfiguration {
             return RES_480P;
         }
         else if (resString.equalsIgnoreCase("720p")) {
-            return RES_720P;
+            // Retired from the ladder; land on the current floor.
+            return MIN_SELECTABLE_RESOLUTION;
         }
         else if (resString.equalsIgnoreCase("1080p")) {
             return RES_1080P;
@@ -578,7 +598,7 @@ public class PreferenceConfiguration {
         }
         else {
             // Should be unreachable
-            return RES_720P;
+            return MIN_SELECTABLE_RESOLUTION;
         }
     }
 
@@ -809,9 +829,16 @@ public class PreferenceConfiguration {
                 config.fps = 60;
             }
 
+            // A retired 720p profile lands on the current floor rather than persisting a value
+            // the selector no longer offers.
+            String migratedLegacyRes = PreferenceConfiguration.migrateRetiredResolution(
+                    getResolutionString(config.width, config.height));
+            config.width = PreferenceConfiguration.getWidthFromResolutionString(migratedLegacyRes);
+            config.height = PreferenceConfiguration.getHeightFromResolutionString(migratedLegacyRes);
+
             prefs.edit()
                     .remove(LEGACY_RES_FPS_PREF_STRING)
-                    .putString(RESOLUTION_PREF_STRING, getResolutionString(config.width, config.height))
+                    .putString(RESOLUTION_PREF_STRING, migratedLegacyRes)
                     .putString(FPS_PREF_STRING, ""+config.fps)
                     .apply();
         }
@@ -822,6 +849,13 @@ public class PreferenceConfiguration {
             // Convert legacy resolution strings to the new style
             if (!resStr.contains("x")) {
                 resStr = PreferenceConfiguration.convertFromLegacyResolutionString(resStr);
+                prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
+            }
+
+            // Retire a stored 720p in place so the stored value and the ladder stay consistent.
+            String migratedRes = PreferenceConfiguration.migrateRetiredResolution(resStr);
+            if (!migratedRes.equals(resStr)) {
+                resStr = migratedRes;
                 prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
             }
 

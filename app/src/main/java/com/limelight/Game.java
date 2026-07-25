@@ -50,6 +50,7 @@ import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
+import com.limelight.ui.xrcontrols.StreamQualityTuple;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
 import com.limelight.utils.MouseModeOption;
@@ -534,7 +535,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (reconnectScheduled) {
                     return false;
                 }
-                xrSessionSettingsController.selectSharedSetting(key, choiceId);
+                try {
+                    xrSessionSettingsController.selectSharedSetting(key, choiceId);
+                }
+                catch (IllegalArgumentException e) {
+                    // A control update and a user gesture can cross on the main thread (e.g. a
+                    // stale codec tap after Raw removed it from the choices). Reject the choice
+                    // from the previous model instead of crashing the streaming activity.
+                    LimeLog.warning("Rejected stale XR shared choice "
+                            + key + "=" + choiceId + ": " + e.getMessage());
+                    refreshXrSessionSettingsModels();
+                    return false;
+                }
                 refreshXrSessionSettingsModels();
                 return true;
             }
@@ -588,7 +600,36 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             @Override
             public void onApplyAndReconnectRequested(SessionSettingsModel pending) {
-                applyXrSessionSettingsAndReconnect();
+                applyXrSessionSettings();
+            }
+
+            @Override
+            public void onLiveStreamQualityApplied(XrStreamPresenter.PresenterMode mode,
+                                                   StreamQualityTuple applied) {
+                if (reconnectScheduled || xrSessionSettingsController == null
+                        || applied == null) {
+                    return;
+                }
+                xrSessionSettingsController.notifyLiveStreamQualityApplied(
+                        toSessionPresenterMode(mode), applied);
+                // Make the applied tuple durable too, so a later resume restores what is on
+                // screen rather than the tuple this session launched with.
+                if (!xrSessionSettingsController.commitPending()) {
+                    LimeLog.warning("XR: live stream quality applied but not persisted");
+                }
+                refreshXrSessionSettingsModels();
+            }
+
+            @Override
+            public void onLiveStreamQualityFailed() {
+                // Leave the staged tuple pending and liveStreamQuality untouched; only rebuild
+                // the controls so the Apply affordance reflects the unchanged live stream.
+                refreshXrSessionSettingsModels();
+            }
+
+            @Override
+            public void onLiveStreamQualityNeedsReconnect() {
+                scheduleReconnectForLiveVideoModeRefusal();
             }
 
             @Override
@@ -655,6 +696,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     scheduleXrSessionReconnect();
                     return;
                 }
+                if (xrSessionSettingsController.selectedModeHasLiveApplicableChange()) {
+                    // The mode itself switched live; its saved tuple differs from the live
+                    // decoder only in ways the host can adopt without a reconnect.
+                    LimeLog.info("XR: applying " + selected + "'s saved stream quality live");
+                    applyLiveStreamQualityChange();
+                    return;
+                }
                 if (sessionSettingsStore != null && sessionPc != null && sessionApp != null
                         && sessionLocalSessionId != null) {
                     sessionSettingsStore.edit(sessionPc, sessionApp, sessionLocalSessionId)
@@ -698,6 +746,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (presenter == null || xrSessionSettingsController == null) {
             return;
         }
+        // The decoder is the authority for how far a live resolution change can reach. Republish
+        // its configured adaptive-playback envelope on every refresh so the live-vs-reconnect
+        // classification never runs against a stale (or pre-configure) envelope.
+        xrSessionSettingsController.setLiveResolutionEnvelope(
+                decoderRenderer != null ? decoderRenderer.getConfiguredAdaptiveMaxWidth() : 0,
+                decoderRenderer != null ? decoderRenderer.getConfiguredAdaptiveMaxHeight() : 0);
         Map<XrStreamPresenter.PresenterMode, ModeStreamQualityModel> qualityModels =
                 new HashMap<>();
         for (XrStreamPresenter.PresenterMode mode
@@ -708,7 +762,36 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         presenter.setSettingsModels(xrSessionSettingsController.getSessionModel(),
                 qualityModels, xrSessionSettingsController.getClientSbsModel(),
                 xrSessionSettingsController.getRawSbsModel(),
-                xrSessionSettingsController.hasPendingChanges());
+                xrSessionSettingsController.hasPendingChanges(),
+                xrSessionSettingsController.pendingChangesRequireReconnect());
+    }
+
+    /**
+     * Applies everything staged in the XR panes. A staged change that the host can adopt on the
+     * running stream takes the live path; anything else keeps the atomic commit-and-reconnect
+     * behavior.
+     */
+    private void applyXrSessionSettings() {
+        if (reconnectScheduled || xrSessionSettingsController == null
+                || !xrSessionSettingsController.hasPendingChanges()) {
+            return;
+        }
+        if (!xrSessionSettingsController.pendingChangesRequireReconnect()
+                && xrSessionSettingsController.selectedModeHasLiveApplicableChange()) {
+            applyLiveStreamQualityChange();
+            return;
+        }
+        applyXrSessionSettingsAndReconnect();
+    }
+
+    private void applyLiveStreamQualityChange() {
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        if (presenter == null || reconnectScheduled || xrSessionSettingsController == null) {
+            return;
+        }
+        presenter.applyLiveStreamQuality(
+                xrSessionSettingsController.getSelectedModePendingQuality());
     }
 
     private void applyXrSessionSettingsAndReconnect() {
@@ -4501,6 +4584,36 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
+    public void videoModeAck(int requestId, int status, int appliedWidth, int appliedHeight,
+                             int appliedFramerateX100, int appliedBitrateKbps) {
+        // Host answer to a live video-mode request. Callback arrives off the UI thread; every
+        // consumer below is main-thread/SceneCore-bound.
+        runOnUiThread(() -> {
+            if (isConnectionUiActive() && streamContainer != null
+                    && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onVideoModeAck(requestId, status, appliedWidth,
+                        appliedHeight, appliedFramerateX100, appliedBitrateKbps);
+            }
+        });
+    }
+
+    /** The ack said this mode is only reachable by reconnecting; commit and restart in place. */
+    public void scheduleReconnectForLiveVideoModeRefusal() {
+        if (reconnectScheduled || xrSessionSettingsController == null) {
+            return;
+        }
+        showCenteredStreamMessage(
+                getString(R.string.xr_session_live_change_needs_reconnect),
+                Toast.LENGTH_LONG);
+        if (!xrSessionSettingsController.commitPending()) {
+            showCenteredStreamMessage(
+                    getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
+            return;
+        }
+        scheduleXrSessionReconnect();
+    }
+
+    @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if (!surfaceCreated) {
             throw new IllegalStateException("Surface changed before creation!");
@@ -4574,6 +4687,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return null;
         }
         return result[0];
+    }
+
+    /** Adopts a live video-mode change in the decoder's replayed geometry. Main thread. */
+    public void updateDecoderStreamGeometry(int width, int height, int fps) {
+        if (decoderRenderer != null) {
+            decoderRenderer.updateStreamGeometry(width, height, fps);
+        }
+    }
+
+    /** Current visible decoder output size as {@code {width, height}}, or null when unavailable. */
+    public int[] getDecoderOutputDimensions() {
+        return decoderRenderer != null ? decoderRenderer.getCurrentOutputDimensions() : null;
     }
 
     public int beginDecoderPresentationModeTransition() {

@@ -8,10 +8,15 @@ import java.util.Objects;
 /**
  * Applied, staged, and live stream quality for one presentation mode.
  *
- * <p>{@link #requiresReconnect()} becomes true only for the selected mode when its pending tuple
- * differs from the tuple backing the live decoder connection, or when the presentation mode uses a
- * different transport geometry. The Activity then atomically commits the staged session record and
- * reconnects before entering a transport-incompatible mode.</p>
+ * <p>The pending delta is three-state for the selected mode:</p>
+ * <ul>
+ *   <li>{@link #requiresApply()} false — nothing staged differs from the live connection.</li>
+ *   <li>{@link #requiresApply()} true, {@link #requiresReconnect()} false — the host can adopt
+ *       the delta live through the video-mode control message.</li>
+ *   <li>{@link #requiresReconnect()} true — the delta cannot be applied live (transport geometry
+ *       change, or a resolution change the mode/decoder cannot absorb). The Activity then
+ *       atomically commits the staged session record and reconnects.</li>
+ * </ul>
  */
 public final class ModeStreamQualityModel {
     private final Map<SessionSettingsModel.Key, SessionSettingsModel.Value> values;
@@ -20,18 +25,20 @@ public final class ModeStreamQualityModel {
     public final StreamQualityTuple liveQuality;
     public final boolean selected;
     private final boolean transportReconnectRequired;
+    private final boolean qualityDeltaRequiresReconnect;
 
     private ModeStreamQualityModel(
             EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Value> values,
             StreamQualityTuple appliedQuality, StreamQualityTuple pendingQuality,
             StreamQualityTuple liveQuality, boolean selected,
-            boolean transportReconnectRequired) {
+            boolean transportReconnectRequired, boolean qualityDeltaRequiresReconnect) {
         this.values = Collections.unmodifiableMap(new EnumMap<>(values));
         this.appliedQuality = Objects.requireNonNull(appliedQuality, "appliedQuality");
         this.pendingQuality = Objects.requireNonNull(pendingQuality, "pendingQuality");
         this.liveQuality = Objects.requireNonNull(liveQuality, "liveQuality");
         this.selected = selected;
         this.transportReconnectRequired = transportReconnectRequired;
+        this.qualityDeltaRequiresReconnect = qualityDeltaRequiresReconnect;
     }
 
     public SessionSettingsModel.Value get(SessionSettingsModel.Key key) {
@@ -46,9 +53,20 @@ public final class ModeStreamQualityModel {
         return !appliedQuality.equals(pendingQuality);
     }
 
-    public boolean requiresReconnect() {
+    /** True when the staged state differs from the live connection, however it gets applied. */
+    public boolean requiresApply() {
         return selected
                 && (transportReconnectRequired || !liveQuality.equals(pendingQuality));
+    }
+
+    /** True when applying the staged state must tear down and re-establish the stream. */
+    public boolean requiresReconnect() {
+        return selected && (transportReconnectRequired || qualityDeltaRequiresReconnect);
+    }
+
+    /** True when the staged state can be applied to the running stream with no reconnect. */
+    public boolean appliesLive() {
+        return requiresApply() && !requiresReconnect();
     }
 
     public static Builder builder(StreamQualityTuple appliedQuality,
@@ -66,6 +84,7 @@ public final class ModeStreamQualityModel {
         private final StreamQualityTuple liveQuality;
         private final boolean selected;
         private boolean transportReconnectRequired;
+        private boolean qualityDeltaRequiresReconnect;
 
         private Builder(StreamQualityTuple appliedQuality, StreamQualityTuple pendingQuality,
                         StreamQualityTuple liveQuality, boolean selected) {
@@ -77,6 +96,12 @@ public final class ModeStreamQualityModel {
 
         public Builder setTransportReconnectRequired(boolean required) {
             transportReconnectRequired = required;
+            return this;
+        }
+
+        /** Whether the pending-vs-live quality delta itself cannot be applied live. */
+        public Builder setQualityDeltaRequiresReconnect(boolean required) {
+            qualityDeltaRequiresReconnect = required;
             return this;
         }
 
@@ -97,7 +122,8 @@ public final class ModeStreamQualityModel {
                 }
             }
             return new ModeStreamQualityModel(values, appliedQuality, pendingQuality,
-                    liveQuality, selected, transportReconnectRequired);
+                    liveQuality, selected, transportReconnectRequired,
+                    qualityDeltaRequiresReconnect);
         }
     }
 }

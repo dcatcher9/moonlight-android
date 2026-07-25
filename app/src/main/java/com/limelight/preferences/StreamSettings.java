@@ -2,7 +2,6 @@ package com.limelight.preferences;
 
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -16,7 +15,6 @@ import androidx.core.content.FileProvider;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceFragmentCompat;
-import androidx.preference.PreferenceManager;
 import androidx.preference.PreferenceScreen;
 
 import com.limelight.DebugInfoActivity;
@@ -137,53 +135,9 @@ public class StreamSettings extends AppCompatActivity {
                 }
             }
 
-            configureStreamingDefaults();
+            // Bitrate is purely user-set: resolution/FPS changes deliberately leave it
+            // untouched. getDefaultBitrate() remains only the fresh-install default.
             configureDiagnostics();
-        }
-
-        private SharedPreferences getPrefs() {
-            return PreferenceManager.getDefaultSharedPreferences(requireContext());
-        }
-
-        private void configureStreamingDefaults() {
-            Preference resolution = findPreference(PreferenceConfiguration.RESOLUTION_PREF_STRING);
-            if (resolution != null) {
-                resolution.setOnPreferenceChangeListener((preference, newValue) -> {
-                    resetBitrate((String) newValue, null);
-                    return true;
-                });
-            }
-
-            Preference fps = findPreference(PreferenceConfiguration.FPS_PREF_STRING);
-            if (fps != null) {
-                fps.setOnPreferenceChangeListener((preference, newValue) -> {
-                    resetBitrate(null, (String) newValue);
-                    return true;
-                });
-            }
-        }
-
-        private void resetBitrate(String resolution, String fps) {
-            SharedPreferences prefs = getPrefs();
-            if (resolution == null) {
-                resolution = prefs.getString(PreferenceConfiguration.RESOLUTION_PREF_STRING,
-                        PreferenceConfiguration.DEFAULT_RESOLUTION);
-            }
-            if (fps == null) {
-                fps = prefs.getString(PreferenceConfiguration.FPS_PREF_STRING,
-                        PreferenceConfiguration.DEFAULT_FPS);
-            }
-            int defaultBitrate = PreferenceConfiguration.getDefaultBitrate(resolution, fps);
-            SeekBarPreference bitrate = findPreference(
-                    PreferenceConfiguration.BITRATE_PREF_STRING);
-            if (bitrate != null) {
-                // Keep the in-row value synchronized with the automatic resolution/FPS reset.
-                bitrate.setProgress(defaultBitrate);
-            }
-            else {
-                prefs.edit().putInt(PreferenceConfiguration.BITRATE_PREF_STRING,
-                        defaultBitrate).apply();
-            }
         }
 
         private void configureDiagnostics() {

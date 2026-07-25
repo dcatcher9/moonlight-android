@@ -3,6 +3,7 @@ package com.limelight.preferences;
 import android.content.SharedPreferences;
 
 import com.limelight.preferences.session.SessionSettingsStore;
+import com.limelight.utils.ClientSbsDepthBuckets;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
@@ -35,11 +36,14 @@ public final class XrSessionSettingsController {
     private static final List<Integer> BITRATES = Arrays.asList(
             10000, 20000, 30000, 40000, 60000, 80000, 100000,
             120000, 130000, 150000, 200000, 250000, 300000);
+    // Must stay in step with XrResolutionSelector.STANDARD_OPTIONS: 16:9 family, then 21:9.
     private static final List<SessionSettingsModel.Choice> RESOLUTION_CHOICES = choices(
-            choice("1280x720", "720p"),
-            choice("1920x1080", "1080p"),
-            choice("2560x1440", "1440p"),
-            choice("3840x2160", "4K"));
+            choice(PreferenceConfiguration.RES_1080P, "1080p"),
+            choice(PreferenceConfiguration.RES_1440P, "1440p"),
+            choice(PreferenceConfiguration.RES_4K, "4K"),
+            choice(PreferenceConfiguration.RES_UW_1080P, "UW 1080p"),
+            choice(PreferenceConfiguration.RES_UW_1440P, "UW 1440p"),
+            choice(PreferenceConfiguration.RES_5K2K, "5K2K"));
     private static final List<SessionSettingsModel.Choice> FRAME_RATE_CHOICES = choices(
             choice("30", "30"),
             choice("60", "60"),
@@ -107,8 +111,6 @@ public final class XrSessionSettingsController {
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, Object> pendingSharedValues =
             new EnumMap<>(SessionSettingsModel.Key.class);
-    private final EnumMap<SessionSettingsModel.Key, Object> sessionSharedModeQuality =
-            new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source>
             appliedSharedSources =
             new EnumMap<>(SessionSettingsModel.Key.class);
@@ -129,7 +131,11 @@ public final class XrSessionSettingsController {
             globalRawSbsPerEyeResolution;
     private final SessionSettingsModel.Source appliedRawSbsPerEyeResolutionSource;
     private final SessionSettingsStore.PresenterMode startupMode;
-    private final StreamQualityTuple liveStreamQuality;
+    /**
+     * The tuple actually backing the live decoder. Not final: a live video-mode change
+     * (0x3007) replaces it without a reconnect.
+     */
+    private StreamQualityTuple liveStreamQuality;
     private final SharedPreferences startupPreferences;
     private final boolean startupCodecCompatibilityAdjusted;
     private SessionSettingsStore.PresenterMode selectedMode;
@@ -139,6 +145,12 @@ public final class XrSessionSettingsController {
             appliedRawSbsPerEyeResolution;
     private PreferenceConfiguration.RawSbsPerEyeResolution
             pendingRawSbsPerEyeResolution;
+    /**
+     * Adaptive-playback envelope configured on the live decoder. Zero means "the decoder cannot
+     * absorb any resolution change", so every resolution delta requires a reconnect.
+     */
+    private int liveResolutionMaxWidth;
+    private int liveResolutionMaxHeight;
     private boolean sharedInheritanceResetRequested;
     private boolean clientModelInheritanceResetRequested;
     private boolean rawSbsPerEyeResolutionInheritanceResetRequested;
@@ -178,12 +190,6 @@ public final class XrSessionSettingsController {
         EnumMap<SessionSettingsModel.Key, Object> effectiveSharedValues =
                 new EnumMap<>(SessionSettingsModel.Key.class);
         readSharedValues(effective, effectiveSharedValues);
-        for (Map.Entry<SessionSettingsModel.Key, Object> entry
-                : effectiveSharedValues.entrySet()) {
-            if (entry.getKey().isModeStreamQuality()) {
-                sessionSharedModeQuality.put(entry.getKey(), entry.getValue());
-            }
-        }
         for (Map.Entry<SessionSettingsModel.Key, String> entry : PREF_KEYS.entrySet()) {
             SessionSettingsModel.Key key = entry.getKey();
             if (!key.isModeStreamQuality()) {
@@ -294,7 +300,8 @@ public final class XrSessionSettingsController {
                 qualityTuple(applied), qualityTuple(pending), liveStreamQuality,
                 mode == selectedMode)
                 .setTransportReconnectRequired(crossesRawTransportBoundary(mode)
-                        || rawPackingChangeRequiresReconnect(mode));
+                        || rawPackingChangeRequiresReconnect(mode))
+                .setQualityDeltaRequiresReconnect(modeQualityDeltaRequiresReconnect(mode));
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
             if (key.isModeStreamQuality()) {
                 builder.put(key, valueForModel(key, applied.get(key), pending.get(key),
@@ -326,6 +333,58 @@ public final class XrSessionSettingsController {
         return liveStreamQuality;
     }
 
+    /** The tuple {@code Game} would send to the host for the selected mode. */
+    public StreamQualityTuple getSelectedModePendingQuality() {
+        return qualityTuple(pendingModeQuality.get(selectedMode));
+    }
+
+    /**
+     * Publishes the live decoder's configured adaptive-playback envelope (its {@code KEY_MAX_*}).
+     * The decoder is the authority for what a live resolution change can reach; this class must
+     * not re-derive it. Pass zeros when there is no usable envelope.
+     */
+    public void setLiveResolutionEnvelope(int maxWidth, int maxHeight) {
+        liveResolutionMaxWidth = Math.max(0, maxWidth);
+        liveResolutionMaxHeight = Math.max(0, maxHeight);
+    }
+
+    /**
+     * Adopts a stream-quality tuple that the host has applied live, with no reconnect.
+     *
+     * <p>Both writes matter: {@code liveStreamQuality} is what the live-vs-reconnect predicate
+     * compares against, and the same values must land in the mode's <em>applied</em> tuple or
+     * {@link #hasPendingChanges()} stays true forever and the Apply button never clears.</p>
+     */
+    public void notifyLiveStreamQualityApplied(StreamQualityTuple applied) {
+        notifyLiveStreamQualityApplied(selectedMode, applied);
+    }
+
+    public void notifyLiveStreamQualityApplied(SessionSettingsStore.PresenterMode mode,
+                                               StreamQualityTuple applied) {
+        Objects.requireNonNull(mode, "mode");
+        Objects.requireNonNull(applied, "applied");
+        liveStreamQuality = applied;
+        EnumMap<SessionSettingsModel.Key, Object> appliedValues = appliedModeQuality.get(mode);
+        EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source> sources =
+                appliedModeQualitySources.get(mode);
+        putAppliedQualityValue(appliedValues, sources,
+                SessionSettingsModel.Key.RESOLUTION, applied.resolution);
+        putAppliedQualityValue(appliedValues, sources,
+                SessionSettingsModel.Key.FRAME_RATE, applied.frameRate);
+        putAppliedQualityValue(appliedValues, sources,
+                SessionSettingsModel.Key.BITRATE, applied.bitrateKbps);
+    }
+
+    private void putAppliedQualityValue(
+            EnumMap<SessionSettingsModel.Key, Object> appliedValues,
+            EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source> sources,
+            SessionSettingsModel.Key key, Object value) {
+        appliedValues.put(key, value);
+        sources.put(key, Objects.equals(value, globalValues.get(key))
+                ? SessionSettingsModel.Source.GLOBAL
+                : SessionSettingsModel.Source.CURRENT_SESSION);
+    }
+
     /** Whether the pending Raw per-eye tuple fits the exact packed host transport. */
     public boolean isRawSbsTransportSupported() {
         int[] dimensions = parseResolution((String) pendingModeQuality.get(
@@ -341,16 +400,13 @@ public final class XrSessionSettingsController {
      * user outside Raw's settings pane.
      */
     public boolean constrainRawSbsTransportToSupportedPreset() {
-        EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
-        String priorResolution = (String) pending.get(SessionSettingsModel.Key.RESOLUTION);
-        Integer priorBitrate = (Integer) pending.get(SessionSettingsModel.Key.BITRATE);
-
         if (isRawSbsTransportSupported()) {
             return false;
         }
-        pending.put(SessionSettingsModel.Key.RESOLUTION, MAX_RAW_SBS_RESOLUTION);
-        stageDefaultBitrate(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        // Repair only the unpackable geometry. Bitrate is purely user-set and must survive
+        // the resolution repair untouched.
+        pendingModeQuality.get(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .put(SessionSettingsModel.Key.RESOLUTION, MAX_RAW_SBS_RESOLUTION);
         return true;
     }
 
@@ -540,8 +596,6 @@ public final class XrSessionSettingsController {
         copyValuesForScope(globalValues, pendingSharedValues, false);
         sharedInheritanceResetRequested = appliedSharedSources.containsValue(
                 SessionSettingsModel.Source.CURRENT_SESSION);
-        sessionSharedModeQuality.clear();
-        copyValuesForScope(globalValues, sessionSharedModeQuality, true);
         ensureSelectedRawCodecCompatibility();
     }
 
@@ -577,31 +631,34 @@ public final class XrSessionSettingsController {
         }
     }
 
-    /** Resets one mode's quality tuple from the current shared session settings. */
+    /**
+     * Resets one mode's quality tuple and mode-owned settings to the current session values.
+     * The session layer is read live from the store so a stale construction-time snapshot can
+     * never resurrect older values; where no session value exists the global default applies.
+     */
     public void useSessionModeDefaults(SessionSettingsStore.PresenterMode mode) {
         Objects.requireNonNull(mode, "mode");
+        SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globalPreferences);
         EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
-        EnumMap<SessionSettingsModel.Key, Object> source = new EnumMap<>(SessionSettingsModel.Key.class);
-        copyValuesForScope(sessionSharedModeQuality, source, true);
+        EnumMap<SessionSettingsModel.Key, Object> sessionValues =
+                new EnumMap<>(SessionSettingsModel.Key.class);
+        readModeValues(snapshot, mode, snapshot.preferencesForMode(mode), sessionValues);
         pending.clear();
-        copyModeValuesForScope(source, pending, mode);
-        if (appliedModeQualitySources.get(mode).containsValue(
-                SessionSettingsModel.Source.CURRENT_SESSION)) {
-            modeInheritanceResetRequested.add(mode);
-        }
-        else {
-            modeInheritanceResetRequested.remove(mode);
-        }
+        copyValuesForScope(sessionValues, pending, true);
+        // Restoring the session values also withdraws any staged "inherit global" action.
+        modeInheritanceResetRequested.remove(mode);
         if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI) {
-            pendingClientModel = globalClientModel;
-            clientModelInheritanceResetRequested =
-                    appliedClientModelSource == SessionSettingsModel.Source.CURRENT_SESSION;
+            pendingClientModel = snapshot.preferencesForMode(
+                    SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).getString(
+                    PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                    globalClientModel);
+            clientModelInheritanceResetRequested = false;
         }
         if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
-            pendingRawSbsPerEyeResolution = globalRawSbsPerEyeResolution;
-            rawSbsPerEyeResolutionInheritanceResetRequested =
-                    appliedRawSbsPerEyeResolutionSource
-                            == SessionSettingsModel.Source.CURRENT_SESSION;
+            pendingRawSbsPerEyeResolution = readRawSbsPerEyeResolution(
+                    snapshot.preferencesForMode(
+                            SessionSettingsStore.PresenterMode.HOST_SBS_RAW));
+            rawSbsPerEyeResolutionInheritanceResetRequested = false;
             constrainRawSbsTransportToSupportedPreset();
         }
         if (mode == selectedMode) {
@@ -707,7 +764,7 @@ public final class XrSessionSettingsController {
                 || !pendingSharedValues.equals(appliedSharedValues)
                 || !pendingClientModel.equals(appliedClientModel)
                 || pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution
-                || modeRequiresReconnect(selectedMode)) {
+                || modeRequiresApply(selectedMode)) {
             return true;
         }
         for (SessionSettingsStore.PresenterMode mode
@@ -719,10 +776,130 @@ public final class XrSessionSettingsController {
         return false;
     }
 
-    private boolean modeRequiresReconnect(SessionSettingsStore.PresenterMode mode) {
+    /** True when the mode's staged tuple or transport differs from the live connection at all. */
+    boolean modeRequiresApply(SessionSettingsStore.PresenterMode mode) {
         return crossesRawTransportBoundary(mode)
                 || rawPackingChangeRequiresReconnect(mode)
-                || !qualityTuple(pendingModeQuality.get(mode)).equals(liveStreamQuality);
+                || modeHasQualityDelta(mode);
+    }
+
+    /**
+     * True when the selected mode has a staged quality delta that the host can adopt live
+     * ({@code LiSendSetVideoMode}) instead of a reconnect.
+     */
+    public boolean selectedModeHasLiveApplicableChange() {
+        return modeHasLiveApplicableChange(selectedMode);
+    }
+
+    boolean modeHasLiveApplicableChange(SessionSettingsStore.PresenterMode mode) {
+        return modeHasQualityDelta(mode) && !modeRequiresReconnect(mode);
+    }
+
+    /**
+     * True when anything staged beyond the selected mode's live-applicable quality delta is
+     * pending. Shared settings, the Client SBS model, Raw packing, inheritance resets, and other
+     * modes' tuples are all committed as one guarded record replacement, so they keep the
+     * established Apply &amp; reconnect behavior.
+     */
+    public boolean pendingChangesRequireReconnect() {
+        if (sharedInheritanceResetRequested
+                || clientModelInheritanceResetRequested
+                || rawSbsPerEyeResolutionInheritanceResetRequested
+                || !modeInheritanceResetRequested.isEmpty()
+                || !pendingSharedValues.equals(appliedSharedValues)
+                || !pendingClientModel.equals(appliedClientModel)
+                || pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution
+                || modeRequiresReconnect(selectedMode)) {
+            return true;
+        }
+        for (SessionSettingsStore.PresenterMode mode
+                : SessionSettingsStore.PresenterMode.values()) {
+            if (mode != selectedMode
+                    && !pendingModeQuality.get(mode).equals(appliedModeQuality.get(mode))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    boolean modeRequiresReconnect(SessionSettingsStore.PresenterMode mode) {
+        return crossesRawTransportBoundary(mode)
+                || rawPackingChangeRequiresReconnect(mode)
+                || modeQualityDeltaRequiresReconnect(mode);
+    }
+
+    private boolean modeHasQualityDelta(SessionSettingsStore.PresenterMode mode) {
+        return !qualityTuple(pendingModeQuality.get(mode)).equals(liveStreamQuality);
+    }
+
+    /**
+     * Classifies the pending-vs-live quality delta for one mode.
+     *
+     * <p>v1 rules:</p>
+     * <ul>
+     *   <li>Bitrate deltas are always live: the host re-clamps its own wire budget.</li>
+     *   <li>Frame-rate deltas are always live: nothing client-side is sized by frame rate.</li>
+     *   <li>Resolution deltas are live when the new decoded frame fits the decoder's configured
+     *       adaptive-playback envelope. Raw <em>Full</em> is the exception: its {@code 2W x H}
+     *       transport may exceed what the virtual display advertises, so only a reconnect can
+     *       renegotiate it. Raw <em>Half</em> is {@code W x H} — the same stream as Normal — and
+     *       is classified identically, envelope checked against {@code W}.</li>
+     *   <li>An <em>aspect</em> change additionally forces a reconnect in Client SBS only. There,
+     *       aspect selects the immutable depth bucket and is baked into generated shader source
+     *       ({@code createReprojectionFragment}/{@code createWarpMapFragment}), so it cannot move
+     *       without rebuilding the pipeline. Nothing aspect-derived is expensive for 2D or Host
+     *       SBS AI — the quad shape and cached aspect are recomputed on the live path anyway.</li>
+     * </ul>
+     */
+    private boolean modeQualityDeltaRequiresReconnect(SessionSettingsStore.PresenterMode mode) {
+        StreamQualityTuple pending = qualityTuple(pendingModeQuality.get(mode));
+        if (pending.equals(liveStreamQuality)) {
+            return false;
+        }
+        if (pending.resolution.equals(liveStreamQuality.resolution)) {
+            // Bitrate and/or frame rate only.
+            return false;
+        }
+        return !resolutionChangeAppliesLive(mode, pending.resolution);
+    }
+
+    private boolean resolutionChangeAppliesLive(SessionSettingsStore.PresenterMode mode,
+                                                String resolution) {
+        if (usesRawPackedTransport(mode, pendingRawSbsPerEyeResolution)) {
+            // Raw Full's 2W transport may exceed what the virtual display advertises, and the
+            // host refuses rather than recreating a monitor mid-stream. Raw Half is W x H, so it
+            // is classified exactly like any other host-rendered mode below.
+            return false;
+        }
+        if (liveResolutionMaxWidth <= 0 || liveResolutionMaxHeight <= 0) {
+            return false;
+        }
+        int[] dimensions = parseResolution(resolution);
+        if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI
+                && !sameClientSbsDepthBucket(dimensions, parseResolution(
+                        liveStreamQuality.resolution))) {
+            // Crossing a depth bucket re-stages a different model and regenerates shader source.
+            return false;
+        }
+        // Host SBS AI packs two eyes into one encoded frame, so the decoder sees 2W x H. Client
+        // SBS decodes a plain W x H — its 2W x H packing is produced on-device for SceneCore and
+        // is not decoder-constrained.
+        int decodedWidth = mode == SessionSettingsStore.PresenterMode.HOST_SBS_AI
+                ? dimensions[0] * 2
+                : dimensions[0];
+        return decodedWidth <= liveResolutionMaxWidth
+                && dimensions[1] <= liveResolutionMaxHeight;
+    }
+
+    /**
+     * Whether two stream sizes select the same Client SBS depth bucket. Aspect alone decides the
+     * bucket, and every bucket-derived artifact (the model, the depth/warp target sizes and the
+     * {@code PROBE_STEPS} literal baked into the reprojection shader source) is identical within
+     * one bucket, so a same-bucket aspect change is applicable live.
+     */
+    static boolean sameClientSbsDepthBucket(int[] candidate, int[] live) {
+        return ClientSbsDepthBuckets.select((double) candidate[0] / Math.max(candidate[1], 1))
+                == ClientSbsDepthBuckets.select((double) live[0] / Math.max(live[1], 1));
     }
 
     private boolean rawPackingChangeRequiresReconnect(
@@ -732,12 +909,30 @@ public final class XrSessionSettingsController {
                 && pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution;
     }
 
+    /**
+     * Compares the transport backing the live connection with the one the target mode needs.
+     *
+     * <p>Only Raw <em>Full</em> has its own transport. {@code rawSbsPackedDimensions} multiplies
+     * the per-eye width by 2 for Full and by 1 for Half, so Raw Half negotiates exactly
+     * {@code W x H} — byte-for-byte the same stream as Normal, sent with {@code sbs_mode 0}. The
+     * host cannot distinguish them, so entering or leaving Raw Half renegotiates nothing and is a
+     * pure client-side presentation change.</p>
+     *
+     * <p>The live side uses the <em>applied</em> packing and the target side the <em>pending</em>
+     * one, mirroring {@link #rawPackingChangeRequiresReconnect} rather than introducing a second
+     * source of truth for what "the current packing" means.</p>
+     */
     private boolean crossesRawTransportBoundary(SessionSettingsStore.PresenterMode mode) {
-        return usesRawSbsTransport(startupMode) != usesRawSbsTransport(mode);
+        return usesRawPackedTransport(startupMode, appliedRawSbsPerEyeResolution)
+                != usesRawPackedTransport(mode, pendingRawSbsPerEyeResolution);
     }
 
-    private static boolean usesRawSbsTransport(SessionSettingsStore.PresenterMode mode) {
-        return mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW;
+    /** True only for Raw Full, whose {@code 2W x H} frame is a transport no other mode uses. */
+    private static boolean usesRawPackedTransport(
+            SessionSettingsStore.PresenterMode mode,
+            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
+        return mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW
+                && perEyeResolution == PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
     }
 
     /**
@@ -863,9 +1058,11 @@ public final class XrSessionSettingsController {
                 && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
                 && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
 
-        String resolution = preferences.getString(
-                PreferenceConfiguration.RESOLUTION_PREF_STRING,
-                PreferenceConfiguration.DEFAULT_RESOLUTION);
+        // A per-machine/app session record can still hold a retired 720p; land it on the floor.
+        String resolution = PreferenceConfiguration.migrateRetiredResolution(
+                preferences.getString(
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                        PreferenceConfiguration.DEFAULT_RESOLUTION));
         String fps = preferences.getString(PreferenceConfiguration.FPS_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_FPS);
         if (usesClientSbsDefaults) {
@@ -885,9 +1082,11 @@ public final class XrSessionSettingsController {
     private static void readSharedValues(SharedPreferences preferences,
                                         EnumMap<SessionSettingsModel.Key, Object> output,
                                         String resolutionDefault, String fpsDefault) {
-        String resolution = preferences.getString(
-                PreferenceConfiguration.RESOLUTION_PREF_STRING,
-                resolutionDefault);
+        // Global prefs can still hold a retired 720p from an older install; land it on the floor.
+        String resolution = PreferenceConfiguration.migrateRetiredResolution(
+                preferences.getString(
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                        resolutionDefault));
         String fps = preferences.getString(PreferenceConfiguration.FPS_PREF_STRING,
                 fpsDefault);
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
@@ -927,14 +1126,6 @@ public final class XrSessionSettingsController {
             value = PreferenceConfiguration.DEFAULT_RAW_SBS_PER_EYE_RESOLUTION;
         }
         return PreferenceConfiguration.RawSbsPerEyeResolution.fromPreferenceValue(value);
-    }
-
-    private void stageDefaultBitrate(SessionSettingsStore.PresenterMode mode) {
-        EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
-        pending.put(SessionSettingsModel.Key.BITRATE,
-                PreferenceConfiguration.getDefaultBitrate(
-                        (String) pending.get(SessionSettingsModel.Key.RESOLUTION),
-                        (String) pending.get(SessionSettingsModel.Key.FRAME_RATE)));
     }
 
     private static int nextBitrate(int current) {

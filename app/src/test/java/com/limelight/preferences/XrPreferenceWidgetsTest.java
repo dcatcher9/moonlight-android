@@ -161,7 +161,10 @@ public final class XrPreferenceWidgetsTest {
     }
 
     @Test
-    public void settingsXmlUsesInlineChoicesSwitchesAndSynchronizesBitrateReset() {
+    public void settingsXmlUsesInlineChoicesSwitchesAndKeepsUserBitrate() {
+        // Bitrate is purely user-set: resolution/FPS changes must never rewrite it.
+        assertTrue(preferences.edit().putInt(
+                PreferenceConfiguration.BITRATE_PREF_STRING, 37000).commit());
         StreamSettings activity = Robolectric.buildActivity(StreamSettings.class)
                 .create().start().resume().visible().get();
         activity.getSupportFragmentManager().executePendingTransactions();
@@ -205,11 +208,16 @@ public final class XrPreferenceWidgetsTest {
                 R.id.xr_choice_group).getVisibility());
         AppCompatButton fullHd = choices.findCardByResolutionId("1920x1080");
         fullHd.performClick();
+        assertEquals("1920x1080", resolution.getValue());
 
-        int expected = PreferenceConfiguration.getDefaultBitrate(
-                "1920x1080", PreferenceConfiguration.DEFAULT_FPS);
-        assertEquals(expected, bitrate.getProgress());
-        assertEquals(expected, preferences.getInt(
+        InlineListPreference fps = fragment.findPreference(
+                PreferenceConfiguration.FPS_PREF_STRING);
+        XrChoiceGroup fpsChoices = bindChoices(fps);
+        findChoice(fpsChoices, "60").performClick();
+        assertEquals("60", fps.getValue());
+
+        assertEquals(37000, bitrate.getProgress());
+        assertEquals(37000, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING, -1));
 
         activity.findViewById(R.id.settingsAudioInput).performClick();

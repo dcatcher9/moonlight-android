@@ -645,9 +645,30 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * ({@code W x H}) or the packed SBS frame ({@code 2W' x H'}) — and rebind the decoder to it.
      * Mirrors {@link #switchToClientSbs}'s dummy-surface handoff so MediaCodec never sees a
      * transient/garbage surface. The decoder's adaptive playback absorbs the host-driven
-     * resolution change that accompanies the switch. Only meaningful in Host SBS AI; Raw SBS
-     * changes the negotiated base width and therefore reconnects before any live surface switch.
+     * resolution change that accompanies the switch, and the same envelope absorbs a live
+     * video-mode change, so this is also how Normal/Host SBS AI re-pin after one. Raw SBS changes
+     * the negotiated base width and therefore reconnects before any live surface switch.
      */
+    /**
+     * Re-pins the Client SBS pipeline to a new stream size: the renderer's resolution-derived
+     * color targets on the GL thread, then the XR swapchain that presents its packed {@code 2W x H}
+     * output. The decoder stays on the renderer's SurfaceTexture throughout, so unlike the
+     * host-surface path there is no dummy-surface park.
+     *
+     * @return false when the renderer refuses the change (a depth-bucket move needs a reconnect)
+     */
+    public boolean resizeClientSbsSurface(int width, int height) {
+        if (mXrPresenter == null || mDestroyed || mStereoRenderer == null
+                || !mStereoRenderer.isClientSbs()) {
+            return false;
+        }
+        if (!mStereoRenderer.requestLiveStreamResize(width, height)) {
+            return false;
+        }
+        mXrPresenter.setClientSbsSurfaceSize(true);
+        return true;
+    }
+
     public boolean resizeHostSbsSurface(boolean sbs) {
         if (mXrPresenter == null || mDestroyed || mDummySurface == null
                 || !mDummySurface.isValid()) {

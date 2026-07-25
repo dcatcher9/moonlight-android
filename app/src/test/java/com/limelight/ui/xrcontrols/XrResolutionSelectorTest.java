@@ -47,15 +47,18 @@ public final class XrResolutionSelectorTest {
     @Test
     public void standardCardsExposeShortLabelsAndExplicitResolutionIds() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
+        // Widescreen family first, then ultrawide; each ascending. 720p is retired.
         String[] ids = {
-                XrResolutionSelector.RESOLUTION_720P,
                 XrResolutionSelector.RESOLUTION_1080P,
                 XrResolutionSelector.RESOLUTION_1440P,
                 XrResolutionSelector.RESOLUTION_4K,
+                XrResolutionSelector.RESOLUTION_UW_1080P,
+                XrResolutionSelector.RESOLUTION_UW_1440P,
+                XrResolutionSelector.RESOLUTION_5K2K,
         };
-        String[] labels = {"720p", "1080p", "1440p", "4K"};
+        String[] labels = {"1080p", "1440p", "4K", "UW 1080p", "UW 1440p", "5K2K"};
 
-        assertEquals(4, selector.getCardCount());
+        assertEquals(6, selector.getCardCount());
         for (int i = 0; i < ids.length; i++) {
             AppCompatButton card = selector.getCardAt(i);
             assertEquals(ids[i], selector.getResolutionIdAt(i));
@@ -126,6 +129,11 @@ public final class XrResolutionSelectorTest {
     @Test
     public void glyphScreenBoundsPreserveTheResolutionAspectCue() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
+        // Three widescreen cards, then three ultrawide. Density is banded by height, so it rises
+        // within each family and restarts at the family boundary.
+        float[] expectedAspects = {16f / 9f, 16f / 9f, 16f / 9f,
+                2560f / 1080f, 3440f / 1440f, 5120f / 2160f};
+        int familySize = 3;
         int previousDensity = 0;
         for (int i = 0; i < selector.getCardCount(); i++) {
             XrResolutionSelector.ResolutionCard card =
@@ -134,14 +142,36 @@ public final class XrResolutionSelectorTest {
             glyph.setBounds(0, 0, glyph.getIntrinsicWidth(), glyph.getIntrinsicHeight());
             RectF screen = glyph.getScreenBounds();
 
-            assertEquals(16f / 9f, selector.getAspectRatioAt(i), 0.0001f);
+            assertEquals(expectedAspects[i], selector.getAspectRatioAt(i), 0.0001f);
             assertEquals(selector.getAspectRatioAt(i),
                     screen.width() / screen.height(), 0.0001f);
             assertTrue(screen.width() > screen.height());
             assertTrue(screen.bottom < glyph.getBounds().bottom);
+
+            if (i % familySize == 0) {
+                previousDensity = 0;
+            }
             assertTrue(glyph.getDensityLevel() > previousDensity);
             previousDensity = glyph.getDensityLevel();
         }
+    }
+
+    @Test
+    public void sameHeightAcrossFamiliesSharesADensityTier() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        // 1080p and UW 1080p are the same vertical class; only the glyph aspect separates them.
+        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_1080P),
+                densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1080P));
+        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_1440P),
+                densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P));
+        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_4K),
+                densityOf(selector, XrResolutionSelector.RESOLUTION_5K2K));
+    }
+
+    private static int densityOf(XrResolutionSelector selector, String resolutionId) {
+        XrResolutionSelector.ResolutionCard card =
+                (XrResolutionSelector.ResolutionCard) selector.findCardByResolutionId(resolutionId);
+        return card.glyph.getDensityLevel();
     }
 
     @Test
@@ -201,32 +231,34 @@ public final class XrResolutionSelectorTest {
     @Test
     public void unknownCurrentValueGetsASelectedCustomCardUntilAStandardChoiceWins() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        String customId = "3440x1440";
+        // 3840x1600 is a real ultrawide that is deliberately not on the ladder. A retired 1280x720
+        // would behave the same way, though migration normally rewrites it before it gets here.
+        String customId = "3840x1600";
         selector.setSelectedResolutionId(customId);
 
         assertEquals(customId, selector.getSelectedResolutionId());
-        assertEquals(5, selector.getCardCount());
+        assertEquals(7, selector.getCardCount());
         AppCompatButton custom = selector.findCardByResolutionId(customId);
         assertTrue(custom.isActivated());
         assertFalse(custom.isClickable());
         assertEquals(customId, custom.getTag());
         assertTrue(custom.getText().toString().contains("Custom"));
-        assertTrue(custom.getText().toString().contains("3440 \u00d7 1440"));
+        assertTrue(custom.getText().toString().contains("3840 \u00d7 1600"));
 
         int customIndex = selector.getCardCount() - 1;
-        assertEquals(3440f / 1440f, selector.getAspectRatioAt(customIndex), 0.0001f);
+        assertEquals(3840f / 1600f, selector.getAspectRatioAt(customIndex), 0.0001f);
         XrResolutionSelector.ResolutionCard customCard =
                 (XrResolutionSelector.ResolutionCard) custom;
         customCard.glyph.setBounds(0, 0, customCard.glyph.getIntrinsicWidth(),
                 customCard.glyph.getIntrinsicHeight());
         RectF screen = customCard.glyph.getScreenBounds();
-        assertEquals(3440f / 1440f, screen.width() / screen.height(), 0.0001f);
+        assertEquals(3840f / 1600f, screen.width() / screen.height(), 0.0001f);
 
         selector.findCardByResolutionId(XrResolutionSelector.RESOLUTION_1440P).performClick();
 
         assertEquals(XrResolutionSelector.RESOLUTION_1440P,
                 selector.getSelectedResolutionId());
-        assertEquals(4, selector.getCardCount());
+        assertEquals(6, selector.getCardCount());
         assertNull(selector.findCardByResolutionId(customId));
         assertTrue(selector.findCardByResolutionId(
                 XrResolutionSelector.RESOLUTION_1440P).isActivated());
