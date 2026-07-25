@@ -38,14 +38,59 @@ both compile in 1.4–1.9 s, so a cold start without a warm compiler cache is us
   `DispatchLibraryDir` option to use NPU"* and fails with `kLiteRtStatusErrorCompilation` (504),
   which is indistinguishable from an unsupported graph. Anything integrating NPU must set it.
 
-## What is still missing
+## Blocked: the DSP transport is not exposed to apps on this device
 
-The Qualcomm AI Runtime (QAIRT) backend libraries. LiteRT's plugin loads, then fails at:
+Every LiteRT and QAIRT layer now loads. The chain gets all the way to the Hexagon transport and
+stops there:
 
 ```
-[qnn_manager.cc:193] Could not load shared library libQnnSystem.so: dlopen failed
-[dispatch_api.cc:135] Failed to set up QNN manager
+NPU accelerator registered                                        OK
+NPU JIT compilation caching enabled                               OK
+libLiteRtDispatch_Qualcomm.so / libQnnSystem.so / libQnnHtp.so    OK
+libQnnHtpV69Stub.so                                               OK
+dlopen("libcdsprpc.so") -> library "libcdsprpc.so" not found      FAIL
+QnnDsp <E> loadRemoteSymbols failed with err 4000
+QnnDsp <E> Failed to load skel, error: 4000
 ```
+
+`libcdsprpc.so` is the compute-DSP RPC transport — the only way userspace reaches Hexagon. It
+exists at `/vendor/lib64/libcdsprpc.so`, but is **not loadable by an ordinary app on this device**:
+
+* It appears only in `/vendor/etc/public.libraries.txt`, which serves the framework's *sphal*
+  namespace (HAL loading), not app namespaces.
+* The app-facing list, `/system/etc/public.libraries-qti.txt`, contains just two audio libraries
+  (`libbinauralrenderer_wrapper.qti.so`, `libhoaeffects.qti.so`). No app-facing
+  `public.libraries*.txt` on the device mentions `cdsprpc` at all.
+* An explicit `dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL)` from app code fails with
+  "library not found", so this is a namespace policy, not a load-ordering accident.
+
+This is a **platform decision by the device vendor, not a defect in this integration**. Nothing in
+the app can work around it: bundling our own copy is not possible either, since the DSP skeleton
+must be signed for and talk to the device's own DSP. Samsung/Qualcomm would have to expose
+`libcdsprpc.so` to app namespaces on Galaxy XR.
+
+Worth noting the contrast: `libOpenCL.so` is likewise vendor-only, yet the GPU path works — GPU
+drivers reach apps through a dedicated, sanctioned loading path that the DSP has no equivalent of.
+
+### If you want to pursue it further
+
+* Google's documented distribution route is Google Play's on-device AI (PODAI) infrastructure via
+  Play Feature Delivery, rather than hand-placed `jniLibs`. That is unlikely to change namespace
+  policy — Play Feature Delivery installs into the same app lib directory — but it is the only
+  supported channel, and is worth confirming before concluding the device is permanently closed.
+* Re-test after major OS updates. This is one line in a device config file; it can change.
+
+### Version note discovered along the way
+
+This SoC is **Hexagon v69**, not v73. `libQnnHtp.so` detects the SoC itself and asks for
+`libQnnHtpV69Stub.so` by name — that runtime request is authoritative. The earlier v73 guess came
+from `libSnpeHtpV73Stub.so` in `/vendor/lib64`, which is SNPE's *supported set*, not the SoC's
+architecture; the device also ships `libSnpeHtpV69Stub.so`, and its QNN stack ships only the v69
+stub.
+
+The LiteRT plugins do **not** need to match: `libLiteRtCompilerPlugin_Qualcomm.so` and
+`libLiteRtDispatch_Qualcomm.so` are byte-identical across the `qualcomm_runtime_v69` .. `_v81`
+directories in the release zip. Only the QAIRT stub/skel pair is version-specific.
 
 ### Steps
 

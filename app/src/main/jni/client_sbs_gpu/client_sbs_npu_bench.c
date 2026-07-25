@@ -16,6 +16,8 @@
 // survive it is an empirical question -- MiDaS v2 is an EfficientNet-Lite CNN and should map well;
 // DA-V2 is a 12-block ViT and is the more likely to fall back or fail.
 
+#include <android/log.h>
+#include <dlfcn.h>
 #include <jni.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -146,6 +148,22 @@ Java_com_limelight_utils_ClientSbsNpuBenchmark_nativeRunBenchmark(
     int ok = 1;
     double compile_ms = 0.0;
     LiteRtSignature signature = NULL;
+
+    // The bundled HTP stub has a NEEDED entry on libcdsprpc.so, the compute-DSP RPC transport.
+    // That library lives in /vendor/lib64 and IS app-loadable -- it is listed in
+    // /vendor/etc/public.libraries.txt -- but nothing has pulled it into this app's linker
+    // namespace by the time the stub's dependencies are resolved, so the load fails with
+    // "library not found". Opening it RTLD_GLOBAL first puts it in the namespace so the stub's
+    // NEEDED entry resolves. Failure here is not fatal: it is reported, and QNN then produces its
+    // own clearer diagnostic.
+    void *dsprpc = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
+    if (dsprpc == NULL) {
+        __android_log_print(ANDROID_LOG_WARN, "AcceleratorBench",
+                            "libcdsprpc.so preload failed: %s", dlerror());
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "AcceleratorBench",
+                            "libcdsprpc.so preloaded for HTP transport");
+    }
     LiteRtEnvOption environment_options[4];
     memset(environment_options, 0, sizeof(environment_options));
     environment_options[0].tag = kLiteRtEnvOptionTagRuntimeLibraryDir;
