@@ -55,7 +55,16 @@ The Qualcomm AI Runtime (QAIRT) backend libraries. LiteRT's plugin loads, then f
    HTTP 403 unauthenticated, so this step cannot be scripted unattended.
 
    Take the version the plugins were built against, not the newest: `fetch_qualcomm_library.sh`
-   pins `2.47.0.260601` for LiteRT 2.1.6. Upstream's `QAIRT_SDK.md` describes the same three
+   pins `2.47.0.260601` for LiteRT 2.1.6, inside a `LINT.IfChange` block tying that same version to
+   the Bazel workspace, the Python wheel and the CMake headers dir. Establish the baseline on the
+   pinned pairing first — with a version-skewed pairing you cannot tell "HTP rejected the graph"
+   from "QNN API mismatch", and this path has already produced two rounds of ambiguous 504s.
+
+   Upgrading afterwards is nearly free: `libLiteRtDispatch_Qualcomm.so` declares no `NEEDED` entry
+   for any `libQnn*.so` and resolves QNN through `dlopen`/`dlsym` at runtime, so swapping QAIRT
+   versions is just replacing files in `jniLibs` and re-running the benchmark — no rebuild, no code
+   change. Try a newer SDK (e.g. 2.48.40.260702) as a deliberate second step once a known-good
+   number exists to compare against. Upstream's `QAIRT_SDK.md` describes the same three
    categories this table lists — `libQnnSystem.so`, the `libQnn{Backend}*.so` set, and the Hexagon
    skeleton under `lib/hexagon-v{arch}/unsigned/`.
 2. Copy into `app/src/main/jniLibs/arm64-v8a/`, from `qairt/2.47.0.260601/`:
