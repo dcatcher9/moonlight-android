@@ -3073,10 +3073,15 @@ public class XrStreamPresenter {
                 ? devicePerformanceSampler.sample() : null;
         if (clientSbsLoggingActive) {
             String depthHealth = clientSbs.depthHealthAvailable
-                    ? String.format(Locale.US, "valid=%.1f%% range=%.4f pop=%.3f collapsed=%s",
+                    ? String.format(Locale.US,
+                            "valid=%.1f%% range=%.4f edge=%.4f pop=%.3f change=%.3f age=%d"
+                                    + " collapsed=%s",
                             clientSbs.validDepthFraction * 100.0f,
                             clientSbs.effectiveDepthRangeWidth,
+                            clientSbs.depthEdgeFraction,
                             clientSbs.stereoPopStrength,
+                            clientSbs.depthChangeFraction,
+                            clientSbs.depthSceneAge,
                             clientSbs.rawDepthRangeCollapsed)
                     : "unavailable";
             // Machine-readable A/B output is intentionally separate from the visible panel. Log

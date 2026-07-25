@@ -447,13 +447,25 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final float effectiveRangeWidth;
         final boolean rangeCollapsed;
         final float popStrength;
+        /**
+         * Weighted edge density -- the adaptive-pop controller's input. Logged because the band
+         * endpoints are a calibration: reading only the resolved pop cannot distinguish "this
+         * scene is genuinely clean" from "the endpoints are wrong for this model", and those need
+         * different fixes.
+         */
+        final float edgeFraction;
+        final float changeFraction;
+        final int sceneAge;
 
         private DepthHealthState() {
             available = false;
             validFraction = 0.0f;
             effectiveRangeWidth = 0.0f;
             rangeCollapsed = true;
-            popStrength = 1.25f;
+            popStrength = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR;
+            edgeFraction = 0.0f;
+            changeFraction = 0.0f;
+            sceneAge = 0;
         }
 
         DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
@@ -461,6 +473,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             validFraction = snapshot.getValidRawFraction();
             effectiveRangeWidth = snapshot.getEffectiveRangeWidth();
             rangeCollapsed = snapshot.isPercentileRangeCollapsed();
+            edgeFraction = snapshot.getEdgeFraction();
+            changeFraction = snapshot.getChangeFraction();
+            sceneAge = snapshot.getSceneAge();
             popStrength = snapshot.getPopStrength();
         }
     }
@@ -518,6 +533,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public final float effectiveDepthRangeWidth;
         public final boolean rawDepthRangeCollapsed;
         public final float stereoPopStrength;
+        public final float depthEdgeFraction;
+        public final float depthChangeFraction;
+        public final int depthSceneAge;
 
         private ClientSbsPerformanceSnapshot(Stereo3DRenderer owner, boolean active,
                                              String backend, long elapsedNs) {
@@ -574,6 +592,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.effectiveDepthRangeWidth = health.effectiveRangeWidth;
             this.rawDepthRangeCollapsed = health.rangeCollapsed;
             this.stereoPopStrength = health.popStrength;
+            this.depthEdgeFraction = health.edgeFraction;
+            this.depthChangeFraction = health.changeFraction;
+            this.depthSceneAge = health.sceneAge;
         }
 
         private static float rate(long count, long elapsedNs) {
