@@ -38,47 +38,55 @@ both compile in 1.4–1.9 s, so a cold start without a warm compiler cache is us
   `DispatchLibraryDir` option to use NPU"* and fails with `kLiteRtStatusErrorCompilation` (504),
   which is indistinguishable from an unsupported graph. Anything integrating NPU must set it.
 
-## Blocked: the DSP transport is not exposed to apps on this device
+## Blocked at the DSP protection domain
 
-Every LiteRT and QAIRT layer now loads. The chain gets all the way to the Hexagon transport and
-stops there:
+Every software layer now loads. The bring-up took four rounds, each of which moved the failure
+one step further, and the final stop is a device permission rather than anything in this code:
+
+| # | symptom | cause | fix |
+|---|---|---|---|
+| 1 | `kLiteRtStatusErrorCompilation` (504) | no Qualcomm plugin in the APK | unpack `libLiteRt*_Qualcomm.so` into `jniLibs` |
+| 2 | 504, *"You should provide the `DispatchLibraryDir` option"* | `DispatchLibraryDir` is distinct from `RuntimeLibraryDir` | set `kLiteRtEnvOptionTagDispatchLibraryDir` |
+| 3 | `dlopen libQnnSystem.so / libQnnHtpV69Stub.so failed` | QAIRT backends not bundled | copy them from the QAIRT SDK |
+| 4 | `dlopen libcdsprpc.so` not found | vendor library not in the app's linker namespace | **`<uses-native-library>`** in the manifest |
+| 5 | `createUnsignedPD ... not supported by HTP`, error 1002 | device does not permit unsigned PD | **no app-side fix** |
+
+Step 4 is worth dwelling on, because it looked like a hard platform wall and was not. A vendor
+library being present in `/vendor/lib64` and listed in `/vendor/etc/public.libraries.txt` is
+necessary but NOT sufficient: since Android 12 an app must also DECLARE it. Without the
+declaration both implicit `NEEDED` resolution and an explicit `dlopen(..., RTLD_GLOBAL)` fail with
+"library not found", which is indistinguishable from the library being withheld.
+
+### Why step 5 stops here
 
 ```
-NPU accelerator registered                                        OK
-NPU JIT compilation caching enabled                               OK
-libLiteRtDispatch_Qualcomm.so / libQnnSystem.so / libQnnHtp.so    OK
-libQnnHtpV69Stub.so                                               OK
-dlopen("libcdsprpc.so") -> library "libcdsprpc.so" not found      FAIL
-QnnDsp <E> loadRemoteSymbols failed with err 4000
-QnnDsp <E> Failed to load skel, error: 4000
+QnnDsp <E> createUnsignedPD unsigned PD or DSPRPC_GET_DSP_INFO not supported by HTP
+QnnDsp <E> DspTransport.createUnsignedPD failed, 0x00000003
 ```
 
-`libcdsprpc.so` is the compute-DSP RPC transport — the only way userspace reaches Hexagon. It
-exists at `/vendor/lib64/libcdsprpc.so`, but is **not loadable by an ordinary app on this device**:
+Two independent pieces of device evidence:
 
-* It appears only in `/vendor/etc/public.libraries.txt`, which serves the framework's *sphal*
-  namespace (HAL loading), not app namespaces.
-* The app-facing list, `/system/etc/public.libraries-qti.txt`, contains just two audio libraries
-  (`libbinauralrenderer_wrapper.qti.so`, `libhoaeffects.qti.so`). No app-facing
-  `public.libraries*.txt` on the device mentions `cdsprpc` at all.
-* An explicit `dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL)` from app code fails with
-  "library not found", so this is a namespace policy, not a load-ordering accident.
+* `/dev/fastrpc-cdsp` does not exist — the compute-DSP FastRPC node is not exposed on this build.
+* `/dev/adsprpc-smd` is `crw-rw-r--  system:system`, so a normal app uid gets read-only access
+  while FastRPC needs read/write. This matches Qualcomm forum reports that `qnn-net-run` works
+  under `adb root` but not from an app.
 
-This is a **platform decision by the device vendor, not a defect in this integration**. Nothing in
-the app can work around it: bundling our own copy is not possible either, since the DSP skeleton
-must be signed for and talk to the device's own DSP. Samsung/Qualcomm would have to expose
-`libcdsprpc.so` to app namespaces on Galaxy XR.
+Qualcomm's documented workaround is to request a **signed** process domain
+(`QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD`, `useSignedProcessDomain = true`). That is a raw QNN
+device-config option, and **LiteRT 2.1.6 does not expose it** — its Qualcomm options surface has 24
+setters covering log level, HTP preference, quantization behaviour, weight sharing, JIT, ConvHMX,
+FoldReLU, graph IO memory type and performance modes, with nothing for process domains. Even if the
+device would accept a signed PD, there is no way to ask for one through this runtime.
 
-Worth noting the contrast: `libOpenCL.so` is likewise vendor-only, yet the GPU path works — GPU
-drivers reach apps through a dedicated, sanctioned loading path that the DSP has no equivalent of.
+### What would change the answer
 
-### If you want to pursue it further
+* **LiteRT exposing the signed-PD option.** This is the most likely unlock and is purely upstream;
+  worth an issue against google-ai-edge/LiteRT.
+* **A device/OS update** enabling unsigned PD or exposing `/dev/fastrpc-cdsp` to apps.
+* Anything shipping as a **privileged or vendor app**, which is not applicable here.
 
-* Google's documented distribution route is Google Play's on-device AI (PODAI) infrastructure via
-  Play Feature Delivery, rather than hand-placed `jniLibs`. That is unlikely to change namespace
-  policy — Play Feature Delivery installs into the same app lib directory — but it is the only
-  supported channel, and is worth confirming before concluding the device is permanently closed.
-* Re-test after major OS updates. This is one line in a device config file; it can change.
+Do not conclude the models are unsuitable: HTP never got far enough to see a graph. Everything up
+to the transport succeeded, so a future unlock only has to clear step 5.
 
 ### Version note discovered along the way
 
