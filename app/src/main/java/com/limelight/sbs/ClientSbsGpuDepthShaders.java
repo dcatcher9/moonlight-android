@@ -17,6 +17,12 @@ final class ClientSbsGpuDepthShaders {
     private ClientSbsGpuDepthShaders() {
     }
 
+    /** GLSL literals for the single-owner adaptive-pop band; see ClientSbsGpuDepthProcessor. */
+    private static final String POP_FLOOR =
+            String.format(java.util.Locale.US, "%.2f", ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR);
+    private static final String POP_CEILING =
+            String.format(java.util.Locale.US, "%.2f", ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING);
+
     private static String lines(String... source) {
         return String.join("\n", source) + "\n";
     }
@@ -638,17 +644,17 @@ final class ClientSbsGpuDepthShaders {
             // 50-60% of depth texels on the first updates, so a busy scene reads smoother than it
             // is and would hold full pop for the whole shot. Hold the floor until the settle
             // crossing, latch once, then stay bit-stable until the next cut.
-            "    float popStrength = wasInitialized ? profileC.y : 1.20;",
+            "    float popStrength = wasInitialized ? profileC.y : " + POP_FLOOR + ";",
             "    if (!wasInitialized || hardCut) {",
-            "        popStrength = 1.20;",
+            "        popStrength = " + POP_FLOOR + ";",
             "    } else if (settledNow) {",
             "        float confidence = 1.0 - smoothstep(0.04, 0.20, edgeFraction);",
-            "        popStrength = mix(1.20, 2.00, confidence);",
+            "        popStrength = mix(" + POP_FLOOR + ", " + POP_CEILING + ", confidence);",
             "    }",
             "    profileA = vec4(stretchLow, stretchHigh, stretchInverse, subjectCandidate);",
             "    profileB = vec4(subjectDepth, recenter, anchorShift, edgeFraction);",
             "    float hardCutEvidence = externalCut ? 2.0 : internalCutEvidence;",
-            "    profileC = vec4(changeFraction, popStrength, popStrength / 1.20, hardCutEvidence);",
+            "    profileC = vec4(changeFraction, popStrength, popStrength / " + POP_FLOOR + ", hardCutEvidence);",
             "    stateFlags.y = 1u;",
             "    stateFlags.w = hardCut ? 1u : 0u;",
             "    if (hardCut) healthCounters.x = min(healthCounters.x + 1u, 0xfffffffeu);",

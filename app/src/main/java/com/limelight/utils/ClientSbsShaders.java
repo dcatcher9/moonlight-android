@@ -5,6 +5,15 @@ final class ClientSbsShaders {
     private ClientSbsShaders() {
     }
 
+    // Single-owner adaptive-pop band (ClientSbsGpuDepthProcessor). Declared before every template
+    // that interpolates them, since static initializers run in declaration order.
+    private static final float ADAPTIVE_POP_CEILING =
+            com.limelight.sbs.ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING;
+    private static final String POP_FLOOR = String.format(java.util.Locale.US, "%.2f",
+            com.limelight.sbs.ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR);
+    private static final String POP_CEILING =
+            String.format(java.util.Locale.US, "%.2f", ADAPTIVE_POP_CEILING);
+
     static final String FLAT_FRAGMENT = String.join("\n",
             "#extension GL_OES_EGL_image_external : require",
             "precision highp float;",
@@ -220,12 +229,12 @@ final class ClientSbsShaders {
             "  float parallaxWidth = min(sourceWidth, CALIBRATION_WIDTH);",
             "  float aspect = max(sourceWidth / max(u_sourceSize.y, 1.0), 0.0001);",
             "  float outputScale = clamp(REFERENCE_ASPECT / aspect, 0.5, 3.0);",
-            "  float popScale = 1.20 * max(stereoProfile.y, 1.0) * outputScale;",
+            "  float popScale = " + POP_FLOOR + " * max(stereoProfile.y, 1.0) * outputScale;",
             "  float anchorShift = stereoProfile.x;",
             "  float parallaxScale = (0.35 / parallaxWidth) * popScale;",
             // Still the historical over-wide bound; the frame's exact reach replaces it in the
             // probe-lattice change. It only ever costs probes, never correctness.
-            "  float radius = outputScale * 2.00 * (0.004 + 12.51 * 0.35 / parallaxWidth);",
+            "  float radius = outputScale * " + POP_CEILING + " * (0.004 + 12.51 * 0.35 / parallaxWidth);",
             "  float startX = v_TexCoord.x - radius;",
             "  float stepX = 2.0 * radius / float(PROBE_STEPS);",
             "  float bestX = v_TexCoord.x;",
@@ -310,8 +319,6 @@ final class ClientSbsShaders {
 
     private static final float REFERENCE_ASPECT_RATIO = 5120.0f / 2160.0f;
     private static final float CALIBRATION_WIDTH_PX = 854.0f;
-    /** Must track the adaptive-pop ceiling the warp radius is built from. */
-    private static final float ADAPTIVE_POP_CEILING = 2.00f;
     private static final float TARGET_DEPTH_TEXELS = 1.22f;
 
     /**
@@ -464,12 +471,12 @@ final class ClientSbsShaders {
             "  float parallaxWidth = min(sourceWidth, CALIBRATION_WIDTH);",
             "  float aspect = max(sourceWidth / max(u_sourceSize.y, 1.0), 0.0001);",
             "  float outputScale = clamp(REFERENCE_ASPECT / aspect, 0.5, 3.0);",
-            "  float popScale = 1.20 * max(stereoProfile.y, 1.0) * outputScale;",
+            "  float popScale = " + POP_FLOOR + " * max(stereoProfile.y, 1.0) * outputScale;",
             "  float anchorShift = stereoProfile.x;",
             "  float parallaxScale = (0.35 / parallaxWidth) * popScale;",
             // Still the historical over-wide bound; the frame's exact reach replaces it in the
             // probe-lattice change. It only ever costs probes, never correctness.
-            "  float radius = outputScale * 2.00 * (0.004 + 12.51 * 0.35 / parallaxWidth);",
+            "  float radius = outputScale * " + POP_CEILING + " * (0.004 + 12.51 * 0.35 / parallaxWidth);",
             // Store small signed displacements instead of absolute source coordinates. RG16F then
             // retains sub-pixel precision across the full eye rather than quantizing near x=1.
             "  vec2 sourceXs = clamp(reprojectBothEyes(profileShape, anchorShift,",

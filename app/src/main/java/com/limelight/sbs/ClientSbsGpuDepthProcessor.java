@@ -41,6 +41,16 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      *     <li>subject candidate, pop strength, hard-cut flag, scene age</li>
      * </ol>
      */
+    /**
+     * Adaptive-pop band. The resolve pass latches a strength in [FLOOR, CEILING] and publishes
+     * {@code strength / FLOOR} as the ratio; the warp multiplies FLOOR by that ratio, and sizes its
+     * inverse-search radius from CEILING. All three must move together — a radius built from a
+     * smaller ceiling than the band can actually latch leaves the frame's displacement outside the
+     * search window and the probe silently misses crossings.
+     */
+    public static final float ADAPTIVE_POP_FLOOR = 1.20f;
+    public static final float ADAPTIVE_POP_CEILING = 2.00f;
+
     public static final int PROFILE_TEXEL_COUNT = 4;
     public static final int PROFILE_TEXEL_STRETCH = 0;
     public static final int PROFILE_TEXEL_STEREO = 1;
