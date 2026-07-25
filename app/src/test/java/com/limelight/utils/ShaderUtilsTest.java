@@ -21,9 +21,10 @@ public class ShaderUtilsTest {
         String shader = ClientSbsShaders.REPROJECTION_FRAGMENT;
         assertTrue(shader.contains("const int PROBE_STEPS = 32"));
         assertTrue(shader.contains("bestv2RawShift"));
-        assertTrue(shader.contains("float subjectShift = bestv2RawShift"));
-        assertTrue(shader.contains("0.5 * subjectShift"));
-        assertTrue(shader.contains("float convergenceBias = -0.004"));
+        assertTrue(shader.contains("float anchorShift = stereoProfile.x;"));
+        assertFalse(shader.contains("0.5 * subjectShift"));
+        assertFalse(shader.contains("convergenceOffset"));
+        assertFalse(shader.contains("parallaxLimit"));
         assertTrue(shader.contains("shift - anchorShift"));
         assertTrue(shader.contains("float parallaxScale ="));
         assertTrue(shader.contains("crossingDepth > bestDepth"));
@@ -43,8 +44,9 @@ public class ShaderUtilsTest {
         String shader = ClientSbsShaders.WARP_MAP_FRAGMENT;
         assertTrue(shader.contains("const int PROBE_STEPS = 32"));
         assertTrue(shader.contains("bestv2RawShift"));
-        assertTrue(shader.contains("0.5 * subjectShift"));
-        assertTrue(shader.contains("float convergenceBias = -0.004"));
+        assertTrue(shader.contains("float anchorShift = stereoProfile.x;"));
+        assertFalse(shader.contains("0.5 * subjectShift"));
+        assertFalse(shader.contains("convergenceOffset"));
         assertTrue(shader.contains("shift - anchorShift"));
         assertTrue(shader.contains("crossingDepth > bestDepth"));
         assertTrue(shader.contains("leftBestDepth >= 0.0 ? leftBestX : backgroundX"));

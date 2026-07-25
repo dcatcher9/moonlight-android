@@ -175,7 +175,8 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(temporal.contains("gradient / max(uSpatialThresholdScale, 1.0)"));
         assertTrue(accumulate.contains("referenceGradient"));
         assertTrue(profile.contains("uniform float uSubjectAlpha"));
-        assertTrue(profile.contains("uniform float uConvergenceAlpha"));
+        assertFalse(profile.contains("uConvergenceAlpha"));
+        assertTrue(profile.contains("previousAge < 8 && sceneAge >= 8"));
         assertTrue(profile.contains("uniform int uReferenceFrameAdvance"));
         assertTrue(profile.contains("/ max(uSpatialThresholdScale, 1.0)"));
         assertFalse(temporal.contains("mix(previous, current, 0.50)"));
@@ -227,7 +228,7 @@ public class ClientSbsGpuDepthShadersTest {
         assertEquals(1.25f, snapshot.getStretchInverseRange(), 0.0001f);
         assertEquals(0.55f, snapshot.getSubjectDepth(), 0.0001f);
         assertEquals(-0.02f, snapshot.getRecenterDelta(), 0.0001f);
-        assertEquals(0.003f, snapshot.getConvergence(), 0.0001f);
+        assertEquals(0.003f, snapshot.getZeroAnchorShift(), 0.0001f);
         assertEquals(0.01f, snapshot.getEdgeFraction(), 0.0001f);
         assertEquals(1.30f, snapshot.getPopStrength(), 0.0001f);
         assertEquals(1.04f, snapshot.getPopRatio(), 0.0001f);

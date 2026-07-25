@@ -36,7 +36,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      * Renderer profile texture layout. Each entry is one RGBA32F texel:
      * <ol>
      *     <li>stretch low, stretch high, stretch inverse range, subject depth</li>
-     *     <li>recenter delta, convergence, pop ratio, profile-ready flag</li>
+     *     <li>recenter delta, zero-plane anchor shift, pop ratio, profile-ready flag</li>
      *     <li>raw P2, raw P98, edge fraction, change fraction</li>
      *     <li>subject candidate, pop strength, hard-cut flag, scene age</li>
      * </ol>
@@ -124,7 +124,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int accumulateSpatialScaleUniform;
     private int resolvePixelCountUniform;
     private int resolveSubjectAlphaUniform;
-    private int resolveConvergenceAlphaUniform;
     private int resolveSpatialScaleUniform;
     private int resolveReferenceFrameAdvanceUniform;
 
@@ -297,8 +296,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 0.625f, processIntervalNs, temporalReferenceHz);
         float subjectAlpha = ClientSbsTemporalTuning.alphaForInterval(
                 0.20f, processIntervalNs, temporalReferenceHz);
-        float convergenceAlpha = ClientSbsTemporalTuning.alphaForInterval(
-                0.10f, processIntervalNs, temporalReferenceHz);
         int referenceFrameAdvance = ClientSbsTemporalTuning.referenceFrameAdvance(
                 processIntervalNs, temporalReferenceHz);
         try {
@@ -377,7 +374,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                     externalSceneCutByteOffset);
             GLES20.glUniform1i(resolvePixelCountUniform, outputWidth * outputHeight);
             GLES20.glUniform1f(resolveSubjectAlphaUniform, subjectAlpha);
-            GLES20.glUniform1f(resolveConvergenceAlphaUniform, convergenceAlpha);
             GLES20.glUniform1f(resolveSpatialScaleUniform, spatialThresholdScale);
             GLES20.glUniform1i(resolveReferenceFrameAdvanceUniform, referenceFrameAdvance);
             GLES31.glBindImageTexture(PROFILE_IMAGE_BINDING, profileTexture, 0, false, 0,
@@ -647,8 +643,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 accumulateProfileProgram, "uSpatialThresholdScale");
         resolvePixelCountUniform = requiredUniform(resolveProfileProgram, "uPixelCount");
         resolveSubjectAlphaUniform = requiredUniform(resolveProfileProgram, "uSubjectAlpha");
-        resolveConvergenceAlphaUniform = requiredUniform(
-                resolveProfileProgram, "uConvergenceAlpha");
         resolveSpatialScaleUniform = requiredUniform(
                 resolveProfileProgram, "uSpatialThresholdScale");
         resolveReferenceFrameAdvanceUniform = requiredUniform(
@@ -1045,7 +1039,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private float stretchInverseRange;
         private float subjectDepth;
         private float recenterDelta;
-        private float convergence;
+        private float zeroAnchorShift;
         private float edgeFraction;
         private float popStrength;
         private float popRatio;
@@ -1074,9 +1068,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             stretchInverseRange = 1.0f;
             subjectDepth = 0.5f;
             recenterDelta = 0.0f;
-            convergence = 0.0f;
+            zeroAnchorShift = 0.0f;
             edgeFraction = 0.0f;
-            popStrength = 1.25f;
+            popStrength = 1.20f;
             popRatio = 1.0f;
             changeFraction = 0.0f;
             hardCutEvidence = 0.0f;
@@ -1105,7 +1099,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             stretchInverseRange = state.getFloat(24);
             subjectDepth = state.getFloat(32);
             recenterDelta = state.getFloat(36);
-            convergence = state.getFloat(40);
+            zeroAnchorShift = state.getFloat(40);
             edgeFraction = state.getFloat(44);
             popStrength = state.getFloat(52);
             popRatio = state.getFloat(56);
@@ -1147,7 +1141,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         public float getStretchInverseRange() { return stretchInverseRange; }
         public float getSubjectDepth() { return subjectDepth; }
         public float getRecenterDelta() { return recenterDelta; }
-        public float getConvergence() { return convergence; }
+        /** Shot-latched zero-plane anchor, in Bestv2 source-pixel shift units. */
+        public float getZeroAnchorShift() { return zeroAnchorShift; }
         public float getEdgeFraction() { return edgeFraction; }
         public float getPopStrength() { return popStrength; }
         public float getPopRatio() { return popRatio; }

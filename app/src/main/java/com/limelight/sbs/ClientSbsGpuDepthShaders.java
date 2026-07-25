@@ -31,7 +31,7 @@ final class ClientSbsGpuDepthShaders {
             "layout(std430, binding = 3) buffer ProcessorState {",
             "    vec4 rangeState;",      // frame low/high, EMA low/high
             "    vec4 profileA;",        // stretch low/high/inverse, subject candidate
-            "    vec4 profileB;",        // subject, recenter, convergence, edge fraction
+            "    vec4 profileB;",        // subject, recenter, zero-plane anchor shift, edge fraction
             "    vec4 profileC;",        // change fraction, pop, pop ratio, cut evidence
             "    uvec4 stateFlags;",     // range init, profile init, first frame, hard cut
             "    ivec4 stateCounters;",  // scene age, cut state, valid samples, frame number
@@ -450,7 +450,13 @@ final class ClientSbsGpuDepthShaders {
                 // occupied bin performs the substantially cheaper global merge below.
                 "        atomicAdd(localDepthHistogram[bin], 1u);",
                 "        atomicAdd(localSubjectHistogram[bin], weight);",
-                "        localTotals[lane] = uvec2(referenceGradient >= 0.02 ? 1u : 0u, weight);",
+                // Weight the edge statistic by gradient MAGNITUDE in fixed point, not a bare
+                // threshold count: a violent silhouette must outweigh a marginal one, or the risk
+                // statistic cannot tell a soft gradient field from a shattered one. Matches
+                // Apollo's min(grad/0.02, 8) * 256, evaluated on the grid-normalized gradient.
+                "        uint edgeWeight = referenceGradient >= 0.02",
+                "                ? uint(min(referenceGradient * 50.0, 8.0) * 256.0 + 0.5) : 0u;",
+                "        localTotals[lane] = uvec2(edgeWeight, weight);",
                 "    }",
                 "    barrier();",
                 "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
@@ -479,7 +485,6 @@ final class ClientSbsGpuDepthShaders {
             "layout(rgba32f, binding = 1) uniform writeonly highp image2D uProfileTexture;",
             "uniform int uPixelCount;",
             "uniform float uSubjectAlpha;",
-            "uniform float uConvergenceAlpha;",
             "uniform float uSpatialThresholdScale;",
             "uniform int uReferenceFrameAdvance;",
             "float depthPercentile(float percentile) {",
@@ -490,6 +495,17 @@ final class ClientSbsGpuDepthShaders {
             "        if (float(cumulative) >= target) return (float(bin) + 0.5) / 256.0;",
             "    }",
             "    return 255.5 / 256.0;",
+            "}",
+            // Must shape identically to the warp's shapedDepth(), or the anchor stops describing
+            // the plane the warp renders. Same single clamp, same order.
+            "float bestv2RawShift(float d) {",
+            "    d = clamp(d, 0.0, 1.0);",
+            "    return -1.39635933 + d * (2.776208766 + d * (21.04503417 + d *",
+            "        (-94.6673759 + d * (376.6610774 + d * (-645.141824 + d *",
+            "        (482.8701123 - 133.5645677 * d))))));",
+            "}",
+            "float shapedDepth(float d, float low, float inverse, float recenter) {",
+            "    return clamp((d - low) * inverse + recenter, 0.0, 1.0);",
             "}",
             "float subjectNearPercentile() {",
             "    float target = 0.35 * float(subjectWeightTotal);",
@@ -503,6 +519,10 @@ final class ClientSbsGpuDepthShaders {
             "void publishProfile() {",
             "    imageStore(uProfileTexture, ivec2(0, 0),",
             "            vec4(profileA.x, profileA.y, profileA.z, profileB.x));",
+            // profileB.z carries the shot-latched zero-plane anchor SHIFT (source pixels), not a
+            // depth. Storing the resolved shift stops later percentile/recenter motion from making
+            // convergence breathe. It replaced the legacy convergence EMA, which is identically
+            // zero under an explicit plane.
             "    imageStore(uProfileTexture, ivec2(1, 0),",
             "            vec4(profileB.y, profileB.z, profileC.z, float(stateFlags.y)));",
             "    imageStore(uProfileTexture, ivec2(2, 0),",
@@ -525,7 +545,7 @@ final class ClientSbsGpuDepthShaders {
             "    float stretchInverse = 1.0 / max(stretchHigh - stretchLow, 1.0e-4);",
             // A one-texel silhouette occupies a larger fraction of a coarser map. Normalize the
             // density back to Apollo's 434px-short-side calibration before adaptive-pop gating.
-            "    float edgeFraction = float(edgeCount) / float(uPixelCount)",
+            "    float edgeFraction = float(edgeCount) / (float(uPixelCount) * 256.0)",
             "            / max(uSpatialThresholdScale, 1.0);",
             // RESOLVE_RAW_RANGE already compared the current raw frame with the previous depth
             // before choosing this frame's effective normalization range.
@@ -555,18 +575,44 @@ final class ClientSbsGpuDepthShaders {
             "            : mix(profileB.x, subjectCandidate, uSubjectAlpha);",
             "    float stretchedSubject = clamp((subjectDepth - stretchLow) * stretchInverse, 0.0, 1.0);",
             "    float recenter = (0.5 - stretchedSubject) * 0.35;",
-            "    float convergenceTarget = (1.0 - subjectDepth) * 0.006;",
-            "    float convergence = !wasInitialized || hardCut ? convergenceTarget",
-            "            : mix(profileB.z, convergenceTarget, uConvergenceAlpha);",
-            "    float popStrength = wasInitialized ? profileC.y : 1.25;",
+            // Shot-latched explicit zero plane (Apollo `median`), replacing the retired per-frame
+            // legacy anchor. Resolve TWICE per shot: immediately, so a new shot never renders on
+            // the previous shot's plane, then once more when the depth field has settled --
+            // normalization settling perturbs 50-60% of texels on the first frames, and a bad latch
+            // here is unrecoverable until the next cut. Between those it must not move.
+            //
+            // The settle test is a CROSSING, not equality: the client advances sceneAge by
+            // uReferenceFrameAdvance per depth update, so it can step straight over the threshold.
+            "    int previousAge = stateCounters.x;",
+            "    bool settledNow = wasInitialized && !hardCut",
+            "            && previousAge < 8 && sceneAge >= 8;",
+            "    float anchorShift = profileB.z;",
+            "    if (!wasInitialized || hardCut || settledNow) {",
+            "        float medianDepth = depthPercentile(0.50);",
+            "        anchorShift = bestv2RawShift(",
+            "                shapedDepth(medianDepth, stretchLow, stretchInverse, recenter));",
+            "    }",
+            // Adaptive pop. Endpoints are calibrated against MEASURED weighted edge density:
+            // real footage spans roughly 0.038-0.245 with a median near 0.10, so the previous
+            // 0.007/0.016 pair saturated on every real scene and pinned the controller to its
+            // floor. The band is 1.20-2.00 (ratio 1.67); the previous 1.25-1.30 was a 1.04 ratio,
+            // below the noise floor of every metric that could judge it.
+            //
+            // Classify on a SETTLED field, never on the cut frame: normalization settling changes
+            // 50-60% of depth texels on the first updates, so a busy scene reads smoother than it
+            // is and would hold full pop for the whole shot. Hold the floor until the settle
+            // crossing, latch once, then stay bit-stable until the next cut.
+            "    float popStrength = wasInitialized ? profileC.y : 1.20;",
             "    if (!wasInitialized || hardCut) {",
-            "        float confidence = 1.0 - smoothstep(0.007, 0.016, edgeFraction);",
-            "        popStrength = mix(1.25, 1.30, confidence);",
+            "        popStrength = 1.20;",
+            "    } else if (settledNow) {",
+            "        float confidence = 1.0 - smoothstep(0.04, 0.20, edgeFraction);",
+            "        popStrength = mix(1.20, 2.00, confidence);",
             "    }",
             "    profileA = vec4(stretchLow, stretchHigh, stretchInverse, subjectCandidate);",
-            "    profileB = vec4(subjectDepth, recenter, convergence, edgeFraction);",
+            "    profileB = vec4(subjectDepth, recenter, anchorShift, edgeFraction);",
             "    float hardCutEvidence = externalCut ? 2.0 : internalCutEvidence;",
-            "    profileC = vec4(changeFraction, popStrength, popStrength / 1.25, hardCutEvidence);",
+            "    profileC = vec4(changeFraction, popStrength, popStrength / 1.20, hardCutEvidence);",
             "    stateFlags.y = 1u;",
             "    stateFlags.w = hardCut ? 1u : 0u;",
             "    if (hardCut) healthCounters.x = min(healthCounters.x + 1u, 0xfffffffeu);",
@@ -586,14 +632,14 @@ final class ClientSbsGpuDepthShaders {
             "    rangeState = vec4(0.0);",
             "    profileA = vec4(0.0, 1.0, 1.0, 0.5);",
             "    profileB = vec4(0.5, 0.0, 0.0, 0.0);",
-            "    profileC = vec4(0.0, 1.25, 1.0, 0.0);",
+            "    profileC = vec4(0.0, 1.20, 1.0, 0.0);",
             "    stateFlags = uvec4(0u);",
             "    stateCounters = ivec4(0);",
             "    healthCounters = uvec4(0u);",
             "    imageStore(uProfileTexture, ivec2(0, 0), vec4(0.0, 1.0, 1.0, 0.5));",
             "    imageStore(uProfileTexture, ivec2(1, 0), vec4(0.0, 0.0, 1.0, 0.0));",
             "    imageStore(uProfileTexture, ivec2(2, 0), vec4(0.0));",
-            "    imageStore(uProfileTexture, ivec2(3, 0), vec4(0.5, 1.25, 0.0, 0.0));",
+            "    imageStore(uProfileTexture, ivec2(3, 0), vec4(0.5, 1.20, 0.0, 0.0));",
             "}"
     );
 }

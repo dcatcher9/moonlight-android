@@ -186,19 +186,23 @@ final class ClientSbsShaders {
             "  vec4 stretch = texture2D(s_ProfileTexture, vec2(0.125, 0.5));",
             "  vec4 gpuStereo = texture2D(s_ProfileTexture, vec2(0.375, 0.5));",
             "  ready = gpuStereo.w > 0.5;",
+            // stereo = (shot-latched zero-plane anchor SHIFT in source pixels, adaptive pop
+            // ratio, unused). The anchor is resolved once per shot by RESOLVE_PROFILE through the
+            // same shapedDepth()/bestv2RawShift() path used below, so it describes exactly the
+            // plane this shader renders.
             "  shape = vec3(stretch.x, stretch.z, gpuStereo.x);",
-            "  stereo = vec3(stretch.w, gpuStereo.y, gpuStereo.z);",
+            "  stereo = vec3(gpuStereo.y, gpuStereo.z, 0.0);",
             "}",
             "float shapedDepth(float d, vec3 shape) {",
             "  return clamp((d - shape.x) * shape.y + shape.z, 0.0, 1.0);",
             "}",
-            "float depthParallax(float d, float anchorShift, float parallaxScale,",
-            "    float convergenceOffset, float limit, vec3 shape) {",
+            "float depthParallax(float d, float anchorShift, float parallaxScale, vec3 shape) {",
             "  float shift = bestv2RawShift(shapedDepth(d, shape));",
-            // Match Apollo's active production profile: legacy zero plane, subject_lock=0.5,
-            // followed by the Bestv2 trim/convergence offset and final pop/aspect scaling.
-            "  return clamp((shift - anchorShift) * parallaxScale + convergenceOffset,",
-            "      -limit, limit);",
+            // No convergence offset: it is identically zero under an explicit zero plane. No safety
+            // clamp either -- reach is 9.979 * (0.35/854) * strength * outputScale against the old
+            // 0.071 * outputScale bound, so outputScale cancels and binding needs strength > 17.36
+            // while the configured maximum is 2.0.
+            "  return (shift - anchorShift) * parallaxScale;",
             "}",
             "float sampleDepth(float x) {",
             "  return texture2D(s_DepthTexture, vec2(clamp(x, 0.0, 1.0),",
@@ -216,17 +220,12 @@ final class ClientSbsShaders {
             "  float parallaxWidth = min(sourceWidth, CALIBRATION_WIDTH);",
             "  float aspect = max(sourceWidth / max(u_sourceSize.y, 1.0), 0.0001);",
             "  float outputScale = clamp(REFERENCE_ASPECT / aspect, 0.5, 3.0);",
-            "  float popScale = 1.25 * max(stereoProfile.z, 1.0) * outputScale;",
-            "  float subjectShift = bestv2RawShift(shapedDepth(stereoProfile.x, profileShape));",
-            "  float anchorShift = 0.5 * subjectShift;",
+            "  float popScale = 1.20 * max(stereoProfile.y, 1.0) * outputScale;",
+            "  float anchorShift = stereoProfile.x;",
             "  float parallaxScale = (0.35 / parallaxWidth) * popScale;",
-            "  float convergenceBias = -0.004 + stereoProfile.y * 4.0 / parallaxWidth;",
-            "  float convergenceOffset = convergenceBias * popScale;",
-            "  float parallaxLimit = 0.071 * outputScale;",
-            // The maximum resolved convergence also keeps the inverse search radius conservative.
-            "  float convergenceGuard = max(stereoProfile.y, 0.0) * 4.0 / parallaxWidth;",
-            "  float radius = outputScale * 1.30 * (0.004 +",
-            "      12.51 * 0.35 / parallaxWidth + convergenceGuard);",
+            // Still the historical over-wide bound; the frame's exact reach replaces it in the
+            // probe-lattice change. It only ever costs probes, never correctness.
+            "  float radius = outputScale * 2.00 * (0.004 + 12.51 * 0.35 / parallaxWidth);",
             "  float startX = v_TexCoord.x - radius;",
             "  float stepX = 2.0 * radius / float(PROBE_STEPS);",
             "  float bestX = v_TexCoord.x;",
@@ -237,7 +236,7 @@ final class ClientSbsShaders {
             "  float previousDepth = sampleDepth(previousX);",
             "  float previousG = (previousX - v_TexCoord.x) -",
             "      u_eyeSign * depthParallax(previousDepth, anchorShift,",
-            "      parallaxScale, convergenceOffset, parallaxLimit, profileShape);",
+            "      parallaxScale, profileShape);",
             "  if (previousDepth < backgroundDepth) {",
             "    backgroundDepth = previousDepth; backgroundX = previousX;",
             "  }",
@@ -245,8 +244,7 @@ final class ClientSbsShaders {
             "    float x = startX + stepX * float(i);",
             "    float d = sampleDepth(x);",
             "    float g = (x - v_TexCoord.x) - u_eyeSign * depthParallax(d,",
-            "        anchorShift, parallaxScale, convergenceOffset, parallaxLimit,",
-            "        profileShape);",
+            "        anchorShift, parallaxScale, profileShape);",
             "    if ((previousG <= 0.0 && g >= 0.0) || (previousG >= 0.0 && g <= 0.0)) {",
             "      float denominator = g - previousG;",
             "      float t = abs(denominator) > 0.000001",
@@ -325,17 +323,19 @@ final class ClientSbsShaders {
             "  vec4 stretch = texture2D(s_ProfileTexture, vec2(0.125, 0.5));",
             "  vec4 gpuStereo = texture2D(s_ProfileTexture, vec2(0.375, 0.5));",
             "  ready = gpuStereo.w > 0.5;",
+            // stereo = (shot-latched zero-plane anchor SHIFT in source pixels, adaptive pop
+            // ratio, unused). The anchor is resolved once per shot by RESOLVE_PROFILE through the
+            // same shapedDepth()/bestv2RawShift() path used below, so it describes exactly the
+            // plane this shader renders.
             "  shape = vec3(stretch.x, stretch.z, gpuStereo.x);",
-            "  stereo = vec3(stretch.w, gpuStereo.y, gpuStereo.z);",
+            "  stereo = vec3(gpuStereo.y, gpuStereo.z, 0.0);",
             "}",
             "float shapedDepth(float d, vec3 shape) {",
             "  return clamp((d - shape.x) * shape.y + shape.z, 0.0, 1.0);",
             "}",
-            "float depthParallax(float d, float anchorShift, float parallaxScale,",
-            "    float convergenceOffset, float limit, vec3 shape) {",
+            "float depthParallax(float d, float anchorShift, float parallaxScale, vec3 shape) {",
             "  float shift = bestv2RawShift(shapedDepth(d, shape));",
-            "  return clamp((shift - anchorShift) * parallaxScale + convergenceOffset,",
-            "      -limit, limit);",
+            "  return (shift - anchorShift) * parallaxScale;",
             "}",
             "float sampleDepth(float x) {",
             "  return texture2D(s_DepthTexture, vec2(clamp(x, 0.0, 1.0),",
@@ -356,8 +356,7 @@ final class ClientSbsShaders {
             "  }",
             "}",
             "vec2 reprojectBothEyes(vec3 profileShape, float anchorShift,",
-            "    float parallaxScale, float convergenceOffset, float parallaxLimit,",
-            "    float radius) {",
+            "    float parallaxScale, float radius) {",
             "  float startX = v_TexCoord.x - radius;",
             "  float stepX = 2.0 * radius / float(PROBE_STEPS);",
             "  float leftBestX = v_TexCoord.x;",
@@ -369,7 +368,7 @@ final class ClientSbsShaders {
             "  float previousX = startX;",
             "  float previousDepth = sampleDepth(previousX);",
             "  float previousParallax = depthParallax(previousDepth, anchorShift,",
-            "      parallaxScale, convergenceOffset, parallaxLimit, profileShape);",
+            "      parallaxScale, profileShape);",
             "  float previousDelta = previousX - v_TexCoord.x;",
             "  vec2 previousG = vec2(previousDelta + previousParallax,",
             "      previousDelta - previousParallax);",
@@ -380,8 +379,7 @@ final class ClientSbsShaders {
             "    float x = startX + stepX * float(i);",
             "    float d = sampleDepth(x);",
             "    float parallax = depthParallax(d,",
-            "        anchorShift, parallaxScale, convergenceOffset, parallaxLimit,",
-            "        profileShape);",
+            "        anchorShift, parallaxScale, profileShape);",
             "    float delta = x - v_TexCoord.x;",
             "    vec2 g = vec2(delta + parallax, delta - parallax);",
             "    updateFrontmostCrossing(previousG.x, g.x, previousX, x,",
@@ -407,20 +405,16 @@ final class ClientSbsShaders {
             "  float parallaxWidth = min(sourceWidth, CALIBRATION_WIDTH);",
             "  float aspect = max(sourceWidth / max(u_sourceSize.y, 1.0), 0.0001);",
             "  float outputScale = clamp(REFERENCE_ASPECT / aspect, 0.5, 3.0);",
-            "  float popScale = 1.25 * max(stereoProfile.z, 1.0) * outputScale;",
-            "  float subjectShift = bestv2RawShift(shapedDepth(stereoProfile.x, profileShape));",
-            "  float anchorShift = 0.5 * subjectShift;",
+            "  float popScale = 1.20 * max(stereoProfile.y, 1.0) * outputScale;",
+            "  float anchorShift = stereoProfile.x;",
             "  float parallaxScale = (0.35 / parallaxWidth) * popScale;",
-            "  float convergenceBias = -0.004 + stereoProfile.y * 4.0 / parallaxWidth;",
-            "  float convergenceOffset = convergenceBias * popScale;",
-            "  float parallaxLimit = 0.071 * outputScale;",
-            "  float convergenceGuard = max(stereoProfile.y, 0.0) * 4.0 / parallaxWidth;",
-            "  float radius = outputScale * 1.30 * (0.004 +",
-            "      12.51 * 0.35 / parallaxWidth + convergenceGuard);",
+            // Still the historical over-wide bound; the frame's exact reach replaces it in the
+            // probe-lattice change. It only ever costs probes, never correctness.
+            "  float radius = outputScale * 2.00 * (0.004 + 12.51 * 0.35 / parallaxWidth);",
             // Store small signed displacements instead of absolute source coordinates. RG16F then
             // retains sub-pixel precision across the full eye rather than quantizing near x=1.
             "  vec2 sourceXs = clamp(reprojectBothEyes(profileShape, anchorShift,",
-            "      parallaxScale, convergenceOffset, parallaxLimit, radius), 0.0, 1.0);",
+            "      parallaxScale, radius), 0.0, 1.0);",
             "  gl_FragColor = vec4(sourceXs - v_TexCoord.xx, 0.0, 1.0);",
             "}");
 
