@@ -35,6 +35,15 @@ android {
         noCompress += ['xz']
     }
 
+    sourceSets {
+        main {
+            // Prebuilt accelerator libraries must be flavor-scoped. In particular, keeping this
+            // shared source set empty prevents experimental QNN/QAIRT payloads from entering both
+            // the root and non-root APKs when they are dropped into src/main/jniLibs locally.
+            jniLibs.srcDirs = []
+        }
+    }
+
     productFlavors {
         root {
             // Android O has native mouse capture, so don't show the rooted
@@ -109,6 +118,12 @@ android {
             // The optional native LiteRT bridge resolves its accelerator libraries from
             // ApplicationInfo.nativeLibraryDir, which must be a real filesystem directory.
             useLegacyPackaging = true
+            // Galaxy XR does not expose the Hexagon NPU to third-party app UIDs. Keep the
+            // unsupported Qualcomm experiment out of every shipping APK even if a dependency or
+            // local SDK copy supplies these libraries again.
+            excludes.add('**/libLiteRt*Qualcomm.so')
+            excludes.add('**/libQairt*.so')
+            excludes.add('**/libQnn*.so')
             // The arcore-openxr artifact bundles both the arcore and runtime OpenXR native
             // libs, which collide with the ones from runtime-openxr. With all androidx.xr.*
             // pinned to alpha16 (see deps below) the duplicates are the same version, so

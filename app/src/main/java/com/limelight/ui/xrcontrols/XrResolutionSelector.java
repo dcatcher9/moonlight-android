@@ -19,6 +19,8 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.widget.AppCompatButton;
 import androidx.core.view.ViewCompat;
 
+import com.limelight.preferences.XrResolutionOptions;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -29,34 +31,43 @@ import java.util.Objects;
  *
  * <p>Every option is an ordinary Android button, so gaze hover, focus, pinch, controller, and
  * accessibility input all follow the hosted-view path. The selector is a flow layout rather than
- * a horizontal scroller: cards stay on one row when they fit and wrap down to one card per row on
- * narrow panels.</p>
+ * a horizontal scroller: landscape cards form the first group and portrait cards always begin on
+ * the next row. Either group can wrap further on a narrow panel.</p>
  */
 public final class XrResolutionSelector extends ViewGroup {
-    public static final String RESOLUTION_1080P = "1920x1080";
-    public static final String RESOLUTION_1440P = "2560x1440";
-    public static final String RESOLUTION_4K = "3840x2160";
-    public static final String RESOLUTION_UW_1080P = "2560x1080";
-    public static final String RESOLUTION_UW_1440P = "3440x1440";
-    public static final String RESOLUTION_5K2K = "5120x2160";
+    public static final String RESOLUTION_1080P = XrResolutionOptions.RESOLUTION_1080P;
+    public static final String RESOLUTION_1440P = XrResolutionOptions.RESOLUTION_1440P;
+    public static final String RESOLUTION_4K = XrResolutionOptions.RESOLUTION_4K;
+    public static final String RESOLUTION_UW_1080P = XrResolutionOptions.RESOLUTION_UW_1080P;
+    public static final String RESOLUTION_UW_1440P =
+            XrResolutionOptions.RESOLUTION_UW_1440P;
+    public static final String RESOLUTION_5K2K = XrResolutionOptions.RESOLUTION_5K2K;
+
+    public static final String RESOLUTION_1080P_PORTRAIT =
+            XrResolutionOptions.RESOLUTION_1080P_PORTRAIT;
+    public static final String RESOLUTION_1440P_PORTRAIT =
+            XrResolutionOptions.RESOLUTION_1440P_PORTRAIT;
+    public static final String RESOLUTION_4K_PORTRAIT =
+            XrResolutionOptions.RESOLUTION_4K_PORTRAIT;
+    public static final String RESOLUTION_UW_1080P_PORTRAIT =
+            XrResolutionOptions.RESOLUTION_UW_1080P_PORTRAIT;
+    public static final String RESOLUTION_UW_1440P_PORTRAIT =
+            XrResolutionOptions.RESOLUTION_UW_1440P_PORTRAIT;
+    public static final String RESOLUTION_5K2K_PORTRAIT =
+            XrResolutionOptions.RESOLUTION_5K2K_PORTRAIT;
 
     /**
-     * Two aspect families, widescreen first then ultrawide, each in ascending size order. The flow
-     * layout wraps them into a clean 3 x 2 grid on the panel, so the row break falls exactly on the
-     * family boundary and the grouping reads without needing a heading.
+     * Existing landscape families first, followed by their portrait counterparts in the same
+     * deterministic order. Keeping the original six cards first preserves their established
+     * placement and cycle order.
      *
-     * <p>The family matters beyond looks: in Client SBS the 16:9 entries select the
-     * {@code ASPECT_16_9} depth bucket and the 21:9 entries select {@code ASPECT_21_9}, so moving
-     * between families crosses a bucket and reconnects, while moving within one stays live.</p>
+     * <p>The shared source is also consumed by every presenter's settings model, so a card cannot
+     * silently exist in only the global picker or only one presentation mode.</p>
      */
-    private static final ResolutionOption[] STANDARD_OPTIONS = {
-            new ResolutionOption(RESOLUTION_1080P, "1080p", 1920, 1080, false),
-            new ResolutionOption(RESOLUTION_1440P, "1440p", 2560, 1440, false),
-            new ResolutionOption(RESOLUTION_4K, "4K", 3840, 2160, false),
-            new ResolutionOption(RESOLUTION_UW_1080P, "UW 1080p", 2560, 1080, false),
-            new ResolutionOption(RESOLUTION_UW_1440P, "UW 1440p", 3440, 1440, false),
-            new ResolutionOption(RESOLUTION_5K2K, "5K2K", 5120, 2160, false),
-    };
+    private static final List<XrResolutionOptions.Option> STANDARD_OPTIONS =
+            XrResolutionOptions.standardOptions();
+    private static final int PORTRAIT_GROUP_START_INDEX =
+            firstPortraitOptionIndex(STANDARD_OPTIONS);
 
     public interface OnResolutionSelectedListener {
         /** Returns true when the explicit resolution ID is accepted. */
@@ -172,8 +183,9 @@ public final class XrResolutionSelector extends ViewGroup {
         visibleOptions.clear();
         cards.clear();
 
-        for (ResolutionOption option : STANDARD_OPTIONS) {
-            addOption(option);
+        for (XrResolutionOptions.Option option : STANDARD_OPTIONS) {
+            addOption(new ResolutionOption(
+                    option.id, option.label, option.width, option.height, false));
         }
         if (isCustomId(selectedResolutionId)) {
             addOption(customOption(selectedResolutionId));
@@ -234,12 +246,7 @@ public final class XrResolutionSelector extends ViewGroup {
     }
 
     private static boolean isStandardId(String id) {
-        for (ResolutionOption option : STANDARD_OPTIONS) {
-            if (option.id.equals(id)) {
-                return true;
-            }
-        }
-        return false;
+        return XrResolutionOptions.isStandardId(id);
     }
 
     @Nullable
@@ -304,7 +311,8 @@ public final class XrResolutionSelector extends ViewGroup {
             int nextWidth = lineHasChild
                     ? lineWidth + horizontalSpacing + childWidth : childWidth;
 
-            if (lineHasChild && nextWidth > availableWidth) {
+            if (lineHasChild
+                    && (i == PORTRAIT_GROUP_START_INDEX || nextWidth > availableWidth)) {
                 widestLine = Math.max(widestLine, lineWidth);
                 contentHeight += lineHeight + verticalSpacing;
                 lineWidth = childWidth;
@@ -349,9 +357,11 @@ public final class XrResolutionSelector extends ViewGroup {
             int childWidth = child.getMeasuredWidth();
             int childHeight = child.getMeasuredHeight();
             int occupiedWidth = childWidth + params.leftMargin + params.rightMargin;
-            boolean needsWrap = lineHasChild && (rtl
+            boolean needsWrap = lineHasChild
+                    && (i == PORTRAIT_GROUP_START_INDEX
+                    || (rtl
                     ? x - horizontalSpacing - occupiedWidth < contentLeft
-                    : x + horizontalSpacing + occupiedWidth > contentRight);
+                    : x + horizontalSpacing + occupiedWidth > contentRight));
             if (needsWrap) {
                 x = rtl ? contentRight : contentLeft;
                 y += lineHeight + verticalSpacing;
@@ -378,6 +388,16 @@ public final class XrResolutionSelector extends ViewGroup {
                     childHeight + params.topMargin + params.bottomMargin);
             lineHasChild = true;
         }
+    }
+
+    private static int firstPortraitOptionIndex(
+            List<XrResolutionOptions.Option> options) {
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i).portrait) {
+                return i;
+            }
+        }
+        return Integer.MAX_VALUE;
     }
 
     @Override
@@ -420,22 +440,23 @@ public final class XrResolutionSelector extends ViewGroup {
         }
 
         /**
-         * Banded by height, the axis the two aspect families share.
+         * Banded by the shorter pixel axis, which an orientation pair shares.
          *
          * <p>Total pixel count would rank UW 1080p above 1080p and below 1440p, which reads as a
-         * tier it is not: the ultrawide entries are the same vertical class as their widescreen
-         * namesakes and only differ in width, which the glyph already shows through its aspect.
-         * Height banding keeps the cue monotonic within each family and consistent across them,
-         * and leaves the retained 16:9 cards on exactly the levels they had before.</p>
+         * tier it is not: the ultrawide entries are the same short-axis class as their widescreen
+         * namesakes and only differ in long-axis extent, which the glyph already shows through its
+         * aspect. Short-axis banding also gives every portrait counterpart the same density cue as
+         * its landscape source and leaves all retained landscape cards unchanged.</p>
          */
         int densityLevel() {
-            if (height <= 720) {
+            int shortAxis = Math.min(width, height);
+            if (shortAxis <= 720) {
                 return 1;
             }
-            if (height <= 1080) {
+            if (shortAxis <= 1080) {
                 return 2;
             }
-            if (height <= 1440) {
+            if (shortAxis <= 1440) {
                 return 3;
             }
             return 4;

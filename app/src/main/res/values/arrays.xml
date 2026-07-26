@@ -153,6 +153,12 @@
         <item>@string/resolution_uw_1080p</item>
         <item>@string/resolution_uw_1440p</item>
         <item>@string/resolution_5k2k</item>
+        <item>@string/xr_resolution_1080p_portrait</item>
+        <item>@string/xr_resolution_1440p_portrait</item>
+        <item>@string/xr_resolution_4k_portrait</item>
+        <item>@string/xr_resolution_uw_1080p_portrait</item>
+        <item>@string/xr_resolution_uw_1440p_portrait</item>
+        <item>@string/xr_resolution_5k2k_portrait</item>
     </string-array>
     <string-array name="xr_resolution_values" translatable="false">
         <item>1920x1080</item>
@@ -161,6 +167,12 @@
         <item>2560x1080</item>
         <item>3440x1440</item>
         <item>5120x2160</item>
+        <item>1080x1920</item>
+        <item>1440x2560</item>
+        <item>2160x3840</item>
+        <item>1080x2560</item>
+        <item>1440x3440</item>
+        <item>2160x5120</item>
     </string-array>
 
     <string-array name="xr_fps_names">

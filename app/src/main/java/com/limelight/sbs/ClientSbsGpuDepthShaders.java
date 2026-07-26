@@ -22,6 +22,9 @@ final class ClientSbsGpuDepthShaders {
             String.format(java.util.Locale.US, "%.2f", ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR);
     private static final String POP_CEILING =
             String.format(java.util.Locale.US, "%.2f", ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING);
+    private static final String UNCLASSIFIED_EDGE = String.format(
+            java.util.Locale.US, "%.1f",
+            ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE);
 
     private static String lines(String... source) {
         return String.join("\n", source) + "\n";
@@ -37,12 +40,35 @@ final class ClientSbsGpuDepthShaders {
             "layout(std430, binding = 3) buffer ProcessorState {",
             "    vec4 rangeState;",      // frame low/high, EMA low/high
             "    vec4 profileA;",        // stretch low/high/inverse, subject candidate
-            "    vec4 profileB;",        // subject, recenter, zero-plane anchor shift, edge fraction
+            "    vec4 profileB;",        // subject, recenter, anchor shift, settle-latched edge
             "    vec4 profileC;",        // change fraction, pop, pop ratio, cut evidence
-            "    uvec4 stateFlags;",     // range init, profile init, first frame, hard cut
-            "    ivec4 stateCounters;",  // scene age, cut state, valid samples, frame number
+            "    uvec4 stateFlags;",     // range init, profile init, first frame, shot-relatch pulse
+            "    ivec4 stateCounters;",  // profile age, cut/hysteresis state, valid samples, frame number
             "    uvec4 healthCounters;", // hard cuts, external requests, empty, collapsed
+            "    vec2 cutStateAux;",      // geometry-change EMA, initialized
+            "    ivec2 cutStateCounters;", // valid-depth-update age, reserved
             "};"
+    );
+
+    private static final String SHOT_CUT_STATE_CONSTANTS = lines(
+            "const int CUT_STATE_SETTLED = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_SETTLED + ";",
+            "const int CUT_STATE_GEOMETRY_ARMED = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_ARMED + ";",
+            "const int CUT_STATE_APPEARANCE_ARMED = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_APPEARANCE_ARMED + ";",
+            "const int CUT_STATE_GEOMETRY_ONE_LOW = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_ONE_LOW + ";",
+            "const int CUT_STATE_APPEARANCE_ONE_QUIET = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_APPEARANCE_ONE_QUIET + ";",
+            "const int CUT_STATE_GEOMETRY_LATCHED = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_LATCHED + ";",
+            "const int CUT_STATE_APPEARANCE_LATCHED = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_APPEARANCE_LATCHED + ";",
+            "const int CUT_STATE_READY = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_READY + ";",
+            "const int CUT_STATE_LATCHED = "
+                    + ClientSbsShotCutPolicy.CUT_STATE_LATCHED + ";"
     );
 
     private static final String EXTERNAL_SCENE_CUT = lines(
@@ -53,9 +79,28 @@ final class ClientSbsGpuDepthShaders {
             "};",
             "uniform int uExternalSceneCut;",
             "uniform uint uExternalSceneCutWordOffset;",
+            "const uint SCENE_EVIDENCE_APPEARANCE = "
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE + "u;",
+            "const uint SCENE_EVIDENCE_EXPOSURE_LIKE = "
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE + "u;",
+            "uint externalSceneEvidence() {",
+            // The explicit CPU request retains its historical cut semantics. Only the automatic
+            // GPU classifier can assert the exposure-like geometry veto. Normalize to one typed
+            // classification; appearance wins malformed dual-bit input as a fail-safe.
+            "    uint evidence = (uExternalSceneCut != 0",
+            "            ? SCENE_EVIDENCE_APPEARANCE : 0u)",
+            "            | externalSceneCutWords[uExternalSceneCutWordOffset];",
+            "    if ((evidence & SCENE_EVIDENCE_APPEARANCE) != 0u)",
+            "        return SCENE_EVIDENCE_APPEARANCE;",
+            "    if ((evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u)",
+            "        return SCENE_EVIDENCE_EXPOSURE_LIKE;",
+            "    return 0u;",
+            "}",
             "bool externalSceneCutRequested() {",
-            "    return uExternalSceneCut != 0",
-            "            || externalSceneCutWords[uExternalSceneCutWordOffset] != 0u;",
+            "    return (externalSceneEvidence() & SCENE_EVIDENCE_APPEARANCE) != 0u;",
+            "}",
+            "bool externalExposureLikeTransition() {",
+            "    return externalSceneEvidence() == SCENE_EVIDENCE_EXPOSURE_LIKE;",
             "}"
     );
 
@@ -258,7 +303,9 @@ final class ClientSbsGpuDepthShaders {
                 "            float current = clamp((rawValue - rangeState.z) / denominator,",
                 "                    0.0, 1.0);",
                 "            float previous = texelFetch(uPreviousDepth, point, 0).r;",
-                "            localChangeCount[lane] = abs(current - previous) >= 0.12",
+                "            localChangeCount[lane] = abs(current - previous) >= "
+                        + ClientSbsShotCutPolicy.glsl(
+                        ClientSbsShotCutPolicy.RAW_PIXEL_DEPTH_DELTA),
                 "                    ? 1u : 0u;",
                 "        }",
                 "    }",
@@ -281,9 +328,41 @@ final class ClientSbsGpuDepthShaders {
     static final String RAW_HISTOGRAM = rawHistogram(true);
 
     static final String RESOLVE_RAW_RANGE = HEADER + RAW_STATS_FOR_RESOLVE + STATE
-            + EXTERNAL_SCENE_CUT + lines(
+            + SHOT_CUT_STATE_CONSTANTS + EXTERNAL_SCENE_CUT + lines(
             "layout(local_size_x = 1) in;",
             "uniform float uRangeAlpha;",
+            "const float STANDALONE_DEPTH_CHANGE_ENTER = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER) + ";",
+            "const float STANDALONE_DEPTH_CHANGE_WITH_SHIFT_ENTER = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_WITH_SHIFT_ENTER) + ";",
+            "const float STANDALONE_DISTRIBUTION_SHIFT_ENTER = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.STANDALONE_DISTRIBUTION_SHIFT_ENTER) + ";",
+            "const float APPEARANCE_DEPTH_CHANGE_ENTER = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.APPEARANCE_DEPTH_CHANGE_ENTER) + ";",
+            "const float APPEARANCE_DEPTH_CHANGE_WITH_SHIFT_ENTER = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.APPEARANCE_DEPTH_CHANGE_WITH_SHIFT_ENTER) + ";",
+            "const float APPEARANCE_DISTRIBUTION_SHIFT_ENTER = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.APPEARANCE_DISTRIBUTION_SHIFT_ENTER) + ";",
+            "const float NOVEL_GEOMETRY_CHANGE_MINIMUM = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.NOVEL_GEOMETRY_CHANGE_MINIMUM) + ";",
+            "const float NOVEL_GEOMETRY_CHANGE_DELTA = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.NOVEL_GEOMETRY_CHANGE_DELTA) + ";",
+            "const float NOVEL_GEOMETRY_CHANGE_RATIO = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.NOVEL_GEOMETRY_CHANGE_RATIO) + ";",
+            "const float GEOMETRY_BASELINE_ALPHA = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.GEOMETRY_BASELINE_ALPHA) + ";",
+            "const int CUT_SETTLE_VALID_DEPTH_UPDATES = "
+                    + ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES + ";",
             // Take the crossing bin's OUTER edge, not its centre. A percentile only excludes its
             // nominal fraction when the distribution is smooth across that bin; when a large atom
             // sits there -- sky, a far wall, a flat background -- a centred bound cuts through the
@@ -302,24 +381,38 @@ final class ClientSbsGpuDepthShaders {
             "    }",
             "    return minimumValue + (255.0 + edge) * binWidth;",
             "}",
-            "void applyExternalCutRange() {",
-            "    if (stateFlags.x != 0u && externalSceneCutRequested()) {",
-            "        rangeState.zw = rangeState.xy;",
-            "        stateFlags.w = 1u;",
-            "    }",
-            "}",
             "void main() {",
             "    stateFlags.z = 0u;",
-            // A hard-cut bit describes this frame only. It is re-established below from depth
-            // evidence or the external cut before temporal filtering begins.
+            // A shot-relatch bit describes this accepted depth frame only. Raw color evidence may
+            // still reset the temporal filter, but it cannot move the zero plane or pop latch until
+            // this pass sees moderate depth/geometry corroboration while the shot detector is armed.
             "    stateFlags.w = 0u;",
             "    profileC.x = 0.0;",
-            "    profileC.w = 0.0;",
+            // The color frame can be accepted into inference even when that inference produces no
+            // valid depth. Preserve its typed classification in the sign of the otherwise-zero
+            // valid-sample counter, then offer it to the next valid accepted depth update. A
+            // classification from the exact CURRENT color frame supersedes stale pending state;
+            // pending is consulted only when the current frame has neither classification.
+            "    uint currentSceneEvidence = externalSceneEvidence();",
+            "    uint pendingSceneEvidence = stateCounters.z == -1",
+            "            ? SCENE_EVIDENCE_APPEARANCE",
+            "            : (stateCounters.z == -2 ? SCENE_EVIDENCE_EXPOSURE_LIKE : 0u);",
+            "    uint selectedSceneEvidence = currentSceneEvidence != 0u",
+            "            ? currentSceneEvidence : pendingSceneEvidence;",
+            // externalSceneEvidence() already normalizes current input, and pending sentinels are
+            // typed, but decode defensively as well: appearance/manual authority wins even if a
+            // malformed dual-bit word ever reaches this phase.
+            "    bool externalEvidence =",
+            "            (selectedSceneEvidence & SCENE_EVIDENCE_APPEARANCE) != 0u;",
+            "    bool exposureLikeTransition = !externalEvidence",
+            "            && (selectedSceneEvidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u;",
+            // Preserve request diagnostics even when an invalid depth frame cannot corroborate it.
+            "    profileC.w = externalEvidence ? 2.0 : 0.0;",
             "    stateCounters.z = int(rawValidCount);",
             "    if (rawValidCount == 0u) {",
+            "        stateCounters.z = externalEvidence ? -1",
+            "                : (exposureLikeTransition ? -2 : 0);",
             "        healthCounters.z = min(healthCounters.z + 1u, 0xfffffffeu);",
-            // Keep the previous frame's raw range behavior for an empty external-cut frame.
-            "        applyExternalCutRange();",
             "        return;",
             "    }",
             "    float minimumValue = float(rawMinimum) / 65536.0;",
@@ -340,6 +433,11 @@ final class ClientSbsGpuDepthShaders {
             "    if (frameHigh - frameLow <= collapseScale * 1.0e-5)",
             "        healthCounters.w = min(healthCounters.w + 1u, 0xfffffffeu);",
             "    bool firstFrame = stateFlags.x == 0u;",
+            // The shot detector counts actual valid depth updates, not wall time. Advance before
+            // deciding so the eighth post-cut update matches Apollo's refractory boundary. The
+            // profile's separate reference-frame age remains responsible for pop/anchor settling.
+            "    int validDepthUpdateAge = stateFlags.y != 0u",
+            "            ? min(max(cutStateCounters.x, 0), 65534) + 1 : 0;",
             "    float previousRange = max(rangeState.w - rangeState.z, 1.0e-6);",
             "    float distributionShift = firstFrame ? 0.0 : max(",
             "            abs(frameLow - rangeState.z), abs(frameHigh - rangeState.w))",
@@ -347,12 +445,51 @@ final class ClientSbsGpuDepthShaders {
             "    float changeFraction = float(rawPadding) / float(rawValidCount);",
             "    float internalCutEvidence = clamp(0.80 * changeFraction",
             "            + 0.20 * min(distributionShift / 0.15, 1.0), 0.0, 1.0);",
+            "    int cutState = stateCounters.y;",
+            "    bool settled = (cutState & CUT_STATE_SETTLED) != 0;",
+            "    bool geometryArmed = settled",
+            "            && (cutState & CUT_STATE_GEOMETRY_ARMED) != 0;",
+            "    bool appearanceArmed = settled",
+            "            && (cutState & CUT_STATE_APPEARANCE_ARMED) != 0;",
+            "    bool geometryLatched = settled",
+            "            && (cutState & CUT_STATE_GEOMETRY_LATCHED) != 0;",
             // Decide broad depth cuts before mapping this frame. This is the same-frame phase
             // boundary that prevents a new scene from being normalized with the old scene's EMA.
             "    bool internalCut = !firstFrame && stateFlags.y != 0u",
-            "            && stateCounters.y > 0 && (changeFraction >= 0.58",
-            "            || (changeFraction >= 0.42 && distributionShift >= 0.10));",
-            "    if (firstFrame || internalCut) {",
+            "            && geometryArmed && !exposureLikeTransition",
+            "            && (changeFraction >= STANDALONE_DEPTH_CHANGE_ENTER",
+            "            || (changeFraction >= STANDALONE_DEPTH_CHANGE_WITH_SHIFT_ENTER",
+            "            && distributionShift >= STANDALONE_DISTRIBUTION_SHIFT_ENTER));",
+            // Appearance is a high-recall qualified structural proposal, not authority to relatch
+            // shot geometry. The proposal is qualified on the model-input color grid before it
+            // reaches this shader.
+            // A weaker depth threshold than the standalone detector preserves similar-depth cuts,
+            // while brightness-only transitions cannot move the zero plane.
+            "    bool colorGeometryCorroborated = changeFraction >= APPEARANCE_DEPTH_CHANGE_ENTER",
+            "            || (changeFraction >= APPEARANCE_DEPTH_CHANGE_WITH_SHIFT_ENTER",
+            "            && distributionShift >= APPEARANCE_DISTRIBUTION_SHIFT_ENTER);",
+            "    bool externalCut = !firstFrame && stateFlags.y != 0u",
+            "            && appearanceArmed && externalEvidence && colorGeometryCorroborated;",
+            // A latched detector must ignore persistent evidence without becoming permanently blind.
+            // Compare against a slow per-update EMA and allow only a materially new geometry spike.
+            "    bool novelLatchedGeometryCut = !firstFrame && stateFlags.y != 0u",
+            "            && geometryLatched && cutStateAux.y > 0.5",
+            "            && !exposureLikeTransition",
+            "            && validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES",
+            "            && changeFraction >= NOVEL_GEOMETRY_CHANGE_MINIMUM",
+            "            && (changeFraction >= cutStateAux.x + NOVEL_GEOMETRY_CHANGE_DELTA",
+            "            || changeFraction >= cutStateAux.x * NOVEL_GEOMETRY_CHANGE_RATIO);",
+            "    bool acceptedCut = internalCut || externalCut || novelLatchedGeometryCut;",
+            // Reset on each accepted shot, then track persistent evidence slowly. Updating only in
+            // this valid-depth path means an all-invalid inference cannot age the novelty baseline.
+            "    if (cutStateAux.y <= 0.5 || acceptedCut) {",
+            "        cutStateAux.x = changeFraction;",
+            "        cutStateAux.y = 1.0;",
+            "    } else {",
+            "        cutStateAux.x = mix(cutStateAux.x, changeFraction,",
+            "                GEOMETRY_BASELINE_ALPHA);",
+            "    }",
+            "    if (firstFrame || acceptedCut) {",
             "        rangeState.zw = vec2(frameLow, frameHigh);",
             "        stateFlags.x = 1u;",
             "    } else {",
@@ -368,12 +505,12 @@ final class ClientSbsGpuDepthShaders {
             "    }",
             "    rangeState.xy = vec2(frameLow, frameHigh);",
             "    stateFlags.z = firstFrame ? 1u : 0u;",
-            "    stateFlags.w = internalCut ? 1u : 0u;",
+            "    stateFlags.w = acceptedCut ? 1u : 0u;",
+            "    cutStateCounters.x = acceptedCut ? 0 : validDepthUpdateAge;",
             "    profileC.x = changeFraction;",
-            "    profileC.w = internalCutEvidence;",
-            // This runs in the same single invocation that owns rangeState, so no additional
-            // dispatch or cross-workgroup ordering is required.
-            "    applyExternalCutRange();",
+            // Two is the existing GPU/health sentinel for an observed external request. The
+            // one-frame stateFlags.w pulse separately says whether geometry accepted it.
+            "    profileC.w = externalEvidence ? 2.0 : internalCutEvidence;",
             "}"
     );
 
@@ -409,8 +546,11 @@ final class ClientSbsGpuDepthShaders {
                 "        return;",
                 "    }",
                 "    float outputDepth = current;",
+                // profileC.w also carries an external proposal across an all-invalid accepted
+                // depth result. Reset history on that first valid update even when moderate depth
+                // corroboration is absent and the proposal therefore cannot relatch shot state.
                 "    bool resetHistory = stateFlags.z != 0u || stateFlags.w != 0u",
-                "            || externalSceneCutRequested();",
+                "            || profileC.w > 1.5 || externalSceneCutRequested();",
                 "    if (!resetHistory) {",
                 "        float change = abs(current - previous);",
                 "        float gradient = 0.0;",
@@ -465,7 +605,8 @@ final class ClientSbsGpuDepthShaders {
                 "                + (normalizedY / 0.55) * (normalizedY / 0.55)));",
                 // Express finite differences in Apollo's aspect-matched reference-texel units
                 // before classifying edges or suppressing them from the subject histogram.
-                "        float referenceGradient = gradient / max(uSpatialThresholdScale, 1.0);",
+                "        float spatialScale = max(uSpatialThresholdScale, 1.0);",
+                "        float referenceGradient = gradient / spatialScale;",
                 "        float sigmoidValue = 1.0 / (1.0 + exp(-10.0 * (referenceGradient - 0.025)));",
                 "        uint weight = uint(centerWeight * (1.0 - sigmoidValue) * 1024.0 + 0.5);",
                 "        uint bin = min(uint(value * 256.0), 255u);",
@@ -476,9 +617,12 @@ final class ClientSbsGpuDepthShaders {
                 // Weight the edge statistic by gradient MAGNITUDE in fixed point, not a bare
                 // threshold count: a violent silhouette must outweigh a marginal one, or the risk
                 // statistic cannot tell a soft gradient field from a shattered one. Matches
-                // Apollo's min(grad/0.02, 8) * 256, evaluated on the grid-normalized gradient.
+                // Apollo's min(grad/0.02, 8) * 256. Below the cap, referenceGradient cancels the
+                // coarser grid's larger boundary-pixel fraction. Once Apollo's weight saturates,
+                // scale the cap itself or that fraction would inflate risk by spatialScale.
                 "        uint edgeWeight = referenceGradient >= 0.02",
-                "                ? uint(min(referenceGradient * 50.0, 8.0) * 256.0 + 0.5) : 0u;",
+                "                ? uint(min(referenceGradient * 50.0, 8.0 / spatialScale)",
+                "                * 256.0 + 0.5) : 0u;",
                 "        localTotals[lane] = uvec2(edgeWeight, weight);",
                 "    }",
                 "    barrier();",
@@ -503,14 +647,20 @@ final class ClientSbsGpuDepthShaders {
     static final String ACCUMULATE_PROFILE = accumulateProfile(true);
 
     static final String RESOLVE_PROFILE = HEADER + PROFILE_STATS + STATE
-            + EXTERNAL_SCENE_CUT + lines(
+            + SHOT_CUT_STATE_CONSTANTS + EXTERNAL_SCENE_CUT + lines(
             "layout(local_size_x = 1) in;",
             "layout(rgba32f, binding = 1) uniform writeonly highp image2D uProfileTexture;",
             "uniform int uPixelCount;",
             "uniform float uSubjectAlpha;",
             "uniform float uBandAlpha;",
-            "uniform float uSpatialThresholdScale;",
             "uniform int uReferenceFrameAdvance;",
+            "const float GEOMETRY_CHANGE_EXIT = "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsShotCutPolicy.GEOMETRY_CHANGE_EXIT) + ";",
+            "const int CUT_SETTLE_VALID_DEPTH_UPDATES = "
+                    + ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES + ";",
+            "const int PROFILE_SETTLE_REFERENCE_FRAMES = "
+                    + ClientSbsGpuDepthProcessor.PROFILE_SETTLE_REFERENCE_FRAMES + ";",
             // `edge` selects the crossing bin's lower (0.0), centre (0.5) or upper (1.0) bound.
             // Band BOUNDS use outer edges so a large atom is not cut through; the median is a point
             // estimate, not a bound, so it keeps the centre.
@@ -574,24 +724,30 @@ final class ClientSbsGpuDepthShaders {
             // same over-clipping and charges the band interior for it.
             "    float stretchLow = depthPercentile(0.02, 0.0);",
             "    float stretchHigh = depthPercentile(0.98, 1.0);",
-            // A one-texel silhouette occupies a larger fraction of a coarser map. Normalize the
-            // density back to Apollo's 434px-short-side calibration before adaptive-pop gating.
-            "    float edgeFraction = float(edgeCount) / (float(uPixelCount) * 256.0)",
-            "            / max(uSpatialThresholdScale, 1.0);",
+            // `edgeCount` already carries cap-aware reference-grid weighting: on a coarser grid a
+            // one-texel boundary occupies `scale` times the pixel fraction while both its linear
+            // weight and its saturation cap are divided by that scale. Dividing this density again
+            // would normalize twice and under-report risk relative to Apollo.
+            "    float edgeFraction = float(edgeCount) / (float(uPixelCount) * 256.0);",
             // RESOLVE_RAW_RANGE already compared the current raw frame with the previous depth
             // before choosing this frame's effective normalization range.
             "    float changeFraction = profileC.x;",
             "    bool wasInitialized = stateFlags.y != 0u;",
-            "    int sceneAge = wasInitialized ? min(stateCounters.x",
+            // Profile age deliberately remains wall-time/reference-frame normalized. It controls
+            // only adaptive-pop and anchor settle crossings, never cut startup or refractory.
+            "    int profileSceneAge = wasInitialized ? min(stateCounters.x",
             "            + max(uReferenceFrameAdvance, 1), 65535) : 0;",
+            "    int validDepthUpdateAge = cutStateCounters.x;",
             "    int cutState = stateCounters.y;",
-            "    bool cutReady = cutState > 0;",
-            "    float internalCutEvidence = profileC.w;",
-            "    bool externalCut = externalSceneCutRequested();",
-            // stateFlags.w was decided before temporal filtering, so both external and internal
-            // cuts use this frame's range and bypass old-scene history in the current dispatch.
-            "    bool internalCut = stateFlags.w != 0u && !externalCut;",
-            "    bool hardCut = wasInitialized && (externalCut || internalCut);",
+            "    float requestedCutEvidence = profileC.w;",
+            // profileC.w includes a proposal carried across an all-invalid accepted depth result;
+            // reading the raw mailbox alone would lose that exact one-valid-update carry.
+            "    bool externalEvidence = requestedCutEvidence > 1.5",
+            "            || externalSceneCutRequested();",
+            // RESOLVE_RAW_RANGE emitted the accepted one-frame pulse after checking depth
+            // corroboration and armed state. Raw external evidence alone may reset the temporal
+            // filter, but cannot relatch shot geometry here.
+            "    bool hardCut = wasInitialized && stateFlags.w != 0u;",
             // Damp the band. lo/inverse form a MULTIPLICATIVE gain, so an unsmoothed band makes the
             // depth mapping breathe between cuts and that wobble is then multiplied by pop
             // strength. Same attack-fast/release-slow rule as the raw range, smoothed in (lo, hi)
@@ -603,15 +759,44 @@ final class ClientSbsGpuDepthShaders {
             "        stretchHigh = max(smoothHigh, stretchHigh);",
             "    }",
             "    float stretchInverse = 1.0 / max(stretchHigh - stretchLow, 1.0e-4);",
-            "    if (!cutReady && wasInitialized && sceneAge >= 8) {",
-            "        cutState = 1;",
-            "        cutReady = true;",
+            "    if (cutState == 0 && wasInitialized",
+            "            && validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES) {",
+            // Arming occurs after RESOLVE_RAW_RANGE made this update's decision, so evidence from
+            // the settle-crossing update itself cannot satisfy either branch.
+            "        cutState = CUT_STATE_READY;",
             "    }",
-            "    if (!wasInitialized || hardCut) sceneAge = 0;",
+            "    if (!wasInitialized || hardCut) profileSceneAge = 0;",
             "    if (hardCut) {",
-            "        cutState = -1;",
-            "    } else if (cutState < 0 && (changeFraction < 0.35 || sceneAge >= 2)) {",
-            "        cutState = 1;",
+            // Any accepted shot latches both evidence sources. They rearm independently below,
+            // preventing persistent appearance from starving a later standalone geometry cut.
+            "        cutState = CUT_STATE_LATCHED;",
+            "    } else if ((cutState & CUT_STATE_SETTLED) != 0) {",
+            "        if ((cutState & CUT_STATE_GEOMETRY_LATCHED) != 0) {",
+            "            if (changeFraction < GEOMETRY_CHANGE_EXIT) {",
+            "                if ((cutState & CUT_STATE_GEOMETRY_ONE_LOW) != 0) {",
+            "                    cutState = cutState & ~(CUT_STATE_GEOMETRY_LATCHED",
+            "                            | CUT_STATE_GEOMETRY_ONE_LOW);",
+            "                    cutState = cutState | CUT_STATE_GEOMETRY_ARMED;",
+            "                } else {",
+            "                    cutState = cutState | CUT_STATE_GEOMETRY_ONE_LOW;",
+            "                }",
+            "            } else {",
+            "                cutState = cutState & ~CUT_STATE_GEOMETRY_ONE_LOW;",
+            "            }",
+            "        }",
+            "        if ((cutState & CUT_STATE_APPEARANCE_LATCHED) != 0) {",
+            "            if (!externalEvidence) {",
+            "                if ((cutState & CUT_STATE_APPEARANCE_ONE_QUIET) != 0) {",
+            "                    cutState = cutState & ~(CUT_STATE_APPEARANCE_LATCHED",
+            "                            | CUT_STATE_APPEARANCE_ONE_QUIET);",
+            "                    cutState = cutState | CUT_STATE_APPEARANCE_ARMED;",
+            "                } else {",
+            "                    cutState = cutState | CUT_STATE_APPEARANCE_ONE_QUIET;",
+            "                }",
+            "            } else {",
+            "                cutState = cutState & ~CUT_STATE_APPEARANCE_ONE_QUIET;",
+            "            }",
+            "        }",
             "    }",
             "    float subjectDepth = !wasInitialized || hardCut ? subjectCandidate",
             "            : mix(profileB.x, subjectCandidate, uSubjectAlpha);",
@@ -623,11 +808,12 @@ final class ClientSbsGpuDepthShaders {
             // normalization settling perturbs 50-60% of texels on the first frames, and a bad latch
             // here is unrecoverable until the next cut. Between those it must not move.
             //
-            // The settle test is a CROSSING, not equality: the client advances sceneAge by
+            // The settle test is a CROSSING, not equality: the client advances profileSceneAge by
             // uReferenceFrameAdvance per depth update, so it can step straight over the threshold.
-            "    int previousAge = stateCounters.x;",
+            "    int previousProfileAge = stateCounters.x;",
             "    bool settledNow = wasInitialized && !hardCut",
-            "            && previousAge < 8 && sceneAge >= 8;",
+            "            && previousProfileAge < PROFILE_SETTLE_REFERENCE_FRAMES",
+            "            && profileSceneAge >= PROFILE_SETTLE_REFERENCE_FRAMES;",
             "    float anchorShift = profileB.z;",
             "    if (!wasInitialized || hardCut || settledNow) {",
             "        float medianDepth = depthPercentile(0.50, 0.5);",
@@ -645,43 +831,55 @@ final class ClientSbsGpuDepthShaders {
             // is and would hold full pop for the whole shot. Hold the floor until the settle
             // crossing, latch once, then stay bit-stable until the next cut.
             "    float popStrength = wasInitialized ? profileC.y : " + POP_FLOOR + ";",
+            "    float classifiedEdgeFraction = wasInitialized ? profileB.w",
+            "            : " + UNCLASSIFIED_EDGE + ";",
             "    if (!wasInitialized || hardCut) {",
             "        popStrength = " + POP_FLOOR + ";",
+            "        classifiedEdgeFraction = " + UNCLASSIFIED_EDGE + ";",
             "    } else if (settledNow) {",
-            "        float confidence = 1.0 - smoothstep(0.04, 0.20, edgeFraction);",
+            "        classifiedEdgeFraction = edgeFraction;",
+            "        float confidence = 1.0 - smoothstep(0.04, 0.20, classifiedEdgeFraction);",
             "        popStrength = mix(" + POP_FLOOR + ", " + POP_CEILING + ", confidence);",
             "    }",
             "    profileA = vec4(stretchLow, stretchHigh, stretchInverse, subjectCandidate);",
-            "    profileB = vec4(subjectDepth, recenter, anchorShift, edgeFraction);",
-            "    float hardCutEvidence = externalCut ? 2.0 : internalCutEvidence;",
-            "    profileC = vec4(changeFraction, popStrength, popStrength / " + POP_FLOOR + ", hardCutEvidence);",
+            "    profileB = vec4(subjectDepth, recenter, anchorShift, classifiedEdgeFraction);",
+            "    profileC = vec4(changeFraction, popStrength, popStrength / " + POP_FLOOR + ",",
+            "            requestedCutEvidence);",
             "    stateFlags.y = 1u;",
             "    stateFlags.w = hardCut ? 1u : 0u;",
             "    if (hardCut) healthCounters.x = min(healthCounters.x + 1u, 0xfffffffeu);",
-            "    if (externalCut)",
+            "    if (externalEvidence)",
             "        healthCounters.y = min(healthCounters.y + 1u, 0xfffffffeu);",
-            "    stateCounters.x = sceneAge;",
+            "    stateCounters.x = profileSceneAge;",
             "    stateCounters.y = cutState;",
             "    stateCounters.w = min(stateCounters.w + 1, 2147483647);",
             "    publishProfile();",
             "}"
     );
 
-    static final String RESET_STATE = HEADER + STATE + lines(
+    static String resetState(String popFloor) {
+        return HEADER + STATE + lines(
             "layout(local_size_x = 1) in;",
             "layout(rgba32f, binding = 1) uniform writeonly highp image2D uProfileTexture;",
             "void main() {",
             "    rangeState = vec4(0.0);",
             "    profileA = vec4(0.0, 1.0, 1.0, 0.5);",
-            "    profileB = vec4(0.5, 0.0, 0.0, 0.0);",
-            "    profileC = vec4(0.0, 1.20, 1.0, 0.0);",
+            "    profileB = vec4(0.5, 0.0, 0.0, " + UNCLASSIFIED_EDGE + ");",
+            "    profileC = vec4(0.0, " + popFloor + ", 1.0, 0.0);",
             "    stateFlags = uvec4(0u);",
             "    stateCounters = ivec4(0);",
             "    healthCounters = uvec4(0u);",
+            "    cutStateAux = vec2(0.0);",
+            "    cutStateCounters = ivec2(0);",
             "    imageStore(uProfileTexture, ivec2(0, 0), vec4(0.0, 1.0, 1.0, 0.5));",
             "    imageStore(uProfileTexture, ivec2(1, 0), vec4(0.0, 0.0, 1.0, 0.0));",
-            "    imageStore(uProfileTexture, ivec2(2, 0), vec4(0.0));",
-            "    imageStore(uProfileTexture, ivec2(3, 0), vec4(0.5, 1.20, 0.0, 0.0));",
+            "    imageStore(uProfileTexture, ivec2(2, 0),",
+            "            vec4(0.0, 0.0, " + UNCLASSIFIED_EDGE + ", 0.0));",
+            "    imageStore(uProfileTexture, ivec2(3, 0), vec4(0.5, " + popFloor
+                    + ", 0.0, 0.0));",
             "}"
-    );
+        );
+    }
+
+    static final String RESET_STATE = resetState(POP_FLOOR);
 }

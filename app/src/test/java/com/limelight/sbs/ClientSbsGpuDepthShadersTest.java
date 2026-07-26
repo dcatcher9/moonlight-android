@@ -100,6 +100,23 @@ public class ClientSbsGpuDepthShadersTest {
     }
 
     @Test
+    public void processorStateAllocationMatchesShaderBlockLayout() {
+        String shader = ClientSbsGpuDepthShaders.RESET_STATE;
+        int blockStart = shader.indexOf("buffer ProcessorState");
+        int blockEnd = shader.indexOf("};", blockStart);
+        assertTrue(blockStart >= 0);
+        assertTrue(blockEnd > blockStart);
+
+        String stateBlock = shader.substring(blockStart, blockEnd);
+        assertEquals(9, occurrences(stateBlock, ";"));
+        assertTrue(stateBlock.indexOf("uvec4 healthCounters;")
+                < stateBlock.indexOf("vec2 cutStateAux;"));
+        assertTrue(stateBlock.indexOf("vec2 cutStateAux;")
+                < stateBlock.indexOf("ivec2 cutStateCounters;"));
+        assertEquals(128, ClientSbsGpuDepthProcessor.STATE_BYTES);
+    }
+
+    @Test
     public void invalidRawPixelsRetainHistoryInsteadOfInjectingZeroDepth() {
         String shader = ClientSbsGpuDepthShaders.temporalFilter(true);
         assertTrue(shader.contains("if (!currentValid)"));
@@ -118,20 +135,65 @@ public class ClientSbsGpuDepthShadersTest {
     }
 
     @Test
-    public void externalSceneCutCanRemainGpuResident() {
+    public void gpuShotCutPolicyUsesIndependentArmsAndLatchedGeometryEscape() {
         String temporal = ClientSbsGpuDepthShaders.temporalFilter(true);
         String rawResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
         String resolve = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
         assertTrue(temporal.contains("binding = 1) readonly buffer ExternalSceneCut"));
         assertTrue(temporal.contains("externalSceneCutWords[uExternalSceneCutWordOffset]"));
         assertTrue(temporal.contains("externalSceneCutRequested()"));
+        assertTrue(temporal.contains("externalExposureLikeTransition()"));
+        assertTrue(temporal.contains(
+                "uExternalSceneCut != 0"));
+        assertTrue(temporal.contains(
+                "return SCENE_EVIDENCE_APPEARANCE"));
+        assertTrue(temporal.contains("profileC.w > 1.5"));
         assertTrue(rawResolve.contains("binding = 0) buffer RawStats"));
         assertTrue(rawResolve.contains("binding = 1) readonly buffer ExternalSceneCut"));
-        assertTrue(rawResolve.contains("void applyExternalCutRange()"));
-        assertTrue(rawResolve.contains("rangeState.zw = rangeState.xy"));
-        assertTrue(rawResolve.contains("stateFlags.w = 1u"));
+        assertTrue(rawResolve.contains("bool colorGeometryCorroborated"));
+        assertTrue(rawResolve.contains("bool geometryArmed = settled"));
+        assertTrue(rawResolve.contains("bool appearanceArmed = settled"));
+        assertTrue(rawResolve.contains("bool novelLatchedGeometryCut"));
+        assertTrue(rawResolve.contains("bool exposureLikeTransition"));
+        assertTrue(rawResolve.contains("uint currentSceneEvidence = externalSceneEvidence()"));
+        assertTrue(rawResolve.contains("uint selectedSceneEvidence = currentSceneEvidence != 0u"));
+        assertTrue(rawResolve.contains("? currentSceneEvidence : pendingSceneEvidence"));
+        assertTrue(rawResolve.contains(
+                "(selectedSceneEvidence & SCENE_EVIDENCE_APPEARANCE) != 0u"));
+        assertTrue(rawResolve.contains(
+                "(selectedSceneEvidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u"));
+        assertTrue(rawResolve.contains(
+                "bool exposureLikeTransition = !externalEvidence"));
+        assertTrue(rawResolve.contains("geometryArmed && !exposureLikeTransition"));
+        assertTrue(rawResolve.contains("geometryLatched && cutStateAux.y > 0.5"));
+        assertTrue(rawResolve.contains("&& !exposureLikeTransition"));
+        assertTrue(rawResolve.contains("const float GEOMETRY_BASELINE_ALPHA = 0.125;"));
+        assertTrue(rawResolve.contains(
+                "validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES"));
+        assertFalse(rawResolve.contains(
+                "stateCounters.x >= CUT_SETTLE_VALID_DEPTH_UPDATES"));
+        assertTrue(rawResolve.contains(
+                "bool acceptedCut = internalCut || externalCut || novelLatchedGeometryCut"));
+        assertFalse(rawResolve.contains("stateCounters.y >= 0"));
+        assertTrue(rawResolve.contains("stateFlags.w = acceptedCut ? 1u : 0u"));
+        assertTrue(rawResolve.contains("profileC.w = externalEvidence ? 2.0"));
+        assertFalse(rawResolve.contains(
+                "externalSceneCutRequested() || pendingExternalEvidence"));
+        assertFalse(rawResolve.contains(
+                "externalExposureLikeTransition() || pendingExposureLike"));
+        assertTrue(rawResolve.contains(": (exposureLikeTransition ? -2 : 0)"));
         assertTrue(resolve.contains("externalSceneCutRequested()"));
-        assertTrue(resolve.contains("float hardCutEvidence = externalCut ? 2.0"));
+        assertTrue(resolve.contains("requestedCutEvidence > 1.5"));
+        assertTrue(resolve.contains("bool hardCut = wasInitialized && stateFlags.w != 0u"));
+        assertTrue(resolve.contains("cutState = CUT_STATE_LATCHED"));
+        assertTrue(resolve.contains("CUT_STATE_GEOMETRY_ONE_LOW"));
+        assertTrue(resolve.contains("CUT_STATE_APPEARANCE_ONE_QUIET"));
+        assertTrue(resolve.contains("cutState = cutState | CUT_STATE_GEOMETRY_ARMED"));
+        assertTrue(resolve.contains("cutState = cutState | CUT_STATE_APPEARANCE_ARMED"));
+        assertTrue(resolve.contains(
+                "validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES"));
+        assertFalse(resolve.contains(
+                "profileSceneAge >= CUT_SETTLE_VALID_DEPTH_UPDATES"));
     }
 
     @Test
@@ -143,11 +205,11 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(histogram.contains("atomicAdd(rawPadding, localChangeCount[0])"));
         assertTrue(rawResolve.contains("float distributionShift"));
         assertTrue(rawResolve.contains("bool internalCut"));
-        assertTrue(rawResolve.contains("if (firstFrame || internalCut)"));
+        assertTrue(rawResolve.contains("if (firstFrame || acceptedCut)"));
         assertTrue(rawResolve.contains("rangeState.zw = vec2(frameLow, frameHigh)"));
-        assertTrue(rawResolve.contains("stateFlags.w = internalCut ? 1u : 0u"));
-        assertTrue(resolve.contains("stateFlags.w != 0u && !externalCut"));
-        assertFalse(resolve.contains("bool internalCut = cutReady"));
+        assertTrue(rawResolve.contains("stateFlags.w = acceptedCut ? 1u : 0u"));
+        assertTrue(resolve.contains("bool hardCut = wasInitialized && stateFlags.w != 0u"));
+        assertFalse(resolve.contains("cutReady"));
     }
 
     @Test
@@ -174,17 +236,194 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(temporal.contains("uniform float uMovingDepthAlpha"));
         assertTrue(temporal.contains("gradient / max(uSpatialThresholdScale, 1.0)"));
         assertTrue(accumulate.contains("referenceGradient"));
+        assertTrue(accumulate.contains("8.0 / spatialScale"));
         assertTrue(profile.contains("uniform float uSubjectAlpha"));
         assertFalse(profile.contains("uConvergenceAlpha"));
-        assertTrue(profile.contains("previousAge < 8 && sceneAge >= 8"));
+        assertTrue(profile.contains(
+                "previousProfileAge < PROFILE_SETTLE_REFERENCE_FRAMES"));
+        assertTrue(profile.contains(
+                "profileSceneAge >= PROFILE_SETTLE_REFERENCE_FRAMES"));
         assertTrue(profile.contains("uniform int uReferenceFrameAdvance"));
-        assertTrue(profile.contains("/ max(uSpatialThresholdScale, 1.0)"));
+        assertFalse(profile.contains("uniform float uSpatialThresholdScale"));
+        assertFalse(profile.contains("edgeCount) / (float(uPixelCount) * 256.0)\n"
+                + "            / max(uSpatialThresholdScale, 1.0)"));
         assertFalse(temporal.contains("mix(previous, current, 0.50)"));
     }
 
     @Test
+    public void cutAgeAdvancesOncePerValidDepthUpdateIndependentOfReferenceTime() {
+        String rawResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
+        String profile = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
+
+        assertTrue(rawResolve.contains(
+                "min(max(cutStateCounters.x, 0), 65534) + 1"));
+        assertTrue(rawResolve.contains(
+                "cutStateCounters.x = acceptedCut ? 0 : validDepthUpdateAge"));
+        assertTrue(rawResolve.contains(
+                "validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES"));
+        assertFalse(rawResolve.contains("uReferenceFrameAdvance"));
+
+        assertTrue(profile.contains(
+                "int validDepthUpdateAge = cutStateCounters.x"));
+        assertTrue(profile.contains(
+                "profileSceneAge = wasInitialized ? min(stateCounters.x"));
+        assertTrue(profile.contains(
+                "+ max(uReferenceFrameAdvance, 1), 65535)"));
+        assertTrue(profile.contains(
+                "previousProfileAge < PROFILE_SETTLE_REFERENCE_FRAMES"));
+        assertTrue(profile.contains(
+                "profileSceneAge >= PROFILE_SETTLE_REFERENCE_FRAMES"));
+    }
+
+    @Test
+    public void weightedEdgeRiskMatchesApolloAcrossProductionDepthGrids() {
+        int[][] grids = {
+                {322, 182}, // Depth Anything 16:9
+                {352, 192}, // MiDaS 16:9
+                {434, 126}  // Depth Anything 32:9
+        };
+        final float depthStep = 0.10f;
+
+        for (int[] grid : grids) {
+            float scale = ClientSbsTemporalTuning.spatialThresholdScale(grid[0], grid[1]);
+            int referenceWidth = Math.round(grid[0] * scale);
+            int referenceHeight = Math.round(grid[1] * scale);
+            float apolloRisk = weightedVerticalEdgeRisk(
+                    referenceWidth, referenceHeight, depthStep, 1.0f);
+            float clientRisk = weightedVerticalEdgeRisk(
+                    grid[0], grid[1], depthStep, scale);
+
+            // A coarser map has proportionally more boundary pixels, while referenceGradient gives
+            // each one proportionally less weight. The accumulator alone therefore matches Apollo.
+            assertEquals(grid[0] + "x" + grid[1], apolloRisk, clientRisk,
+                    apolloRisk * 0.002f);
+
+            // This is the removed resolve-pass division. It must remain observably wrong so a
+            // future "density normalization" cannot silently reintroduce the double scaling.
+            float doubleNormalizedRisk = clientRisk / scale;
+            assertTrue(Math.abs(apolloRisk - doubleNormalizedRisk) > apolloRisk * 0.40f);
+        }
+    }
+
+    @Test
+    public void saturatedWeightedEdgeRiskAlsoMatchesApolloAcrossProductionDepthGrids() {
+        int[][] grids = {
+                {322, 182},
+                {352, 192},
+                {434, 126}
+        };
+        final float saturatedDepthStep = 1.0f;
+
+        for (int[] grid : grids) {
+            float scale = ClientSbsTemporalTuning.spatialThresholdScale(grid[0], grid[1]);
+            int referenceWidth = Math.round(grid[0] * scale);
+            int referenceHeight = Math.round(grid[1] * scale);
+            float apolloRisk = weightedVerticalEdgeRisk(
+                    referenceWidth, referenceHeight, saturatedDepthStep, 1.0f);
+            float clientRisk = weightedVerticalEdgeRisk(
+                    grid[0], grid[1], saturatedDepthStep, scale);
+
+            assertEquals(grid[0] + "x" + grid[1], apolloRisk, clientRisk,
+                    apolloRisk * 0.002f);
+
+            float unnormalizedCapRisk = weightedVerticalEdgeRiskWithUnnormalizedCap(
+                    grid[0], grid[1], saturatedDepthStep, scale);
+            assertTrue(grid[0] + "x" + grid[1],
+                    unnormalizedCapRisk > apolloRisk * 2.0f);
+        }
+    }
+
+    @Test
+    public void adaptivePopDiagnosticsLatchTheSettleInputUntilTheNextCut() {
+        AdaptivePopReference state = new AdaptivePopReference();
+
+        state.update(false, false, false, 0.05f);
+        assertEquals(ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE,
+                state.classifiedEdge, 0.0f);
+        assertEquals(ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR, state.popStrength, 0.0f);
+
+        state.update(true, false, true, 0.08f);
+        assertEquals(0.08f, state.classifiedEdge, 0.0f);
+        assertEquals(1.875f, state.popStrength, 0.0001f);
+
+        // The live edge field can become much busier, but both diagnostics stay paired to the
+        // settle event that actually selected this shot's pop.
+        state.update(true, false, false, 0.19f);
+        assertEquals(0.08f, state.classifiedEdge, 0.0f);
+        assertEquals(1.875f, state.popStrength, 0.0001f);
+
+        state.update(true, true, false, 0.03f);
+        assertEquals(ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE,
+                state.classifiedEdge, 0.0f);
+        assertEquals(ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR, state.popStrength, 0.0f);
+
+        String shader = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
+        assertTrue(shader.contains("classifiedEdgeFraction = edgeFraction"));
+        assertTrue(shader.contains("smoothstep(0.04, 0.20, classifiedEdgeFraction)"));
+        assertTrue(shader.contains(
+                "profileB = vec4(subjectDepth, recenter, anchorShift, classifiedEdgeFraction)"));
+    }
+
+    @Test
+    public void healthSnapshotDistinguishesUnsettledPopFromSettledZeroEdgeRisk() {
+        ByteBuffer state = ByteBuffer.allocate(
+                ClientSbsGpuDepthProcessor.STATE_BYTES).order(ByteOrder.nativeOrder());
+        ClientSbsGpuDepthProcessor.HealthSnapshot snapshot =
+                new ClientSbsGpuDepthProcessor.HealthSnapshot();
+
+        state.putFloat(44, ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE);
+        snapshot.updateFromState(state, 1L, 1);
+        assertFalse(snapshot.hasAdaptivePopClassification());
+
+        state.putFloat(44, 0.0f);
+        snapshot.updateFromState(state, 2L, 1);
+        assertTrue(snapshot.hasAdaptivePopClassification());
+        assertEquals(0.0f, snapshot.getEdgeFraction(), 0.0f);
+    }
+
+    @Test
+    public void healthSnapshotReportsGeometryArmRatherThanPositiveBitmask() {
+        ByteBuffer state = ByteBuffer.allocate(
+                ClientSbsGpuDepthProcessor.STATE_BYTES).order(ByteOrder.nativeOrder());
+        ClientSbsGpuDepthProcessor.HealthSnapshot snapshot =
+                new ClientSbsGpuDepthProcessor.HealthSnapshot();
+
+        state.putInt(84, ClientSbsShotCutPolicy.CUT_STATE_SETTLED
+                | ClientSbsShotCutPolicy.CUT_STATE_APPEARANCE_ARMED
+                | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_LATCHED);
+        snapshot.updateFromState(state, 1L, 1);
+        assertFalse(snapshot.isDepthCutArmed());
+
+        state.putInt(84, ClientSbsShotCutPolicy.CUT_STATE_READY);
+        snapshot.updateFromState(state, 2L, 1);
+        assertTrue(snapshot.isDepthCutArmed());
+    }
+
+    @Test
+    public void adaptivePopResetPathsUseTheSingleOwnerFloor() {
+        String sentinelFloor = "9.87";
+        String shader = ClientSbsGpuDepthShaders.resetState(sentinelFloor);
+
+        assertTrue(shader.contains(
+                "profileC = vec4(0.0, " + sentinelFloor + ", 1.0, 0.0);"));
+        assertTrue(shader.contains(
+                "imageStore(uProfileTexture, ivec2(3, 0), vec4(0.5, "
+                        + sentinelFloor + ", 0.0, 0.0));"));
+        assertTrue(shader.contains("cutStateAux = vec2(0.0);"));
+        assertTrue(shader.contains("cutStateCounters = ivec2(0);"));
+        assertFalse(shader.contains("1.20"));
+
+        ClientSbsGpuDepthProcessor.HealthSnapshot snapshot =
+                new ClientSbsGpuDepthProcessor.HealthSnapshot();
+        snapshot.reset();
+        assertEquals(ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR,
+                snapshot.getPopStrength(), 0.0f);
+    }
+
+    @Test
     public void healthSnapshotClassifiesValidityAndCollapsedRange() {
-        ByteBuffer state = ByteBuffer.allocate(112).order(ByteOrder.nativeOrder());
+        ByteBuffer state = ByteBuffer.allocate(
+                ClientSbsGpuDepthProcessor.STATE_BYTES).order(ByteOrder.nativeOrder());
         state.putFloat(0, 100.0f);
         state.putFloat(4, 100.00001f);
         state.putFloat(8, 99.0f);
@@ -203,7 +442,7 @@ public class ClientSbsGpuDepthShadersTest {
         state.putInt(68, 1);
         state.putInt(76, 1);
         state.putInt(80, 0);
-        state.putInt(84, 1);
+        state.putInt(84, ClientSbsShotCutPolicy.CUT_STATE_READY);
         state.putInt(88, 90);
         state.putInt(92, 12);
         state.putInt(96, 3);
@@ -230,6 +469,7 @@ public class ClientSbsGpuDepthShadersTest {
         assertEquals(-0.02f, snapshot.getRecenterDelta(), 0.0001f);
         assertEquals(0.003f, snapshot.getZeroAnchorShift(), 0.0001f);
         assertEquals(0.01f, snapshot.getEdgeFraction(), 0.0001f);
+        assertTrue(snapshot.hasAdaptivePopClassification());
         assertEquals(1.30f, snapshot.getPopStrength(), 0.0001f);
         assertEquals(1.04f, snapshot.getPopRatio(), 0.0001f);
         assertTrue(snapshot.wasExternalCutRequested());
@@ -249,5 +489,51 @@ public class ClientSbsGpuDepthShadersTest {
             offset += needle.length();
         }
         return count;
+    }
+
+    private static float weightedVerticalEdgeRisk(int width, int height, float gradient,
+                                                  float spatialScale) {
+        float scale = Math.max(spatialScale, 1.0f);
+        float referenceGradient = gradient / scale;
+        int edgeWeight = referenceGradient >= 0.02f
+                ? (int) (Math.min(referenceGradient * 50.0f, 8.0f / scale)
+                * 256.0f + 0.5f)
+                : 0;
+        long edgeWeightSum = (long) edgeWeight * height;
+        return edgeWeightSum / ((long) width * height * 256.0f);
+    }
+
+    private static float weightedVerticalEdgeRiskWithUnnormalizedCap(
+            int width, int height, float gradient, float spatialScale) {
+        float referenceGradient = gradient / Math.max(spatialScale, 1.0f);
+        int edgeWeight = referenceGradient >= 0.02f
+                ? (int) (Math.min(referenceGradient * 50.0f, 8.0f) * 256.0f + 0.5f)
+                : 0;
+        long edgeWeightSum = (long) edgeWeight * height;
+        return edgeWeightSum / ((long) width * height * 256.0f);
+    }
+
+    private static float adaptivePopForEdge(float edgeFraction) {
+        float t = Math.max(0.0f, Math.min((edgeFraction - 0.04f) / 0.16f, 1.0f));
+        float smooth = t * t * (3.0f - 2.0f * t);
+        float confidence = 1.0f - smooth;
+        return ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR
+                + (ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING
+                - ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR) * confidence;
+    }
+
+    private static final class AdaptivePopReference {
+        float classifiedEdge = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+        float popStrength = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR;
+
+        void update(boolean initialized, boolean hardCut, boolean settledNow, float currentEdge) {
+            if (!initialized || hardCut) {
+                classifiedEdge = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+                popStrength = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR;
+            } else if (settledNow) {
+                classifiedEdge = currentEdge;
+                popStrength = adaptivePopForEdge(classifiedEdge);
+            }
+        }
     }
 }

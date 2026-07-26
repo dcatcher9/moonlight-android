@@ -77,11 +77,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
 
-    // Largest resolution the XR mode rows can select. Mirrors XrResolutionSelector's
-    // 1080p/1440p/4K/UW-1080p/UW-1440p/5K2K cards; keep the two in sync. 5K2K (5120x2160) is the
-    // widest and 4K/5K2K jointly set the tallest.
-    static final int MAX_LIVE_STREAM_WIDTH = 5120;
-    static final int MAX_LIVE_STREAM_HEIGHT = 2160;
+    // Largest real resolution in each orientation. Do not combine the independent long-axis
+    // maxima into a synthetic 5120x5120 envelope that no quality row can request.
+    static final int MAX_LIVE_LANDSCAPE_WIDTH = 5120;
+    static final int MAX_LIVE_LANDSCAPE_HEIGHT = 2160;
+    static final int MAX_LIVE_PORTRAIT_WIDTH = 2160;
+    static final int MAX_LIVE_PORTRAIT_HEIGHT = 5120;
 
     private static final int OUTPUT_DEQUEUE_TIMEOUT_US = 2000;
     private static final int INPUT_DEQUEUE_HANG_TIMEOUT_MS = 5000;
@@ -1065,9 +1066,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      *   <li>A live video-mode change ({@code LiSendSetVideoMode}) raises the stream resolution
      *       with no reconnect. Because {@code KEY_MAX_*} is fixed for the life of the configured
      *       codec, the envelope must be pre-sized at launch to the largest resolution the XR mode
-     *       rows can select — {@link #MAX_LIVE_STREAM_WIDTH} x {@link #MAX_LIVE_STREAM_HEIGHT},
-     *       mirroring {@code XrResolutionSelector}'s 1080p/1440p/4K/ultrawide rows. With host
-     *       doubling that reaches 10240, above every codec ceiling, so the clamp below caps
+     *       rows can select in that orientation, mirroring {@code XrResolutionSelector}'s
+     *       landscape and portrait rows without synthesizing a square Cartesian maximum. With host
+     *       doubling that reaches 10240 wide, above every codec ceiling, so the clamp below caps
      *       HEVC/AV1 at 8192 — the host clamps its packed width to match.</li>
      * </ul>
      *
@@ -1078,13 +1079,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                           boolean hostDoubledWidth, int videoFormat,
                                           boolean extended,
                                           int decoderMaxWidth, int decoderMaxHeight) {
+        return adaptivePlaybackEnvelope(initialWidth, initialHeight,
+                initialHeight > initialWidth, hostDoubledWidth, videoFormat, extended,
+                decoderMaxWidth, decoderMaxHeight);
+    }
+
+    static int[] adaptivePlaybackEnvelope(int initialWidth, int initialHeight,
+                                          boolean portraitStream,
+                                          boolean hostDoubledWidth, int videoFormat,
+                                          boolean extended,
+                                          int decoderMaxWidth, int decoderMaxHeight) {
         // Same per-codec ceiling used for host SBS packing: 4096 for H.264, 8192 for HEVC/AV1.
         int codecCap = PreferenceConfiguration.maxHostSbsPackedWidthForVideoFormat(videoFormat);
         int width = initialWidth;
         int height = initialHeight;
         if (extended) {
-            width = Math.max(width, MAX_LIVE_STREAM_WIDTH);
-            height = Math.max(height, MAX_LIVE_STREAM_HEIGHT);
+            width = Math.max(width, portraitStream
+                    ? MAX_LIVE_PORTRAIT_WIDTH : MAX_LIVE_LANDSCAPE_WIDTH);
+            height = Math.max(height, portraitStream
+                    ? MAX_LIVE_PORTRAIT_HEIGHT : MAX_LIVE_LANDSCAPE_HEIGHT);
         }
         if (hostDoubledWidth) {
             width = Math.min(width * 2, codecCap);
@@ -1115,7 +1128,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Capability introspection is advisory; the configure-time fallback still applies.
             LimeLog.info("Decoder size capabilities unavailable: " + e);
         }
-        int[] envelope = adaptivePlaybackEnvelope(initialWidth, initialHeight,
+        boolean portraitStream = prefs != null && prefs.height > prefs.width;
+        int[] envelope = adaptivePlaybackEnvelope(initialWidth, initialHeight, portraitStream,
                 prefs != null && prefs.isHostDoubledWidthMode(), getActiveVideoFormat(),
                 extendedAdaptiveEnvelope, decoderMaxWidth, decoderMaxHeight);
         adaptiveEnvelopeWidth = envelope[0];

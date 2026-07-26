@@ -1,6 +1,7 @@
 package com.limelight.ui.xrcontrols;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -47,7 +48,7 @@ public final class XrResolutionSelectorTest {
     @Test
     public void standardCardsExposeShortLabelsAndExplicitResolutionIds() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        // Widescreen family first, then ultrawide; each ascending. 720p is retired.
+        // Existing landscapes retain their order, followed by exact swapped portrait IDs.
         String[] ids = {
                 XrResolutionSelector.RESOLUTION_1080P,
                 XrResolutionSelector.RESOLUTION_1440P,
@@ -55,10 +56,22 @@ public final class XrResolutionSelectorTest {
                 XrResolutionSelector.RESOLUTION_UW_1080P,
                 XrResolutionSelector.RESOLUTION_UW_1440P,
                 XrResolutionSelector.RESOLUTION_5K2K,
+                XrResolutionSelector.RESOLUTION_1080P_PORTRAIT,
+                XrResolutionSelector.RESOLUTION_1440P_PORTRAIT,
+                XrResolutionSelector.RESOLUTION_4K_PORTRAIT,
+                XrResolutionSelector.RESOLUTION_UW_1080P_PORTRAIT,
+                XrResolutionSelector.RESOLUTION_UW_1440P_PORTRAIT,
+                XrResolutionSelector.RESOLUTION_5K2K_PORTRAIT,
         };
-        String[] labels = {"1080p", "1440p", "4K", "UW 1080p", "UW 1440p", "5K2K"};
+        String[] labels = {
+                "1080p", "1440p", "4K", "UW 1080p", "UW 1440p", "5K2K",
+                "1080p Portrait", "1440p Portrait", "4K Portrait",
+                "UW 1080p Portrait", "UW 1440p Portrait", "5K2K Portrait"
+        };
 
-        assertEquals(6, selector.getCardCount());
+        assertEquals(12, selector.getCardCount());
+        assertArrayEquals(ids, context.getResources().getStringArray(
+                R.array.xr_resolution_values));
         for (int i = 0; i < ids.length; i++) {
             AppCompatButton card = selector.getCardAt(i);
             assertEquals(ids[i], selector.getResolutionIdAt(i));
@@ -129,12 +142,11 @@ public final class XrResolutionSelectorTest {
     @Test
     public void glyphScreenBoundsPreserveTheResolutionAspectCue() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        // Three widescreen cards, then three ultrawide. Density is banded by height, so it rises
-        // within each family and restarts at the family boundary.
+        // Six established landscapes followed by their swapped portrait counterparts.
         float[] expectedAspects = {16f / 9f, 16f / 9f, 16f / 9f,
-                2560f / 1080f, 3440f / 1440f, 5120f / 2160f};
-        int familySize = 3;
-        int previousDensity = 0;
+                2560f / 1080f, 3440f / 1440f, 5120f / 2160f,
+                9f / 16f, 9f / 16f, 9f / 16f,
+                1080f / 2560f, 1440f / 3440f, 2160f / 5120f};
         for (int i = 0; i < selector.getCardCount(); i++) {
             XrResolutionSelector.ResolutionCard card =
                     (XrResolutionSelector.ResolutionCard) selector.getCardAt(i);
@@ -145,14 +157,13 @@ public final class XrResolutionSelectorTest {
             assertEquals(expectedAspects[i], selector.getAspectRatioAt(i), 0.0001f);
             assertEquals(selector.getAspectRatioAt(i),
                     screen.width() / screen.height(), 0.0001f);
-            assertTrue(screen.width() > screen.height());
+            assertEquals(i < 6, screen.width() > screen.height());
             assertTrue(screen.bottom < glyph.getBounds().bottom);
-
-            if (i % familySize == 0) {
-                previousDensity = 0;
+            if (i >= 6) {
+                assertEquals(((XrResolutionSelector.ResolutionCard)
+                                selector.getCardAt(i - 6)).glyph.getDensityLevel(),
+                        glyph.getDensityLevel());
             }
-            assertTrue(glyph.getDensityLevel() > previousDensity);
-            previousDensity = glyph.getDensityLevel();
         }
     }
 
@@ -166,6 +177,10 @@ public final class XrResolutionSelectorTest {
                 densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P));
         assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_4K),
                 densityOf(selector, XrResolutionSelector.RESOLUTION_5K2K));
+        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_1080P),
+                densityOf(selector, XrResolutionSelector.RESOLUTION_1080P_PORTRAIT));
+        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P),
+                densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P_PORTRAIT));
     }
 
     private static int densityOf(XrResolutionSelector selector, String resolutionId) {
@@ -229,6 +244,26 @@ public final class XrResolutionSelectorTest {
     }
 
     @Test
+    public void wideWidthStillKeepsLandscapeAndPortraitCardsOnSeparateRows() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        int width = dp(2000);
+        selector.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        selector.layout(0, 0, selector.getMeasuredWidth(), selector.getMeasuredHeight());
+
+        int landscapeTop = selector.getCardAt(0).getTop();
+        for (int i = 1; i < 6; i++) {
+            assertEquals(landscapeTop, selector.getCardAt(i).getTop());
+        }
+
+        int portraitTop = selector.getCardAt(6).getTop();
+        assertTrue(portraitTop > landscapeTop);
+        for (int i = 7; i < 12; i++) {
+            assertEquals(portraitTop, selector.getCardAt(i).getTop());
+        }
+    }
+
+    @Test
     public void unknownCurrentValueGetsASelectedCustomCardUntilAStandardChoiceWins() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
         // 3840x1600 is a real ultrawide that is deliberately not on the ladder. A retired 1280x720
@@ -237,7 +272,7 @@ public final class XrResolutionSelectorTest {
         selector.setSelectedResolutionId(customId);
 
         assertEquals(customId, selector.getSelectedResolutionId());
-        assertEquals(7, selector.getCardCount());
+        assertEquals(13, selector.getCardCount());
         AppCompatButton custom = selector.findCardByResolutionId(customId);
         assertTrue(custom.isActivated());
         assertFalse(custom.isClickable());
@@ -258,7 +293,7 @@ public final class XrResolutionSelectorTest {
 
         assertEquals(XrResolutionSelector.RESOLUTION_1440P,
                 selector.getSelectedResolutionId());
-        assertEquals(6, selector.getCardCount());
+        assertEquals(12, selector.getCardCount());
         assertNull(selector.findCardByResolutionId(customId));
         assertTrue(selector.findCardByResolutionId(
                 XrResolutionSelector.RESOLUTION_1440P).isActivated());

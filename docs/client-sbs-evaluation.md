@@ -252,7 +252,7 @@ The live order mirrors Apollo: adopt/postprocess completed pair N, capture and e
 other slot, then blur/warp/submit N. Inference and compose may overlap on the GPU, but the color and
 depth identities do not. The direct rectangular depth shaders for both model families use one raw
 tensor load per requested sample; no selected production model uses the legacy reflected-padding
-mapping. The 1x-depth two-eye inverse-warp map shares one stream-fixed 32/24/16-step
+mapping. The 1x-depth two-eye inverse-warp map shares one stream-fixed 19/14/12-step
 depth/parallax solve across both eyes for the 16:9, 21:9, and 32:9 buckets respectively. Its
 validated compose path emits the full-width packed SBS image in one draw; only the direct
 compatibility path retains two half-width draws.
@@ -289,6 +289,7 @@ Direct command including the family-archive extraction contract:
     --tests "com.limelight.sbs.ClientSbsGpuDepthShadersTest" `
     --tests "com.limelight.sbs.ClientSbsGpuSceneCutDetectorTest" `
     --tests "com.limelight.sbs.ClientSbsGpuSceneCutShadersTest" `
+    --tests "com.limelight.sbs.ClientSbsShotCutPolicyTest" `
     --tests "com.limelight.sbs.ClientSbsGpuTimerTest" `
     --tests "com.limelight.sbs.ClientSbsTemporalTuningTest" `
     --tests "com.limelight.binding.video.DecoderModeTransitionGateTest" `
@@ -311,9 +312,14 @@ The tests cover:
 
 - `ClientSbsFrameSlotsTest`: matched color-frame ownership and legal slot transitions.
 - `ClientSbsGpuDepthShadersTest`: packed Float32 depth reads and overflow-safe GPU histogram math.
-- `ClientSbsGpuSceneCutDetectorTest`: scene-cut thresholds, evidence requirements, and reset state.
-- `ClientSbsGpuSceneCutShadersTest`: rectangular model-input luma reduction,
-  structural/histogram cut evidence, and GPU-only cut-word contracts.
+- `ClientSbsGpuSceneCutDetectorTest`: accepted/discarded frame history and GPU transaction state.
+- `ClientSbsGpuSceneCutShadersTest`: rectangular model-input luma/median-max-RGB reduction,
+  numerical gain/offset/nonlinear-clipped-exposure rejection, reliable local ordinal structure,
+  same-histogram structural cuts, and GPU-only evidence-word contracts.
+- `ClientSbsShotCutPolicyTest`: numerical model-grid cut boundaries, startup blocking through the
+  settle crossing, one-pulse sustained evidence, independent two-update geometry/appearance
+  rearming, refractory relative-spike escape, and one-valid-update carry after an all-invalid
+  depth result.
 - `ClientSbsGpuTimerTest`: nonblocking per-stage query rings, unsigned results, and disjoint-sample
   rejection.
 - `ClientSbsTemporalTuningTest`: Apollo-equivalent temporal response and spatial-scale mapping at
@@ -383,10 +389,11 @@ an install task and omits the required build type.
 ## 3. Galaxy XR native GPU smoke test
 
 The physical-device smoke class creates real shared EGL contexts, uploads a deterministic packed
-Float32 gradient, invokes the bundled model through native LiteRT, waits for the returned GL fence,
-and rejects missing, non-finite, zero, or flat output. Its six model tests independently extract
-and load the three canonical DA-V2 buckets (`322 x 182`, `350 x 154`, and `434 x 126`) and three
-MiDaS buckets (`352 x 192`, `384 x 160`, and `448 x 128`) through the same packed-GL native path.
+Float32 gradient, invokes the selected fixed-shape graph through native LiteRT, waits for the
+returned GL fence, and rejects missing, non-finite, zero, or flat output. Its six graph/bucket tests
+cover the two selectable model families independently: three canonical DA-V2 buckets (`322 x 182`,
+`350 x 154`, and `434 x 126`) and three MiDaS buckets (`352 x 192`, `384 x 160`, and `448 x 128`)
+through the same packed-GL native path.
 
 ### Protect the installed Artemis data
 
@@ -442,7 +449,7 @@ A pass requires all of the following:
 
 - Native LiteRT initializes with OpenCL/OpenGL interoperability.
 - Archive validation checks both family TAR/XZ assets, all six complete TAR entries, each extracted byte
-  count, and all six final SHA-256 values. Only the selected model may remain
+  count, and all six final SHA-256 values. Only the selected fixed-shape graph may remain
   staged in `code_cache/client-sbs-model-assets`.
 - Offline graph verification fixes every DA-V2 core at 683 operations, while the native smoke test
   programmatically requires complete acceleration. Confirm the accompanying LiteRT log says
@@ -508,9 +515,10 @@ not mix it into the rectangular-bucket range.
 
 ### Sustained production-model benchmark
 
-The smoke timings above use only four invocations per model and predate the controlled wake-lock
-benchmark. Do not use them for current throughput decisions. The dedicated benchmark class keeps
-the normal six-model smoke suite unchanged, holds a bounded partial wake lock to prevent off-head
+The smoke timings above use only four invocations per fixed-shape graph and predate the controlled
+wake-lock benchmark. Do not use them for current throughput decisions. The dedicated benchmark
+class keeps the normal six-graph/two-family smoke suite unchanged, holds a bounded partial wake lock
+to prevent off-head
 system suspend, discards 20 warm-ups, and records 100 fence-complete invocations per result.
 
 Run one production bucket at a time so the logged model, shape, delegation, thermals, and latency
@@ -627,7 +635,7 @@ Open the in-headset Stats panel and verify:
   `warp-map compose validated`.
   `Direct GLES N-probe` is still GPU reprojection, but its timings must be analyzed separately
   because it repeats the inverse solve per output pixel. `N` is fixed when the stream starts from
-  the selected 16:9, 21:9, or 32:9 aspect bucket (32/24/16 probes for either model family).
+  the selected 16:9, 21:9, or 32:9 aspect bucket (19/14/12 probes for either model family).
 - App CPU core-equivalent load, device GPU busy/clock, and Android thermal status remain plausible.
   The pane intentionally has no NPU row or custom CPU/GPU temperature probes; Android 14 exposes no
   trustworthy public per-app NPU-utilization API. The production backend is GPU.

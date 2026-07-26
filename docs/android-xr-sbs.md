@@ -40,12 +40,13 @@ requested `W x H` matched-color/per-eye target by upscaling that lower-resolutio
 Normal and both Host SBS modes are direct MediaCodec-to-SceneCore paths. Do not insert a GL bridge,
 copy, or Client SBS dependency into them.
 
-Raw SBS can use a different negotiated base width from every other mode. Entering or leaving Raw,
-or changing Full/Half while Raw is live, must commit the target mode and reconnect before changing
-SceneCore, MediaCodec, Client SBS ownership, or Apollo's Host AI wire mode. This prevents Client AI
-from consuming an already-packed stereo frame and prevents Host AI from repacking it. Live
-transitions among Normal, Host
-SBS AI, and Client SBS AI retain their guarded surface-handoff behavior. After a live
+Only Raw Full owns a distinct negotiated transport: its `2W x H` stream requires a reconnect when
+entering or leaving that transport, and changing Full/Half while Raw is live likewise reconnects.
+Raw Half is the ordinary `W x H`, `sbs_mode 0` wire stream, so entering or leaving Raw Half is a
+pure SceneCore presentation change when the selected quality tuple fits the live decoder envelope.
+This prevents Client AI from consuming an already-packed Raw Full frame and prevents Host AI from
+repacking it. Live transitions among Normal, Raw Half, Host SBS AI, and Client SBS AI retain their
+guarded surface-handoff behavior. After a live
 `setOutputSurface()` handoff, reapply the requested surface frame rate because that metadata belongs
 to the replacement `Surface`. Artemis rejects Raw on a physical-capture session and directs the user
 to relaunch Apollo's Virtual Display instead of pretending that a wide aspect-fit is native Raw
@@ -117,7 +118,8 @@ buckets. The selection is immutable until the next stream.
 | 21:9 | `384 x 160` | `midas-v2-small-static-384x160-fp16weights.tflite.model` | `5a66ab484a888c3c9e1642580ac3086c7d6d3175a860ca1e82f30d7a58c532bd` |
 | 32:9 | `448 x 128` | `midas-v2-small-static-448x128-fp16weights.tflite.model` | `060ec0e16fd4e20f2626d6ac51d80853a1bdf9b2f082c3d933099784cf9cabfb` |
 
-The non-root flavor packages the six models in two standard solid family archives:
+The non-root flavor packages the six fixed-shape aspect graphs for those two selectable model
+families in two standard solid family archives:
 
 - `app/src/nonRoot_game/assets/client-sbs-dav2-models.tar.xz`
 - `app/src/nonRoot_game/assets/client-sbs-midas-models.tar.xz`
@@ -327,9 +329,11 @@ engine from the renderer thread.
 
 Client SBS and Host SBS AI expose no manual depth-tuning parameters. Client normalization,
 convergence, and pop compensation are adaptive GPU state in `ClientSbsGpuDepthProcessor`.
-Reprojection mirrors the host's fixed legacy zero plane: half of the tracked subject shift is used
-as the anchor and the host convergence bias is retained. Do not reintroduce the removed strength,
-convergence, balance, movie-mode, zero-plane, or legacy shader parameters.
+Reprojection mirrors the host's shot-latched median zero plane. The anchor is resolved through the
+same shaped-depth and Bestv2 shift path as the warp, stored as a source-pixel shift immediately on a
+cut, and resolved once more when the new shot settles. There is no subject-lock multiplier or
+separate convergence bias. Do not reintroduce the removed strength, convergence, balance,
+movie-mode, zero-plane, or legacy shader parameters.
 
 The depth model never runs on the full decoded frame. DA-V2 directly bilinear-resizes the entire
 frame to the selected canonical rectangle (`322 x 182`, `350 x 154`, or `434 x 126`); MiDaS does the same for
@@ -338,13 +342,13 @@ padding, or uses a reflected border. The matched color texture remains at the cl
 H` output resolution for reprojection.
 
 The preferred compose path solves the Bestv2 inverse field once per newly adopted depth/profile
-pair. The probe count is compiled once from the stream aspect: 32 for 16:9, 24 for 21:9, and 16 for
-32:9. These are the same
-aspect-scaled budgets used by Apollo,
-without a per-frame branch. The pass stores small signed left- and right-eye source displacements in
-red and green of an `RG16F` map at the source-aligned depth resolution. Signed displacements retain
-more useful half-float precision than absolute normalized source coordinates, while linear sampling
-reconstructs the field at presentation resolution. Final output uses one full-width packed-SBS draw.
+pair. The probe count is compiled once from the stream aspect: 19 for 16:9, 14 for 21:9, and 12 for
+32:9. These counts apply Apollo's 1.22-depth-texel spacing rule to the client's coarser canonical
+depth grids, without a per-frame branch. The pass stores small signed left- and right-eye source
+displacements in red and green of an `RG16F` map at the source-aligned depth resolution. Signed
+displacements retain more useful half-float precision than absolute normalized source coordinates,
+while linear sampling reconstructs the field at presentation resolution. Final output uses one
+full-width packed-SBS draw.
 The shader applies a half-open split at packed X `0.5`, derives an eye-local X without `fract()`
 wrapping, selects the matching RG channel, and performs one warp-map lookup plus one
 request-resolution matched-color sample per output pixel. The `RG16F` warp map is the only reusable
@@ -357,17 +361,64 @@ performance comparisons are not mixed.
 
 ## Scene cuts and depth health
 
-Scene-cut detection is GPU-only and paired with the exact SDR model-input frame. GLES reduces the
-selected rectangular input through bounds-safe 16 x 16 workgroups to persistent integer-luma
-history and combines spatially broad, mean-compensated structural change with coarse histogram
-change. Its grids and GL resources are derived once from the selected stream shape. It writes one
-uint32 cut word to an SSBO; the following depth/profile dispatch consumes that word directly on the
-same GL queue. No per-frame flag crosses through Java or CPU memory.
+Scene-cut detection is GPU-only and paired with the exact SDR model-input frame. Each bounds-safe
+16 x 16 workgroup stores average integer Rec.709 luma for the broad raw-change gate and a separate
+structural value: the median `max(R,G,B)` of a fixed 3 x 3 sample lattice. The latter is an order
+statistic of an exposure-equivariant scalar, so an identical global monotone RGB exposure curve
+(gain, offset, gamma, clamp, and rounding) can preserve an ordering or collapse it into a tie but
+cannot reverse it. On the small persistent block grid the comparison pass checks all ten pairwise
+orderings in a center/left/right/up/down stencil. A relation votes only if it differs by at least
+four codes in both frames; a changed site needs at least four common relations, two reversals, and
+a reversal majority. This scope deliberately excludes codec noise, color matrices, and local tone
+mapping. A proposal requires at least 15% changed sites plus the existing spatially broad raw-change
+gates. Histogram L1 remains diagnostic, not cut authority: exposure can move a histogram, while
+real same-histogram edits exist. Across all six production DA-V2/MiDaS grids, the committed
+`scene_cut` pairs measure 0.433–0.571 and `flat_transition` measures 0.201–0.266; the largest
+adjacent non-cut is 0.062. The weakest cut therefore retains an 11-site margin on its 224-site grid
+at the 15% threshold. The nonlinear clipped-plaid adversary produces zero ordinal reversals.
+The old brightness-only `uniformHardTransition` path is absent. Its grids and GL resources are
+derived once from the selected stream shape. It writes one uint32 structural-evidence word to an
+SSBO; the following depth/profile dispatch consumes that word directly on the same GL queue. No
+per-frame flag crosses through Java or CPU memory.
 
-The depth processor also derives cut evidence from depth change. NaN, infinity, and finite negative
-model values are excluded from statistics, and invalid pixels retain the previous valid temporal
-depth rather than poisoning the profile. Hard color cuts and strong depth evidence reset temporal
-history promptly; ordinary object motion should not.
+The depth processor separately derives geometry evidence from depth change and range-distribution
+shift. Raw structural evidence may reset temporal filtering promptly, but it relatches the
+shot-owned zero plane, adaptive pop, subject state, and range only when moderate depth evidence
+corroborates it (`change >= 0.18`, or `>= 0.10` with range shift `>= 0.06`). Standalone strong
+depth evidence uses the same one-update shot pulse at `change >= 0.58`, or `>= 0.42` with range
+shift `>= 0.10`. Both branches remain blocked through valid-depth-update age 8, and arming happens
+after that update's decision.
+
+Every accepted pulse latches both evidence sources, but they rearm independently: geometry needs
+two consecutive accepted depth updates below `0.08`, while appearance needs two consecutive
+updates without a qualified structural proposal. Persistent evidence therefore cannot repeatedly
+move shot state, and persistent appearance cannot starve a later standalone geometry cut. While
+geometry remains latched, a genuinely new spike may escape on or after valid-depth-update age 8:
+change must be at least `0.30` and exceed its per-update EMA by `0.20` or by `2x`. The EMA uses
+alpha `0.125` and resets to the current fraction on each accepted cut, so a sustained high fraction
+converges instead of pulsing repeatedly.
+
+Cut age and profile-settle age are intentionally separate. The cut counter advances exactly once
+for each accepted inference containing valid depth, never for an all-invalid result, and resets to
+zero on initialization or an accepted cut. Elapsed time and `referenceFrameAdvance` cannot skip its
+startup or refractory guard. The existing profile age remains reference-frame-scaled so adaptive
+pop and the second zero-plane resolution can still cross their wall-time settle boundary after a
+slow inference. In the 128-byte processor SSBO, the final 16 bytes are split into the existing
+two-float geometry-baseline state and a two-int cut-counter state; every preceding state and health
+offset is unchanged. This matches Apollo's one increment per valid completed depth update while
+retaining the client's intentional wall-time normalization only where it belongs.
+
+These depth fractions are calibrated for the client's
+smaller model grid; they intentionally differ from Apollo's capture-grid thresholds. NaN, infinity,
+and finite negative model values are excluded from statistics, and invalid pixels retain the
+previous valid temporal depth rather than poisoning the profile.
+
+An accepted inference can exceptionally contain no valid depth samples after its exact color frame
+has already advanced the structural detector's committed history. In that case the GPU profile
+state carries the structural proposal—without its color texture—to exactly the next valid accepted
+depth update, where current geometry must still corroborate it. That first valid update consumes the
+proposal whether or not it produces a shot pulse. The carry uses the existing GPU state and
+per-inference-slot mailbox ordering; it adds no CPU readback, wait, or cross-frame color/depth pair.
 
 Depth-health stats are diagnostics, not part of inference or reprojection. The renderer samples the
 GPU profile state through a nonblocking readback only while Stats or explicit performance logging is
@@ -436,23 +487,35 @@ rate, and bitrate**. Changing one mode's tuple never changes another mode. After
 handoff succeeds, selecting a mode whose saved or newly staged tuple differs from the tuple backing
 the live decoder automatically commits the complete staged session record and reconnects into the
 selected tuple. Committing the whole record ensures that shared or other-mode edits cannot be lost
-when the Activity is recreated. A same-tuple switch among non-Raw modes remains live; entering or
-leaving Raw always reconnects because its logical `W x H` tuple maps to a mode-specific packed
-transport. Changing Raw's Full/Half choice while Raw is live also reconnects.
+when the Activity is recreated. A same-tuple switch remains live unless it enters or leaves Raw
+Full's distinct `2W x H` transport. Raw Half uses the ordinary `W x H` mono transport, so entering
+or leaving it remains live; changing Raw's Full/Half choice while Raw is live still reconnects.
 **Apply & reconnect** remains the explicit action when no mode-quality or transport change already
 requires a restart. The Client SBS model is also mode-specific, and its aspect bucket is derived
 from the pending Client SBS resolution. Raw's Full/Half choice is likewise mode-specific, persists
 with the current session, and inherits its default from Global Settings.
+
+The resolution ladder keeps its six established landscape choices first and then exposes one
+explicit portrait counterpart for each by swapping `W` and `H`. Those portrait IDs are literal
+host/virtual-display requests; they do not toggle Android's resolution-inversion option or rotate
+the XR activity. Landscape/portrait crossings reconnect so the decoder can use a real
+orientation-specific adaptive envelope rather than a synthetic `5120 x 5120` maximum. Resizes
+within the current orientation remain live when that envelope and the active presentation
+pipeline allow them. Client SBS aspect-fits portrait color into its landscape model with reflected
+side padding and crops the matching padding from depth, avoiding a nonuniform portrait stretch;
+that immutable crop/shader contract participates in the reconnect decision.
 
 The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
 range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
 shared set. Global Settings provide the cross-session defaults for both the shared set and the
 quality baseline inherited independently by each mode.
 
-Fresh installs and reset modes use the verified Galaxy XR baseline: **3840 x 2160 at 90 FPS,
-130 Mbps, HEVC, HDR, Full range, and latency pacing**, with stereo audio, host audio off, and
-Depth Anything V2 as the Client SBS model and Full as Raw SBS per-eye resolution. Existing explicit
-global or per-session choices remain unchanged.
+The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 130 Mbps, HEVC, HDR, Full
+range, and latency pacing**, with stereo audio, host audio off, MiDaS v2.1 Small as the Client SBS
+model, and Full as Raw SBS per-eye resolution. In-session **Use global defaults** inherits the
+values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
+**Use session settings** discards staged edits and restores that mode's durable current-session
+values, falling back to its current global values where no session override exists.
 
 **Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, the Client
 SBS model, and the selected startup mode as one guarded record replacement. It then waits for
@@ -534,17 +597,20 @@ the active tile again toggles that mode's row. A passive down/up chevron with a 
 ratio sits centered against the lower edge of the tile and communicates the expandable state
 without a small nested "Options" target. It does not change the fixed dock/tile geometry. Every
 mode row owns that mode's
-resolution/FPS/bitrate tuple. Resolution uses visual cards, FPS uses a compact segmented control,
-and bitrate uses a bandwidth meter, discrete slider, exact value, and direct minus/plus steps. The
+resolution/FPS/bitrate tuple. Resolution uses visual cards with every landscape choice in the
+first group and every portrait choice beginning on the row below; either group may wrap further
+when the panel is narrow. FPS uses a compact segmented control, and bitrate uses a bandwidth
+meter, discrete slider, exact value, and direct minus/plus steps. The
 row identifies Global versus Current Session inheritance, shows the tuple currently backing the
 live decoder, and offers the same atomic **Apply & reconnect** action whenever any scoped change
 requires it.
 
 Normal and Host SBS rows also show their presentation/source status. Client SBS adds only its model
 choice, resolution-derived fixed aspect bucket, and live GPU backend status; it has no strength,
-convergence, balance, movie-mode, or depth-inference cadence controls. Restoring global defaults is
-scoped: the shared pane resets only shared values, while a mode row resets only that mode's quality
-tuple (plus the Client SBS model or Raw Full/Half choice for its corresponding row).
+convergence, balance, movie-mode, or depth-inference cadence controls. Restoring values is scoped:
+the shared pane's **Use global defaults** stages the currently saved global shared values, while a
+mode row's **Use session settings** restores only that mode's durable quality tuple (plus the Client
+SBS model or Raw Full/Half choice for its corresponding row).
 
 The Settings tile opens the left side panel for values shared by every mode in the current PC
 session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
@@ -705,12 +771,14 @@ For every mode/surface change, test:
   Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
 - Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
   A successfully selected mode whose tuple differs from the live decoder must reconnect into that
-  tuple automatically. Same-tuple non-Raw switches stay live, while every transition into or out
-  of Raw reconnects and negotiates its exact Full (`2W x H`) or Half (`W x H`) transport. Changing
-  Full/Half during Raw also reconnects. Any other staged edits must be
+  tuple automatically. Same-tuple switches stay live when they retain the ordinary `W x H`
+  transport, including transitions into or out of Raw Half. Entering or leaving Raw Full
+  reconnects to cross its `2W x H` transport boundary, and changing Full/Half during Raw also
+  reconnects. Any other staged edits must be
   committed in the same atomic record before that automatic Activity recreation.
 - Normal and Host SBS remain direct and work when Client SBS initialization fails.
-- Test all six selectable models separately on Galaxy XR: the three canonical DA-V2 entries from
+- Test both selectable model families across all six fixed-shape aspect graphs on Galaxy XR: the
+  three canonical DA-V2 entries from
   `client-sbs-dav2-models.tar.xz` and the three MiDaS entries from
   `client-sbs-midas-models.tar.xz`. Both
   families must report

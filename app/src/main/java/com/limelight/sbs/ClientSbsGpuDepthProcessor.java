@@ -37,7 +37,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      * <ol>
      *     <li>stretch low, stretch high, stretch inverse range, subject depth</li>
      *     <li>recenter delta, zero-plane anchor shift, pop ratio, profile-ready flag</li>
-     *     <li>raw P2, raw P98, edge fraction, change fraction</li>
+     *     <li>raw P2, raw P98, settle-latched edge fraction, change fraction</li>
      *     <li>subject candidate, pop strength, hard-cut flag, scene age</li>
      * </ol>
      */
@@ -50,6 +50,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      */
     public static final float ADAPTIVE_POP_FLOOR = 1.20f;
     public static final float ADAPTIVE_POP_CEILING = 2.00f;
+    /** Diagnostic sentinel used until a settled edge field has classified the current shot. */
+    public static final float ADAPTIVE_POP_UNCLASSIFIED_EDGE = -1.0f;
+    /** Wall-time/reference-frame age used only for adaptive-pop and anchor settling. */
+    static final int PROFILE_SETTLE_REFERENCE_FRAMES = 8;
 
     public static final int PROFILE_TEXEL_COUNT = 4;
     public static final int PROFILE_TEXEL_STRETCH = 0;
@@ -68,7 +72,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private static final int RAW_STATS_BYTES = 4 * (4 + 256);
     private static final int PROFILE_STATS_BYTES = 4 * (256 + 256 + 4);
-    private static final int STATE_BYTES = 7 * 4 * Float.BYTES;
+    // Seven full vectors followed by one vec2 and one ivec2. Splitting the final 16 bytes gives
+    // the cut detector an exact valid-depth-update counter without moving existing health fields.
+    static final int STATE_BYTES = 7 * 4 * Float.BYTES
+            + 2 * Float.BYTES + 2 * Integer.BYTES;
     private static final int SCENE_CUT_MAILBOX_SLOT_COUNT = 2;
     private static final int SCENE_CUT_MAILBOX_BYTES =
             SCENE_CUT_MAILBOX_SLOT_COUNT * Integer.BYTES;
@@ -135,7 +142,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int resolvePixelCountUniform;
     private int resolveSubjectAlphaUniform;
     private int resolveBandAlphaUniform;
-    private int resolveSpatialScaleUniform;
     private int resolveReferenceFrameAdvanceUniform;
 
     private int currentDepthIndex;
@@ -390,7 +396,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             GLES20.glUniform1i(resolvePixelCountUniform, outputWidth * outputHeight);
             GLES20.glUniform1f(resolveSubjectAlphaUniform, subjectAlpha);
             GLES20.glUniform1f(resolveBandAlphaUniform, bandAlpha);
-            GLES20.glUniform1f(resolveSpatialScaleUniform, spatialThresholdScale);
             GLES20.glUniform1i(resolveReferenceFrameAdvanceUniform, referenceFrameAdvance);
             GLES31.glBindImageTexture(PROFILE_IMAGE_BINDING, profileTexture, 0, false, 0,
                     GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F);
@@ -660,8 +665,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         resolvePixelCountUniform = requiredUniform(resolveProfileProgram, "uPixelCount");
         resolveSubjectAlphaUniform = requiredUniform(resolveProfileProgram, "uSubjectAlpha");
         resolveBandAlphaUniform = requiredUniform(resolveProfileProgram, "uBandAlpha");
-        resolveSpatialScaleUniform = requiredUniform(
-                resolveProfileProgram, "uSpatialThresholdScale");
         resolveReferenceFrameAdvanceUniform = requiredUniform(
                 resolveProfileProgram, "uReferenceFrameAdvance");
     }
@@ -1034,6 +1037,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private long frameSequence;
         private int expectedRawSamples;
         private int validRawSamples;
+        // Reference-frame-scaled profile age for pop/anchor diagnostics, not the cut refractory.
         private int sceneAge;
         private int frameNumber;
         private boolean hardCut;
@@ -1086,8 +1090,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             subjectDepth = 0.5f;
             recenterDelta = 0.0f;
             zeroAnchorShift = 0.0f;
-            edgeFraction = 0.0f;
-            popStrength = 1.20f;
+            edgeFraction = ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+            popStrength = ADAPTIVE_POP_FLOOR;
             popRatio = 1.0f;
             changeFraction = 0.0f;
             hardCutEvidence = 0.0f;
@@ -1102,7 +1106,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             expectedRawSamples = expectedSamples;
             validRawSamples = Math.max(0, state.getInt(88));
             sceneAge = state.getInt(80);
-            depthCutArmed = state.getInt(84) > 0;
+            depthCutArmed = ClientSbsShotCutPolicy.isGeometryArmed(state.getInt(84));
             frameNumber = state.getInt(92);
             hardCut = state.getInt(76) != 0;
             frameRangeLow = state.getFloat(0);
@@ -1161,6 +1165,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         /** Shot-latched zero-plane anchor, in Bestv2 source-pixel shift units. */
         public float getZeroAnchorShift() { return zeroAnchorShift; }
         public float getEdgeFraction() { return edgeFraction; }
+        /** Whether {@link #getEdgeFraction()} selected the currently latched pop strength. */
+        public boolean hasAdaptivePopClassification() {
+            return Float.isFinite(edgeFraction) && edgeFraction >= 0.0f;
+        }
         public float getPopStrength() { return popStrength; }
         public float getPopRatio() { return popRatio; }
         public float getChangeFraction() { return changeFraction; }

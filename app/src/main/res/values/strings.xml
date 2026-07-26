@@ -348,6 +348,12 @@
     <string name="resolution_uw_1080p">UW 1080p</string>
     <string name="resolution_uw_1440p">UW 1440p</string>
     <string name="resolution_5k2k">5K2K</string>
+    <string name="xr_resolution_1080p_portrait">1080p Portrait</string>
+    <string name="xr_resolution_1440p_portrait">1440p Portrait</string>
+    <string name="xr_resolution_4k_portrait">4K Portrait</string>
+    <string name="xr_resolution_uw_1080p_portrait">UW 1080p Portrait</string>
+    <string name="xr_resolution_uw_1440p_portrait">UW 1440p Portrait</string>
+    <string name="xr_resolution_5k2k_portrait">5K2K Portrait</string>
 
     <string name="fps_30">30 FPS</string>
     <string name="fps_60">60 FPS</string>

@@ -41,6 +41,20 @@ public class MediaCodecDecoderRendererEnvelopeTest {
     }
 
     @Test
+    public void portraitEnvelopeUsesRealPortraitMaximumInsteadOfSyntheticSquare() {
+        assertArrayEquals(new int[] {2160, 5120},
+                MediaCodecDecoderRenderer.adaptivePlaybackEnvelope(
+                        1080, 1920, true, false,
+                        MoonBridge.VIDEO_FORMAT_H265, true,
+                        NO_DECODER_LIMIT, NO_DECODER_LIMIT));
+        assertArrayEquals(new int[] {4320, 5120},
+                MediaCodecDecoderRenderer.adaptivePlaybackEnvelope(
+                        2160, 1920, true, true,
+                        MoonBridge.VIDEO_FORMAT_H265, true,
+                        NO_DECODER_LIMIT, NO_DECODER_LIMIT));
+    }
+
+    @Test
     public void extendedHostSbsEnvelopeSaturatesTheCodecCeiling() {
         // 5120 doubled is 10240, above every codec ceiling, so HEVC/AV1 caps at 8192. The host
         // clamps its packed width to match and reports the clamped mode in its ack.

@@ -7,9 +7,9 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
- * The depth bucket is the unit of immutability for Client SBS, so it is also the boundary between
- * a live resolution change and one that needs a reconnect. These tests pin the selection boundary
- * itself rather than trusting arithmetic done by hand.
+ * Pins the DA-V2/probe-grid bucket selection itself rather than trusting arithmetic done by hand.
+ * Live-resize decisions compare {@link ClientSbsPipelineContract}, because MiDaS graph boundaries
+ * do not match this table.
  */
 public class ClientSbsDepthBucketsTest {
     // Bucket aspects: 322/182, 350/154, 434/126. select() minimizes |log(bucket / source)|, so the
@@ -35,7 +35,7 @@ public class ClientSbsDepthBucketsTest {
 
     @Test
     public void sixteenTenSharesTheSixteenNineBucket() {
-        // An aspect change within a bucket needs no model change and no shader regeneration.
+        // These aspects share DA-V2's model shape and the probe-grid identity.
         assertTrue(ClientSbsDepthBuckets.sameBucket(16.0 / 9.0, 16.0 / 10.0));
         assertEquals(ClientSbsDepthBuckets.Bucket.ASPECT_16_9,
                 ClientSbsDepthBuckets.select(16.0 / 10.0));

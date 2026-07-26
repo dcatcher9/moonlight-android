@@ -12,11 +12,12 @@ import com.limelight.LimeLog;
  * GPU-only hard color-cut detector for the Client-SBS model-input texture.
  *
  * <p>The input is the renderer's model-sized SDR {@link GLES20#GL_TEXTURE_2D}. Each compute
- * workgroup reduces a 16x16 tile to one integer Rec.709-luma value. Partial tiles at the right and
- * bottom edges contain only in-bounds samples. A second pass compares the resulting luma grid with
- * persistent GPU history, and a final pass combines spatially broad change,
- * mean-compensated structural change, and coarse histogram change. This intentionally rejects
- * ordinary object motion while resetting depth history immediately on a hard cut.</p>
+ * workgroup reduces a 16x16 tile to average integer Rec.709 luma plus the median max-RGB value of
+ * a fixed 3x3 sample lattice. Partial tiles at the right and bottom edges contain only in-bounds
+ * samples. A second pass compares the resulting grid with persistent GPU history, and a final pass
+ * combines spatially broad luma change with reliable local ordinal-structure change. The ordinal
+ * cue rejects a shared global monotone exposure transform, including clamp-created ties, while
+ * publishing high-recall structural evidence for the depth processor.</p>
  *
  * <p>No texture, buffer, or flag is read by the CPU.
  * {@link #processRendererOwnedAndPack(int, int)} packs the model tensor while reducing the same
@@ -43,7 +44,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private static final int INPUT_TENSOR_SSBO_BINDING = 2;
     private static final int PREVIOUS_LUMA_IMAGE_BINDING = 0;
     private static final int CURRENT_LUMA_IMAGE_BINDING = 1;
-    private static final int STATS_UINT_COUNT = 12 + 16 + 16;
+    private static final int STATS_UINT_COUNT = 8 + 16 + 16;
     private static final int STATS_BYTES = STATS_UINT_COUNT * Integer.BYTES;
     private static final int OUTPUT_BYTES = Integer.BYTES;
 

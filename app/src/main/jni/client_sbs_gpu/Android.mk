@@ -9,7 +9,7 @@ LOCAL_PATH := $(call my-dir)
 ifeq ($(PRODUCT_FLAVOR),nonRoot)
 include $(CLEAR_VARS)
 LOCAL_MODULE := client-sbs-gpu
-LOCAL_SRC_FILES := client_sbs_gpu.c client_sbs_npu_bench.c
+LOCAL_SRC_FILES := client_sbs_gpu.c
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/../third_party/litert/include
 LOCAL_CFLAGS := -std=c11
 LOCAL_LDLIBS := -llog -lEGL -lGLESv3

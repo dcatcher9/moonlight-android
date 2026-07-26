@@ -195,6 +195,26 @@ public class PreferenceConfiguration {
     public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
     private static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
             CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
+
+    /**
+     * Returns the renderer-supported model family for a stored Client SBS model id.
+     *
+     * <p>Keep every settings/controller caller on this same fallback path: legacy DA-V2 ids map
+     * to the current DA-V2 family, while null, corrupt, or future/unknown ids fail closed to the
+     * renderer default.</p>
+     */
+    public static String normalizeClientSbsDepthModelId(String modelId) {
+        if (CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY.equals(modelId)
+                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(modelId)
+                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350.equals(modelId)) {
+            return CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
+        }
+        if (CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(modelId)
+                || CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(modelId)) {
+            return modelId;
+        }
+        return DEFAULT_CLIENT_SBS_DEPTH_MODEL;
+    }
     public static final String DEFAULT_RAW_SBS_PER_EYE_RESOLUTION =
             RawSbsPerEyeResolution.FULL.preferenceValue;
 
@@ -528,7 +548,7 @@ public class PreferenceConfiguration {
     }
 
     public static boolean isNativeResolution(int width, int height) {
-        // It's not a native resolution if it matches an existing resolution option
+        // It's not a native resolution if it matches an existing resolution option.
         if (width == 640 && height == 360) {
             return false;
         }
@@ -538,17 +558,7 @@ public class PreferenceConfiguration {
         else if (width == 1280 && height == 720) {
             return false;
         }
-        else if (width == 1920 && height == 1080) {
-            return false;
-        }
-        else if (width == 2560 && height == 1440) {
-            return false;
-        }
-        else if (width == 3840 && height == 2160) {
-            return false;
-        }
-
-        return true;
+        return !XrResolutionOptions.isStandardId(width + "x" + height);
     }
 
     // If we have a screen that has semi-square dimensions, we may want to change our behavior
@@ -915,24 +925,24 @@ public class PreferenceConfiguration {
         config.videoScaleMode = getVideoScaleMode(prefs);
 
         config.videoFormat = getVideoFormatValue(prefs);
-        String clientSbsDepthModel;
+        String storedClientSbsDepthModel;
         try {
-            clientSbsDepthModel = prefs.getString(
+            storedClientSbsDepthModel = prefs.getString(
                     CLIENT_SBS_DEPTH_MODEL_PREF_STRING, DEFAULT_CLIENT_SBS_DEPTH_MODEL);
         } catch (ClassCastException invalidStoredType) {
-            clientSbsDepthModel = DEFAULT_CLIENT_SBS_DEPTH_MODEL;
+            storedClientSbsDepthModel = null;
         }
-        if (CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY.equals(clientSbsDepthModel)
-                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(clientSbsDepthModel)
+        String clientSbsDepthModel =
+                normalizeClientSbsDepthModelId(storedClientSbsDepthModel);
+        if (!clientSbsDepthModel.equals(storedClientSbsDepthModel)
+                && (CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY.equals(
+                        storedClientSbsDepthModel)
+                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(
+                        storedClientSbsDepthModel)
                 || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350.equals(
-                clientSbsDepthModel)) {
-            clientSbsDepthModel = CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
+                        storedClientSbsDepthModel))) {
             prefs.edit().putString(CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
                     clientSbsDepthModel).apply();
-        }
-        if (!CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(clientSbsDepthModel)
-                && !CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(clientSbsDepthModel)) {
-            clientSbsDepthModel = DEFAULT_CLIENT_SBS_DEPTH_MODEL;
         }
         config.clientSbsDepthModelId = clientSbsDepthModel;
         String rawSbsPerEyeResolution;

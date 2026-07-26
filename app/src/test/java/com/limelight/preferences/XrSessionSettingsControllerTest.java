@@ -210,6 +210,50 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void unknownStoredClientModelUsesTheRendererFallbackDuringResizeClassification() {
+        assertTrue(store.edit(pc, app)
+                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                        "future-model-family",
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                .commit());
+
+        XrSessionSettingsController controller = withFullEnvelope(controller());
+        String rendererModel = PreferenceConfiguration.readPreferences(
+                context, controller.getStartupPreferences()).clientSbsDepthModelId;
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2, rendererModel);
+        assertEquals(rendererModel, controller.getClientSbsModel().pendingModelId);
+
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                SessionSettingsModel.Key.RESOLUTION, "3840x2160");
+
+        // This invokes ClientSbsPipelineContract. An unnormalized stored id used to throw here,
+        // even though the live renderer had already fallen back to MiDaS.
+        assertFalse(controller.selectedModeRequiresReconnect());
+        assertTrue(controller.selectedModeHasLiveApplicableChange());
+    }
+
+    @Test
+    public void malformedClientModelPreferenceTypeAlsoUsesTheRendererFallback() {
+        assertTrue(globals.edit()
+                .putInt(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING, 42)
+                .commit());
+
+        XrSessionSettingsController controller = withFullEnvelope(controller());
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                controller.getClientSbsModel().pendingModelId);
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                PreferenceConfiguration.readPreferences(
+                        context, globals).clientSbsDepthModelId);
+
+        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                SessionSettingsModel.Key.RESOLUTION, "3840x2160");
+        assertFalse(controller.selectedModeRequiresReconnect());
+    }
+
+    @Test
     public void rawPerEyeResolutionDefaultsToFullAndInheritsGlobalHalf() {
         RawSbsModeSettingsModel initial = controller().getRawSbsModel();
 
@@ -1367,10 +1411,27 @@ public final class XrSessionSettingsControllerTest {
     public void clientSbsCrossBucketResolutionDeltaRequiresReconnect() {
         // 1920x1080 (16:9) -> 2560x1080 (21:9) re-stages a different depth model and regenerates
         // the reprojection shader source, so it cannot be applied live.
-        assertTrue(XrSessionSettingsController.sameClientSbsDepthBucket(
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1440}, new int[] {1920, 1080}));
-        assertFalse(XrSessionSettingsController.sameClientSbsDepthBucket(
+        assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1080}, new int[] {1920, 1080}));
+    }
+
+    @Test
+    public void clientSbsResizeUsesTheSelectedModelFamilyContract() {
+        int[] aspect205 = {2050, 1000};
+        int[] aspect237 = {2370, 1000};
+
+        // Both aspects select DA-V2's 350x154 graph and its 14-probe shader.
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                aspect205, aspect237));
+        // MiDaS crosses from 352x192 to 384x160 between the same two aspects.
+        assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                aspect205, aspect237));
     }
 
     @Test
@@ -1563,6 +1624,49 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void clampedLiveAckReplacesThePendingTupleBeforeCommit() {
+        XrSessionSettingsController controller = withFullEnvelope(controller());
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.RESOLUTION, "5120x2160");
+        StreamQualityTuple requested = controller.getSelectedModePendingQuality();
+        StreamQualityTuple clamped = new StreamQualityTuple(
+                "4096x1728", requested.frameRate, requested.bitrateKbps);
+
+        controller.notifyLiveStreamQualityApplied(
+                SessionSettingsStore.PresenterMode.NORMAL, clamped);
+
+        assertEquals(clamped, controller.getSelectedModePendingQuality());
+        assertEquals(clamped, controller.getLiveStreamQuality());
+        assertFalse(controller.hasPendingChanges());
+        assertTrue(controller.commitPending());
+        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+                clamped.resolution, clamped.frameRate, clamped.bitrateKbps);
+    }
+
+    @Test
+    public void refusalPublicationPersistsTheTupleStillInEffect() {
+        XrSessionSettingsController controller = withFullEnvelope(controller());
+        StreamQualityTuple stillInEffect = controller.getLiveStreamQuality();
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.FRAME_RATE, "90");
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.BITRATE, "80000");
+        assertTrue(controller.hasPendingChanges());
+
+        // A non-reconnect refusal is published through the same callback as a reconciled success,
+        // but with the previous requested-wire tuple that the host reports is still active.
+        controller.notifyLiveStreamQualityApplied(
+                SessionSettingsStore.PresenterMode.NORMAL, stillInEffect);
+
+        assertEquals(stillInEffect, controller.getSelectedModePendingQuality());
+        assertFalse(controller.hasPendingChanges());
+        assertTrue(controller.commitPending());
+        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+                stillInEffect.resolution, stillInEffect.frameRate,
+                stillInEffect.bitrateKbps);
+    }
+
+    @Test
     public void notifyLiveStreamQualityAppliedMarksTheModeAsSessionScoped() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
         controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
@@ -1573,6 +1677,38 @@ public final class XrSessionSettingsControllerTest {
         assertEquals(SessionSettingsModel.Source.CURRENT_SESSION,
                 controller.getModeStreamQualityModel(SessionSettingsStore.PresenterMode.NORMAL)
                         .get(SessionSettingsModel.Key.BITRATE).source);
+    }
+
+    @Test
+    public void repeatedLiveAcksPersistTheRequestedWireBitrate() {
+        assertTrue(globals.edit()
+                .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 130000)
+                .commit());
+        XrSessionSettingsController controller = withFullEnvelope(controller());
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.FRAME_RATE, "90");
+
+        StreamQualityTuple firstRequest = controller.getSelectedModePendingQuality();
+        assertEquals(130000, firstRequest.bitrateKbps);
+        // XrStreamPresenter reconciles Apollo's lower effective encoder bitrate back into a tuple
+        // carrying this original wire budget before Game forwards it to the controller.
+        controller.notifyLiveStreamQualityApplied(new StreamQualityTuple(
+                firstRequest.resolution, firstRequest.frameRate, firstRequest.bitrateKbps));
+        assertTrue(controller.commitPending());
+        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+                "1920x1080", "90", 130000);
+
+        controller = withFullEnvelope(controller());
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.RESOLUTION, "3840x2160");
+        StreamQualityTuple secondRequest = controller.getSelectedModePendingQuality();
+        assertEquals("a prior effective encoder ACK must not become the next wire budget",
+                130000, secondRequest.bitrateKbps);
+        controller.notifyLiveStreamQualityApplied(new StreamQualityTuple(
+                secondRequest.resolution, secondRequest.frameRate, secondRequest.bitrateKbps));
+        assertTrue(controller.commitPending());
+        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+                "3840x2160", "90", 130000);
     }
 
     // --- retired 720p migration -----------------------------------------------------------
@@ -1614,12 +1750,9 @@ public final class XrSessionSettingsControllerTest {
     public void retiredResolutionMigrationLeavesEveryLadderEntryAlone() {
         assertEquals(PreferenceConfiguration.RES_1080P,
                 PreferenceConfiguration.migrateRetiredResolution("1280x720"));
-        for (String ladderEntry : new String[] {
-                PreferenceConfiguration.RES_1080P, PreferenceConfiguration.RES_1440P,
-                PreferenceConfiguration.RES_4K, PreferenceConfiguration.RES_UW_1080P,
-                PreferenceConfiguration.RES_UW_1440P, PreferenceConfiguration.RES_5K2K}) {
-            assertEquals(ladderEntry,
-                    PreferenceConfiguration.migrateRetiredResolution(ladderEntry));
+        for (XrResolutionOptions.Option option : XrResolutionOptions.standardOptions()) {
+            assertEquals(option.id,
+                    PreferenceConfiguration.migrateRetiredResolution(option.id));
         }
     }
 
@@ -1630,26 +1763,81 @@ public final class XrSessionSettingsControllerTest {
         for (SessionSettingsStore.PresenterMode mode
                 : SessionSettingsStore.PresenterMode.values()) {
             XrSessionSettingsController controller = withFullEnvelope(controller());
-            for (String ladderEntry : new String[] {
-                    PreferenceConfiguration.RES_1080P, PreferenceConfiguration.RES_1440P,
-                    PreferenceConfiguration.RES_4K, PreferenceConfiguration.RES_UW_1080P,
-                    PreferenceConfiguration.RES_UW_1440P, PreferenceConfiguration.RES_5K2K}) {
+            assertEquals(XrResolutionOptions.standardOptions().size(),
+                    controller.getModeStreamQualityModel(mode)
+                            .get(SessionSettingsModel.Key.RESOLUTION).choices.size());
+            for (XrResolutionOptions.Option option : XrResolutionOptions.standardOptions()) {
                 controller.selectModeQualitySetting(mode,
-                        SessionSettingsModel.Key.RESOLUTION, ladderEntry);
-                assertEquals(ladderEntry, controller.getModeStreamQualityModel(mode)
+                        SessionSettingsModel.Key.RESOLUTION, option.id);
+                assertEquals(option.id, controller.getModeStreamQualityModel(mode)
                         .pendingQuality.resolution);
             }
         }
     }
 
     @Test
+    public void portraitResolutionPersistsAsLiteralGeometryWithoutRotationPreference() {
+        XrSessionSettingsController controller = controller();
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.RESOLUTION,
+                XrResolutionOptions.RESOLUTION_4K_PORTRAIT);
+
+        assertTrue(controller.commitPending());
+        SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
+        assertEquals(XrResolutionOptions.RESOLUTION_4K_PORTRAIT,
+                snapshot.preferencesForMode(SessionSettingsStore.PresenterMode.NORMAL)
+                        .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
+        assertFalse(globals.contains("checkbox_auto_invert_video_resolution"));
+
+        XrSessionSettingsController restored =
+                new XrSessionSettingsController(store, pc, app, globals, snapshot);
+        assertEquals(XrResolutionOptions.RESOLUTION_4K_PORTRAIT,
+                restored.getModeStreamQualityModel(SessionSettingsStore.PresenterMode.NORMAL)
+                        .pendingQuality.resolution);
+    }
+
+    @Test
+    public void landscapeToPortraitReconnectsButPortraitFamilyResizeCanStayLive() {
+        XrSessionSettingsController landscape = controller();
+        landscape.setLiveResolutionEnvelope(5120, 2160);
+        landscape.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.RESOLUTION,
+                XrResolutionOptions.RESOLUTION_1080P_PORTRAIT);
+        assertTrue(landscape.selectedModeRequiresReconnect());
+        assertFalse(landscape.selectedModeHasLiveApplicableChange());
+
+        assertTrue(landscape.commitPending());
+        XrSessionSettingsController portrait = new XrSessionSettingsController(
+                store, pc, app, globals, store.snapshot(pc, globals));
+        portrait.setLiveResolutionEnvelope(2160, 5120);
+        portrait.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.RESOLUTION,
+                XrResolutionOptions.RESOLUTION_1440P_PORTRAIT);
+        assertFalse(portrait.selectedModeRequiresReconnect());
+        assertTrue(portrait.selectedModeHasLiveApplicableChange());
+    }
+
+    @Test
+    public void clientSbsPortraitContractReconnectsOnOrientationButNotSameAspectResize() {
+        assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                new int[] {1920, 1080}, new int[] {1080, 1920}));
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                new int[] {1080, 1920}, new int[] {1440, 2560}));
+    }
+
+    @Test
     public void clientSbsStaysLiveWithinTheUltrawideFamily() {
         // 2560x1080, 3440x1440 and 5120x2160 all select ASPECT_21_9.
-        assertTrue(XrSessionSettingsController.sameClientSbsDepthBucket(
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1080}, new int[] {5120, 2160}));
-        assertTrue(XrSessionSettingsController.sameClientSbsDepthBucket(
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {3440, 1440}, new int[] {5120, 2160}));
-        assertTrue(XrSessionSettingsController.sameClientSbsDepthBucket(
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1080}, new int[] {3440, 1440}));
     }
 
@@ -1659,7 +1847,8 @@ public final class XrSessionSettingsControllerTest {
             for (int[] ultrawide : new int[][] {{2560, 1080}, {3440, 1440}, {5120, 2160}}) {
                 assertFalse(widescreen[0] + "x" + widescreen[1] + " vs "
                                 + ultrawide[0] + "x" + ultrawide[1],
-                        XrSessionSettingsController.sameClientSbsDepthBucket(
+                        XrSessionSettingsController.sameClientSbsPipelineContract(
+                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                                 widescreen, ultrawide));
             }
         }

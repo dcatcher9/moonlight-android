@@ -513,16 +513,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
      * Extracts only the selected full graph from its solid model-family TAR.XZ into a hash-named
      * code-cache file and verifies it before native LiteRT maps it.
      */
-    /**
-     * Materialises and SHA-verifies a model outside the engine, for the accelerator benchmark.
-     * Package-private on purpose: this is a measurement entry point, not a second load path.
-     */
-    static File prepareBenchmarkModelFile(Context storageContext, AssetManager modelAssets,
-                                          ClientSbsModelManifest manifest) throws IOException {
-        return prepareVerifiedModelFile(storageContext, modelAssets, manifest,
-                "client-sbs-accelerator-bench-models");
-    }
-
     private static File prepareVerifiedModelFile(Context storageContext,
                                                  AssetManager modelAssets,
                                                  ClientSbsModelManifest manifest,

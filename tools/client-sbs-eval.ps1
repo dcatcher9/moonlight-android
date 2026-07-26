@@ -36,6 +36,7 @@ try {
         "--tests" "com.limelight.sbs.ClientSbsGpuDepthShadersTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuSceneCutDetectorTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuSceneCutShadersTest" `
+        "--tests" "com.limelight.sbs.ClientSbsShotCutPolicyTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuTimerTest" `
         "--tests" "com.limelight.sbs.ClientSbsTemporalTuningTest" `
         "--tests" "com.limelight.binding.video.DecodedVideoDimensionsTest" `

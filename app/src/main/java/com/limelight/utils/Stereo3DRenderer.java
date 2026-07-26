@@ -55,19 +55,17 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private static final int GPU_CLOSE_ATTEMPTS_ON_OWNER_WORKER = 3;
     /** One warp texel per depth texel avoids oversolving the already low-resolution depth field. */
     private static final int WARP_MAP_SCALE = 1;
+    private final String clientSbsModelId;
+    private final ClientSbsPipelineContract pipelineContract;
     private final ClientSbsModelManifest aiModel;
     private final int modelInputHeight;
     private final int modelInputWidth;
     /**
-     * Stream aspect. Not final: a live resolution change may move it, but only within the same
-     * depth bucket — see {@link #requestLiveStreamResize}, which is the invariant's enforcement
-     * point. Everything derived from it is bucket-derived, so a same-bucket move is a no-op for
-     * the model, the depth/warp targets and the compiled shader source.
+     * Stream aspect. Not final: a live resolution change may move it, but only while the complete
+     * immutable pipeline contract stays equal — see {@link #requestLiveStreamResize}.
      */
     private volatile float sourceAspect;
-    /** Tolerance for the exact-aspect fallback used by non-direct-full-frame models. */
-    private static final float ASPECT_EPSILON = 1e-3f;
-    /** Compiled once from the same static aspect bucket as the selected depth model. */
+    /** Compiled once from its own static probe bucket. */
     private final int reprojectionProbeSteps;
     private long latchedFrameSequence;
     private long lastCapturedFrameSequence;
@@ -412,20 +410,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         this.performanceSamplingEnabled = performanceSamplingEnabled;
         resetPerformanceCountersLocked(System.nanoTime());
         sourceAspect = (float) prefConfig.width / Math.max(prefConfig.height, 1);
-        reprojectionProbeSteps = ClientSbsShaders.probeStepsForAspect(sourceAspect);
-        aiModel = ClientSbsModelManifest.forStream(
-                prefConfig.clientSbsDepthModelId, sourceAspect);
+        clientSbsModelId = prefConfig.clientSbsDepthModelId;
+        pipelineContract = ClientSbsPipelineContract.forStream(clientSbsModelId, sourceAspect);
+        reprojectionProbeSteps = pipelineContract.getReprojectionProbeSteps();
+        aiModel = pipelineContract.getModelManifest();
         aiModel.validateFloatGpuRendererContract();
         modelInputWidth = aiModel.getInputWidth();
         modelInputHeight = aiModel.getInputHeight();
-        depthMapWidth = aiModel.getDepthOutputWidth(sourceAspect);
-        depthMapHeight = aiModel.getDepthOutputHeight(sourceAspect);
+        depthMapWidth = pipelineContract.getDepthOutputWidth();
+        depthMapHeight = pipelineContract.getDepthOutputHeight();
         warpMapWidth = depthMapWidth * WARP_MAP_SCALE;
         warpMapHeight = depthMapHeight * WARP_MAP_SCALE;
         LimeLog.info("Client SBS stream model selected once: " + aiModel.getId()
                 + " input=" + modelInputWidth + "x" + modelInputHeight
                 + " dynamic=" + aiModel.hasDynamicSpatialShape()
-                + " directFullFrame=" + aiModel.usesDirectFullFrameResize()
+                + " directFullFrame=" + pipelineContract.usesDirectFullFrameResize()
                 + " sourceAspect=" + sourceAspect
                 + " warpProbes=" + reprojectionProbeSteps);
 
@@ -448,12 +447,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final boolean rangeCollapsed;
         final float popStrength;
         /**
-         * Weighted edge density -- the adaptive-pop controller's input. Logged because the band
-         * endpoints are a calibration: reading only the resolved pop cannot distinguish "this
-         * scene is genuinely clean" from "the endpoints are wrong for this model", and those need
-         * different fixes.
+         * Settle-latched weighted edge density that selected {@link #popStrength}. Logged because
+         * the band endpoints are a calibration: reading only the resolved pop cannot distinguish
+         * "this scene is genuinely clean" from "the endpoints are wrong for this model", and those
+         * need different fixes.
          */
         final float edgeFraction;
+        final boolean popClassified;
         final float changeFraction;
         final int sceneAge;
 
@@ -463,7 +463,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             effectiveRangeWidth = 0.0f;
             rangeCollapsed = true;
             popStrength = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR;
-            edgeFraction = 0.0f;
+            edgeFraction = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+            popClassified = false;
             changeFraction = 0.0f;
             sceneAge = 0;
         }
@@ -474,6 +475,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             effectiveRangeWidth = snapshot.getEffectiveRangeWidth();
             rangeCollapsed = snapshot.isPercentileRangeCollapsed();
             edgeFraction = snapshot.getEdgeFraction();
+            popClassified = snapshot.hasAdaptivePopClassification();
             changeFraction = snapshot.getChangeFraction();
             sceneAge = snapshot.getSceneAge();
             popStrength = snapshot.getPopStrength();
@@ -533,6 +535,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public final float effectiveDepthRangeWidth;
         public final boolean rawDepthRangeCollapsed;
         public final float stereoPopStrength;
+        /** True when depthEdgeFraction selected stereoPopStrength at the settle crossing. */
+        public final boolean adaptivePopClassified;
         public final float depthEdgeFraction;
         public final float depthChangeFraction;
         public final int depthSceneAge;
@@ -592,6 +596,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.effectiveDepthRangeWidth = health.effectiveRangeWidth;
             this.rawDepthRangeCollapsed = health.rangeCollapsed;
             this.stereoPopStrength = health.popStrength;
+            this.adaptivePopClassified = health.popClassified;
             this.depthEdgeFraction = health.edgeFraction;
             this.depthChangeFraction = health.changeFraction;
             this.depthSceneAge = health.sceneAge;
@@ -1186,37 +1191,22 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
      * Whether a live resolution change to {@code width x height} can be absorbed without
      * rebuilding the depth pipeline.
      *
-     * <p>The binding constraint is <em>depth-bucket identity</em>, not exact aspect. In the
-     * production path everything derived from {@link #sourceAspect} is bucket-derived:</p>
+     * <p>The binding constraint is the complete immutable pipeline identity, not a generic aspect
+     * bucket. It includes:</p>
      * <ul>
-     *   <li>{@code ClientSbsShaders.probeStepsForAspect} routes through the same
-     *       {@code ClientSbsDepthInputShape.select} buckets and returns 32/24/16, so the
-     *       {@code PROBE_STEPS} literal substituted into the reprojection and warp-map shader
-     *       source is identical for any two aspects in one bucket. No program is regenerated.</li>
-     *   <li>{@code ClientSbsModelManifest.forStream} selects the same model.</li>
-     *   <li>{@code getDepthOutputWidth/Height} return the model's fixed output size whenever the
-     *       model uses a direct full-frame resize — which every production manifest does — so
-     *       {@code depthMapWidth/Height} and the warp-map targets do not move at all.</li>
-     *   <li>{@code ClientSbsGpuDepthProcessor} pins {@code contentScale} to 1.0 when reflected
-     *       padding is not removed, which is likewise the production configuration.</li>
+     *   <li>the model-family-specific manifest selected for the new aspect,</li>
+     *   <li>its model/depth/warp target dimensions, and</li>
+     *   <li>the independently bucketed {@code PROBE_STEPS} literal compiled into both
+     *       reprojection shader programs.</li>
      * </ul>
-     *
-     * <p>A model that does <em>not</em> use a direct full-frame resize would size its depth output
-     * continuously from the aspect and would compile a live {@code u_sourceAspect} uniform, so
-     * this narrows to exact-aspect-unchanged for that case rather than reallocating targets that
-     * are entangled with the inference pipeline.</p>
      */
     public boolean canResizeStreamLive(int width, int height) {
         if (!clientSbs || width <= 0 || height <= 0 || shuttingDown.get()) {
             return false;
         }
         float newAspect = (float) width / Math.max(height, 1);
-        if (!aiModel.usesDirectFullFrameResize()) {
-            // Depth output dims and the model-input aspect uniform both vary continuously here.
-            return Math.abs(newAspect - sourceAspect) <= ASPECT_EPSILON;
-        }
-        return ClientSbsDepthInputShape.select(newAspect)
-                .equals(ClientSbsDepthInputShape.select(sourceAspect));
+        return pipelineContract.equals(
+                ClientSbsPipelineContract.forStream(clientSbsModelId, newAspect));
     }
 
     /**
@@ -1246,8 +1236,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             if (shuttingDown.get() || !clientSbs || prefConfig == null) {
                 return;
             }
-            int previousProbeSteps = reprojectionProbeSteps;
             float newAspect = (float) width / Math.max(height, 1);
+            ClientSbsPipelineContract resizedContract =
+                    ClientSbsPipelineContract.forStream(clientSbsModelId, newAspect);
+            if (!pipelineContract.equals(resizedContract)) {
+                LimeLog.severe("Client SBS refused queued live resize across immutable pipeline "
+                        + "contract: " + pipelineContract + " -> " + resizedContract);
+                return;
+            }
 
             // Invalidate first so no in-flight result can be adopted into the retired color slots,
             // then drain every outstanding lease exactly like a same-context generation reset.
@@ -1264,21 +1260,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 return;
             }
 
-            // Probe steps are bucket-invariant by construction, so no program is recompiled here.
-            // Assert it rather than assume it: a change would mean the shader source is now stale.
-            int probeSteps = ClientSbsShaders.probeStepsForAspect(sourceAspect);
-            if (probeSteps != previousProbeSteps) {
-                LimeLog.severe("Client SBS live resize crossed a probe-step boundary ("
-                        + previousProbeSteps + " -> " + probeSteps
-                        + "); compiled shaders are stale");
-                requestGpuShutdown("probe-step boundary crossed by a live resize");
-                return;
-            }
-
             LimeLog.info("Client SBS live resize to " + width + "x" + height
-                    + " (aspect " + sourceAspect + ", bucket unchanged, "
-                    + probeSteps + " probes, depth " + depthMapWidth + "x" + depthMapHeight
-                    + " unchanged)");
+                    + " (aspect " + sourceAspect + ", pipeline unchanged: "
+                    + resizedContract + ")");
             glSurfaceView.requestRender();
         }
     }
@@ -1707,7 +1691,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         modelInputProgram = createProgram(
                 ShaderUtils.SIMPLE_VERTEX_SHADER,
                 ClientSbsShaders.createModelInputFragment(
-                        aiModel.usesDirectFullFrameResize()));
+                        pipelineContract.usesDirectFullFrameResize()));
         modelInputPackProgram = createComputeProgram(
                 ClientSbsShaders.createModelInputPackCompute(
                         modelInputWidth, modelInputHeight));
@@ -1758,7 +1742,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             try {
                 gpuDepthProcessor = new ClientSbsGpuDepthProcessor(
                         aiModel.getOutputWidth(), aiModel.getOutputHeight(),
-                        sourceAspect, !aiModel.usesDirectFullFrameResize(),
+                        pipelineContract.getModelContentAspect(),
+                        !pipelineContract.usesDirectFullFrameResize(),
                         Math.max(prefConfig.fps, 1));
                 gpuDepthProcessor.setHealthDiagnosticsEnabled(performanceSamplingEnabled);
                 gpuComputeReady = gpuDepthProcessor.getOutputWidth() == depthMapWidth
@@ -2266,7 +2251,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         if (bindings.sourceAspect != -1 && prefConfig != null) {
             GLES20.glUniform1f(bindings.sourceAspect,
-                    (float) prefConfig.width / Math.max(prefConfig.height, 1));
+                    pipelineContract.getModelContentAspect());
         }
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);

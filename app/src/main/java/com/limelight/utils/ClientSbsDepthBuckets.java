@@ -1,17 +1,12 @@
 package com.limelight.utils;
 
 /**
- * Public view of the Client SBS depth-bucket selection for callers outside this package.
+ * Public view of the DA-V2-aligned depth-grid bucket selection.
  *
- * <p>The bucket is the unit of immutability for Client SBS: aspect alone selects it, and
- * everything derived from aspect is derived through it — the depth model
- * ({@code ClientSbsModelManifest.forStream}), the depth/warp target sizes, and the
- * {@code PROBE_STEPS} loop bound substituted into the reprojection and warp-map shader source by
- * {@code ClientSbsShaders.probeStepsForAspect}. Two aspects in the same bucket therefore need no
- * model change and no shader regeneration, while crossing a bucket needs a full reconnect.</p>
- *
- * <p>This delegates to the package-private {@code ClientSbsDepthInputShape} so there is exactly
- * one bucket table in the codebase.</p>
+ * <p>This is also the bucket table used to size the compiled reprojection probe loop, but it is
+ * not by itself the live-resize contract: MiDaS selects differently aligned static graphs. Callers
+ * deciding whether an existing renderer can survive a resize must compare
+ * {@link ClientSbsPipelineContract} instead.</p>
  */
 public final class ClientSbsDepthBuckets {
     /** Stable bucket identity. Values are opaque; only equality is meaningful. */
@@ -36,7 +31,7 @@ public final class ClientSbsDepthBuckets {
         return Bucket.ASPECT_32_9;
     }
 
-    /** Whether two stream aspects resolve to the same immutable bucket. */
+    /** Whether two stream aspects resolve to the same DA-V2/probe-grid bucket. */
     public static boolean sameBucket(double first, double second) {
         return select(first) == select(second);
     }

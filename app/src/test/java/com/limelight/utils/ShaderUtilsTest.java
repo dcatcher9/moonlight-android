@@ -67,6 +67,8 @@ public class ShaderUtilsTest {
         assertEquals(19, ClientSbsShaders.probeStepsForAspect(16.0f / 9.0f));
         assertEquals(14, ClientSbsShaders.probeStepsForAspect(21.0f / 9.0f));
         assertEquals(12, ClientSbsShaders.probeStepsForAspect(32.0f / 9.0f));
+        assertEquals(10, ClientSbsShaders.probeStepsForAspect(9.0f / 16.0f));
+        assertEquals(8, ClientSbsShaders.probeStepsForAspect(9.0f / 21.5f));
         assertTrue(ClientSbsShaders.createReprojectionFragment(21.0f / 9.0f)
                 .contains("const int PROBE_STEPS = 14;"));
         assertTrue(ClientSbsShaders.createWarpMapFragment(32.0f / 9.0f)

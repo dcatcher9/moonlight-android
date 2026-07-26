@@ -61,10 +61,11 @@ final class ClientSbsShaders {
     static final String MODEL_INPUT_FRAGMENT = createModelInputFragment(true);
 
     /**
-     * Builds the stream-fixed model-input shader. A rectangular Depth Anything graph gets a
-     * literal full-frame UV path; the inactive square padding/reflection code is not compiled into
-     * that program. The external decoder texture is GL_LINEAR, so rendering it into the fixed
-     * model target performs one direct bilinear resize.
+     * Builds the stream-fixed model-input shader. A source whose orientation matches its model
+     * gets a literal full-frame UV path. Portrait input uses the reflected-padding path with
+     * {@code u_sourceAspect = sourceAspect / modelAspect}; expressing it relative to the model is
+     * what preserves the source aspect on a rectangular landscape tensor. The external decoder
+     * texture is GL_LINEAR, so rendering into the fixed model target performs one bilinear resize.
      */
     static String createModelInputFragment(boolean directFullFrame) {
         String aspectUniform = directFullFrame ? "" : "uniform float u_sourceAspect;";
@@ -301,14 +302,19 @@ final class ClientSbsShaders {
             throw new IllegalArgumentException("Source aspect must be finite and positive");
         }
         ClientSbsDepthInputShape bucket = ClientSbsDepthInputShape.select(sourceAspect);
-        // Widest model input for this bucket: MiDaS runs a larger grid than DA-V2 at every aspect,
-        // and the wider grid needs the finer spacing, so sizing for it is the safe direction.
-        int depthWidth = Math.max(bucket.getWidth(), widestModelWidthFor(bucket));
-        // Size from the bucket's NARROWEST aspect, not the caller's. Two streams in the same bucket
-        // must produce byte-identical shader source so the compiled program can be shared, and the
-        // narrowest aspect is the worst case because outputScale is REFERENCE/aspect — it yields the
-        // widest radius and therefore the finest spacing requirement in that bucket.
-        float worstAspect = narrowestAspectFor(bucket);
+        // Portrait input is aspect-fitted into the landscape graph and the reflected side padding
+        // is cropped from its depth output. Size against that narrower, source-aligned output, not
+        // the padded tensor width. MiDaS has the taller graph in every bucket and therefore yields
+        // the widest cropped portrait map, which is the safe model-independent direction.
+        int depthWidth = sourceAspect < 1.0f
+                ? Math.max(1, Math.round(sourceAspect
+                * Math.max(bucket.getHeight(), tallestModelHeightFor(bucket))))
+                : Math.max(bucket.getWidth(), widestModelWidthFor(bucket));
+        // Landscape streams size from the bucket's NARROWEST aspect, so streams in the same
+        // immutable direct-resize contract produce byte-identical shader source. Portrait
+        // contracts already vary with the exact aspect-fit crop, so use their exact source aspect.
+        float worstAspect = sourceAspect < 1.0f
+                ? sourceAspect : narrowestAspectFor(bucket);
         float outputScale = Math.max(0.5f, Math.min(REFERENCE_ASPECT_RATIO / worstAspect, 3.0f));
         float radius = outputScale * ADAPTIVE_POP_CEILING
                 * (0.004f + 12.51f * 0.35f / CALIBRATION_WIDTH_PX);
@@ -351,6 +357,16 @@ final class ClientSbsShaders {
             return ClientSbsModelManifest.MIDAS_V2_STATIC_21_9.getInputWidth();
         }
         return ClientSbsModelManifest.MIDAS_V2_STATIC_32_9.getInputWidth();
+    }
+
+    private static int tallestModelHeightFor(ClientSbsDepthInputShape bucket) {
+        if (bucket.equals(ClientSbsDepthInputShape.ASPECT_16_9)) {
+            return ClientSbsModelManifest.MIDAS_V2_STATIC_16_9.getInputHeight();
+        }
+        if (bucket.equals(ClientSbsDepthInputShape.ASPECT_21_9)) {
+            return ClientSbsModelManifest.MIDAS_V2_STATIC_21_9.getInputHeight();
+        }
+        return ClientSbsModelManifest.MIDAS_V2_STATIC_32_9.getInputHeight();
     }
 
     static String createReprojectionFragment(float sourceAspect) {

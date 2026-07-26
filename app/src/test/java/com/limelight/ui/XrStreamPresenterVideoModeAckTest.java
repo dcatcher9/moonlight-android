@@ -1,7 +1,9 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
@@ -59,13 +61,98 @@ public class XrStreamPresenterVideoModeAckTest {
     @Test
     public void anAckArrivingAfterTheRequestSettledIsStale() {
         // A settled or timed-out request clears the outstanding id, so a late duplicate ack is a
-        // no-op rather than a second application. This is what makes ack/SPS order-independent.
+        // no-op rather than a second application.
         assertEquals(XrStreamPresenter.VideoModeAckOutcome.IGNORE_STALE,
                 XrStreamPresenter.videoModeAckOutcome(-1, OUTSTANDING,
                         MoonBridge.VIDEO_MODE_ACK_APPLIED));
         assertEquals(XrStreamPresenter.VideoModeAckOutcome.IGNORE_STALE,
                 XrStreamPresenter.videoModeAckOutcome(0, OUTSTANDING,
                         MoonBridge.VIDEO_MODE_ACK_APPLIED));
+    }
+
+    @Test
+    public void resolutionAckFirstWaitsForMatchingDecoderOutput() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+
+        assertFalse(gate.onAppliedAck());
+        assertTrue(gate.hasAppliedAck());
+        assertFalse(gate.canSettle());
+
+        assertTrue(gate.onDecoderOutput(4096, 1728, 4096, 1728));
+        assertTrue(gate.hasMatchingDecoderOutput());
+        assertTrue(gate.canSettle());
+    }
+
+    @Test
+    public void resolutionDecoderFirstRetainsItsConfirmationUntilAck() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+
+        assertFalse(gate.onDecoderOutput(3840, 2160, 3840, 2160));
+        assertTrue(gate.hasDecoderOutput());
+        assertTrue(gate.hasMatchingDecoderOutput());
+        assertFalse(gate.canSettle());
+
+        assertTrue(gate.onAppliedAck());
+        assertTrue(gate.canSettle());
+    }
+
+    @Test
+    public void decoderFirstCanBeRevalidatedAgainstAClampedAck() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+
+        // The fresh IDR already carries the host's clamp, while the client still expects its
+        // requested 5120x2160 until the authoritative ACK arrives.
+        assertFalse(gate.onDecoderOutput(4096, 1728, 5120, 2160));
+        assertTrue(gate.hasDecoderOutput());
+        assertFalse(gate.hasMatchingDecoderOutput());
+        assertFalse(gate.onAppliedAck());
+
+        assertTrue(gate.revalidateDecoderOutput(4096, 1728));
+        assertTrue(gate.hasMatchingDecoderOutput());
+    }
+
+    @Test
+    public void fastAppliedAckNeedsNoDecoderConfirmation() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(false);
+
+        assertTrue(gate.onAppliedAck());
+        assertFalse(gate.hasDecoderOutput());
+        assertTrue(gate.canSettle());
+    }
+
+    @Test
+    public void decoderCallbackWithoutUsableDimensionsCannotSettleResolution() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+
+        assertFalse(gate.onAppliedAck());
+        assertFalse(gate.onDecoderOutput(0, 0, 3840, 2160));
+        assertTrue(gate.hasDecoderOutput());
+        assertFalse(gate.hasMatchingDecoderOutput());
+        assertFalse(gate.canSettle());
+    }
+
+    @Test
+    public void everyOutstandingLiveQualityPathBlocksAnotherTransaction() {
+        assertTrue(XrStreamPresenter.liveQualityTransactionBusy(OUTSTANDING, false));
+        // After a resolution ACK consumes its request id, the decoder half still owns the guard.
+        assertTrue(XrStreamPresenter.liveQualityTransactionBusy(-1, true));
+        assertFalse(XrStreamPresenter.liveQualityTransactionBusy(-1, false));
+    }
+
+    @Test
+    public void ackTimeoutFinalizesOnlyTheOptimisticFastPath() {
+        assertTrue(XrStreamPresenter.shouldFinalizeLiveQualityOnAckTimeout(false));
+        assertFalse(XrStreamPresenter.shouldFinalizeLiveQualityOnAckTimeout(true));
     }
 
     @Test
@@ -87,8 +174,35 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple applied = XrStreamPresenter.appliedTuple(4096, 1728, 6000, 118000);
         assertEquals("4096x1728", applied.resolution);
         assertEquals("60", applied.frameRate);
-        // The applied bitrate is the host's post-budget encoder value, surfaced as effective.
+        // The raw ACK tuple carries the host's post-budget encoder value.
         assertEquals(118000, applied.bitrateKbps);
+    }
+
+    @Test
+    public void repeatedAcksKeepTheRequestedWireBudgetSeparateFromEffectiveEncoderBitrate() {
+        StreamQualityTuple firstRequest =
+                new StreamQualityTuple("1920x1080", "29.97", 130000);
+
+        XrStreamPresenter.AcknowledgedVideoMode firstAck =
+                XrStreamPresenter.acknowledgedVideoMode(
+                        firstRequest, 1920, 1080, 2997, 118000);
+
+        assertEquals(new StreamQualityTuple("1920x1080", "29.97", 130000),
+                firstAck.requestedWireQuality);
+        assertEquals(118000, firstAck.effectiveEncoderBitrateKbps);
+
+        // A later FPS/resolution change starts from the reconciled requested tuple. Apollo may
+        // deduct audio/FEC again, but that effective value must never become the next wire budget.
+        StreamQualityTuple secondRequest = new StreamQualityTuple(
+                "3840x2160", "23.976", firstAck.requestedWireQuality.bitrateKbps);
+        XrStreamPresenter.AcknowledgedVideoMode secondAck =
+                XrStreamPresenter.acknowledgedVideoMode(
+                        secondRequest, 3840, 2160, 2398, 105000);
+
+        assertEquals("3840x2160", secondAck.requestedWireQuality.resolution);
+        assertEquals("23.98", secondAck.requestedWireQuality.frameRate);
+        assertEquals(130000, secondAck.requestedWireQuality.bitrateKbps);
+        assertEquals(105000, secondAck.effectiveEncoderBitrateKbps);
     }
 
     @Test
@@ -118,9 +232,15 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
-    public void appliedFrameRateRoundsBackFromHundredthsOfAHz() {
-        assertEquals("30", XrStreamPresenter.appliedTuple(1920, 1080, 2997, 20000).frameRate);
-        assertEquals("24", XrStreamPresenter.appliedTuple(1920, 1080, 2398, 20000).frameRate);
+    public void appliedFrameRateRetainsAckHundredthsOfAHz() {
+        assertEquals("29.97",
+                XrStreamPresenter.appliedTuple(1920, 1080, 2997, 20000).frameRate);
+        assertEquals("23.98",
+                XrStreamPresenter.appliedTuple(1920, 1080, 2398, 20000).frameRate);
+        assertEquals("59.94",
+                XrStreamPresenter.appliedTuple(1920, 1080, 5994, 20000).frameRate);
+        assertEquals("60",
+                XrStreamPresenter.appliedTuple(1920, 1080, 6000, 20000).frameRate);
     }
 
     @Test

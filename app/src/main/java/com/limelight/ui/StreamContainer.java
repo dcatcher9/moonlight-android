@@ -595,8 +595,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mRequestedEglDetachGeneration = 0;
         mCreatedEglAttachGeneration = 0;
         mExpectedEglOutputSurface = null;
-        // Client -> Normal goes directly to W x H; Client -> Host SBS AI goes directly to its
-        // packed target. Raw transitions reconnect before reaching this live handoff path.
+        // Client -> Normal or Raw Half goes directly to W x H; Client -> Host SBS AI goes directly
+        // to its packed target. Only a Raw Full transport boundary reconnects before this path.
         mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
         Surface target = mXrPresenter.getVideoSurface();
         completeClientSbsSwitch(detachGeneration,
@@ -655,7 +655,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * output. The decoder stays on the renderer's SurfaceTexture throughout, so unlike the
      * host-surface path there is no dummy-surface park.
      *
-     * @return false when the renderer refuses the change (a depth-bucket move needs a reconnect)
+     * @return false when the renderer refuses the change (an immutable pipeline-contract change
+     *         needs a reconnect)
      */
     public boolean resizeClientSbsSurface(int width, int height) {
         if (mXrPresenter == null || mDestroyed || mStereoRenderer == null

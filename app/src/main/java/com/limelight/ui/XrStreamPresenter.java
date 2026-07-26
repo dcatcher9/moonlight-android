@@ -180,8 +180,8 @@ public class XrStreamPresenter {
             return false;
         }
 
-        default void onUseModeGlobalDefaultsRequested(PresenterMode mode,
-                                                      ModeStreamQualityModel current) {
+        default void onUseSessionModeDefaultsRequested(PresenterMode mode,
+                                                        ModeStreamQualityModel current) {
         }
 
         default boolean onClientSbsModelSelected(String modelId,
@@ -200,7 +200,9 @@ public class XrStreamPresenter {
         /**
          * A live video-mode change (0x3007) has been accepted by the running stream. The listener
          * owns the durable/session-model bookkeeping; the presenter has already updated
-         * {@code PreferenceConfiguration} and the XR geometry.
+         * {@code PreferenceConfiguration} and the XR geometry. The tuple's bitrate remains the
+         * requested total wire budget; Apollo's acknowledged post-audio/FEC encoder bitrate is
+         * diagnostic state and is not persisted.
          */
         default void onLiveStreamQualityApplied(PresenterMode mode, StreamQualityTuple applied) {
         }
@@ -302,10 +304,21 @@ public class XrStreamPresenter {
     private boolean applyRequiresReconnect = true;
     /** Guards a live video-mode change so it cannot interleave with another transaction. */
     private boolean liveQualityChangeInProgress;
-    /** The decoder already produced a fresh IDR at the pinned geometry (second confirmation). */
-    private boolean liveQualityDecoderConfirmed;
+    /** ACK and decoder confirmations are independent and may arrive in either order. */
+    private final LiveQualityConfirmationGate liveQualityConfirmations =
+            new LiveQualityConfirmationGate();
     private StreamQualityTuple pendingLiveQuality;
     private StreamQualityTuple previousLiveQuality;
+    /** Host-reconciled tuple retained until a resolution transaction also receives its fresh IDR. */
+    private StreamQualityTuple acknowledgedLiveQuality;
+    /** Presentation mode that owned the request; never infer it from mutable current mode at ACK. */
+    private PresenterMode pendingLiveQualityMode;
+    /**
+     * Last encoder bitrate acknowledged by Apollo after its audio/FEC deductions. This is
+     * diagnostic state only: {@link PreferenceConfiguration#bitrate} and persisted XR quality
+     * retain the user's total wire budget.
+     */
+    private int effectiveEncoderBitrateKbps;
     /** Opaque u16 correlation token for the outstanding 0x3007 request; -1 when there is none. */
     private int pendingVideoModeRequestId = -1;
     private int videoModeRequestCounter;
@@ -549,6 +562,101 @@ public class XrStreamPresenter {
             modeGeneration = 0;
             hdrGeneration = 0;
         }
+    }
+
+    /**
+     * Two-source completion gate for a live video-mode request.
+     *
+     * <p>A fast bitrate/frame-rate request needs only its correlated APPLIED ACK. A resolution
+     * request additionally needs MediaCodec to release a fresh IDR at the acknowledged geometry.
+     * Keeping these bits independent makes both arrival orders equivalent without discarding the
+     * later event.</p>
+     */
+    static final class LiveQualityConfirmationGate {
+        private boolean decoderConfirmationRequired;
+        private boolean appliedAckReceived;
+        private boolean decoderOutputReceived;
+        private boolean matchingDecoderOutputReceived;
+        private int decoderOutputWidth;
+        private int decoderOutputHeight;
+
+        void begin(boolean decoderConfirmationRequired) {
+            this.decoderConfirmationRequired = decoderConfirmationRequired;
+            appliedAckReceived = false;
+            decoderOutputReceived = false;
+            matchingDecoderOutputReceived = false;
+            decoderOutputWidth = 0;
+            decoderOutputHeight = 0;
+        }
+
+        boolean onAppliedAck() {
+            appliedAckReceived = true;
+            return canSettle();
+        }
+
+        boolean onDecoderOutput(int actualWidth, int actualHeight,
+                                int expectedWidth, int expectedHeight) {
+            decoderOutputReceived = true;
+            decoderOutputWidth = actualWidth;
+            decoderOutputHeight = actualHeight;
+            matchingDecoderOutputReceived = actualWidth > 0 && actualHeight > 0
+                    && actualWidth == expectedWidth && actualHeight == expectedHeight;
+            return canSettle();
+        }
+
+        /**
+         * Reinterprets an already-received decoder confirmation after an ACK reports a clamped
+         * geometry. It never manufactures the decoder half of the transaction before the decoder
+         * callback actually arrives.
+         */
+        boolean revalidateDecoderOutput(int expectedWidth, int expectedHeight) {
+            matchingDecoderOutputReceived = decoderOutputReceived
+                    && decoderOutputWidth > 0 && decoderOutputHeight > 0
+                    && decoderOutputWidth == expectedWidth
+                    && decoderOutputHeight == expectedHeight;
+            return canSettle();
+        }
+
+        boolean canSettle() {
+            return appliedAckReceived
+                    && (!decoderConfirmationRequired || matchingDecoderOutputReceived);
+        }
+
+        boolean hasAppliedAck() {
+            return appliedAckReceived;
+        }
+
+        boolean hasDecoderOutput() {
+            return decoderOutputReceived;
+        }
+
+        boolean hasMatchingDecoderOutput() {
+            return matchingDecoderOutputReceived;
+        }
+
+        void clear() {
+            decoderConfirmationRequired = false;
+            appliedAckReceived = false;
+            decoderOutputReceived = false;
+            matchingDecoderOutputReceived = false;
+            decoderOutputWidth = 0;
+            decoderOutputHeight = 0;
+        }
+    }
+
+    static boolean liveQualityTransactionBusy(
+            int pendingRequestId, boolean resolutionChangeInProgress) {
+        return pendingRequestId > 0 || resolutionChangeInProgress;
+    }
+
+    private boolean liveQualityTransactionBusy() {
+        return liveQualityTransactionBusy(
+                pendingVideoModeRequestId, liveQualityChangeInProgress);
+    }
+
+    static boolean shouldFinalizeLiveQualityOnAckTimeout(
+            boolean resolutionChangeInProgress) {
+        return !resolutionChangeInProgress;
     }
 
     /** Which mode the SurfaceEntity is currently presenting (defaults to NORMAL). */
@@ -1318,14 +1426,14 @@ public class XrStreamPresenter {
         ModeStreamQualityModel model = modeStreamQualityModels.get(currentPresenterMode);
         StreamQualityTuple live = model != null ? model.liveQuality
                 : new StreamQualityTuple(prefConfig.width + "x" + prefConfig.height,
-                        String.format(Locale.US, "%.0f", prefConfig.fps), prefConfig.bitrate);
+                        formatFrameRate(prefConfig.fps), prefConfig.bitrate);
         glanceStreamView.setText(activity.getString(R.string.xr_glance_stream,
                 live.resolution.replace("x", " \u00d7 "), live.frameRate,
                 prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
                         : activity.getString(R.string.xr_glance_sdr)));
 
         boolean liveStatus = streamPresentationReady && sessionControlsEnabled
-                && !modeSwitchInProgress && !liveQualityChangeInProgress
+                && !modeSwitchInProgress && !liveQualityTransactionBusy()
                 && pendingDecoderTransitionMode == null
                 && !isDepthBusy() && !reconnectPending;
         int statusText;
@@ -1389,7 +1497,7 @@ public class XrStreamPresenter {
     private boolean canAutoCollapseDock() {
         return shouldAutoCollapseDock(streamPresentationReady, sessionControlsEnabled,
                 controlUiState.getVisibleSurface(), controlUiState.isStatsVisible(),
-                reconnectPending, modeSwitchInProgress || liveQualityChangeInProgress,
+                reconnectPending, modeSwitchInProgress || liveQualityTransactionBusy(),
                 pendingDecoderTransitionMode != null, isDepthBusy(),
                 dockHoverTarget != null, dockFocusTarget != null,
                 secondaryActionsExpanded);
@@ -1523,6 +1631,9 @@ public class XrStreamPresenter {
             applyControlUiState(true, "mode tile");
         }
         if (action == XrControlUiState.ModeTileAction.SELECT_MODE) {
+            if (liveQualityTransactionBusy()) {
+                return;
+            }
             if (requiresReconnectBeforeModeSwitch(
                     currentPresenterMode, item.selectsMode,
                     prefConfig.rawSbsPerEyeResolution)) {
@@ -1978,7 +2089,7 @@ public class XrStreamPresenter {
                 activity.getString(R.string.xr_session_use_session));
         modeDefaultsButton.setEnabled(sessionControlsEnabled);
         modeDefaultsButton.setOnClickListener(v -> controlActionListener
-                .onUseModeGlobalDefaultsRequested(mode, modeStreamQualityModels.get(mode)));
+                .onUseSessionModeDefaultsRequested(mode, modeStreamQualityModels.get(mode)));
         footer.addView(modeDefaultsButton);
 
         modeApplyButton = compactButton(applyButtonLabel());
@@ -3072,18 +3183,24 @@ public class XrStreamPresenter {
         DevicePerformanceSampler.Snapshot device = (panelVisible || clientSbsLoggingActive)
                 ? devicePerformanceSampler.sample() : null;
         if (clientSbsLoggingActive) {
-            String depthHealth = clientSbs.depthHealthAvailable
-                    ? String.format(Locale.US,
-                            "valid=%.1f%% range=%.4f edge=%.4f pop=%.3f change=%.3f age=%d"
-                                    + " collapsed=%s",
-                            clientSbs.validDepthFraction * 100.0f,
-                            clientSbs.effectiveDepthRangeWidth,
-                            clientSbs.depthEdgeFraction,
-                            clientSbs.stereoPopStrength,
-                            clientSbs.depthChangeFraction,
-                            clientSbs.depthSceneAge,
-                            clientSbs.rawDepthRangeCollapsed)
-                    : "unavailable";
+            String depthHealth;
+            if (!clientSbs.depthHealthAvailable) {
+                depthHealth = "unavailable";
+            } else {
+                String classifiedEdge = clientSbs.adaptivePopClassified
+                        ? String.format(Locale.US, "%.4f", clientSbs.depthEdgeFraction)
+                        : "unsettled";
+                depthHealth = String.format(Locale.US,
+                        "valid=%.1f%% range=%.4f edge=%s pop=%.3f change=%.3f age=%d"
+                                + " collapsed=%s",
+                        clientSbs.validDepthFraction * 100.0f,
+                        clientSbs.effectiveDepthRangeWidth,
+                        classifiedEdge,
+                        clientSbs.stereoPopStrength,
+                        clientSbs.depthChangeFraction,
+                        clientSbs.depthSceneAge,
+                        clientSbs.rawDepthRangeCollapsed);
+            }
             // Machine-readable A/B output is intentionally separate from the visible panel. Log
             // formatting and logcat I/O are enabled only by the explicit performance-log switch.
             LimeLog.info(String.format(Locale.US,
@@ -3972,7 +4089,7 @@ public class XrStreamPresenter {
         if (!streamPresentationReady || item.selectsMode == null || surfaceEntity == null
                 || surfaceEntity.isDisposed()
                 || item.selectsMode == currentPresenterMode || modeSwitchInProgress
-                || liveQualityChangeInProgress) {
+                || liveQualityTransactionBusy()) {
             return;
         }
         // A switch kicks off an async surface handoff (GL pause/resume + resize); ignore a second
@@ -4068,7 +4185,7 @@ public class XrStreamPresenter {
     public void applyLiveStreamQuality(StreamQualityTuple target) {
         if (target == null || !streamPresentationReady || surfaceEntity == null
                 || surfaceEntity.isDisposed() || modeSwitchInProgress
-                || liveQualityChangeInProgress || pendingDecoderTransitionMode != null
+                || liveQualityTransactionBusy() || pendingDecoderTransitionMode != null
                 || clientSbsHdrTransitionInProgress) {
             return;
         }
@@ -4078,9 +4195,9 @@ public class XrStreamPresenter {
             return;
         }
 
-        int currentFps = Math.round(prefConfig.fps);
+        float currentFps = prefConfig.fps;
         int[] size = parseResolutionSize(target.resolution);
-        int fps = parseFrameRate(target.frameRate, currentFps);
+        float fps = parseFrameRate(target.frameRate, currentFps);
         int fpsX100 = frameRateX100(target.frameRate, currentFps);
         if (size == null || fps <= 0 || fpsX100 <= 0) {
             LimeLog.warning("XR: ignoring unparseable live stream quality " + target);
@@ -4088,7 +4205,7 @@ public class XrStreamPresenter {
         }
         StreamQualityTuple previous = new StreamQualityTuple(
                 prefConfig.width + "x" + prefConfig.height,
-                String.valueOf(currentFps), prefConfig.bitrate);
+                formatFrameRate(currentFps), prefConfig.bitrate);
         boolean resolutionChanged = size[0] != prefConfig.width || size[1] != prefConfig.height;
         if (resolutionChanged && !supportsLiveResolutionChange(
                 currentPresenterMode, prefConfig.rawSbsPerEyeResolution)) {
@@ -4113,22 +4230,27 @@ public class XrStreamPresenter {
             pendingVideoModeRequestId = requestId;
             pendingLiveQuality = target;
             previousLiveQuality = previous;
+            acknowledgedLiveQuality = null;
+            pendingLiveQualityMode = currentPresenterMode;
+            liveQualityConfirmations.begin(false);
             prefConfig.fps = fps;
             prefConfig.bitrate = target.bitrateKbps;
-            game.updateDecoderStreamGeometry(prefConfig.width, prefConfig.height, fps);
-            controlActionListener.onLiveStreamQualityApplied(currentPresenterMode, target);
+            game.updateDecoderStreamGeometry(
+                    prefConfig.width, prefConfig.height, Math.round(fps));
             armLiveQualityAckTimeout();
             updateGlancePanel();
             revealDockTemporarily();
-            LimeLog.info("XR: applied live stream quality " + target
+            LimeLog.info("XR: requested live stream quality " + target
                     + " (request " + requestId + ", awaiting ack)");
             return;
         }
 
         liveQualityChangeInProgress = true;
-        liveQualityDecoderConfirmed = false;
+        liveQualityConfirmations.begin(true);
         previousLiveQuality = previous;
         pendingLiveQuality = target;
+        acknowledgedLiveQuality = null;
+        pendingLiveQualityMode = currentPresenterMode;
         updateGlancePanel();
         revealDockTemporarily();
 
@@ -4243,28 +4365,54 @@ public class XrStreamPresenter {
         cancelLiveQualityAckTimeout();
         pendingVideoModeRequestId = -1;
 
-        StreamQualityTuple appliedTuple = appliedTuple(appliedWidth, appliedHeight,
-                appliedFramerateX100, appliedBitrateKbps);
+        StreamQualityTuple requestedWireQuality = outcome == VideoModeAckOutcome.ADOPT_APPLIED
+                ? pendingLiveQuality : previousLiveQuality;
+        AcknowledgedVideoMode acknowledged = acknowledgedVideoMode(requestedWireQuality,
+                appliedWidth, appliedHeight, appliedFramerateX100, appliedBitrateKbps);
+        StreamQualityTuple appliedTuple = acknowledged != null
+                ? acknowledged.requestedWireQuality : null;
+        if (acknowledged != null) {
+            effectiveEncoderBitrateKbps = acknowledged.effectiveEncoderBitrateKbps;
+        }
         if (outcome != VideoModeAckOutcome.ADOPT_APPLIED) {
             handleVideoModeRefusal(game, status, appliedTuple);
             return;
         }
+        if (appliedTuple == null) {
+            // An APPLIED status without a usable authoritative tuple cannot safely complete either
+            // path. Restore the known previous tuple and treat the malformed response as failure.
+            LimeLog.severe("XR: host returned an unusable applied video mode for request "
+                    + requestId);
+            handleVideoModeRefusal(
+                    game, MoonBridge.VIDEO_MODE_ACK_FAILED, previousLiveQuality);
+            return;
+        }
 
         // Adopt the applied values as authoritative, re-pinning geometry when the host clamped.
-        if (appliedTuple != null) {
-            LimeLog.info("XR: host applied " + appliedTuple + " for request " + requestId);
-            applyAcknowledgedQuality(game, appliedTuple);
+        LimeLog.info("XR: host applied " + appliedTuple.resolution + " @ "
+                + appliedTuple.frameRate + " FPS for request " + requestId
+                + " (requested wire bitrate " + appliedTuple.bitrateKbps
+                + " Kbps, effective encoder bitrate " + effectiveEncoderBitrateKbps
+                + " Kbps)");
+        acknowledgedLiveQuality = appliedTuple;
+        applyAcknowledgedQuality(game, appliedTuple);
+        liveQualityConfirmations.onAppliedAck();
+
+        if (liveQualityChangeInProgress) {
+            int[] expected = expectedLiveQualityDecoderDimensions();
+            liveQualityConfirmations.revalidateDecoderOutput(expected[0], expected[1]);
         }
-        settleLiveQualityChange(game, appliedTuple != null ? appliedTuple : pendingLiveQuality);
+        finishConfirmedLiveQualityChange(game);
     }
 
     /**
-     * Adopts the host's applied tuple. Resolution differences re-run the geometry path; frame
-     * rate and the host's post-budget encoder bitrate are recorded either way.
+     * Adopts the host's applied geometry and frame rate while retaining the requested total wire
+     * bitrate. Apollo's post-audio/FEC encoder bitrate is tracked separately and must never replace
+     * {@link PreferenceConfiguration#bitrate}.
      */
     private void applyAcknowledgedQuality(com.limelight.Game game, StreamQualityTuple applied) {
         int[] size = parseResolutionSize(applied.resolution);
-        int fps = parseFrameRate(applied.frameRate, Math.round(prefConfig.fps));
+        float fps = parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null) {
             return;
         }
@@ -4276,15 +4424,18 @@ public class XrStreamPresenter {
         }
         prefConfig.fps = fps;
         prefConfig.bitrate = applied.bitrateKbps;
-        game.updateDecoderStreamGeometry(size[0], size[1], fps);
+        game.updateDecoderStreamGeometry(size[0], size[1], Math.round(fps));
     }
 
     private void handleVideoModeRefusal(com.limelight.Game game, int status,
                                         StreamQualityTuple stillInEffect) {
         // On a refusal the applied* values describe the mode that remains in effect, so
         // resynchronize the client to them rather than to what was optimistically staged.
-        if (stillInEffect != null) {
-            applyAcknowledgedQuality(game, stillInEffect);
+        StreamQualityTuple durableStillInEffect =
+                stillInEffect != null ? stillInEffect : previousLiveQuality;
+        PresenterMode requestMode = liveQualityRequestMode();
+        if (durableStillInEffect != null) {
+            applyAcknowledgedQuality(game, durableStillInEffect);
         }
         boolean wasResolutionTransaction = liveQualityChangeInProgress;
         if (wasResolutionTransaction && surfaceEntity != null && !surfaceEntity.isDisposed()) {
@@ -4300,6 +4451,14 @@ public class XrStreamPresenter {
             controlActionListener.onLiveStreamQualityNeedsReconnect();
             return;
         }
+
+        // An explicit non-reconnect refusal withdraws the staged target. Publish the tuple that
+        // remains on the wire so the controller updates both pending and applied state before its
+        // atomic commit; otherwise a rejected optimistic fast-path target becomes durable.
+        if (durableStillInEffect != null) {
+            controlActionListener.onLiveStreamQualityApplied(
+                    requestMode, durableStillInEffect);
+        }
         LimeLog.severe("XR: host refused the live video mode (status " + status + ")");
         reportLiveQualityFailure(status == MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID
                 ? "the PC rejected the request as invalid"
@@ -4307,10 +4466,10 @@ public class XrStreamPresenter {
     }
 
     /**
-     * The host's applied mode as a stream-quality tuple. {@code width}/{@code height} are base
+     * The host's raw applied mode as a stream-quality tuple. {@code width}/{@code height} are base
      * per-eye values before any SBS doubling, and {@code bitrateKbps} is the host's post-budget
-     * encoder value rather than the requested wire budget. Null when the host reported nothing
-     * usable.
+     * encoder value rather than the requested wire budget. Fractional frame rates retain the
+     * hundredths-of-a-Hz precision carried by the ACK. Null when the host reported nothing usable.
      */
     static StreamQualityTuple appliedTuple(int width, int height, int framerateX100,
                                            int bitrateKbps) {
@@ -4318,11 +4477,39 @@ public class XrStreamPresenter {
             return null;
         }
         return new StreamQualityTuple(width + "x" + height,
-                String.valueOf(Math.round(framerateX100 / 100f)), bitrateKbps);
+                formatFrameRateX100(framerateX100), bitrateKbps);
+    }
+
+    /**
+     * Reconciles an ACK without confusing its effective encoder bitrate with the total wire
+     * budget sent in the request.
+     */
+    static AcknowledgedVideoMode acknowledgedVideoMode(
+            StreamQualityTuple requestedWireQuality, int width, int height,
+            int framerateX100, int effectiveEncoderBitrateKbps) {
+        StreamQualityTuple effective = appliedTuple(
+                width, height, framerateX100, effectiveEncoderBitrateKbps);
+        if (requestedWireQuality == null || effective == null) {
+            return null;
+        }
+        return new AcknowledgedVideoMode(new StreamQualityTuple(
+                effective.resolution, effective.frameRate, requestedWireQuality.bitrateKbps),
+                effectiveEncoderBitrateKbps);
+    }
+
+    static final class AcknowledgedVideoMode {
+        final StreamQualityTuple requestedWireQuality;
+        final int effectiveEncoderBitrateKbps;
+
+        private AcknowledgedVideoMode(StreamQualityTuple requestedWireQuality,
+                                     int effectiveEncoderBitrateKbps) {
+            this.requestedWireQuality = requestedWireQuality;
+            this.effectiveEncoderBitrateKbps = effectiveEncoderBitrateKbps;
+        }
     }
 
     private boolean applyLiveStreamGeometry(com.limelight.Game game, StreamQualityTuple tuple,
-                                            int fps) {
+                                            float fps) {
         int[] size = parseResolutionSize(tuple.resolution);
         return size != null
                 && applyLiveStreamGeometry(game, size[0], size[1], fps, tuple.bitrateKbps);
@@ -4334,7 +4521,7 @@ public class XrStreamPresenter {
      * MediaCodec never sees a transient target), the quad, and the dependent panel poses.
      */
     private boolean applyLiveStreamGeometry(com.limelight.Game game, int width, int height,
-                                            int fps, int bitrateKbps) {
+                                            float fps, int bitrateKbps) {
         StreamContainer streamContainer = game.getStreamContainer();
         if (streamContainer == null || surfaceEntity == null || surfaceEntity.isDisposed()) {
             return false;
@@ -4345,7 +4532,7 @@ public class XrStreamPresenter {
         prefConfig.bitrate = bitrateKbps;
         // The only cached dimension-derived field in this class.
         fullAspect = (float) width / height;
-        game.updateDecoderStreamGeometry(width, height, fps);
+        game.updateDecoderStreamGeometry(width, height, Math.round(fps));
 
         // Client SBS owns its own GL color targets and presents a packed 2W x H swapchain, so it
         // resizes through the renderer rather than the host-surface dummy-park handoff.
@@ -4376,8 +4563,8 @@ public class XrStreamPresenter {
      * Decoder callback path: the fresh IDR at the new geometry has reached the target surface.
      *
      * <p>This is the second, independent confirmation. The ack rides reliable ENet while video
-     * rides RTP, so the two can arrive in either order; whichever lands first settles the change
-     * and the other is a no-op through {@link #liveQualityChangeInProgress}.</p>
+     * rides RTP, so the two can arrive in either order. A resolution transaction settles only
+     * after both have arrived and the decoder output matches the host-acknowledged geometry.</p>
      */
     private void finishPendingLiveQualityChange() {
         com.limelight.Game game = activity instanceof com.limelight.Game
@@ -4388,46 +4575,79 @@ public class XrStreamPresenter {
             clearLiveQualityChange();
             return;
         }
-        decoderTransitionGenerations.clearMode();
-        liveQualityDecoderConfirmed = true;
 
-        // The decoder can only confirm against the geometry currently pinned on the client, which
-        // is the requested tuple until an ack reports a clamped apply.
-        int[] expected = initialSurfacePixelDimensions(currentPresenterMode,
-                prefConfig.width, prefConfig.height, hostSbsVideoFormat,
-                prefConfig.rawSbsPerEyeResolution);
+        // The decoder callback may precede a clamped ACK. Retain its exact dimensions so the ACK
+        // can revalidate this same event against the authoritative geometry instead of discarding
+        // the first half of the transaction as stale.
+        int[] expected = expectedLiveQualityDecoderDimensions();
         int[] actual = game.getDecoderOutputDimensions();
-        if (actual != null && actual[0] == expected[0] && actual[1] == expected[1]) {
-            settleLiveQualityChange(game, pendingLiveQuality);
-            return;
-        }
-
-        // A mismatch is not yet a failure: the host may have clamped, and its ack carries the
-        // authoritative applied values. Keep waiting; the ack timeout is the backstop.
-        LimeLog.info("XR: decoder output "
-                + (actual == null ? "unknown" : actual[0] + "x" + actual[1])
-                + " does not match the requested " + expected[0] + "x" + expected[1]
-                + "; waiting for the host ack");
+        int actualWidth = actual != null ? actual[0] : 0;
+        int actualHeight = actual != null ? actual[1] : 0;
+        liveQualityConfirmations.onDecoderOutput(
+                actualWidth, actualHeight, expected[0], expected[1]);
+        finishConfirmedLiveQualityChange(game);
     }
 
-    /** Completes an in-flight live change exactly once, whichever confirmation arrived first. */
-    private void settleLiveQualityChange(com.limelight.Game game, StreamQualityTuple applied) {
-        if (!liveQualityChangeInProgress) {
-            // Fast path (no surface transaction), or an already-settled resolution change. The
-            // ack still resynchronizes the durable model to the host's applied values.
-            if (applied != null) {
-                controlActionListener.onLiveStreamQualityApplied(currentPresenterMode, applied);
+    private int[] expectedLiveQualityDecoderDimensions() {
+        return initialSurfacePixelDimensions(liveQualityRequestMode(),
+                prefConfig.width, prefConfig.height, hostSbsVideoFormat,
+                prefConfig.rawSbsPerEyeResolution);
+    }
+
+    private PresenterMode liveQualityRequestMode() {
+        return pendingLiveQualityMode != null
+                ? pendingLiveQualityMode : currentPresenterMode;
+    }
+
+    /**
+     * Completes a live-quality transaction only when every confirmation required by its path is
+     * present. For resolution requests, a received-but-mismatched decoder event is terminal once
+     * the authoritative ACK is known; continuing would expose a surface whose geometry disagrees
+     * with the host.
+     */
+    private void finishConfirmedLiveQualityChange(com.limelight.Game game) {
+        if (!liveQualityConfirmations.canSettle()) {
+            if (liveQualityChangeInProgress
+                    && liveQualityConfirmations.hasAppliedAck()
+                    && liveQualityConfirmations.hasDecoderOutput()) {
+                int[] expected = expectedLiveQualityDecoderDimensions();
+                int[] actual = game.getDecoderOutputDimensions();
+                LimeLog.severe("XR: fresh-IDR output "
+                        + (actual == null ? "unknown" : actual[0] + "x" + actual[1])
+                        + " does not match the host-applied "
+                        + expected[0] + "x" + expected[1]);
+                decoderTransitionGenerations.clearMode();
+                game.handleDecoderSurfaceSwitchFailure();
+                return;
             }
-            clearLiveQualityChange();
+
+            if (liveQualityChangeInProgress
+                    && liveQualityConfirmations.hasDecoderOutput()) {
+                int[] expected = expectedLiveQualityDecoderDimensions();
+                int[] actual = game.getDecoderOutputDimensions();
+                if (liveQualityConfirmations.hasMatchingDecoderOutput()) {
+                    LimeLog.info("XR: matching fresh-IDR output arrived before the host ack");
+                } else {
+                    LimeLog.info("XR: decoder output "
+                            + (actual == null ? "unknown" : actual[0] + "x" + actual[1])
+                            + " does not yet match " + expected[0] + "x" + expected[1]
+                            + "; waiting for the host ack");
+                }
+            }
             return;
         }
-        if (surfaceEntity != null && !surfaceEntity.isDisposed()) {
+
+        StreamQualityTuple applied = acknowledgedLiveQuality != null
+                ? acknowledgedLiveQuality : pendingLiveQuality;
+        PresenterMode requestMode = liveQualityRequestMode();
+        boolean wasResolutionTransaction = liveQualityChangeInProgress;
+        if (wasResolutionTransaction && surfaceEntity != null && !surfaceEntity.isDisposed()) {
             surfaceEntity.setAlpha(1.0f);
         }
         decoderTransitionGenerations.clearMode();
         clearLiveQualityChange();
         if (applied != null) {
-            controlActionListener.onLiveStreamQualityApplied(currentPresenterMode, applied);
+            controlActionListener.onLiveStreamQualityApplied(requestMode, applied);
         }
         updateGlancePanel();
         revealDockTemporarily();
@@ -4440,32 +4660,40 @@ public class XrStreamPresenter {
      * path which has no decoder transaction at all.
      */
     private void onLiveQualityAckTimeout() {
-        if (pendingVideoModeRequestId <= 0) {
+        if (!liveQualityTransactionBusy() && pendingLiveQuality == null) {
             return;
         }
         com.limelight.Game game = activity instanceof com.limelight.Game
                 ? (com.limelight.Game) activity : null;
-        pendingVideoModeRequestId = -1;
         if (game == null) {
             clearLiveQualityChange();
             return;
         }
-        if (!liveQualityChangeInProgress) {
-            // The optimistic fast-path values stand; nothing was gated on the ack.
+        if (shouldFinalizeLiveQualityOnAckTimeout(liveQualityChangeInProgress)) {
+            // The host accepted the reliable request onto its control stream but never returned
+            // an ACK. With no surface/decoder transition at risk, retain and durably publish the
+            // optimistic frame-rate/bitrate tuple.
+            StreamQualityTuple optimisticTarget = pendingLiveQuality;
+            PresenterMode requestMode = liveQualityRequestMode();
             LimeLog.warning("XR: no video-mode ack for the live bitrate/frame-rate change");
             clearLiveQualityChange();
+            if (optimisticTarget != null) {
+                controlActionListener.onLiveStreamQualityApplied(
+                        requestMode, optimisticTarget);
+            }
             return;
         }
-        if (liveQualityDecoderConfirmed) {
-            // The decoder never matched the requested geometry and no ack explained why.
-            LimeLog.severe("XR: no video-mode ack explained the decoder geometry mismatch");
+        if (liveQualityConfirmations.hasMatchingDecoderOutput()) {
+            LimeLog.severe("XR: no video-mode ack after matching fresh-IDR output");
+        } else if (liveQualityConfirmations.hasDecoderOutput()) {
+            LimeLog.severe("XR: no video-mode ack explained the fresh-IDR geometry");
         } else {
             LimeLog.severe("XR: no video-mode ack and no fresh-IDR output");
         }
         StreamQualityTuple previous = previousLiveQuality;
         if (previous != null) {
             applyLiveStreamGeometry(game, previous,
-                    parseFrameRate(previous.frameRate, Math.round(prefConfig.fps)));
+                    parseFrameRate(previous.frameRate, prefConfig.fps));
         }
         if (surfaceEntity != null && !surfaceEntity.isDisposed()) {
             surfaceEntity.setAlpha(1.0f);
@@ -4488,10 +4716,12 @@ public class XrStreamPresenter {
     private void clearLiveQualityChange() {
         cancelLiveQualityAckTimeout();
         liveQualityChangeInProgress = false;
-        liveQualityDecoderConfirmed = false;
+        liveQualityConfirmations.clear();
         pendingVideoModeRequestId = -1;
         pendingLiveQuality = null;
         previousLiveQuality = null;
+        acknowledgedLiveQuality = null;
+        pendingLiveQualityMode = null;
         updateGlancePanel();
         revealDockTemporarily();
     }
@@ -4509,7 +4739,7 @@ public class XrStreamPresenter {
      * Frame rate on the wire is hundredths of a Hz, so fractional rates (2997 = 29.97) survive
      * the round trip even though the XR picker currently only offers whole values.
      */
-    static int frameRateX100(String frameRate, int fallbackFps) {
+    static int frameRateX100(String frameRate, float fallbackFps) {
         float fps;
         try {
             fps = Float.parseFloat(frameRate.trim());
@@ -4519,19 +4749,35 @@ public class XrStreamPresenter {
         return Math.max(0, Math.min(0xFFFF, Math.round(fps * 100f)));
     }
 
-    static int parseFrameRate(String frameRate, int fallback) {
+    static float parseFrameRate(String frameRate, float fallback) {
         try {
-            return Math.round(Float.parseFloat(frameRate.trim()));
+            return Float.parseFloat(frameRate.trim());
         } catch (RuntimeException e) {
             return fallback;
         }
+    }
+
+    private static String formatFrameRate(float frameRate) {
+        return formatFrameRateX100(Math.round(frameRate * 100f));
+    }
+
+    private static String formatFrameRateX100(int frameRateX100) {
+        int whole = frameRateX100 / 100;
+        int hundredths = frameRateX100 % 100;
+        if (hundredths == 0) {
+            return String.valueOf(whole);
+        }
+        if (hundredths % 10 == 0) {
+            return whole + "." + (hundredths / 10);
+        }
+        return whole + "." + (hundredths < 10 ? "0" : "") + hundredths;
     }
 
     /**
      * Modes whose decoded frame size can change live. Raw <em>Full</em> is the only exclusion:
      * its {@code 2W x H} packed transport is negotiated at connect and 0x3007 cannot renegotiate
      * it. Raw Half streams {@code W x H} exactly like Normal and resizes live. Client SBS resizes
-     * through {@code Stereo3DRenderer}, which refuses a change that would move the depth bucket.
+     * through {@code Stereo3DRenderer}, which refuses a change to its immutable pipeline contract.
      */
     static boolean supportsLiveResolutionChange(
             PresenterMode mode,
@@ -5443,6 +5689,14 @@ public class XrStreamPresenter {
     public void onDestroy() {
         modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
         dockVisibilityHandler.removeCallbacks(collapseDockRunnable);
+        cancelLiveQualityAckTimeout();
+        liveQualityChangeInProgress = false;
+        liveQualityConfirmations.clear();
+        pendingVideoModeRequestId = -1;
+        pendingLiveQuality = null;
+        previousLiveQuality = null;
+        acknowledgedLiveQuality = null;
+        pendingLiveQualityMode = null;
         viewStateStore.saveHeight(panelHeightMeters);
         if (surfaceEntity != null) {
             if (!surfaceEntity.isDisposed()) {

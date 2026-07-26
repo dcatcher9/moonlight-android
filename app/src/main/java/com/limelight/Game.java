@@ -587,7 +587,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             @Override
-            public void onUseModeGlobalDefaultsRequested(
+            public void onUseSessionModeDefaultsRequested(
                     XrStreamPresenter.PresenterMode mode,
                     ModeStreamQualityModel current) {
                 if (reconnectScheduled) {
@@ -612,8 +612,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
                 xrSessionSettingsController.notifyLiveStreamQualityApplied(
                         toSessionPresenterMode(mode), applied);
-                // Make the applied tuple durable too, so a later resume restores what is on
-                // screen rather than the tuple this session launched with.
+                // Make the acknowledged geometry/FPS and requested total wire bitrate durable.
+                // Apollo's lower post-audio/FEC encoder bitrate never enters this settings path.
                 if (!xrSessionSettingsController.commitPending()) {
                     LimeLog.warning("XR: live stream quality applied but not persisted");
                 }

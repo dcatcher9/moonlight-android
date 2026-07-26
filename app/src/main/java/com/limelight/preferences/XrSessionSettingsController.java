@@ -3,7 +3,7 @@ package com.limelight.preferences;
 import android.content.SharedPreferences;
 
 import com.limelight.preferences.session.SessionSettingsStore;
-import com.limelight.utils.ClientSbsDepthBuckets;
+import com.limelight.utils.ClientSbsPipelineContract;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
@@ -36,14 +36,8 @@ public final class XrSessionSettingsController {
     private static final List<Integer> BITRATES = Arrays.asList(
             10000, 20000, 30000, 40000, 60000, 80000, 100000,
             120000, 130000, 150000, 200000, 250000, 300000);
-    // Must stay in step with XrResolutionSelector.STANDARD_OPTIONS: 16:9 family, then 21:9.
-    private static final List<SessionSettingsModel.Choice> RESOLUTION_CHOICES = choices(
-            choice(PreferenceConfiguration.RES_1080P, "1080p"),
-            choice(PreferenceConfiguration.RES_1440P, "1440p"),
-            choice(PreferenceConfiguration.RES_4K, "4K"),
-            choice(PreferenceConfiguration.RES_UW_1080P, "UW 1080p"),
-            choice(PreferenceConfiguration.RES_UW_1440P, "UW 1440p"),
-            choice(PreferenceConfiguration.RES_5K2K, "5K2K"));
+    private static final List<SessionSettingsModel.Choice> RESOLUTION_CHOICES =
+            createResolutionChoices();
     private static final List<SessionSettingsModel.Choice> FRAME_RATE_CHOICES = choices(
             choice("30", "30"),
             choice("60", "60"),
@@ -132,8 +126,10 @@ public final class XrSessionSettingsController {
     private final SessionSettingsModel.Source appliedRawSbsPerEyeResolutionSource;
     private final SessionSettingsStore.PresenterMode startupMode;
     /**
-     * The tuple actually backing the live decoder. Not final: a live video-mode change
-     * (0x3007) replaces it without a reconnect.
+     * The tuple backing the live decoder, expressed in user-request semantics: acknowledged
+     * geometry/frame rate plus the requested total wire bitrate. Apollo's post-audio/FEC encoder
+     * bitrate is deliberately not persisted here. Not final: a live video-mode change (0x3007)
+     * replaces it without a reconnect.
      */
     private StreamQualityTuple liveStreamQuality;
     private final SharedPreferences startupPreferences;
@@ -228,14 +224,12 @@ public final class XrSessionSettingsController {
             pendingModeQuality.put(mode, new EnumMap<>(applied));
             appliedModeQualitySources.put(mode, sources);
         }
-        globalClientModel = globalPreferences.getString(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+        globalClientModel = readClientSbsDepthModel(
+                globalPreferences,
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2);
         SharedPreferences clientPreferences = snapshot.preferencesForMode(
                 SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        appliedClientModel = clientPreferences.getString(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                globalClientModel);
+        appliedClientModel = readClientSbsDepthModel(clientPreferences, globalClientModel);
         pendingClientModel = appliedClientModel;
         appliedClientModelSource = snapshot.isModeOverridden(
                 SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
@@ -352,8 +346,10 @@ public final class XrSessionSettingsController {
      * Adopts a stream-quality tuple that the host has applied live, with no reconnect.
      *
      * <p>Both writes matter: {@code liveStreamQuality} is what the live-vs-reconnect predicate
-     * compares against, and the same values must land in the mode's <em>applied</em> tuple or
-     * {@link #hasPendingChanges()} stays true forever and the Apply button never clears.</p>
+     * compares against, while the host-reconciled values must replace both the mode's
+     * <em>pending</em> tuple and its <em>applied</em> tuple. Replacing pending is essential when
+     * the host clamps a successful request or explicitly refuses an optimistic fast-path request:
+     * the following atomic commit must persist what is actually still on the wire.</p>
      */
     public void notifyLiveStreamQualityApplied(StreamQualityTuple applied) {
         notifyLiveStreamQualityApplied(selectedMode, applied);
@@ -364,6 +360,10 @@ public final class XrSessionSettingsController {
         Objects.requireNonNull(mode, "mode");
         Objects.requireNonNull(applied, "applied");
         liveStreamQuality = applied;
+        EnumMap<SessionSettingsModel.Key, Object> pendingValues = pendingModeQuality.get(mode);
+        pendingValues.put(SessionSettingsModel.Key.RESOLUTION, applied.resolution);
+        pendingValues.put(SessionSettingsModel.Key.FRAME_RATE, applied.frameRate);
+        pendingValues.put(SessionSettingsModel.Key.BITRATE, applied.bitrateKbps);
         EnumMap<SessionSettingsModel.Key, Object> appliedValues = appliedModeQuality.get(mode);
         EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source> sources =
                 appliedModeQualitySources.get(mode);
@@ -373,6 +373,7 @@ public final class XrSessionSettingsController {
                 SessionSettingsModel.Key.FRAME_RATE, applied.frameRate);
         putAppliedQualityValue(appliedValues, sources,
                 SessionSettingsModel.Key.BITRATE, applied.bitrateKbps);
+        modeInheritanceResetRequested.remove(mode);
     }
 
     private void putAppliedQualityValue(
@@ -648,9 +649,9 @@ public final class XrSessionSettingsController {
         // Restoring the session values also withdraws any staged "inherit global" action.
         modeInheritanceResetRequested.remove(mode);
         if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI) {
-            pendingClientModel = snapshot.preferencesForMode(
-                    SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).getString(
-                    PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+            pendingClientModel = readClientSbsDepthModel(
+                    snapshot.preferencesForMode(
+                            SessionSettingsStore.PresenterMode.CLIENT_SBS_AI),
                     globalClientModel);
             clientModelInheritanceResetRequested = false;
         }
@@ -748,9 +749,10 @@ public final class XrSessionSettingsController {
 
     /**
      * Returns whether the selected mode's staged quality tuple or transport geometry differs from
-     * the connection backing the live decoder. Raw SBS uses a packed stereo host stream, so
-     * entering/leaving Raw or changing its Full/Half packing must reconnect even when the selected
-     * quality tuple is identical. Same-quality switches among the other modes remain live.
+     * the connection backing the live decoder. Only Raw Full owns a distinct {@code 2W x H}
+     * transport, so crossing its boundary or changing Full/Half while Raw is live reconnects.
+     * Raw Half is the ordinary {@code W x H} mono wire stream and remains a live presentation
+     * change when the quality tuple and decoder envelope permit it.
      */
     public boolean selectedModeRequiresReconnect() {
         return modeRequiresReconnect(selectedMode);
@@ -844,11 +846,13 @@ public final class XrSessionSettingsController {
      *       transport may exceed what the virtual display advertises, so only a reconnect can
      *       renegotiate it. Raw <em>Half</em> is {@code W x H} — the same stream as Normal — and
      *       is classified identically, envelope checked against {@code W}.</li>
-     *   <li>An <em>aspect</em> change additionally forces a reconnect in Client SBS only. There,
-     *       aspect selects the immutable depth bucket and is baked into generated shader source
-     *       ({@code createReprojectionFragment}/{@code createWarpMapFragment}), so it cannot move
-     *       without rebuilding the pipeline. Nothing aspect-derived is expensive for 2D or Host
-     *       SBS AI — the quad shape and cached aspect are recomputed on the live path anyway.</li>
+     *   <li>Crossing between landscape and portrait reconnects. Decoder envelopes cover the real
+     *       choices in their launch orientation instead of a synthetic square made from both
+     *       independent long-axis maxima.</li>
+     *   <li>An <em>aspect</em> change additionally forces a reconnect in Client SBS when it
+     *       changes the selected model-family manifest or the independently compiled reprojection
+     *       probe count. Nothing aspect-derived is expensive for 2D or Host SBS AI — the quad
+     *       shape and cached aspect are recomputed on the live path anyway.</li>
      * </ul>
      */
     private boolean modeQualityDeltaRequiresReconnect(SessionSettingsStore.PresenterMode mode) {
@@ -875,10 +879,14 @@ public final class XrSessionSettingsController {
             return false;
         }
         int[] dimensions = parseResolution(resolution);
+        int[] liveDimensions = parseResolution(liveStreamQuality.resolution);
+        if ((dimensions[0] < dimensions[1]) != (liveDimensions[0] < liveDimensions[1])) {
+            return false;
+        }
         if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI
-                && !sameClientSbsDepthBucket(dimensions, parseResolution(
-                        liveStreamQuality.resolution))) {
-            // Crossing a depth bucket re-stages a different model and regenerates shader source.
+                && !sameClientSbsPipelineContract(appliedClientModel, dimensions,
+                        liveDimensions)) {
+            // The existing renderer cannot swap graphs, depth targets, or compiled shader loops.
             return false;
         }
         // Host SBS AI packs two eyes into one encoded frame, so the decoder sees 2W x H. Client
@@ -891,15 +899,13 @@ public final class XrSessionSettingsController {
                 && dimensions[1] <= liveResolutionMaxHeight;
     }
 
-    /**
-     * Whether two stream sizes select the same Client SBS depth bucket. Aspect alone decides the
-     * bucket, and every bucket-derived artifact (the model, the depth/warp target sizes and the
-     * {@code PROBE_STEPS} literal baked into the reprojection shader source) is identical within
-     * one bucket, so a same-bucket aspect change is applicable live.
-     */
-    static boolean sameClientSbsDepthBucket(int[] candidate, int[] live) {
-        return ClientSbsDepthBuckets.select((double) candidate[0] / Math.max(candidate[1], 1))
-                == ClientSbsDepthBuckets.select((double) live[0] / Math.max(live[1], 1));
+    /** Whether two stream sizes can share the selected model family's immutable pipeline. */
+    static boolean sameClientSbsPipelineContract(
+            String modelId, int[] candidate, int[] live) {
+        return ClientSbsPipelineContract.sameForStream(
+                modelId,
+                (double) candidate[0] / Math.max(candidate[1], 1),
+                (double) live[0] / Math.max(live[1], 1));
     }
 
     private boolean rawPackingChangeRequiresReconnect(
@@ -1128,6 +1134,20 @@ public final class XrSessionSettingsController {
         return PreferenceConfiguration.RawSbsPerEyeResolution.fromPreferenceValue(value);
     }
 
+    private static String readClientSbsDepthModel(
+            SharedPreferences preferences, String fallback) {
+        String modelId;
+        try {
+            modelId = preferences.getString(
+                    PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                    fallback);
+        }
+        catch (ClassCastException invalidStoredType) {
+            modelId = fallback;
+        }
+        return PreferenceConfiguration.normalizeClientSbsDepthModelId(modelId);
+    }
+
     private static int nextBitrate(int current) {
         for (int bitrate : BITRATES) {
             if (bitrate > current) {
@@ -1286,6 +1306,14 @@ public final class XrSessionSettingsController {
 
     private static SessionSettingsModel.Choice choice(String id, String label) {
         return new SessionSettingsModel.Choice(id, label);
+    }
+
+    private static List<SessionSettingsModel.Choice> createResolutionChoices() {
+        ArrayList<SessionSettingsModel.Choice> choices = new ArrayList<>();
+        for (XrResolutionOptions.Option option : XrResolutionOptions.standardOptions()) {
+            choices.add(choice(option.id, option.label));
+        }
+        return Collections.unmodifiableList(choices);
     }
 
     private static List<SessionSettingsModel.Choice> choices(

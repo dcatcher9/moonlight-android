@@ -52,7 +52,11 @@ final class ClientSbsTemporalTuning {
         return Math.max(1, Math.min((int) Math.round(frames), (int) MAX_REFERENCE_FRAMES));
     }
 
-    /** Maps finite differences and one-texel edge density to Apollo's aspect-matched grid. */
+    /**
+     * Maps finite differences to Apollo's aspect-matched grid. Magnitude-weighted edge density
+     * needs no resolve-pass scaling: its larger coarse-grid pixel fraction cancels the smaller
+     * linear weight, while the producer scales its saturation cap by this same factor.
+     */
     static float spatialThresholdScale(int width, int height) {
         int shortSide = Math.max(1, Math.min(width, height));
         int longSide = Math.max(width, height);
