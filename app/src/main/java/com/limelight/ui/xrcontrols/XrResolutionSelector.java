@@ -293,6 +293,24 @@ public final class XrResolutionSelector extends ViewGroup {
                 ? Integer.MAX_VALUE
                 : Math.max(0, widthSize - getPaddingLeft() - getPaddingRight());
 
+        // Cards are a picker grid, so they must all be one size. Their natural WRAP_CONTENT size
+        // is not: a portrait label carries an extra word, and the custom card carries a second
+        // line, so measuring each card on its own text makes neighbours visibly different sizes.
+        // Measure everything once to find the largest natural card, then give that size to all.
+        int uniformWidth = 0;
+        int uniformHeight = 0;
+        for (int i = 0; i < getChildCount(); i++) {
+            View child = getChildAt(i);
+            if (child.getVisibility() == GONE) {
+                continue;
+            }
+            measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, 0);
+            uniformWidth = Math.max(uniformWidth, child.getMeasuredWidth());
+            uniformHeight = Math.max(uniformHeight, child.getMeasuredHeight());
+        }
+        int uniformWidthSpec = MeasureSpec.makeMeasureSpec(uniformWidth, MeasureSpec.EXACTLY);
+        int uniformHeightSpec = MeasureSpec.makeMeasureSpec(uniformHeight, MeasureSpec.EXACTLY);
+
         int lineWidth = 0;
         int lineHeight = 0;
         int widestLine = 0;
@@ -304,7 +322,7 @@ public final class XrResolutionSelector extends ViewGroup {
             if (child.getVisibility() == GONE) {
                 continue;
             }
-            measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, 0);
+            child.measure(uniformWidthSpec, uniformHeightSpec);
             MarginLayoutParams params = (MarginLayoutParams) child.getLayoutParams();
             int childWidth = child.getMeasuredWidth() + params.leftMargin + params.rightMargin;
             int childHeight = child.getMeasuredHeight() + params.topMargin + params.bottomMargin;
@@ -485,7 +503,7 @@ public final class XrResolutionSelector extends ViewGroup {
             setElevation(0f);
             setGravity(Gravity.CENTER);
             setAllCaps(false);
-            setText(option.custom ? option.label + "\n" + option.detail() : option.label);
+            setText(option.custom ? option.label + "\n" + option.detail() : cardText(option));
             setTag(option.id);
             setTextSize(22f);
             setTextColor(cardTextColors());
@@ -504,6 +522,27 @@ public final class XrResolutionSelector extends ViewGroup {
             setFocusableInTouchMode(false);
             setClickable(!option.custom);
             updateContentDescription(false);
+        }
+
+        /**
+         * Breaks the orientation word onto its own line for portrait cards.
+         *
+         * <p>"UW 1440p Portrait" laid out on one line is far wider than the landscape card it sits
+         * beside, which then drags every card to that width once the grid is uniformly sized. The
+         * measured word is the same one the label already ends with, so the card still reads as its
+         * landscape peer plus an orientation, and {@code option.label} stays a single clean string
+         * for the content description and the other pickers.</p>
+         */
+        private static String cardText(ResolutionOption option) {
+            if (option.height <= option.width) {
+                return option.label;
+            }
+            int lastSpace = option.label.lastIndexOf(' ');
+            if (lastSpace <= 0) {
+                return option.label;
+            }
+            return option.label.substring(0, lastSpace) + "\n"
+                    + option.label.substring(lastSpace + 1);
         }
 
         void updateContentDescription(boolean selected) {
@@ -589,6 +628,53 @@ public final class XrResolutionSelector extends ViewGroup {
                     screenLeft + screenWidth, screenTop + screenHeight);
         }
 
+        float densityDotRadius() {
+            return Math.max(1f, strokeWidth * 0.55f);
+        }
+
+        /**
+         * Centres of the density matrix as flat x,y pairs, in draw order.
+         *
+         * <p>A denser matrix distinguishes 1080p through 4K even when every preset shares an aspect.
+         * The dot row must therefore run along the screen's LONG axis: a portrait rect is only about
+         * a third as wide as a landscape one, so a horizontal row of 2-4 dots collapses into a
+         * single smudge and every portrait card ends up looking identical. Transposing keeps the
+         * dot count and the spacing rule while leaving landscape glyphs pixel-identical.</p>
+         */
+        float[] densityDotCenters() {
+            RectF screen = getScreenBounds();
+            boolean portraitScreen = screen.height() > screen.width();
+            float alongExtent = portraitScreen ? screen.height() : screen.width();
+            float crossExtent = portraitScreen ? screen.width() : screen.height();
+            float alongCenter = portraitScreen ? screen.centerY() : screen.centerX();
+            float crossCenter = portraitScreen ? screen.centerX() : screen.centerY();
+            float usableAlong = alongExtent * 0.56f;
+            float firstAlong = alongCenter - usableAlong / 2f;
+            float stepAlong = densityLevel == 1 ? 0f : usableAlong / (densityLevel - 1);
+            // The narrow axis of a portrait rect would otherwise place the two rows close enough to
+            // merge. The floor keeps a visible gap and never moves the wider landscape rows.
+            float crossOffset = Math.max(densityDotRadius() * 1.8f, crossExtent * 0.12f);
+
+            float[] centers = new float[densityLevel * 4];
+            for (int index = 0; index < densityLevel; index++) {
+                float along = densityLevel == 1 ? alongCenter : firstAlong + index * stepAlong;
+                int offset = index * 4;
+                if (portraitScreen) {
+                    centers[offset] = crossCenter - crossOffset;
+                    centers[offset + 1] = along;
+                    centers[offset + 2] = crossCenter + crossOffset;
+                    centers[offset + 3] = along;
+                }
+                else {
+                    centers[offset] = along;
+                    centers[offset + 1] = crossCenter - crossOffset;
+                    centers[offset + 2] = along;
+                    centers[offset + 3] = crossCenter + crossOffset;
+                }
+            }
+            return centers;
+        }
+
         @Override
         public void draw(@NonNull Canvas canvas) {
             paint.setColor(glyphColorForState(getState()));
@@ -596,19 +682,11 @@ public final class XrResolutionSelector extends ViewGroup {
             RectF screen = getScreenBounds();
             canvas.drawRoundRect(screen, cornerRadius, cornerRadius, paint);
 
-            // A denser pixel matrix distinguishes 720p through 4K even when every preset is 16:9.
             paint.setStyle(Paint.Style.FILL);
-            float dotRadius = Math.max(1f, strokeWidth * 0.55f);
-            float usableWidth = screen.width() * 0.56f;
-            float firstX = screen.centerX() - usableWidth / 2f;
-            float stepX = densityLevel == 1 ? 0f : usableWidth / (densityLevel - 1);
-            float firstY = screen.centerY() - screen.height() * 0.12f;
-            float secondY = screen.centerY() + screen.height() * 0.12f;
-            for (int column = 0; column < densityLevel; column++) {
-                float x = densityLevel == 1
-                        ? screen.centerX() : firstX + column * stepX;
-                canvas.drawCircle(x, firstY, dotRadius, paint);
-                canvas.drawCircle(x, secondY, dotRadius, paint);
+            float dotRadius = densityDotRadius();
+            float[] centers = densityDotCenters();
+            for (int i = 0; i < centers.length; i += 2) {
+                canvas.drawCircle(centers[i], centers[i + 1], dotRadius, paint);
             }
             paint.setStyle(Paint.Style.STROKE);
 

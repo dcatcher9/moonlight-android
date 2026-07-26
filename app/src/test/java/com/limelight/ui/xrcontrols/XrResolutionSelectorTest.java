@@ -77,7 +77,10 @@ public final class XrResolutionSelectorTest {
             assertEquals(ids[i], selector.getResolutionIdAt(i));
             assertEquals(ids[i], card.getTag());
             assertEquals(labels[i], selector.getLabelAt(i));
-            assertEquals(labels[i], card.getText().toString());
+            // Portrait cards break the orientation word onto a second line so they do not force
+            // every card in the uniformly sized grid to the width of the longest label.
+            assertEquals(labels[i].replaceFirst(" Portrait$", "\nPortrait"),
+                    card.getText().toString());
             assertFalse(CompoundButton.class.isInstance(card));
             assertTrue(card.isClickable());
             assertTrue(card.isFocusable());
@@ -261,6 +264,77 @@ public final class XrResolutionSelectorTest {
         for (int i = 7; i < 12; i++) {
             assertEquals(portraitTop, selector.getCardAt(i).getTop());
         }
+    }
+
+    @Test
+    public void everyCardIsMeasuredToOneUniformSizeRegardlessOfLabelLength() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        selector.measure(View.MeasureSpec.makeMeasureSpec(dp(2000), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        selector.layout(0, 0, selector.getMeasuredWidth(), selector.getMeasuredHeight());
+
+        int width = selector.getCardAt(0).getWidth();
+        int height = selector.getCardAt(0).getHeight();
+        assertTrue(width > 0);
+        assertTrue(height > 0);
+        for (int i = 1; i < selector.getCardCount(); i++) {
+            // "UW 1440p Portrait" is the longest label on the ladder; before uniform measurement
+            // it produced a visibly wider card than the landscape entry beside it.
+            assertEquals(width, selector.getCardAt(i).getWidth());
+            assertEquals(height, selector.getCardAt(i).getHeight());
+        }
+    }
+
+    @Test
+    public void portraitGlyphsSpreadDensityDotsAlongTheirLongAxisInsteadOfCollapsing() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        // Cards 6..8 are 1080p/1440p/4K portrait: identical 9:16 aspect, so the density matrix is
+        // the only thing separating them. Along the narrow axis the dots merged into one smudge,
+        // which is what made every portrait icon look the same.
+        float previousSpread = -1f;
+        for (int i = 0; i < 3; i++) {
+            XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, 6 + i);
+            float[] centers = glyph.densityDotCenters();
+            assertEquals(glyph.getDensityLevel() * 4, centers.length);
+
+            // Dots must step along Y (the long axis) and pair across X.
+            float spread = centers[centers.length - 3] - centers[1];
+            assertTrue(spread > 0f);
+            assertEquals(centers[0], centers[centers.length - 4], 0.001f);
+            assertTrue(centers[2] > centers[0]);
+
+            // Consecutive dots must clear their own diameter, or they render as one blob.
+            if (glyph.getDensityLevel() > 1) {
+                float step = spread / (glyph.getDensityLevel() - 1);
+                assertTrue(step > glyph.densityDotRadius() * 2f);
+            }
+            // Every tier packs the same span, so a denser tier is a visibly different picture.
+            if (previousSpread >= 0f) {
+                assertEquals(previousSpread, spread, 0.001f);
+            }
+            previousSpread = spread;
+        }
+    }
+
+    @Test
+    public void landscapeGlyphsKeepTheirHorizontalDensityRow() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        for (int i = 0; i < 6; i++) {
+            XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, i);
+            float[] centers = glyph.densityDotCenters();
+            // Unchanged from before the portrait fix: step along X, pair across Y.
+            assertTrue(centers[centers.length - 4] - centers[0] > 0f);
+            assertEquals(centers[1], centers[centers.length - 3], 0.001f);
+            assertTrue(centers[3] > centers[1]);
+        }
+    }
+
+    private static XrResolutionSelector.ResolutionGlyphDrawable glyphAt(
+            XrResolutionSelector selector, int index) {
+        XrResolutionSelector.ResolutionGlyphDrawable glyph =
+                ((XrResolutionSelector.ResolutionCard) selector.getCardAt(index)).glyph;
+        glyph.setBounds(0, 0, glyph.getIntrinsicWidth(), glyph.getIntrinsicHeight());
+        return glyph;
     }
 
     @Test
