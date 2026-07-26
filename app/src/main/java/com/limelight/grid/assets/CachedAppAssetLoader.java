@@ -198,7 +198,8 @@ public class CachedAppAssetLoader {
                 // Set off another loader task on the network executor. This time our AsyncDrawable
                 // will use the app image placeholder bitmap, rather than an empty bitmap.
                 LoaderTask task = new LoaderTask(imageView, textView, false);
-                AsyncDrawable asyncDrawable = new AsyncDrawable(imageView.getResources(), noAppImageBitmap, task);
+                AsyncDrawable asyncDrawable = new AsyncDrawable(imageView.getResources(),
+                        appTileFor(imageView, tuple), task);
                 imageView.setImageDrawable(asyncDrawable);
                 imageView.startAnimation(AnimationUtils.loadAnimation(imageView.getContext(), R.anim.boxart_fadein));
                 imageView.setVisibility(View.VISIBLE);
@@ -323,6 +324,22 @@ public class CachedAppAssetLoader {
                 doNetworkAssetLoad(tuple, null);
             }
         });
+    }
+
+    /**
+     * Per-app fallback artwork, drawn at the card's own pixel size.
+     *
+     * <p>Falls back to the shipped raster if the card dimensions cannot be resolved, so a layout
+     * that does not define them still shows something rather than nothing.</p>
+     */
+    private Bitmap appTileFor(ImageView imageView, LoaderTuple tuple) {
+        if (imageView == null || tuple == null || tuple.app == null) {
+            return noAppImageBitmap;
+        }
+        int width = imageView.getResources().getDimensionPixelSize(R.dimen.xr_app_card_width);
+        int height = imageView.getResources().getDimensionPixelSize(R.dimen.xr_app_card_height);
+        Bitmap tile = AppTileArtwork.forApp(tuple.app.getAppName(), width, height);
+        return tile != null ? tile : noAppImageBitmap;
     }
 
     private boolean isBitmapPlaceholder(ScaledBitmap bitmap) {
