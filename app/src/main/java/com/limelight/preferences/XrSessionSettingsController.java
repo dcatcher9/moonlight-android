@@ -32,15 +32,28 @@ public final class XrSessionSettingsController {
     private static final String CODEC_H264 = "neverh265";
     private static final String CLIENT_SBS_DEFAULT_RESOLUTION = "1920x1080";
     private static final String CLIENT_SBS_DEFAULT_FPS = "30";
+    // Host SBS encodes a double-width packed frame, so its per-frame cost is twice a flat stream
+    // at the same per-eye resolution, and the host cannot hold 90 at 4K per eye. 72 is the fastest
+    // rate it does sustain AND a native Galaxy XR panel mode, so the stream lands 1:1 on the
+    // display instead of beating against it the way 60 (6:5) or an undelivered 90 would.
+    private static final String HOST_SBS_DEFAULT_FPS = "72";
     private static final String MAX_RAW_SBS_RESOLUTION = "3840x2160";
-    private static final List<Integer> BITRATES = Arrays.asList(
-            10000, 20000, 30000, 40000, 60000, 80000, 100000,
-            120000, 130000, 150000, 200000, 250000, 300000);
+    // Six rungs, derived by scoring candidates against every resolution x fps x codec x
+    // packed/flat combination the picker can produce. The value is a ceiling rather than a target,
+    // so reach matters more than resolution: the old thirteen-rung list spent six rungs below
+    // 50 Mbps that no configuration on a local link ever wants, and put 120 and 130 -- an
+    // eight percent difference nobody can see -- next to each other.
+    private static final List<Integer> BITRATES =
+            com.limelight.ui.xrcontrols.XrBitrateRecommendation.LADDER_KBPS;
     private static final List<SessionSettingsModel.Choice> RESOLUTION_CHOICES =
             createResolutionChoices();
+    // 72 is a native Galaxy XR panel mode (the display reports 60/72/90), so it is offered as a
+    // first-class rate: matching the stream to the panel avoids the uneven frame pacing a 90 fps
+    // stream produces while the headset is running its 72 Hz mode.
     private static final List<SessionSettingsModel.Choice> FRAME_RATE_CHOICES = choices(
             choice("30", "30"),
             choice("60", "60"),
+            choice("72", "72"),
             choice("90", "90"),
             choice("120", "120"));
     private static final List<SessionSettingsModel.Choice> BITRATE_CHOICES =
@@ -1036,6 +1049,9 @@ public final class XrSessionSettingsController {
             target.put(SessionSettingsModel.Key.RESOLUTION, CLIENT_SBS_DEFAULT_RESOLUTION);
             target.put(SessionSettingsModel.Key.FRAME_RATE, CLIENT_SBS_DEFAULT_FPS);
         }
+        else if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            target.put(SessionSettingsModel.Key.FRAME_RATE, HOST_SBS_DEFAULT_FPS);
+        }
     }
 
     private static StreamQualityTuple qualityTuple(
@@ -1063,6 +1079,10 @@ public final class XrSessionSettingsController {
         boolean usesClientFpsDefaults = clientSbsMode
                 && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
                 && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
+        boolean usesHostSbsFpsDefaults =
+                mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW
+                && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
+                && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
 
         // A per-machine/app session record can still hold a retired 720p; land it on the floor.
         String resolution = PreferenceConfiguration.migrateRetiredResolution(
@@ -1076,6 +1096,9 @@ public final class XrSessionSettingsController {
         }
         if (usesClientFpsDefaults) {
             fps = CLIENT_SBS_DEFAULT_FPS;
+        }
+        if (usesHostSbsFpsDefaults) {
+            fps = HOST_SBS_DEFAULT_FPS;
         }
 
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);

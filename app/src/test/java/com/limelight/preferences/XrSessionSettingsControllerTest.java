@@ -188,6 +188,36 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void hostSbsDefaultsTo72EvenWhenTheGlobalRateIsHigher() {
+        // The packed host-SBS frame is double width, so it costs the encoder twice a flat stream
+        // at the same per-eye resolution and 90 is not deliverable at 4K per eye. 72 is both
+        // sustainable and a native panel mode, so it lands 1:1 on the display.
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.FPS_PREF_STRING, "90")
+                .commit());
+        XrSessionSettingsController controller = controller();
+
+        assertEquals("72", controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
+        // Only host SBS is redirected; every other mode still follows the global rate.
+        assertEquals("90", controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.NORMAL)
+                .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
+    }
+
+    @Test
+    public void hostSbsKeepsAnExplicitRateInsteadOfTheDefault() {
+        XrSessionSettingsController controller = controller();
+        SessionSettingsStore.PresenterMode mode =
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW;
+
+        controller.selectModeQualitySetting(mode, SessionSettingsModel.Key.FRAME_RATE, "90");
+        assertEquals("90", controller.getModeStreamQualityModel(mode)
+                .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
+    }
+
+    @Test
     public void clientModelPersistsOnlyInClientMode() {
         XrSessionSettingsController controller = controller();
         controller.selectClientSbsModel(
@@ -501,7 +531,8 @@ public final class XrSessionSettingsControllerTest {
 
         controller.cycle(SessionSettingsModel.Key.BITRATE);
 
-        assertEquals("120000", controller.getSessionModel()
+        // 140 is the next rung above a custom 113 on the six-rung ladder; the old list had 120.
+        assertEquals("140000", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
     }
 
@@ -742,7 +773,9 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController restarted = controller();
         assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                 restarted.getStartupMode());
-        assertEquals(new StreamQualityTuple("3840x2160", "60", 80000),
+        // Resolution and bitrate were overridden for this mode; the frame rate was not, so it
+        // takes the host-SBS default rather than the global rate.
+        assertEquals(new StreamQualityTuple("3840x2160", "72", 80000),
                 restarted.getLiveStreamQuality());
     }
 
@@ -1166,9 +1199,11 @@ public final class XrSessionSettingsControllerTest {
                 .get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
         assertTrue(controller.commitPending());
 
+        // Resetting to global defaults still lands on the host-SBS frame-rate default, the same
+        // way CLIENT_SBS_AI keeps its own resolution/rate defaults through this path.
         assertQuality(store.snapshot(pc, globals),
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
-                "1920x1080", "60", 200000);
+                "1920x1080", "72", 200000);
     }
 
     @Test

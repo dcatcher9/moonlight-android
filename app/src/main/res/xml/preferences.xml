@@ -34,18 +34,12 @@
             android:title="@string/title_fps_list"
             app:iconSpaceReserved="false" />
 
-        <com.limelight.preferences.SeekBarPreference
+        <com.limelight.preferences.BitrateLadderPreference
             android:defaultValue="200000"
             android:key="seekbar_bitrate_kbps"
-            android:max="300000"
             android:summary="@string/summary_seekbar_bitrate"
-            android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_bitrate"
-            app:iconSpaceReserved="false"
-            app:xrDivisor="1000"
-            app:xrKeyStep="1000"
-            app:xrMin="500"
-            app:xrStep="500" />
+            app:iconSpaceReserved="false" />
 
         <SwitchPreferenceCompat
             android:defaultValue="true"

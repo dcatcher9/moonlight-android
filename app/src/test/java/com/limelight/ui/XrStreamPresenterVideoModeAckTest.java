@@ -251,4 +251,23 @@ public class XrStreamPresenterVideoModeAckTest {
         // Unparseable values fall back to the live frame rate rather than sending zero.
         assertEquals(9000, XrStreamPresenter.frameRateX100("bogus", 90));
     }
+
+    @Test
+    public void panelFollowSnapsOntoTheOfferedFrameRateLadder() {
+        // The headset's own panel modes land exactly on the ladder.
+        assertEquals(90, XrStreamPresenter.snapToOfferedFrameRate(90));
+        assertEquals(72, XrStreamPresenter.snapToOfferedFrameRate(72));
+        assertEquals(60, XrStreamPresenter.snapToOfferedFrameRate(60));
+
+        // A system frame-rate override is not restricted to those, so anything between rungs is
+        // snapped DOWN: requesting a rate the host's virtual display has no mode for would fail.
+        assertEquals(72, XrStreamPresenter.snapToOfferedFrameRate(89));
+        assertEquals(60, XrStreamPresenter.snapToOfferedFrameRate(71));
+        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(45));
+
+        // Below the slowest offered rate the floor holds rather than chasing the override down.
+        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(24));
+        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(1));
+        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(0));
+    }
 }

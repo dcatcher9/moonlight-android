@@ -59,6 +59,8 @@ import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 import com.limelight.ui.xrcontrols.XrBitrateControl;
+import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
+import com.limelight.ui.xrcontrols.XrSegmentedLadder;
 import com.limelight.ui.xrcontrols.XrControlPanelLayout;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrModeChevronView;
@@ -130,6 +132,10 @@ public class XrStreamPresenter {
     // and cuts the Android panel raster from the former 9.1 MP two-column surface to 2.8 MP.
     private static final float STATS_WIDTH_METERS = 1.40f;
     private static final float STATS_HEIGHT_METERS = 1.05f;
+    /** Never shrink below the authored size, so a sparse mode does not leave a sliver of a panel. */
+    private static final float STATS_MIN_HEIGHT_METERS = STATS_HEIGHT_METERS;
+    /** Beyond this the panel would run past comfortable gaze range; the ScrollView takes over. */
+    private static final float STATS_MAX_HEIGHT_METERS = 1.85f;
     private static final int STATS_RASTER_WIDTH = 1920;
     private static final int STATS_RASTER_HEIGHT = 1440;
     // SceneCore alpha16 rasterizes at roughly 1728 px/m. Scale this capped 4:3 raster to the stated
@@ -319,6 +325,14 @@ public class XrStreamPresenter {
      * retain the user's total wire budget.
      */
     private int effectiveEncoderBitrateKbps;
+    /**
+     * Frame rate the user actually chose, and the ceiling panel-follow may never exceed. Distinct
+     * from {@link PreferenceConfiguration#fps}, which holds whatever rate the stream is running at
+     * right now — including one that panel-follow lowered it to.
+     */
+    private float userSelectedFps = -1f;
+    /** Last panel rate acted on, so a repeated display callback is not a second transaction. */
+    private int followedPanelRefreshHz = -1;
     /** Opaque u16 correlation token for the outstanding 0x3007 request; -1 when there is none. */
     private int pendingVideoModeRequestId = -1;
     private int videoModeRequestCounter;
@@ -341,7 +355,7 @@ public class XrStreamPresenter {
     private Button sessionApplyButton;
     private PresenterMode renderedModeOptionsMode;
     private XrResolutionSelector modeResolutionSelector;
-    private XrChoiceGroup modeFpsChoiceGroup;
+    private XrSegmentedLadder modeFpsLadder;
     private XrParameterGlyphView modeFpsGlyph;
     private XrBitrateControl modeBitrateControl;
     private TextView modeQualityCueView;
@@ -374,6 +388,9 @@ public class XrStreamPresenter {
 
     /** Compact performance-stats panel wrapped inward from the screen's right edge. */
     private PanelEntity statsPanel;
+    /** Content root of the stats panel, measured to size the panel to its rows. */
+    private LinearLayout statsContentRoot;
+    private float statsHeightMeters = STATS_HEIGHT_METERS;
     private TextView statsTitle;
     private TableLayout statsTable;
     private boolean reuseStatsRows;
@@ -812,8 +829,8 @@ public class XrStreamPresenter {
         if (modeResolutionSelector != null) {
             modeResolutionSelector.setEnabled(enabled);
         }
-        if (modeFpsChoiceGroup != null) {
-            modeFpsChoiceGroup.setEnabled(enabled);
+        if (modeFpsLadder != null) {
+            modeFpsLadder.setEnabled(enabled);
         }
         if (modeBitrateControl != null) {
             modeBitrateControl.setEnabled(enabled);
@@ -1342,6 +1359,8 @@ public class XrStreamPresenter {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
+        statsContentRoot = root;
+        statsHeightMeters = STATS_HEIGHT_METERS;
         statsPanel = PanelEntity.create(
                 session, root, new IntSize2d(STATS_RASTER_WIDTH, STATS_RASTER_HEIGHT),
                 "xr-stats", statsPose(videoHeightMeters), surfaceEntity);
@@ -1428,7 +1447,7 @@ public class XrStreamPresenter {
                 : new StreamQualityTuple(prefConfig.width + "x" + prefConfig.height,
                         formatFrameRate(prefConfig.fps), prefConfig.bitrate);
         glanceStreamView.setText(activity.getString(R.string.xr_glance_stream,
-                live.resolution.replace("x", " \u00d7 "), live.frameRate,
+                live.resolution.replace("x", " \u00d7 "), glanceFrameRateText(live.frameRate),
                 prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
                         : activity.getString(R.string.xr_glance_sdr)));
 
@@ -2019,13 +2038,10 @@ public class XrStreamPresenter {
         fpsHeading.addView(controlText(activity.getString(R.string.title_fps_list),
                 24f, Color.WHITE));
         fpsCard.addView(fpsHeading);
-        modeFpsChoiceGroup = buildChoiceGroup(fps.choices,
-                qualityChoiceId(fps, model.pendingQuality.frameRate), fps.pendingValue,
-                choiceId -> controlActionListener.onModeQualitySettingSelected(mode,
-                        SessionSettingsModel.Key.FRAME_RATE, choiceId,
-                        modeStreamQualityModels.get(mode)));
-        modeFpsChoiceGroup.setEnabled(sessionControlsEnabled);
-        fpsCard.addView(modeFpsChoiceGroup, new LinearLayout.LayoutParams(
+        modeFpsLadder = new XrSegmentedLadder(activity);
+        configureFpsLadder(mode, fps, model);
+        modeFpsLadder.setEnabled(sessionControlsEnabled);
+        fpsCard.addView(modeFpsLadder, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         tuningColumn.addView(fpsCard);
@@ -2044,8 +2060,9 @@ public class XrStreamPresenter {
         modeBitrateControl = new XrBitrateControl(activity);
         String bitrateId = qualityChoiceId(bitrate,
                 String.valueOf(model.pendingQuality.bitrateKbps));
+        int recommendedKbps = recommendedBitrateKbps(mode, model);
         modeBitrateControl.setChoices(choicesOrCurrent(bitrate, bitrateId), bitrateId,
-                bitrate.pendingValue, choiceId ->
+                recommendedKbps, bitrateHintFor(recommendedKbps), choiceId ->
                         controlActionListener.onModeQualitySettingSelected(mode,
                                 SessionSettingsModel.Key.BITRATE, choiceId,
                                 modeStreamQualityModels.get(mode)));
@@ -2331,7 +2348,7 @@ public class XrStreamPresenter {
     private void clearModeOptionsReferences() {
         renderedModeOptionsMode = null;
         modeResolutionSelector = null;
-        modeFpsChoiceGroup = null;
+        modeFpsLadder = null;
         modeFpsGlyph = null;
         modeBitrateControl = null;
         modeQualityCueView = null;
@@ -2358,7 +2375,7 @@ public class XrStreamPresenter {
             return;
         }
         ModeStreamQualityModel model = modeStreamQualityModels.get(mode);
-        if (model == null || modeResolutionSelector == null || modeFpsChoiceGroup == null
+        if (model == null || modeResolutionSelector == null || modeFpsLadder == null
                 || modeBitrateControl == null) {
             renderModeOptions();
             return;
@@ -2368,13 +2385,10 @@ public class XrStreamPresenter {
         modeResolutionSelector.setEnabled(sessionControlsEnabled);
         SessionSettingsModel.Value fps = model.get(SessionSettingsModel.Key.FRAME_RATE);
         String fpsId = qualityChoiceId(fps, model.pendingQuality.frameRate);
-        if (!modeFpsChoiceGroup.setSelectedValue(fpsId)) {
-            configureChoiceGroup(modeFpsChoiceGroup, fps.choices, fpsId, fps.pendingValue,
-                    choiceId -> controlActionListener.onModeQualitySettingSelected(mode,
-                            SessionSettingsModel.Key.FRAME_RATE, choiceId,
-                            modeStreamQualityModels.get(mode)));
+        if (!modeFpsLadder.setSelectedChoiceId(fpsId)) {
+            configureFpsLadder(mode, fps, model);
         }
-        modeFpsChoiceGroup.setEnabled(sessionControlsEnabled);
+        modeFpsLadder.setEnabled(sessionControlsEnabled);
         if (modeFpsGlyph != null) {
             modeFpsGlyph.setParameter(XrParameterGlyphView.Kind.FPS_MOTION_BARS,
                     model.pendingQuality.frameRate);
@@ -2384,8 +2398,9 @@ public class XrStreamPresenter {
                 String.valueOf(model.pendingQuality.bitrateKbps));
         // Keep bitrate independent from resolution/fps. Rebuild the choice model so the slider
         // remains in sync with the latest pending value and any out-of-preset entry.
+        int recommendedKbps = recommendedBitrateKbps(mode, model);
         modeBitrateControl.setChoices(choicesOrCurrent(bitrate, bitrateId), bitrateId,
-                bitrate.pendingValue, choiceId ->
+                recommendedKbps, bitrateHintFor(recommendedKbps), choiceId ->
                         controlActionListener.onModeQualitySettingSelected(mode,
                                 SessionSettingsModel.Key.BITRATE, choiceId,
                                 modeStreamQualityModels.get(mode)));
@@ -2987,6 +3002,77 @@ public class XrStreamPresenter {
         }
     }
 
+    /**
+     * Live frame rate, naming the selected ceiling whenever the stream is running below it.
+     *
+     * <p>The picker sets a maximum, not a fixed rate: when the headset slows its display the stream
+     * follows it down. Without this the glance would read "72 FPS" against a picker showing 90 and
+     * look like a bug rather than the intended behaviour.</p>
+     */
+    private String glanceFrameRateText(String liveFrameRate) {
+        int ceiling = Math.round(userSelectedFps);
+        int live = Math.round(parseFrameRate(liveFrameRate, prefConfig.fps));
+        if (ceiling <= 0 || live <= 0 || live >= ceiling) {
+            return liveFrameRate;
+        }
+        return activity.getString(R.string.xr_glance_frame_rate_capped, liveFrameRate, ceiling);
+    }
+
+    /**
+     * Bitrate rung suited to this mode's pending resolution, frame rate and codec, or -1 when the
+     * codec cannot reach that shape at any offered rung.
+     */
+    private int recommendedBitrateKbps(PresenterMode mode, ModeStreamQualityModel model) {
+        if (model == null || model.pendingQuality == null) {
+            return -1;
+        }
+        int[] size = parseResolutionSize(model.pendingQuality.resolution);
+        if (size == null) {
+            return -1;
+        }
+        int fps = Math.round(parseFrameRate(model.pendingQuality.frameRate, prefConfig.fps));
+        // Both host-SBS modes encode a double-width packed frame; the client-side and normal modes
+        // encode one eye's worth, which is a whole rung or two of difference.
+        boolean packed = mode == PresenterMode.HOST_SBS_RAW || mode == PresenterMode.HOST_SBS_AI;
+        return XrBitrateRecommendation.recommendedKbps(
+                packed, size[0], size[1], fps, codecIdFor(prefConfig.videoFormat));
+    }
+
+    private static String codecIdFor(PreferenceConfiguration.FormatOption format) {
+        if (format == PreferenceConfiguration.FormatOption.FORCE_AV1) {
+            return XrBitrateRecommendation.CODEC_AV1;
+        }
+        if (format == PreferenceConfiguration.FormatOption.FORCE_H264) {
+            return XrBitrateRecommendation.CODEC_H264;
+        }
+        if (format == PreferenceConfiguration.FormatOption.FORCE_HEVC) {
+            return XrBitrateRecommendation.CODEC_HEVC;
+        }
+        return XrBitrateRecommendation.CODEC_AUTO;
+    }
+
+    /** Frame rate is a ceiling too: panel-follow may run the stream below the chosen rung. */
+    private void configureFpsLadder(PresenterMode mode, SessionSettingsModel.Value fps,
+                                    ModeStreamQualityModel model) {
+        // A mode carrying a custom rate reports no choices at all; synthesize the current one so
+        // the ladder still renders a single segment rather than refusing to build.
+        String fpsId = qualityChoiceId(fps, model.pendingQuality.frameRate);
+        modeFpsLadder.setChoices(
+                choicesOrCurrent(fps, fpsId),
+                fpsId,
+                null, null,
+                (choice, index, count) -> activity.getString(R.string.xr_fps_caption, choice.label),
+                choiceId -> controlActionListener.onModeQualitySettingSelected(mode,
+                        SessionSettingsModel.Key.FRAME_RATE, choiceId,
+                        modeStreamQualityModels.get(mode)));
+    }
+
+    private CharSequence bitrateHintFor(int recommendedKbps) {
+        return recommendedKbps > 0
+                ? activity.getString(R.string.xr_bitrate_recommended)
+                : activity.getString(R.string.xr_bitrate_codec_too_slow);
+    }
+
     private String sessionSettingLabel(SessionSettingsModel.Key key) {
         switch (key) {
             case RESOLUTION:
@@ -3586,6 +3672,46 @@ public class XrStreamPresenter {
     private void finishStatsRows() {
         trimStatsTable(statsTable, primaryStatsRowCursor);
         reuseStatsRows = false;
+        scheduleStatsPanelFit();
+    }
+
+    /**
+     * Grows the stats panel to whatever its rows need, up to a cap.
+     *
+     * <p>The panel was a fixed 1.05 m raster with the table inside a ScrollView, so any mode that
+     * reports more rows than fit — Client SBS adds a whole depth-pipeline section — pushed the user
+     * into scrolling a floating panel with a gaze cursor, which is awkward and hides the rows that
+     * matter. The ScrollView stays as the fallback beyond {@link #STATS_MAX_HEIGHT_METERS}.</p>
+     */
+    private void scheduleStatsPanelFit() {
+        if (statsPanel == null || statsPanel.isDisposed() || statsContentRoot == null) {
+            return;
+        }
+        // Measure after this layout pass; row views added moments ago have no height yet.
+        statsContentRoot.post(this::fitStatsPanelToContent);
+    }
+
+    private void fitStatsPanelToContent() {
+        if (statsPanel == null || statsPanel.isDisposed() || statsContentRoot == null) {
+            return;
+        }
+        statsContentRoot.measure(
+                View.MeasureSpec.makeMeasureSpec(STATS_RASTER_WIDTH, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int contentHeightPx = statsContentRoot.getMeasuredHeight();
+        if (contentHeightPx <= 0) {
+            return;
+        }
+        // Scale from the ORIGINAL raster/metre pair rather than the live size, so repeated fits
+        // cannot drift the panel a little larger every refresh.
+        float targetHeightMeters = calculateModeOptionsHeightMeters(
+                STATS_HEIGHT_METERS, STATS_RASTER_HEIGHT, contentHeightPx,
+                STATS_MIN_HEIGHT_METERS, STATS_MAX_HEIGHT_METERS);
+        if (Math.abs(targetHeightMeters - statsHeightMeters) < 0.005f) {
+            return;
+        }
+        statsHeightMeters = targetHeightMeters;
+        statsPanel.setSize(new FloatSize2d(STATS_WIDTH_METERS, targetHeightMeters));
     }
 
     private static void trimStatsTable(TableLayout table, int rowsToKeep) {
@@ -4183,6 +4309,62 @@ public class XrStreamPresenter {
      * <p>Main-thread only: every SceneCore call below is Activity-bound.</p>
      */
     public void applyLiveStreamQuality(StreamQualityTuple target) {
+        applyLiveStreamQuality(target, true);
+    }
+
+    /**
+     * Follows an automatic headset display-mode change.
+     *
+     * <p>Android XR moves the panel between its 60/72/90 Hz modes on its own for thermal and power
+     * reasons. A stream running at a rate the panel no longer refreshes at is delivered on an
+     * uneven cadence — 90 into 72 holds every fifth frame an extra refresh — so the stream follows
+     * the panel DOWN. It never follows it back up past the rate the user selected: that ceiling is
+     * an encode-budget decision about the host, not a display decision about the headset.</p>
+     */
+    public void onClientRefreshRateChanged(float panelRefreshHz) {
+        int panelHz = Math.round(panelRefreshHz);
+        if (panelHz <= 0 || panelHz == followedPanelRefreshHz) {
+            return;
+        }
+        followedPanelRefreshHz = panelHz;
+        if (userSelectedFps <= 0f) {
+            // No deliberate change yet, so the rate the stream started at IS the user's choice.
+            userSelectedFps = prefConfig.fps;
+        }
+        int target = snapToOfferedFrameRate(Math.min(Math.round(userSelectedFps), panelHz));
+        if (target <= 0 || target == Math.round(prefConfig.fps)) {
+            return;
+        }
+        LimeLog.info("XR: headset panel moved to " + panelHz + "Hz; following stream rate to "
+                + target + " (user ceiling " + Math.round(userSelectedFps) + ")");
+        // Built from live prefConfig rather than acknowledgedLiveQuality, which stays null until
+        // the first live change is acked and would otherwise disable follow on a fresh stream.
+        applyLiveStreamQuality(new StreamQualityTuple(
+                prefConfig.width + "x" + prefConfig.height,
+                String.valueOf(target), prefConfig.bitrate), false);
+    }
+
+    /**
+     * Largest offered rate not above {@code effectiveHz}.
+     *
+     * <p>The panel's own modes are 60/72/90, but {@code getRefreshRate()} also reports a system
+     * frame-rate override, which is not restricted to those and can read below 60. Requesting an
+     * arbitrary rate would ask the host's virtual display for a mode outside the ladder both ends
+     * agree on, so the follow target is snapped down onto it instead.</p>
+     */
+    static int snapToOfferedFrameRate(int effectiveHz) {
+        int[] offered = {30, 60, 72, 90, 120};
+        int best = 0;
+        for (int rate : offered) {
+            if (rate <= effectiveHz && rate > best) {
+                best = rate;
+            }
+        }
+        // Never chase an override below the slowest offered rate; hold the floor instead.
+        return best == 0 ? offered[0] : best;
+    }
+
+    private void applyLiveStreamQuality(StreamQualityTuple target, boolean userInitiated) {
         if (target == null || !streamPresentationReady || surfaceEntity == null
                 || surfaceEntity.isDisposed() || modeSwitchInProgress
                 || liveQualityTransactionBusy() || pendingDecoderTransitionMode != null
@@ -4202,6 +4384,11 @@ public class XrStreamPresenter {
         if (size == null || fps <= 0 || fpsX100 <= 0) {
             LimeLog.warning("XR: ignoring unparseable live stream quality " + target);
             return;
+        }
+        if (userInitiated) {
+            // Only a deliberate choice moves the ceiling. Panel-follow must not ratchet it down,
+            // or a single thermal dip to 72 would permanently cap a 90 Hz session at 72.
+            userSelectedFps = fps;
         }
         StreamQualityTuple previous = new StreamQualityTuple(
                 prefConfig.width + "x" + prefConfig.height,
@@ -5760,6 +5947,7 @@ public class XrStreamPresenter {
         dockFocusTarget = null;
         videoSurface = null;
         statsTable = null;
+        statsContentRoot = null;
         settingsItem = null;
         cinemaItem = null;
         statsItem = null;

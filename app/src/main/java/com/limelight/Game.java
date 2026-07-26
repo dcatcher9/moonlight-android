@@ -233,6 +233,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean waitingForAllModifiersUp = false;
     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
     private StreamContainer streamContainer;
+    /** Watches the headset's effective display rate so the stream can follow it; null when idle. */
+    private DisplayManager.DisplayListener panelRefreshListener;
     private long synthTouchDownTime = 0;
 
     private boolean pendingDrag = false;
@@ -1392,6 +1394,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 requestFocusToExternalDisplayControl(this);
                 listenForExternalDisplayRemoval();
             }
+            listenForPanelRefreshRateChanges();
 
             // Initialize touch contexts based on preferences
             // The mouse mode preference is also read in PreferenceConfiguration to set the boolean flags
@@ -1598,6 +1601,57 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void handleDisplayRemoved() {
         NotificationManagerCompat.from(getBaseContext()).cancel(SECONDARY_SCREEN_NOTIFICATION_ID);
         closeExternalDisplayControl();
+    }
+
+    /**
+     * Follows the headset's own display-rate changes.
+     *
+     * <p>Android XR moves the panel between its 60/72/90 Hz modes for thermal and power reasons
+     * with no involvement from us, and may additionally impose a frame-rate override without
+     * changing the mode at all. A stream running at a rate the display no longer presents at is
+     * delivered on an uneven cadence, so the presenter re-requests a matching rate from the host.
+     * {@code getRefreshRate()} is read rather than {@code getMode().getRefreshRate()} precisely
+     * because it reports the effective rate, override included.</p>
+     */
+    private void listenForPanelRefreshRateChanges() {
+        DisplayManager displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        if (displayManager == null || panelRefreshListener != null) {
+            return;
+        }
+        panelRefreshListener = new DisplayManager.DisplayListener() {
+            @Override
+            public void onDisplayAdded(int displayId) {
+            }
+
+            @Override
+            public void onDisplayRemoved(int displayId) {
+            }
+
+            @Override
+            public void onDisplayChanged(int displayId) {
+                Display display = getActiveDisplay(Game.this, prefConfig);
+                if (display == null || display.getDisplayId() != displayId) {
+                    return;
+                }
+                XrStreamPresenter presenter = streamContainer != null
+                        ? streamContainer.getXrPresenter() : null;
+                if (presenter != null) {
+                    presenter.onClientRefreshRateChanged(display.getRefreshRate());
+                }
+            }
+        };
+        displayManager.registerDisplayListener(panelRefreshListener, null);
+    }
+
+    private void stopListeningForPanelRefreshRateChanges() {
+        if (panelRefreshListener == null) {
+            return;
+        }
+        DisplayManager displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+        if (displayManager != null) {
+            displayManager.unregisterDisplayListener(panelRefreshListener);
+        }
+        panelRefreshListener = null;
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -2250,6 +2304,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onDestroy() {
+        // Drop the display callback before teardown: it dereferences streamContainer.
+        stopListeningForPanelRefreshRateChanges();
         // Native connection teardown must complete before codec/EGL/XR resources disappear.
         // In particular, cancellation during startup is now covered because connecting is set
         // before NvConnection.start().

@@ -173,7 +173,8 @@ public final class XrPreferenceWidgetsTest {
 
         InlineListPreference resolution = fragment.findPreference(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING);
-        SeekBarPreference bitrate = fragment.findPreference(
+        // Bitrate moved from a 600-position seek bar to the shared discrete ladder.
+        BitrateLadderPreference bitrate = fragment.findPreference(
                 PreferenceConfiguration.BITRATE_PREF_STRING);
         InlineListPreference rawPerEyeResolution = fragment.findPreference(
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING);
@@ -216,8 +217,15 @@ public final class XrPreferenceWidgetsTest {
         findChoice(fpsChoices, "60").performClick();
         assertEquals("60", fps.getValue());
 
-        assertEquals(37000, bitrate.getProgress());
-        assertEquals(37000, preferences.getInt(
+        // Off-ladder rates are retired: 37000 came from the seek bar and is snapped to the
+        // nearest rung, so the two surfaces cannot disagree about what is selectable.
+        assertEquals(50000, bitrate.getCurrentValue());
+        assertEquals(50000, BitrateLadderPreference.snapToLadder(37000));
+        assertEquals(140000, BitrateLadderPreference.snapToLadder(150000));
+        assertEquals(300000, BitrateLadderPreference.snapToLadder(250000));
+        // The migration is durable, not display-only: storage now holds the rung too, so the
+        // stream and the control can never disagree about the ceiling.
+        assertEquals(50000, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING, -1));
 
         activity.findViewById(R.id.settingsAudioInput).performClick();

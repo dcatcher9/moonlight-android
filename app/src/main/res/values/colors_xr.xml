@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared palette for the XR surfaces.
+
+  These screens are composited over passthrough or over video, so the palette is deliberately
+  narrow and dark: large light areas glow in a headset and wash out whatever is behind them. One
+  accent hue carries every "selected / active / live" meaning, and semantic colours are reserved
+  for status so they keep their signal value.
+
+  Colours were previously written as literal hex in layouts and in Java, which is why the same
+  blue appeared in four slightly different values. Add to this file rather than inlining.
+-->
+<resources>
+    <!-- Surfaces. Opaque, because blending a second large translucent panel over video costs fill
+         rate and muddies both. -->
+    <color name="xr_surface">#FF16181E</color>
+    <color name="xr_surface_raised">#FF1E212A</color>
+    <color name="xr_surface_sunken">#FF101319</color>
+    <color name="xr_divider">#FF2C3140</color>
+
+    <!-- Accent: one hue for selection, focus and "live". -->
+    <color name="xr_accent">#FF60BEFF</color>
+    <color name="xr_accent_dim">#FF3E7FAD</color>
+    <!-- Text drawn ON the accent fill, which is light enough to need a dark foreground. -->
+    <color name="xr_on_accent">#FF101418</color>
+
+    <!-- Text. Three weights is enough; more and the hierarchy stops reading at arm's length. -->
+    <color name="xr_text_primary">#FFE8EEF6</color>
+    <color name="xr_text_secondary">#FF96A2B4</color>
+    <color name="xr_text_disabled">#FF5C6472</color>
+
+    <!-- Status. Kept away from the accent hue so "good" never reads as "selected". -->
+    <color name="xr_status_ok">#FF7AD6A8</color>
+    <color name="xr_status_warn">#FFF5C06A</color>
+    <color name="xr_status_error">#FFFF9A8F</color>
+
+    <!-- Controls. -->
+    <color name="xr_segment_filled">@color/xr_accent</color>
+    <color name="xr_segment_empty">#FF404A5A</color>
+    <color name="xr_segment_disabled">#FF33383F</color>
+</resources>

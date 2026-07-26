@@ -186,6 +186,36 @@ public class XrStreamPresenterLayoutTest {
     }
 
     @Test
+    public void statsPanelGrowsWithItsRowsAndNeverShrinksBelowTheAuthoredSize() {
+        // Reference pair is the authored panel: 1.05 m rendered into a 1440 px raster.
+        float authored = 1.05f;
+        int raster = 1440;
+        float min = 1.05f;
+        float max = 1.85f;
+
+        // A mode whose rows fit exactly keeps the authored height.
+        assertEquals(authored,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        authored, raster, raster, min, max),
+                0.0001f);
+        // Client SBS adds a depth section: taller content grows the panel instead of scrolling.
+        assertEquals(1.4583f,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        authored, raster, 2000, min, max),
+                0.0001f);
+        // Sparse content must not leave a sliver — the floor is the authored size.
+        assertEquals(min,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        authored, raster, 400, min, max),
+                0.0001f);
+        // Past the cap the panel stops growing and the ScrollView takes over.
+        assertEquals(max,
+                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                        authored, raster, 4000, min, max),
+                0.0001f);
+    }
+
+    @Test
     public void modeOptionsPanelTiltsTowardFaceAndAnchorsBelowLevelControls() {
         float controlY = -1.24f;
         float controlHeight = 0.21f;
