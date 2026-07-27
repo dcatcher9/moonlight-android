@@ -38,7 +38,8 @@ public class XrDesignScaleTest {
         return fileName.contains("xr")
                 || fileName.equals("app_grid_item.xml")
                 || fileName.equals("activity_app_view.xml")
-                || fileName.equals("pc_grid_item_hero.xml");
+                || fileName.equals("pc_grid_item_hero.xml")
+                || fileName.equals("activity_stream_settings.xml");
     }
 
     private static final Pattern RAW_TEXT_SIZE =

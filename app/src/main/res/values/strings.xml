@@ -908,4 +908,7 @@
     <string name="xr_pairing_connected_title">PC paired</string>
     <string name="xr_pairing_connected_detail">Pairing is complete. Opening the application library.</string>
     <string name="xr_pairing_failed_title">Pairing failed</string>
+    <string name="xr_app_author" translatable="false">Yang Qu</string>
+    <!-- app name, version, author -->
+    <string name="xr_settings_attribution">%1$s %2$s · %3$s</string>
 </resources>

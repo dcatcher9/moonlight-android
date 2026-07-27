@@ -40,8 +40,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/xr_global_settings_title"
-                android:textColor="#FFFFFFFF"
-                android:textSize="30sp"
+                android:textColor="@color/xr_text_primary"
+                android:textSize="@dimen/xr_text_display"
                 android:textStyle="bold" />
 
             <TextView
@@ -49,8 +49,16 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:text="@string/xr_global_settings_summary"
-                android:textColor="#FFBDC1C6"
-                android:textSize="16sp" />
+                android:textColor="@color/xr_text_secondary"
+                android:textSize="@dimen/xr_text_body" />
+
+            <TextView
+                android:id="@+id/settingsAttribution"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/xr_space_xs"
+                android:textColor="@color/xr_text_secondary"
+                android:textSize="@dimen/xr_text_caption" />
         </LinearLayout>
     </LinearLayout>
 

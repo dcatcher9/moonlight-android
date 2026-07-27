@@ -217,13 +217,6 @@
             android:title="@string/title_checkbox_enable_perf_logging"
             app:iconSpaceReserved="false" />
 
-        <Preference
-            android:dependency="checkbox_enable_perf_logging"
-            android:key="share_performance_logs"
-        android:icon="@drawable/ic_xr_share"
-            android:summary="@string/summary_share_performance_logs"
-            android:title="@string/title_share_performance_logs_button"
-            app:iconSpaceReserved="false" />
 
         <Preference
             android:key="pref_debug_info"

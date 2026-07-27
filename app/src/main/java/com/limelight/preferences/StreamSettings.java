@@ -2,31 +2,27 @@ package com.limelight.preferences;
 
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.FileProvider;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceScreen;
 
+import com.limelight.BuildConfig;
 import com.limelight.DebugInfoActivity;
 import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.UiHelper;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * XR-first editor for global defaults.
@@ -63,6 +59,13 @@ public class StreamSettings extends AppCompatActivity {
         setContentView(R.layout.activity_stream_settings);
 
         findViewById(R.id.settingsBackFab).setOnClickListener(v -> finish());
+
+        TextView attribution = findViewById(R.id.settingsAttribution);
+        if (attribution != null) {
+            attribution.setText(getString(R.string.xr_settings_attribution,
+                    getString(R.string.app_label), BuildConfig.VERSION_NAME,
+                    getString(R.string.xr_app_author)));
+        }
         for (int i = 0; i < SECTION_BUTTON_IDS.length; i++) {
             final int section = i;
             findViewById(SECTION_BUTTON_IDS[i]).setOnClickListener(v -> showSection(section));
@@ -151,13 +154,6 @@ public class StreamSettings extends AppCompatActivity {
                 });
             }
 
-            Preference shareLogs = findPreference("share_performance_logs");
-            if (shareLogs != null) {
-                shareLogs.setOnPreferenceClickListener(preference -> {
-                    sharePerformanceLogs(preference.getContext());
-                    return true;
-                });
-            }
 
             Preference debugInfo = findPreference("pref_debug_info");
             if (debugInfo != null) {
@@ -168,41 +164,5 @@ public class StreamSettings extends AppCompatActivity {
             }
         }
 
-        private void sharePerformanceLogs(Context context) {
-            String logs = new PerformanceDataTracker().getLog(context);
-            if (logs == null || logs.trim().isEmpty()) {
-                Toast.makeText(context, R.string.toast_no_logs, Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            try {
-                File logFile = new File(context.getCacheDir(), "artemis-performance-logs.txt");
-                try (FileOutputStream output = new FileOutputStream(logFile)) {
-                    output.write(logs.getBytes(StandardCharsets.UTF_8));
-                }
-
-                Uri uri = FileProvider.getUriForFile(context,
-                        context.getPackageName() + ".fileprovider", logFile);
-                Intent intent = new Intent(Intent.ACTION_SEND)
-                        .setType("text/plain")
-                        .putExtra(Intent.EXTRA_EMAIL,
-                                new String[] {context.getString(R.string.email_recipient)})
-                        .putExtra(Intent.EXTRA_SUBJECT,
-                                context.getString(R.string.email_subject))
-                        .putExtra(Intent.EXTRA_TEXT,
-                                context.getString(R.string.email_prefix_message))
-                        .putExtra(Intent.EXTRA_STREAM, uri)
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(Intent.createChooser(intent,
-                        context.getString(R.string.email_chooser_title)));
-            }
-            catch (IOException e) {
-                Log.w("StreamSettings", "Unable to create performance log attachment", e);
-                Toast.makeText(context, R.string.pref_error_occurred, Toast.LENGTH_SHORT).show();
-            }
-            catch (android.content.ActivityNotFoundException e) {
-                Toast.makeText(context, R.string.toast_no_email_clients, Toast.LENGTH_SHORT).show();
-            }
-        }
     }
 }
