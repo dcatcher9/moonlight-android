@@ -2839,12 +2839,6 @@ public class XrStreamPresenter {
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         header.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
-        sessionDefaultsButton = compactButton(
-                activity.getString(R.string.xr_session_use_global));
-        sessionDefaultsButton.setEnabled(sessionControlsEnabled);
-        sessionDefaultsButton.setOnClickListener(v -> controlActionListener
-                .onUseGlobalDefaultsRequested(sessionSettingsModel));
-        header.addView(sessionDefaultsButton);
         root.addView(header);
 
         String pcName = activity.getIntent().getStringExtra(Game.EXTRA_PC_NAME);
@@ -2896,6 +2890,22 @@ public class XrStreamPresenter {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
+        // Both actions sit in one footer, matching the mode pane. "Use global defaults" used to
+        // live in the header, where it competed with the title and left the two buttons in
+        // opposite corners of the pane; a reset and its apply belong side by side, reset first so
+        // the primary action stays where the eye finishes.
+        LinearLayout footer = new LinearLayout(activity);
+        footer.setOrientation(LinearLayout.HORIZONTAL);
+        footer.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        footer.setPadding(0, dp(12), 0, 0);
+
+        sessionDefaultsButton = compactButton(
+                activity.getString(R.string.xr_session_use_global));
+        sessionDefaultsButton.setEnabled(sessionControlsEnabled);
+        sessionDefaultsButton.setOnClickListener(v -> controlActionListener
+                .onUseGlobalDefaultsRequested(sessionSettingsModel));
+        footer.addView(sessionDefaultsButton);
+
         sessionApplyButton = compactButton(applyButtonLabel());
         sessionApplyButton.setBackgroundResource(R.drawable.xr_home_primary_action_background);
         sessionApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
@@ -2904,9 +2914,9 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        applyParams.gravity = Gravity.END;
-        applyParams.topMargin = dp(12);
-        root.addView(sessionApplyButton, applyParams);
+        applyParams.leftMargin = dp(12);
+        footer.addView(sessionApplyButton, applyParams);
+        root.addView(footer);
         return root;
     }
 
