@@ -158,7 +158,17 @@ public final class XrStreamPresenterViewTest {
         LinearLayout.LayoutParams params =
                 (LinearLayout.LayoutParams) apply.getLayoutParams();
         assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT, params.width);
-        assertEquals(android.view.Gravity.END, params.gravity);
+
+        // Alignment moved from the button to the footer that now holds both actions, so assert
+        // the arrangement rather than a gravity flag that no longer lives on the button: reset
+        // first, apply last, and the pair pushed to the pane end.
+        LinearLayout footer = (LinearLayout) apply.getParent();
+        assertEquals(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.END,
+                footer.getGravity());
+        Button defaults = (Button) getField(presenter, "sessionDefaultsButton");
+        assertEquals(footer, defaults.getParent());
+        assertEquals(0, footer.indexOfChild(defaults));
+        assertEquals(1, footer.indexOfChild(apply));
         controller.destroy();
     }
 

@@ -911,4 +911,7 @@
     <string name="xr_app_author" translatable="false">Yang Qu</string>
     <!-- app name, version, author -->
     <string name="xr_settings_attribution">%1$s %2$s · %3$s</string>
+    <!-- Client load on the glance strip: CPU core-equivalent, then GPU busy percent. -->
+    <string name="xr_glance_load">CPU %1$s · GPU %2$s</string>
+    <string name="xr_glance_load_unavailable" translatable="false">n/a</string>
 </resources>

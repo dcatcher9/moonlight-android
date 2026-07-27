@@ -52,4 +52,9 @@
     <color name="xr_segment_filled">@color/xr_accent</color>
     <color name="xr_segment_empty">@color/xr_border</color>
     <color name="xr_segment_disabled">@color/xr_surface_raised</color>
+
+    <!-- Border tones for raised chrome. Bluer than xr_border, which is the neutral hairline;
+         these tie a tile or panel edge to the accent without drawing as a line of its own. -->
+    <color name="xr_border_tile">#FF455466</color>
+    <color name="xr_border_panel">#FF34485D</color>
 </resources>

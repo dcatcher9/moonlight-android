@@ -123,14 +123,6 @@ public class XrStreamPresenter {
     private static final float MODE_OPTIONS_GAP_METERS = 0.02f;
     private static final float MODE_OPTIONS_MIN_TILT_DEGREES = 10.0f;
     private static final float MODE_OPTIONS_MAX_TILT_DEGREES = 30.0f;
-    private static final int TILE_IDLE_COLOR = 0xFF22262B;  // = xr_surface_raised
-    private static final int TILE_IDLE_BORDER_COLOR = 0xFF455466;
-    private static final int TILE_ACTIVE_COLOR = 0xFF36587F;  // = xr_accent_deep
-    private static final int TILE_ACTIVE_BORDER_COLOR = 0xFF8AB4F8;  // = xr_accent
-    private static final int PANEL_BACKGROUND_COLOR = 0xFF0C0F14;  // = xr_surface_sunken
-    private static final int PANEL_SECTION_COLOR = 0xFF22262B;  // = xr_surface_raised
-    private static final int PANEL_SUBTLE_COLOR = 0xFF16181E;  // = xr_surface
-    private static final int PANEL_SECTION_BORDER_COLOR = 0xFF34485D;
     // Keep Stats compact and place it beside the video. A single column is easier to scan in-headset
     // and cuts the Android panel raster from the former 9.1 MP two-column surface to 2.8 MP.
     private static final float STATS_WIDTH_METERS = 1.40f;
@@ -405,7 +397,21 @@ public class XrStreamPresenter {
     private TextView glanceIdentityView;
     private TextView glanceModeView;
     private TextView glanceStreamView;
+    private TextView glanceLoadView;
     private TextView glanceStatusView;
+    private static final long GLANCE_LOAD_INTERVAL_MS = 1000L;
+    private final android.os.Handler glanceLoadHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable glanceLoadRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (glanceLoadView == null) {
+                return;
+            }
+            updateGlanceLoad(devicePerformanceSampler.sample());
+            glanceLoadHandler.postDelayed(this, GLANCE_LOAD_INTERVAL_MS);
+        }
+    };
 
     private final android.os.Handler dockVisibilityHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
@@ -448,12 +454,6 @@ public class XrStreamPresenter {
             new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable hideTransientMessageRunnable = this::hideTransientMessage;
 
-    private static final int STATS_LABEL_COLOR = 0xFFB0B9C6;  // = xr_text_secondary
-    private static final int STATS_VALUE_COLOR = 0xFFFFFFFF;  // = xr_text_primary
-    private static final int STATS_ON_COLOR = 0xFF5CD65C;  // = xr_status_ok
-    private static final int STATS_WARN_COLOR = 0xFFE0B020;  // = xr_status_warn
-    private static final int STATS_ERROR_COLOR = 0xFFFFB4AB;  // = xr_danger
-    private static final int STATS_UNAVAILABLE_COLOR = 0xFF71808F;  // = xr_text_disabled
     static final float STATS_TEXT_SP = 30f;
     static final float SESSION_SUMMARY_TEXT_SP = 25f;
     static final float SESSION_GROUP_TEXT_SP = 26f;
@@ -1606,7 +1606,7 @@ public class XrStreamPresenter {
         // toward the face independently while its ordinary child Views retain native gaze taps.
         modeOptionsHost = new FrameLayout(activity);
         modeOptionsHost.setBackground(controlSurfaceBackground(
-                PANEL_BACKGROUND_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_sunken), paletteColor(R.color.xr_border_panel), 1));
         modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
         modeOptionsPanel = PanelEntity.create(
                 session, modeOptionsHost,
@@ -1631,13 +1631,13 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         // Fully opaque content avoids blending a second large translucent surface over video.
-        root.setBackgroundColor(PANEL_BACKGROUND_COLOR);
+        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken));
         int p = statsDp(18);
         root.setPadding(p, p, p, p);
 
         statsTitle = new TextView(activity);
         statsTitle.setText(R.string.xr_stats_title);
-        statsTitle.setTextColor(TILE_ACTIVE_BORDER_COLOR);
+        statsTitle.setTextColor(paletteColor(R.color.xr_accent));
         statsTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,
                 (STATS_TEXT_SP + 4f) * STATS_CONTENT_SCALE);
         statsTitle.setTypeface(statsTitle.getTypeface(), android.graphics.Typeface.BOLD);
@@ -1669,7 +1669,7 @@ public class XrStreamPresenter {
     /** Create the left-side entity used by shared Session Settings. */
     private void createAuxiliaryPanel(float videoHeightMeters) {
         auxiliaryContentHost = new FrameLayout(activity);
-        auxiliaryContentHost.setBackgroundColor(PANEL_BACKGROUND_COLOR);
+        auxiliaryContentHost.setBackgroundColor(paletteColor(R.color.xr_surface_sunken));
         auxiliaryPanel = PanelEntity.create(
                 session, auxiliaryContentHost,
                 new FloatSize2d(AUXILIARY_WIDTH_METERS, AUXILIARY_HEIGHT_METERS),
@@ -1683,25 +1683,31 @@ public class XrStreamPresenter {
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER_VERTICAL);
         root.setPadding(dp(12), dp(4), dp(12), dp(4));
-        root.setBackground(controlSurfaceBackground(0xE6101418, 0xFF3C4043, 1));
+        root.setBackground(controlSurfaceBackground(
+                paletteColor(R.color.xr_surface_sunken, 0xE6),
+                paletteColor(R.color.xr_border), 1));
         root.setClickable(false);
         root.setFocusable(false);
         glanceRoot = root;
 
-        glanceIdentityView = glanceText(Color.WHITE);
-        glanceModeView = glanceText(0xFFD7E5FF);
-        glanceStreamView = glanceText(0xFFD7E5FF);
-        glanceStatusView = glanceText(STATS_WARN_COLOR);
+        glanceIdentityView = glanceText(paletteColor(R.color.xr_text_primary));
+        glanceModeView = glanceText(paletteColor(R.color.xr_accent_bright));
+        glanceStreamView = glanceText(paletteColor(R.color.xr_accent_bright));
+        glanceLoadView = glanceText(paletteColor(R.color.xr_accent_bright));
+        glanceStatusView = glanceText(paletteColor(R.color.xr_status_warn));
         glanceStatusView.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        root.addView(glanceIdentityView, glanceLayoutParams(1.45f));
-        root.addView(glanceModeView, glanceLayoutParams(1.0f));
-        root.addView(glanceStreamView, glanceLayoutParams(1.55f));
+        root.addView(glanceIdentityView, glanceLayoutParams(1.35f));
+        root.addView(glanceModeView, glanceLayoutParams(0.95f));
+        root.addView(glanceStreamView, glanceLayoutParams(1.5f));
+        root.addView(glanceLoadView, glanceLayoutParams(1.0f));
         root.addView(glanceStatusView, glanceLayoutParams(0.72f));
 
         glancePanel = PanelEntity.create(session, root,
                 new FloatSize2d(GLANCE_WIDTH_METERS, GLANCE_HEIGHT_METERS),
                 "xr-stream-glance", glancePose(videoHeightMeters), surfaceEntity);
         glancePanel.setEnabled(true);
+        glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
+        glanceLoadHandler.post(glanceLoadRunnable);
     }
 
     private TextView glanceText(int color) {
@@ -1771,8 +1777,37 @@ public class XrStreamPresenter {
             statusText = R.string.xr_glance_live;
         }
         glanceStatusView.setText(statusText);
-        glanceStatusView.setTextColor(liveStatus ? STATS_ON_COLOR : STATS_WARN_COLOR);
+        glanceStatusView.setTextColor(liveStatus ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_status_warn));
         updateDockRevealPill(statusText, liveStatus);
+    }
+
+    private int paletteColor(int colorRes) {
+        return ContextCompat.getColor(activity, colorRes);
+    }
+
+    /** Palette colour at a given alpha, for scrims that must let video through. */
+    private int paletteColor(int colorRes, int alpha) {
+        return (paletteColor(colorRes) & 0x00FFFFFF) | (alpha << 24);
+    }
+
+    /**
+     * Client load on the glance strip. Driven by its own ticker rather than {@code setStats}:
+     * decoder telemetry is switched off entirely while the stats pane is closed, so a readout that
+     * rode on it would sit blank exactly when it is the only place to see the numbers. The cost is
+     * one getElapsedCpuTime() and two sysfs reads a second -- no GL call, so no GPU sync.
+     */
+    private void updateGlanceLoad(DevicePerformanceSampler.Snapshot device) {
+        if (glanceLoadView == null) {
+            return;
+        }
+        String unavailable = activity.getString(R.string.xr_glance_load_unavailable);
+        String cpu = device != null && device.appCpuAvailable
+                ? String.format(Locale.US, "%.1f", device.appCpuCoreEquivalent) : unavailable;
+        // Device-wide GPU busy, not this process's share: the KGSL counter cannot attribute.
+        String gpu = device != null && device.deviceGpuUtilizationAvailable
+                ? String.format(Locale.US, "%.0f%%", device.deviceGpuUtilizationPercent)
+                : unavailable;
+        glanceLoadView.setText(activity.getString(R.string.xr_glance_load, cpu, gpu));
     }
 
     private void updateDockRevealPill(int statusText, boolean liveStatus) {
@@ -1781,7 +1816,7 @@ public class XrStreamPresenter {
         }
         dockRevealPill.setText(activity.getString(R.string.xr_dock_reveal_status,
                 modeLabel(currentPresenterMode), activity.getString(statusText)));
-        dockRevealPill.setTextColor(liveStatus ? STATS_ON_COLOR : STATS_WARN_COLOR);
+        dockRevealPill.setTextColor(liveStatus ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_status_warn));
     }
 
     /** Reset the soft-collapse timer and immediately restore the full dock. */
@@ -2219,7 +2254,7 @@ public class XrStreamPresenter {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(18), dp(12), dp(18), dp(12));
         header.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         addModeOptionsHeading(header, mode);
         switch (mode) {
             case NORMAL:
@@ -2243,7 +2278,7 @@ public class XrStreamPresenter {
 
         TextView qualityHeading = controlText(
                 activity.getString(R.string.xr_mode_quality_heading),
-                20f, TILE_ACTIVE_BORDER_COLOR);
+                20f, paletteColor(R.color.xr_accent));
         qualityHeading.setAllCaps(true);
         qualityHeading.setLetterSpacing(0.08f);
         qualityHeading.setTypeface(qualityHeading.getTypeface(),
@@ -2261,7 +2296,7 @@ public class XrStreamPresenter {
             clientRow.setGravity(Gravity.CENTER_VERTICAL);
             clientRow.setPadding(dp(12), dp(12), dp(12), dp(12));
             clientRow.setBackground(controlSurfaceBackground(
-                    PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                    paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
             addClientSbsModeOptions(clientRow);
             LinearLayout.LayoutParams clientParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2298,7 +2333,7 @@ public class XrStreamPresenter {
         resolutionColumn.setOrientation(LinearLayout.VERTICAL);
         resolutionColumn.setPadding(dp(12), dp(12), dp(12), dp(12));
         resolutionColumn.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         TextView resolutionTitle = controlText(
                 activity.getString(R.string.title_resolution_list), 24f, Color.WHITE);
         resolutionTitle.setTypeface(resolutionTitle.getTypeface(),
@@ -2328,7 +2363,7 @@ public class XrStreamPresenter {
         fpsCard.setOrientation(LinearLayout.VERTICAL);
         fpsCard.setPadding(dp(12), dp(12), dp(12), dp(12));
         fpsCard.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         LinearLayout fpsHeading = new LinearLayout(activity);
         fpsHeading.setOrientation(LinearLayout.HORIZONTAL);
         fpsHeading.setGravity(Gravity.CENTER_VERTICAL);
@@ -2350,7 +2385,7 @@ public class XrStreamPresenter {
         bitrateCard.setOrientation(LinearLayout.VERTICAL);
         bitrateCard.setPadding(dp(12), dp(12), dp(12), dp(12));
         bitrateCard.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         TextView bitrateTitle = controlText(
                 activity.getString(R.string.title_bitrate_ceiling), 24f, Color.WHITE);
         bitrateTitle.setTypeface(bitrateTitle.getTypeface(),
@@ -2385,10 +2420,10 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         modeQualityCueView = controlText(modeQualityCue(model), 22f,
-                model.requiresReconnect() ? STATS_WARN_COLOR : STATS_LABEL_COLOR);
+                model.requiresReconnect() ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_text_secondary));
         modeQualityCueView.setPadding(dp(12), dp(8), dp(12), dp(8));
         modeQualityCueView.setBackground(controlSurfaceBackground(
-                PANEL_SUBTLE_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface), paletteColor(R.color.xr_border_panel), 1));
         LinearLayout.LayoutParams cueParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -2485,7 +2520,7 @@ public class XrStreamPresenter {
 
         TextView active = controlText(activity.getString(mode == currentPresenterMode
                         ? R.string.xr_mode_active : R.string.xr_mode_options_title),
-                22f, mode == currentPresenterMode ? STATS_ON_COLOR : STATS_LABEL_COLOR);
+                22f, mode == currentPresenterMode ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_text_secondary));
         heading.addView(active);
         row.addView(heading, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1.25f));
@@ -2494,7 +2529,7 @@ public class XrStreamPresenter {
     private void addModeStatus(LinearLayout row, String label, String value) {
         LinearLayout status = labeledValue(label, value,
                 value.toLowerCase(Locale.US).contains("unavailable")
-                        ? STATS_ERROR_COLOR : Color.WHITE);
+                        ? paletteColor(R.color.xr_danger) : Color.WHITE);
         row.addView(status, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 2.0f));
     }
@@ -2510,7 +2545,7 @@ public class XrStreamPresenter {
                 : activity.getString(R.string.xr_setting_source_session);
         clientModelSourceView = controlText(
                 activity.getString(R.string.xr_client_model) + " \u00b7 " + source,
-                22f, STATS_LABEL_COLOR);
+                22f, paletteColor(R.color.xr_text_secondary));
         modelColumn.addView(clientModelSourceView);
 
         clientModelChoiceGroup = buildChoiceGroup(model.choices, model.selectedChoiceId,
@@ -2525,7 +2560,7 @@ public class XrStreamPresenter {
         choiceParams.topMargin = dp(4);
         modelColumn.addView(clientModelChoiceGroup, choiceParams);
 
-        clientModelPendingView = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        clientModelPendingView = controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         clientModelPendingView.setPadding(0, dp(4), 0, 0);
         modelColumn.addView(clientModelPendingView);
         updateClientModelPendingView(model);
@@ -2555,7 +2590,7 @@ public class XrStreamPresenter {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(12), dp(12), dp(12), dp(12));
         card.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
 
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.HORIZONTAL);
@@ -2567,7 +2602,7 @@ public class XrStreamPresenter {
         heading.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
         rawSbsPerEyeResolutionSourceView = controlText(
-                rawSbsSourceText(model), SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+                rawSbsSourceText(model), SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         heading.addView(rawSbsPerEyeResolutionSourceView);
         card.addView(heading);
 
@@ -2583,12 +2618,12 @@ public class XrStreamPresenter {
         card.addView(rawSbsPerEyeResolutionChoiceGroup, choiceParams);
 
         rawSbsGeometryView = controlText(
-                rawSbsGeometryText(model), 20f, STATS_LABEL_COLOR);
+                rawSbsGeometryText(model), 20f, paletteColor(R.color.xr_text_secondary));
         rawSbsGeometryView.setPadding(0, dp(8), 0, 0);
         card.addView(rawSbsGeometryView);
 
         rawSbsPerEyeResolutionPendingView =
-                controlText("", SESSION_META_TEXT_SP, STATS_WARN_COLOR);
+                controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_status_warn));
         rawSbsPerEyeResolutionPendingView.setPadding(0, dp(4), 0, 0);
         card.addView(rawSbsPerEyeResolutionPendingView);
         updateRawSbsPendingView(model);
@@ -2702,7 +2737,7 @@ public class XrStreamPresenter {
         modeBitrateControl.setEnabled(sessionControlsEnabled);
         modeQualityCueView.setText(modeQualityCue(model));
         modeQualityCueView.setTextColor(model.requiresReconnect()
-                ? STATS_WARN_COLOR : STATS_LABEL_COLOR);
+                ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_text_secondary));
         modeDefaultsButton.setEnabled(sessionControlsEnabled);
         modeApplyButton.setText(applyButtonLabel());
         modeApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
@@ -2779,7 +2814,7 @@ public class XrStreamPresenter {
 
     private int clientRuntimeStatusColor(String status) {
         return status.toLowerCase(Locale.US).contains("unavailable")
-                ? STATS_ERROR_COLOR : Color.WHITE;
+                ? paletteColor(R.color.xr_danger) : Color.WHITE;
     }
 
     private boolean isClientOptionsOpen() {
@@ -2835,7 +2870,7 @@ public class XrStreamPresenter {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = controlText(activity.getString(R.string.xr_session_settings_title),
-                32f, TILE_ACTIVE_BORDER_COLOR);
+                32f, paletteColor(R.color.xr_accent));
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         header.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
@@ -2854,7 +2889,7 @@ public class XrStreamPresenter {
 
         TextView summary = controlText(
                 activity.getString(R.string.xr_session_settings_summary),
-                SESSION_SUMMARY_TEXT_SP, STATS_LABEL_COLOR);
+                SESSION_SUMMARY_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         summary.setPadding(0, dp(8), 0, dp(12));
         root.addView(summary);
 
@@ -2924,7 +2959,7 @@ public class XrStreamPresenter {
         LinearLayout column = new LinearLayout(activity);
         column.setOrientation(LinearLayout.VERTICAL);
         TextView heading = controlText(label, SESSION_GROUP_TEXT_SP,
-                TILE_ACTIVE_BORDER_COLOR);
+                paletteColor(R.color.xr_accent));
         heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
         heading.setPadding(dp(4), 0, 0, dp(8));
         column.addView(heading);
@@ -2958,7 +2993,7 @@ public class XrStreamPresenter {
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(18), dp(18), dp(18), dp(18));
         row.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
 
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.HORIZONTAL);
@@ -2972,7 +3007,7 @@ public class XrStreamPresenter {
         String source = value.source == SessionSettingsModel.Source.GLOBAL
                 ? activity.getString(R.string.xr_setting_source_global)
                 : activity.getString(R.string.xr_setting_source_session);
-        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         sessionSourceViews.put(key, sourceView);
         heading.addView(sourceView);
         row.addView(heading);
@@ -2988,7 +3023,7 @@ public class XrStreamPresenter {
         choiceParams.topMargin = dp(8);
         row.addView(choices, choiceParams);
 
-        TextView pending = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        TextView pending = controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         pending.setPadding(0, dp(4), 0, 0);
         sessionPendingViews.put(key, pending);
         row.addView(pending);
@@ -3006,7 +3041,7 @@ public class XrStreamPresenter {
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(18), dp(18), dp(18), dp(18));
         row.setBackground(controlSurfaceBackground(
-                PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
 
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.HORIZONTAL);
@@ -3020,7 +3055,7 @@ public class XrStreamPresenter {
         String source = value.source == SessionSettingsModel.Source.GLOBAL
                 ? activity.getString(R.string.xr_setting_source_global)
                 : activity.getString(R.string.xr_setting_source_session);
-        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         sessionSourceViews.put(key, sourceView);
         heading.addView(sourceView);
         row.addView(heading);
@@ -3028,7 +3063,7 @@ public class XrStreamPresenter {
         // Unlike the other rows in this pane, bitrate is stored per presentation mode.
         TextView scopeNote = controlText(
                 activity.getString(R.string.xr_session_bitrate_scope),
-                SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+                SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         scopeNote.setPadding(0, dp(4), 0, dp(4));
         row.addView(scopeNote);
 
@@ -3043,7 +3078,7 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        TextView pending = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
+        TextView pending = controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
         pending.setPadding(0, dp(4), 0, 0);
         sessionPendingViews.put(key, pending);
         row.addView(pending);
@@ -3173,7 +3208,7 @@ public class XrStreamPresenter {
     private LinearLayout panelColumn() {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(PANEL_BACKGROUND_COLOR);
+        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken));
         int padding = dp(24);
         root.setPadding(padding, padding, padding, padding);
         return root;
@@ -3182,7 +3217,7 @@ public class XrStreamPresenter {
     private LinearLayout labeledValue(String label, String value, int valueColor) {
         LinearLayout column = new LinearLayout(activity);
         column.setOrientation(LinearLayout.VERTICAL);
-        TextView labelView = controlText(label, 21f, STATS_LABEL_COLOR);
+        TextView labelView = controlText(label, 21f, paletteColor(R.color.xr_text_secondary));
         TextView valueView = controlText(value, 26f, valueColor);
         column.addView(labelView);
         column.addView(valueView);
@@ -3393,7 +3428,7 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(0xE6101418);
+        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken, 0xE6));
         int p = dp(12);
         root.setPadding(p, p, p, p);
 
@@ -3423,7 +3458,7 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(0xE6101418);
+        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken, 0xE6));
         int padding = dp(12);
         root.setPadding(padding, padding, padding, padding);
 
@@ -3688,26 +3723,26 @@ public class XrStreamPresenter {
                     String.format(Locale.US, "%dx%d | %s | %s range",
                             stream.getSourceWidth(), stream.getSourceHeight(),
                             hdrActive ? "HDR" : "SDR", stream.getVideoRange()),
-                    hdrActive ? STATS_ON_COLOR : STATS_VALUE_COLOR);
-            addStatsRow("Codec", stream.getCodecDescription(), STATS_VALUE_COLOR);
-            addStatsRow("Decoder component", stream.getDecoderName(), STATS_VALUE_COLOR);
+                    hdrActive ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_text_primary));
+            addStatsRow("Codec", stream.getCodecDescription(), paletteColor(R.color.xr_text_primary));
+            addStatsRow("Decoder component", stream.getDecoderName(), paletteColor(R.color.xr_text_primary));
             addStatsRow("Decoder latency",
                     formatDecoderLatencyMode(stream.isDedicatedLowLatencyDecoder(),
                             stream.isDecoderLowLatencyRequested()),
                     stream.isDedicatedLowLatencyDecoder()
                                     || stream.isDecoderLowLatencyRequested()
-                            ? STATS_ON_COLOR : STATS_VALUE_COLOR);
+                            ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_text_primary));
             addStatsRow("Output pacing", stream.getOutputPacingDescription(),
-                    STATS_VALUE_COLOR);
+                    paletteColor(R.color.xr_text_primary));
         } else {
-            addStatsRow("Video", "Waiting for decoder sample", STATS_UNAVAILABLE_COLOR);
+            addStatsRow("Video", "Waiting for decoder sample", paletteColor(R.color.xr_text_disabled));
         }
 
         if (stream != null) {
             addStatsRow("FPS sender / receive",
                     String.format(Locale.US, "%.1f / %.1f",
                             stream.getStreamSequenceFps(), stream.getReceivedFps()),
-                    STATS_VALUE_COLOR);
+                    paletteColor(R.color.xr_text_primary));
             String presentedFps = Float.isFinite(stream.getDecoderPresentedFps())
                     ? String.format(Locale.US, "%.1f", stream.getDecoderPresentedFps()) : "n/a";
             addStatsRow("Decoder output / release / surface",
@@ -3715,7 +3750,7 @@ public class XrStreamPresenter {
                             stream.getDecoderOutputFps(), stream.getDecoderReleaseFps(),
                             presentedFps),
                     Float.isFinite(stream.getDecoderPresentedFps())
-                            ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR);
+                            ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled));
 
             String bandwidth = stream.hasBandwidth()
                     ? String.format(Locale.US, "%.1f Mbps", stream.getBandwidthMbps()) : "n/a";
@@ -3726,7 +3761,7 @@ public class XrStreamPresenter {
                     String.format(Locale.US, "%s | loss %.2f%% | RTT %s",
                             bandwidth, stream.getNetworkLossPercent(), rtt),
                     stream.getNetworkLossPercent() > 1.0f
-                            ? STATS_WARN_COLOR : STATS_VALUE_COLOR);
+                            ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_text_primary));
 
             String hostLatency = stream.hasHostProcessingLatency()
                     ? String.format(Locale.US, "%.2f / %.2f",
@@ -3739,16 +3774,16 @@ public class XrStreamPresenter {
                     : "n/a";
             addStatsRow("Host / decode avg / max",
                     "host " + hostLatency + " | decode " + decodeLatency + " ms",
-                    stream.hasDecodeLatency() ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR);
+                    stream.hasDecodeLatency() ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled));
         }
 
         addStatsSection("DEVICE");
         if (device.appCpuAvailable) {
             addStatsRow("App CPU",
                     String.format(Locale.US, "%.2f cores", device.appCpuCoreEquivalent),
-                    STATS_VALUE_COLOR);
+                    paletteColor(R.color.xr_text_primary));
         } else {
-            addStatsRow("App CPU", "Warming up", STATS_UNAVAILABLE_COLOR);
+            addStatsRow("App CPU", "Warming up", paletteColor(R.color.xr_text_disabled));
         }
 
         String gpuBusy = device.deviceGpuUtilizationAvailable
@@ -3759,7 +3794,7 @@ public class XrStreamPresenter {
         addStatsRow("Device GPU total / clock", gpuBusy + " | " + gpuClock,
                 device.deviceGpuUtilizationAvailable
                         ? utilizationColor(device.deviceGpuUtilizationPercent)
-                        : STATS_UNAVAILABLE_COLOR);
+                        : paletteColor(R.color.xr_text_disabled));
         if (clientSbsStatsActive) {
             addStatsRow("Thermal", thermalStatusName(clientSbs.thermalStatus),
                     thermalStatusColor(clientSbs.thermalStatus));
@@ -3768,7 +3803,7 @@ public class XrStreamPresenter {
         if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI) {
             addStatsSection("CLIENT SBS");
             if (!clientSbsStatsActive) {
-                addStatsRow("Depth pipeline", "Initializing", STATS_UNAVAILABLE_COLOR);
+                addStatsRow("Depth pipeline", "Initializing", paletteColor(R.color.xr_text_disabled));
             } else {
                 addStatsRow("Depth model",
                         clientSbs.modelId + " | " + clientSbs.modelInputWidth + "x"
@@ -3779,17 +3814,17 @@ public class XrStreamPresenter {
                         String.format(Locale.US, "%.1f / %.1f / %.1f",
                                 clientSbs.glLatchFps, clientSbs.depthAdoptFps,
                                 clientSbs.glOutputSubmitFps),
-                        STATS_VALUE_COLOR);
+                        paletteColor(R.color.xr_text_primary));
                 addStatsRow("Depth inference call avg / max",
                         String.format(Locale.US, "%.2f / %.2f ms | OpenCL + sync",
                                 clientSbs.averageNativeLiteRtRunWallMs,
                                 clientSbs.maxNativeLiteRtRunWallMs),
-                        STATS_VALUE_COLOR);
+                        paletteColor(R.color.xr_text_primary));
                 addStatsRow("Depth age avg / max",
                         String.format(Locale.US, "%.2f / %.2f ms",
                                 clientSbs.averageDepthResultAgeMs,
                                 clientSbs.maxDepthResultAgeMs),
-                        STATS_VALUE_COLOR);
+                        paletteColor(R.color.xr_text_primary));
 
                 if (clientSbs.gpuTimersAvailable) {
                     addStatsRow("Model input GL GPU",
@@ -3811,13 +3846,13 @@ public class XrStreamPresenter {
                                     "prefilter + warp + draw"),
                             gpuStageColor(clientSbs.gpuSbsComposeSamples));
                     addStatsRow("GPU timing note", "Stages can overlap; do not add as busy %",
-                            STATS_UNAVAILABLE_COLOR);
+                            paletteColor(R.color.xr_text_disabled));
                 } else {
                     addStatsRow("Client GL GPU stages", "Timer queries unavailable",
-                            STATS_UNAVAILABLE_COLOR);
+                            paletteColor(R.color.xr_text_disabled));
                 }
                 addStatsRow("XR composition", "SceneCore does not expose compositor timing",
-                        STATS_UNAVAILABLE_COLOR);
+                        paletteColor(R.color.xr_text_disabled));
 
                 long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs;
                 if (faults > 0L) {
@@ -3825,7 +3860,7 @@ public class XrStreamPresenter {
                             String.format(Locale.US, "color busy %d | flat %d",
                                     clientSbs.colorSlotBusySkips,
                                     clientSbs.flatSbsOutputs),
-                            STATS_WARN_COLOR);
+                            paletteColor(R.color.xr_status_warn));
                 }
 
                 if (clientSbs.depthHealthAvailable) {
@@ -3844,7 +3879,7 @@ public class XrStreamPresenter {
                                     clientSbs.depthSubjectDepth,
                                     clientSbs.rawDepthRangeCollapsed ? "yes" : "no"),
                             clientSbs.rawDepthRangeCollapsed
-                                    ? STATS_WARN_COLOR : STATS_ON_COLOR,
+                                    ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_status_ok),
                             // Fixed to the configured band: an autoscaled pop plot turns 1.20 into
                             // a dramatic trough when it is simply the floor.
                             clientSbs.popTrend, false,
@@ -3856,12 +3891,12 @@ public class XrStreamPresenter {
                                             clientSbs.depthEdgeFraction)
                                     : "unsettled",
                             clientSbs.adaptivePopClassified
-                                    ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR,
+                                    ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled),
                             clientSbs.edgeTrend, false, Float.NaN, Float.NaN);
                     addTrendStatsRow("Changed-depth fraction",
                             String.format(Locale.US, "%.4f",
                                     clientSbs.depthChangeFraction),
-                            STATS_VALUE_COLOR,
+                            paletteColor(R.color.xr_text_primary),
                             clientSbs.changeTrend, false, 0.0f, 1.0f);
                     // Keep the cut and zero-plane rows adjacent. A rising cut count during
                     // ordinary motion is retriggering; a simultaneous anchor jump proves that the
@@ -3871,7 +3906,7 @@ public class XrStreamPresenter {
                                     "%d total | scene age %d frames",
                                     clientSbs.depthHardCutCount,
                                     clientSbs.depthSceneAge),
-                            STATS_LABEL_COLOR,
+                            paletteColor(R.color.xr_text_secondary),
                             // Deltas: one cut is one spike whenever it happened.
                             clientSbs.cutTrend, true, Float.NaN, Float.NaN);
                     if (clientSbs.depthEmptyRawFrames > 0L
@@ -3882,16 +3917,16 @@ public class XrStreamPresenter {
                                 String.format(Locale.US, "empty %d | collapsed %d",
                                         clientSbs.depthEmptyRawFrames,
                                         clientSbs.depthCollapsedRawFrames),
-                                STATS_WARN_COLOR);
+                                paletteColor(R.color.xr_status_warn));
                     }
                     addTrendStatsRow("Zero-plane anchor shift",
                             String.format(Locale.US, "%.1f px",
                                     clientSbs.depthZeroAnchorShift),
-                            STATS_LABEL_COLOR,
+                            paletteColor(R.color.xr_text_secondary),
                             clientSbs.anchorTrend, false, Float.NaN, Float.NaN);
                 } else {
                     addStatsRow("Depth health", "Waiting for sample",
-                            STATS_UNAVAILABLE_COLOR);
+                            paletteColor(R.color.xr_text_disabled));
                 }
             }
         }
@@ -3958,30 +3993,30 @@ public class XrStreamPresenter {
     }
 
     private int gpuStageColor(long samples) {
-        return samples > 0L ? STATS_VALUE_COLOR : STATS_UNAVAILABLE_COLOR;
+        return samples > 0L ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled);
     }
 
     private int utilizationColor(double percent) {
         if (percent >= 95.0) {
-            return STATS_ERROR_COLOR;
+            return paletteColor(R.color.xr_danger);
         }
         if (percent >= 80.0) {
-            return STATS_WARN_COLOR;
+            return paletteColor(R.color.xr_status_warn);
         }
-        return STATS_ON_COLOR;
+        return paletteColor(R.color.xr_status_ok);
     }
 
     private int backendColor(String backend) {
         if (isLiteRtOpenClGlBackend(backend)) {
-            return STATS_ON_COLOR;
+            return paletteColor(R.color.xr_status_ok);
         }
         if ("Unavailable".equals(backend) || "Failed".equals(backend)) {
-            return STATS_WARN_COLOR;
+            return paletteColor(R.color.xr_status_warn);
         }
         if ("Inactive".equals(backend) || "Initializing".equals(backend)) {
-            return STATS_UNAVAILABLE_COLOR;
+            return paletteColor(R.color.xr_text_disabled);
         }
-        return STATS_VALUE_COLOR;
+        return paletteColor(R.color.xr_text_primary);
     }
 
     private String depthBackendName(String backend) {
@@ -4129,7 +4164,7 @@ public class XrStreamPresenter {
         row.setTag(tag);
         if (section) {
             TextView heading = new TextView(activity);
-            heading.setTextColor(TILE_ACTIVE_BORDER_COLOR);
+            heading.setTextColor(paletteColor(R.color.xr_accent));
             heading.setTextSize(TypedValue.COMPLEX_UNIT_SP,
                     (STATS_TEXT_SP + 1f) * STATS_CONTENT_SCALE);
             heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
@@ -4142,7 +4177,7 @@ public class XrStreamPresenter {
         }
 
         TextView label = new TextView(activity);
-        label.setTextColor(STATS_LABEL_COLOR);
+        label.setTextColor(paletteColor(R.color.xr_text_secondary));
         label.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP * STATS_CONTENT_SCALE);
         label.setLineSpacing(0f, 1.08f);
         label.setPadding(0, statsDp(3), statsDp(18), statsDp(3));
@@ -4192,14 +4227,14 @@ public class XrStreamPresenter {
         }
     }
 
-    private static int thermalStatusColor(int status) {
+    private int thermalStatusColor(int status) {
         if (status >= 5) {
-            return STATS_ERROR_COLOR;
+            return paletteColor(R.color.xr_danger);
         }
         if (status >= 3) {
-            return STATS_WARN_COLOR;
+            return paletteColor(R.color.xr_status_warn);
         }
-        return STATS_ON_COLOR;
+        return paletteColor(R.color.xr_status_ok);
     }
 
     /**
@@ -4230,7 +4265,7 @@ public class XrStreamPresenter {
         valueView.setText(value);
         valueView.setTextColor(valueColor);
         XrSparklineView spark = (XrSparklineView) row.getChildAt(2);
-        spark.setColors(valueColor, PANEL_SECTION_BORDER_COLOR);
+        spark.setColors(valueColor, paletteColor(R.color.xr_border_panel));
         spark.setRange(rangeMin, rangeMax);
         spark.setValues(plotted, count);
     }
@@ -4255,7 +4290,7 @@ public class XrStreamPresenter {
         lp.leftMargin = dp(4);
         lp.rightMargin = dp(4);
         d.setLayoutParams(lp);
-        d.setBackgroundColor(0x55FFFFFF);
+        d.setBackgroundColor(paletteColor(R.color.xr_text_primary, 0x55));
         return d;
     }
 
@@ -6305,7 +6340,7 @@ public class XrStreamPresenter {
         }
         else {
             root.setBackground(controlSurfaceBackground(
-                    TILE_IDLE_COLOR, TILE_IDLE_BORDER_COLOR, 1));
+                    paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_tile), 1));
         }
 
         LinearLayout col = new LinearLayout(activity);
@@ -6472,10 +6507,10 @@ public class XrStreamPresenter {
             }
             if (selected) {
                 root.setBackground(controlSurfaceBackground(
-                        TILE_ACTIVE_COLOR, TILE_ACTIVE_BORDER_COLOR, 2));
+                        paletteColor(R.color.xr_accent_deep), paletteColor(R.color.xr_accent), 2));
             } else {
                 root.setBackground(controlSurfaceBackground(
-                        TILE_IDLE_COLOR, TILE_IDLE_BORDER_COLOR, 1));
+                        paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_tile), 1));
             }
             root.invalidate();  // force the XR panel to re-render the tile's new fill/border
         }
@@ -6769,6 +6804,8 @@ public class XrStreamPresenter {
         glanceIdentityView = null;
         glanceModeView = null;
         glanceStreamView = null;
+        glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
+        glanceLoadView = null;
         glanceStatusView = null;
         controlBarRow = null;
         dockRevealPill = null;
