@@ -4,8 +4,10 @@ import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
 import android.view.View;
+import android.widget.LinearLayout;
 import android.widget.TableLayout;
 import android.widget.TableRow;
+import android.widget.TextView;
 
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
@@ -24,14 +26,9 @@ import java.lang.reflect.Method;
 /**
  * The stats table renders to a fixed-width raster, so its columns compete for a hard budget.
  *
- * <p>Trend rows put a sparkline in a third column after the label and the value. The plot is the
- * one column that cannot shrink, so if the other two grow it lands outside the raster and is
- * simply never drawn. Measured at the real raster width and the headset's 240dpi, since both
- * numbers decide whether it fits.</p>
- *
- * <p>Known limit: Robolectric does no real font measurement, so the label column comes back far
- * narrower here than on the device. This catches a sparkline sized or positioned wrongly; it
- * cannot catch overflow driven purely by long label text.</p>
+ * <p>Trend rows keep their value and sparkline in one bounded second-column container. This avoids
+ * relying on runtime font measurement to keep a third global table column inside SceneCore's
+ * clipped panel raster.</p>
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, qualifiers = "hdpi", shadows = {
@@ -70,7 +67,15 @@ public final class XrStatsTableLayoutTest {
         tableField.setAccessible(true);
         tableField.set(presenter, table);
 
-        // The longest label the pane actually renders, alongside a plausible value.
+        // Include the longest ordinary label: TableLayout shares each column's width across all
+        // rows, so this is what used to push an independent chart column beyond the raster.
+        Method addRow = XrStreamPresenter.class.getDeclaredMethod(
+                "addStatsRow", String.class, String.class, int.class);
+        addRow.setAccessible(true);
+        addRow.invoke(presenter, "Decoder output / release / surface",
+                "90.0 / 90.0 / 90.0", 0xFFFFFFFF);
+        TableRow widestLabelRow = (TableRow) table.getChildAt(0);
+
         Method addTrend = XrStreamPresenter.class.getDeclaredMethod("addTrendStatsRow",
                 String.class, String.class, int.class, float[].class, boolean.class,
                 float.class, float.class);
@@ -79,27 +84,44 @@ public final class XrStatsTableLayoutTest {
         for (int i = 0; i < samples.length; i++) {
             samples[i] = i % 7;
         }
-        addTrend.invoke(presenter, "Depth edge fraction trend", "0.081", 0xFFFFFFFF,
-                samples, false, 0f, 1f);
+        addTrend.invoke(presenter, "Pop strength",
+                "valid 100.0% | range 2.8467 | pop 2.000 | subject 0.884 | collapsed no",
+                0xFFFFFFFF, samples, false, 0f, 1f);
 
         int raster = intConstant("STATS_RASTER_WIDTH");
-        table.measure(View.MeasureSpec.makeMeasureSpec(raster, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        table.layout(0, 0, raster, table.getMeasuredHeight());
+        Method statsDp = XrStreamPresenter.class.getDeclaredMethod("statsDp", float.class);
+        statsDp.setAccessible(true);
+        int panelPadding = (int) statsDp.invoke(presenter, 18.0f);
+        int viewportWidth = raster - panelPadding * 2;
+        // Robolectric's font metrics are intentionally simple. Give the shared label column a
+        // deterministic, realistic pressure so this test does not pass only because text is
+        // measured narrower than it is on the headset.
+        ((TextView) widestLabelRow.getChildAt(0)).setMinWidth(viewportWidth * 2 / 3);
 
-        TableRow row = (TableRow) table.getChildAt(0);
-        assertTrue("trend row should carry a sparkline in column 2",
-                row.getChildAt(2) instanceof XrSparklineView);
-        View spark = row.getChildAt(2);
+        table.measure(View.MeasureSpec.makeMeasureSpec(viewportWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        table.layout(0, 0, viewportWidth, table.getMeasuredHeight());
+
+        TableRow row = (TableRow) table.getChildAt(1);
+        assertTrue("trend row must use only the table's label and bounded content columns",
+                row.getChildCount() == 2);
+        assertTrue("trend value and plot should share one bounded cell",
+                row.getChildAt(1) instanceof LinearLayout);
+        LinearLayout trendContent = (LinearLayout) row.getChildAt(1);
+        assertTrue("bounded trend cell should contain the value and sparkline",
+                trendContent.getChildCount() == 2);
+        assertTrue("trend cell should carry a sparkline after its value",
+                trendContent.getChildAt(1) instanceof XrSparklineView);
+        View spark = trendContent.getChildAt(1);
 
         assertTrue("sparkline must have a drawable width, was " + spark.getWidth(),
                 spark.getWidth() > 0);
         assertTrue("sparkline must have a drawable height, was " + spark.getHeight(),
                 spark.getHeight() > 0);
-        int right = spark.getLeft() + spark.getWidth();
-        assertTrue("sparkline runs past the stats raster: right edge " + right
-                        + " against a " + raster + "px raster, so it is never drawn",
-                right <= raster);
+        assertTrue("bounded trend cell runs past the stats viewport",
+                trendContent.getLeft() + trendContent.getWidth() <= viewportWidth);
+        assertTrue("sparkline runs past its bounded trend cell",
+                spark.getRight() <= trendContent.getWidth());
         controller.destroy();
     }
 }

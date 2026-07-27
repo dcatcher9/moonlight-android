@@ -4187,15 +4187,30 @@ public class XrStreamPresenter {
         value.setLineSpacing(0f, 1.08f);
         value.setPadding(0, statsDp(3), 0, statsDp(3));
 
-        row.addView(label);
-        row.addView(value);
         if (STATS_ROW_TREND.equals(tag)) {
+            // Keep the value and its plot inside one bounded table cell. The previous third
+            // global TableLayout column depended on runtime font measurement to remain inside
+            // SceneCore's clipped panel raster. Sharing the remaining width makes the plot's
+            // bounds independent of the widest metric label in another row.
+            LinearLayout trendContent = new LinearLayout(activity);
+            trendContent.setOrientation(LinearLayout.HORIZONTAL);
+            trendContent.setGravity(Gravity.CENTER_VERTICAL);
+            trendContent.setWeightSum(1.0f);
+            trendContent.addView(value, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.72f));
+
             XrSparklineView spark = new XrSparklineView(activity);
-            TableRow.LayoutParams sparkParams =
-                    new TableRow.LayoutParams(statsDp(200), statsDp(24));
+            LinearLayout.LayoutParams sparkParams =
+                    new LinearLayout.LayoutParams(0, statsDp(32), 0.28f);
             sparkParams.leftMargin = statsDp(14);
             sparkParams.topMargin = statsDp(4);
-            row.addView(spark, sparkParams);
+            trendContent.addView(spark, sparkParams);
+
+            row.addView(label);
+            row.addView(trendContent);
+        } else {
+            row.addView(label);
+            row.addView(value);
         }
         return row;
     }
@@ -4263,10 +4278,11 @@ public class XrStreamPresenter {
 
         TableRow row = obtainStatsRow(STATS_ROW_TREND);
         ((TextView) row.getChildAt(0)).setText(label);
-        TextView valueView = (TextView) row.getChildAt(1);
+        LinearLayout trendContent = (LinearLayout) row.getChildAt(1);
+        TextView valueView = (TextView) trendContent.getChildAt(0);
         valueView.setText(value);
         valueView.setTextColor(valueColor);
-        XrSparklineView spark = (XrSparklineView) row.getChildAt(2);
+        XrSparklineView spark = (XrSparklineView) trendContent.getChildAt(1);
         // A plain View carries no accessibility role, so the plot is absent from both the
         // accessibility tree and any hierarchy dump taken from it -- which also makes "is the
         // sparkline there at all" unanswerable from outside the process.

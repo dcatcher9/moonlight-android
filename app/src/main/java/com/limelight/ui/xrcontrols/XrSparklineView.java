@@ -39,8 +39,8 @@ public final class XrSparklineView extends View {
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeCap(Paint.Cap.ROUND);
         linePaint.setStrokeJoin(Paint.Join.ROUND);
-        linePaint.setStrokeWidth(Math.max(1.0f, dp(1.5f)));
-        baselinePaint.setStrokeWidth(Math.max(1.0f, dp(1.0f)));
+        linePaint.setStrokeWidth(Math.max(1.0f, dp(2.0f)));
+        baselinePaint.setStrokeWidth(Math.max(1.0f, dp(1.25f)));
     }
 
     public void setColors(int lineColor, int baselineColor) {

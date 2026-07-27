@@ -1,6 +1,7 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -296,10 +297,12 @@ public final class XrStreamPresenterViewTest {
         View[] firstSparklines = new View[labels.length];
         for (int i = 0; i < labels.length; i++) {
             firstRows[i] = (TableRow) table.getChildAt(i);
-            assertEquals(3, firstRows[i].getChildCount());
+            assertEquals(2, firstRows[i].getChildCount());
             assertEquals(labels[i],
                     ((TextView) firstRows[i].getChildAt(0)).getText().toString());
-            firstSparklines[i] = firstRows[i].getChildAt(2);
+            LinearLayout trendContent = (LinearLayout) firstRows[i].getChildAt(1);
+            assertEquals(2, trendContent.getChildCount());
+            firstSparklines[i] = trendContent.getChildAt(1);
         }
 
         begin.invoke(presenter);
@@ -313,9 +316,58 @@ public final class XrStreamPresenterViewTest {
         assertEquals(labels.length, table.getChildCount());
         for (int i = 0; i < labels.length; i++) {
             assertSame(firstRows[i], table.getChildAt(i));
+            LinearLayout trendContent =
+                    (LinearLayout) ((TableRow) table.getChildAt(i)).getChildAt(1);
             assertSame(firstSparklines[i],
-                    ((TableRow) table.getChildAt(i)).getChildAt(2));
+                    trendContent.getChildAt(1));
         }
+        controller.destroy();
+    }
+
+    @Test
+    public void trendRowsReplacePlainFallbacksAsHistoryBecomesAvailable() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, PreferenceConfiguration.readPreferences(activity),
+                surface -> { }, visible -> { });
+        TableLayout table = new TableLayout(activity);
+        setField(presenter, "statsTable", table);
+
+        Method begin = XrStreamPresenter.class.getDeclaredMethod("beginStatsRows");
+        Method finish = XrStreamPresenter.class.getDeclaredMethod("finishStatsRows");
+        Method addTrend = XrStreamPresenter.class.getDeclaredMethod(
+                "addTrendStatsRow", String.class, String.class, int.class,
+                float[].class, boolean.class, float.class, float.class);
+        begin.setAccessible(true);
+        finish.setAccessible(true);
+        addTrend.setAccessible(true);
+
+        begin.invoke(presenter);
+        addTrend.invoke(presenter, "Pop strength", "warming", 0xFFFFFFFF,
+                new float[] {1.0f}, false, 0.0f, 2.0f);
+        finish.invoke(presenter);
+        TableRow fallback = (TableRow) table.getChildAt(0);
+        assertTrue(fallback.getChildAt(1) instanceof TextView);
+
+        begin.invoke(presenter);
+        addTrend.invoke(presenter, "Pop strength", "live", 0xFFFFFFFF,
+                new float[] {1.0f, 1.5f}, false, 0.0f, 2.0f);
+        finish.invoke(presenter);
+        TableRow trend = (TableRow) table.getChildAt(0);
+        assertNotSame(fallback, trend);
+        assertTrue(trend.getChildAt(1) instanceof LinearLayout);
+
+        begin.invoke(presenter);
+        addTrend.invoke(presenter, "Pop strength", "reset", 0xFFFFFFFF,
+                new float[] {1.0f}, false, 0.0f, 2.0f);
+        finish.invoke(presenter);
+        TableRow resetFallback = (TableRow) table.getChildAt(0);
+        assertNotSame(trend, resetFallback);
+        assertTrue(resetFallback.getChildAt(1) instanceof TextView);
         controller.destroy();
     }
 
