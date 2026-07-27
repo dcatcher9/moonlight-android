@@ -22,7 +22,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:textColor="#FFFFFFFF"
+            android:textColor="@color/xr_text_primary"
             android:textSize="18sp"
             android:textStyle="bold" />
 
@@ -33,7 +33,7 @@
             android:layout_marginStart="16dp"
             android:gravity="end"
             android:minWidth="80dp"
-            android:textColor="#FFD7E5FF"
+            android:textColor="@color/xr_accent_bright"
             android:textSize="17sp"
             android:textStyle="bold" />
     </LinearLayout>
@@ -43,7 +43,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textColor="#FFBDC1C6"
+        android:textColor="@color/xr_text_secondary"
         android:textSize="14sp" />
 
     <LinearLayout
@@ -69,10 +69,10 @@
             android:layout_marginEnd="12dp"
             android:layout_weight="1"
             android:focusable="true"
-            android:progressBackgroundTint="#FF3C4043"
-            android:progressTint="#FF8AB4F8"
+            android:progressBackgroundTint="@color/xr_border"
+            android:progressTint="@color/xr_accent"
             android:splitTrack="false"
-            android:thumbTint="#FFD7E5FF" />
+            android:thumbTint="@color/xr_accent_bright" />
 
         <androidx.appcompat.widget.AppCompatButton
             android:id="@+id/xr_seekbar_increase"

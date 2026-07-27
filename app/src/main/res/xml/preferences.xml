@@ -30,15 +30,15 @@
             android:entries="@array/xr_fps_names"
             android:entryValues="@array/xr_fps_values"
             android:key="list_fps"
-            android:summary="@string/summary_fps_list"
-            android:title="@string/title_fps_list"
+            android:summary="@string/summary_fps_ceiling"
+            android:title="@string/title_fps_ceiling"
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.BitrateLadderPreference
             android:defaultValue="200000"
             android:key="seekbar_bitrate_kbps"
-            android:summary="@string/summary_seekbar_bitrate"
-            android:title="@string/title_seekbar_bitrate"
+            android:summary="@string/summary_bitrate_ceiling"
+            android:title="@string/title_bitrate_ceiling"
             app:iconSpaceReserved="false" />
 
         <SwitchPreferenceCompat
@@ -208,19 +208,5 @@
             android:summary="@string/summary_debug_info"
             android:title="@string/title_debug_info"
             app:iconSpaceReserved="false" />
-
-        <com.limelight.preferences.WebLauncherPreference
-            android:key="option_software_release"
-            android:summary="@string/summary_software_update"
-            android:title="@string/title_software_update"
-            app:iconSpaceReserved="false"
-            url="https://github.com/ClassicOldSong/moonlight-android/releases" />
-
-        <com.limelight.preferences.WebLauncherPreference
-            android:key="option_follow_update"
-            android:summary="@string/summary_follow_update"
-            android:title="@string/title_follow_update"
-            app:iconSpaceReserved="false"
-            url="@string/obtainium_app_url" />
     </PreferenceCategory>
 </PreferenceScreen>

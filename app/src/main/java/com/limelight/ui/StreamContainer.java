@@ -201,8 +201,13 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private void updateClientSbsPerformanceSampling() {
         if (mStereoRenderer != null) {
+            // Visibility is retained by this container before the renderer/processor exists and
+            // republished after every Client-SBS GL generation.
+            mStereoRenderer.setStatsPanelVisible(mClientSbsStatsVisible);
             // Normal and Host SBS don't execute this pipeline, so their Stats panel must not
-            // create GL timer queries, depth-health readbacks, or per-stage counter contention.
+            // create Client-SBS GL timer queries or per-stage counter contention. The renderer's
+            // cheap health ring is deliberately independent and only receives new copies while
+            // Client SBS actually processes depth.
             mStereoRenderer.setPerformanceSamplingEnabled(
                     clientSbsDiagnosticsEnabled() && mStereoRenderer.isClientSbs());
         }
@@ -408,6 +413,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                             surfaceGeneration, eglAttachGeneration, reason));
                 }
             }, context, prefConfig, false);
+            updateClientSbsPerformanceSampling();
             // Client SBS renders into a negotiated-size packed XR compositor surface, which is
             // unrelated to this view's on-screen size. Tell the renderer both dimensions explicitly.
             mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),

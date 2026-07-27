@@ -57,17 +57,21 @@ public class ClientSbsGpuSceneCutShadersTest {
     public void comparisonUsesReliableExposureInvariantOrdinalStructure() {
         String shader = ClientSbsGpuSceneCutShaders.COMPARE;
         assertTrue(shader.contains("ORDINAL_COMPARISON_FLOOR = 4"));
-        assertTrue(shader.contains("uvec2 orderingEvidence("));
+        assertTrue(shader.contains("uvec3 orderingEvidence("));
         assertTrue(shader.contains("for (int first = 0; first < 5; ++first)"));
         assertTrue(shader.contains("for (int second = first + 1; second < 5; ++second)"));
-        assertTrue(shader.contains("ordinalEvidence.x >= 4u"));
-        assertTrue(shader.contains("ordinalEvidence.y >= 2u"));
-        assertTrue(shader.contains("ordinalEvidence.y * 2u >= ordinalEvidence.x"));
+        assertTrue(shader.contains("currentStructureSupported = ordinalEvidence.x >= 4u"));
+        assertTrue(shader.contains("commonStructureSupported = ordinalEvidence.y >= 4u"));
+        assertTrue(shader.contains("ordinalEvidence.z >= 2u"));
+        assertTrue(shader.contains("ordinalEvidence.z * 2u >= ordinalEvidence.y"));
         assertTrue(shader.contains(
                 "(currentDelta < 0) != (previousDelta < 0)"));
         assertTrue(shader.contains("shared uvec4 localDeltaTotals[256]"));
         assertTrue(shader.contains("localDeltaTotals[lane] += localDeltaTotals[lane + stride]"));
         assertTrue(shader.contains("atomicAdd(structuralChangeCount, delta.z)"));
+        assertTrue(shader.contains("uint packedSupport"));
+        assertTrue(shader.contains("atomicAdd(currentStructuralSupportCount, currentSupport)"));
+        assertTrue(shader.contains("atomicAdd(commonStructuralSupportCount, commonSupport)"));
         assertFalse(shader.contains("currentGradient"));
         assertFalse(shader.contains("previousGradient"));
         assertFalse(shader.contains("lumaDeviation"));
@@ -82,7 +86,25 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("structuralChangeCount, blocks, 15u"));
         assertTrue(shader.contains("quietStructuralChange"));
         assertTrue(shader.contains("structuralChangeCount, blocks, 5u"));
+        assertTrue(shader.contains("sufficientCurrentSupport"));
+        assertTrue(shader.contains("currentStructuralSupportCount, blocks, 5u"));
+        assertTrue(shader.contains("sufficientCommonSupport"));
+        assertTrue(shader.contains("commonStructuralSupportCount, blocks, 5u"));
+        assertTrue(shader.contains("HISTORY_STRUCTURE_SUPPORTED"));
+        assertTrue(shader.contains("historyStructureSupported"));
+        assertTrue(shader.contains("bool structurelessInterval"));
+        assertTrue(shader.contains("bool preservedExposure"));
+        assertTrue(shader.contains("bool bridgedReturn"));
+        assertTrue(shader.contains("bool persistentLowStart"));
+        assertTrue(shader.contains("bool supportedReturn"));
+        assertTrue(shader.contains(
+                "histogramL1 = l1\n"
+                        + "            | (structurelessInterval ? COMMIT_HOLD_HISTORY : 0u)"));
+        assertTrue(shader.contains(
+                "structurelessInterval || preservedExposure || bridgedReturn"));
         assertTrue(shader.contains("SCENE_EVIDENCE_EXPOSURE_LIKE"));
+        assertTrue(shader.contains("SCENE_EVIDENCE_PERSISTENT_LOW_START"));
+        assertTrue(shader.contains("SCENE_EVIDENCE_SUPPORTED_RETURN"));
         assertTrue(shader.contains(
                 "bool hardCut = comparable && broadRawChange && enoughRawEnergy"));
         assertFalse(shader.contains("histogramChanged"));
@@ -108,20 +130,155 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertFalse(referenceHardCut(base, additive, 12));
         assertFalse(referenceHardCut(base, doubledExposure, 12));
         assertFalse(referenceHardCut(clippedBase, clippedExposure, 12));
-        // This exact 72-code-value, 100%-raw-change case used to take the removed
-        // uniformHardTransition override.
-        assertFalse(referenceHardCut(darkUniform, brightUniform, 12));
         assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
-                referenceEvidence(darkUniform, brightUniform, 12));
+                referenceEvidence(base, additive, 12));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                referenceEvidence(base, doubledExposure, 12));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                referenceEvidence(clippedBase, clippedExposure, 12));
+        // Unsupported startup history cannot establish exposure or a meaningful support loss.
+        assertFalse(referenceHardCut(darkUniform, brightUniform, 12));
+        assertEquals(0, referenceEvidence(darkUniform, brightUniform, 12));
+        // Raw RGB cannot qualify a support-loss veto: every value in this structured ramp is
+        // within 28 codes of gray, yet its collapse to gray must retain history.
+        int[] structuredNearGray = rampGrid(12, 10, 106, 4, 0);
+        int[] matchingGray = repeatingLuma(120, 128);
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                referenceEvidence(structuredNearGray, matchingGray, 12));
         // Requiring the same ordering to be reliable in both frames prevents a pure gain from
         // turning a sub-floor relation into structural evidence.
         assertFalse(referenceHardCut(
+                lowContrastRamp, gainedAcrossReliabilityFloor, 12));
+        assertEquals(0, referenceEvidence(
                 lowContrastRamp, gainedAcrossReliabilityFloor, 12));
         // Normalized 2-D gradient direction used to rotate under component-wise clipping and
         // falsely fire this exact pure 2x-exposure fixture on three production-sized block grids.
         // Ordinal signs can only be preserved or collapse into rejected ties.
         assertFalse(referenceHardCut(
                 clippedTwoDimensional, doubledClippedTwoDimensional, 22));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                referenceEvidence(
+                        clippedTwoDimensional, doubledClippedTwoDimensional, 22));
+    }
+
+    @Test
+    public void numericalHistoryBridgeRejectsBlackAndWhiteFlashAndFindsNextScene() {
+        int[] sceneA = rampGrid(12, 10, 40, 16, 0);
+        int[] sceneB = rampGrid(12, 10, 40, 0, 16);
+
+        for (int flatCode : new int[] {0, 255}) {
+            int[] saturatedFlat = repeatingLuma(sceneA.length, flatCode);
+            ReferenceDetector flash = new ReferenceDetector(12);
+            assertEquals(0, flash.detectAndCommit(sceneA));
+            assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                    flash.detectAndCommit(saturatedFlat));
+            // The flat frame did not replace scene A's structural history, so restoration compares
+            // A against A. The persistent gap bit emits a one-update veto for the return edge too.
+            int returnEvidence = flash.detectAndCommit(sceneA);
+            assertEquals(
+                    ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE, returnEvidence);
+            assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                    true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                    false, true, 1.0f, 1.0f,
+                    true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+
+            ReferenceDetector edit = new ReferenceDetector(12);
+            assertEquals(0, edit.detectAndCommit(sceneA));
+            assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                    edit.detectAndCommit(saturatedFlat));
+            // A different supported scene compares directly with A across the structureless gap.
+            int nextSceneEvidence = edit.detectAndCommit(sceneB);
+            assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE, nextSceneEvidence);
+            assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                    true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                    true, false, ClientSbsShotCutPolicy.APPEARANCE_DEPTH_CHANGE_ENTER, 0.0f,
+                    true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        }
+    }
+
+    @Test
+    public void oneFrameGapDoesNotVetoQuietColorDifferentEndpointGeometry() {
+        int[] sceneA = rampGrid(12, 10, 40, 12, 4);
+        int[] flat = repeatingLuma(sceneA.length, 0);
+        // Three luma codes preserve every ordinal relation and remain far below the broad raw
+        // proposal. They can nevertheless represent a different decoded frame whose depth is
+        // authoritative. The old "!broadAppearanceReplacement" bridge incorrectly vetoed it.
+        int[] quietColorSceneB = mapLuma(sceneA, 1, 3);
+        ReferenceDetector detector = new ReferenceDetector(12);
+
+        assertEquals(0, detector.detectAndCommit(sceneA));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                detector.detectAndCommit(flat));
+        assertEquals(0, detector.detectAndCommit(quietColorSceneB));
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+    }
+
+    @Test
+    public void persistentLowStructureDefersOnceThenRestoresGeometryAuthority() {
+        int[] sceneA = rampGrid(12, 10, 40, 16, 0);
+        int[] flatScene = repeatingLuma(sceneA.length, 32);
+        ReferenceDetector detector = new ReferenceDetector(12);
+
+        assertEquals(0, detector.detectAndCommit(sceneA));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                detector.detectAndCommit(flatScene));
+        assertEquals(2, detector.historyState);
+        // A single flat update retains A for flash rejection. Persistence is different: the
+        // second update resolves A-vs-flat and cannot keep vetoing authoritative geometry.
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START,
+                detector.detectAndCommit(flatScene));
+        assertEquals(3, detector.historyState);
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        // History advanced to the real flat shot, so continued persistence remains quiet instead
+        // of periodically retriggering.
+        assertEquals(0, detector.detectAndCommit(flatScene));
+        assertEquals(3, detector.historyState);
+
+        int marker = ClientSbsShotCutPolicy.nextLowStructureSceneMarker(
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, true, false);
+        assertEquals(ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_ACTIVE, marker);
+        // Persistence has no timer or periodic event and cannot bypass a latched detector.
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, 1.0f, 1.0f, true, 1.0f, 0,
+                marker, false, false));
+
+        int returnEvidence = detector.detectAndCommit(sceneA);
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN, returnEvidence);
+        assertEquals(1, detector.historyState);
+        // The first supported return has one absolute decision even while normal geometry remains
+        // latched and refractory, then consumes the marker regardless of the result.
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 1.0f, 0, marker, false, true));
+        marker = ClientSbsShotCutPolicy.nextLowStructureSceneMarker(marker, false, true);
+        assertEquals(ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, marker);
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 1.0f, 0, marker, false, false));
+    }
+
+    @Test
+    public void numericalUnsupportedHistoryToSupportedSceneLeavesGeometryAuthoritative() {
+        int[] black = repeatingLuma(120, 0);
+        int[] structured = rampGrid(12, 10, 40, 12, 4);
+        ReferenceDetector detector = new ReferenceDetector(12);
+        assertEquals(0, detector.detectAndCommit(black));
+        int evidence = detector.detectAndCommit(structured);
+        assertEquals(0, evidence);
+
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
     }
 
     @Test
@@ -180,11 +337,68 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(compare.contains("bool comparable = uHistoryValid != 0"));
         assertTrue(resolve.contains("bool comparable = uHistoryValid != 0"));
         assertFalse(resolve.contains("previousHistogram[bin] = currentHistogram[bin]"));
+        assertTrue(commit.contains("bool holdHistory = uHistoryValid != 0"));
+        assertTrue(commit.contains("bool historyGapPending ="));
+        assertTrue(commit.contains("bool lowStructureScene ="));
+        assertTrue(commit.contains(
+                "&& (histogramL1 & COMMIT_HOLD_HISTORY) != 0u"));
+        assertTrue(commit.contains("bool persistentLowScene = !currentStructureSupported"));
+        assertTrue(commit.contains("historyStructureSupported"));
+        assertTrue(commit.contains("currentStructuralSupportCount, currentBlockCount, 5u"));
+        assertTrue(commit.contains("imageStore(uCurrentLuma, block, imageLoad(uPreviousLuma, block))"));
+        assertTrue(commit.contains("previousBlockCount & HISTORY_BLOCK_COUNT_MASK"));
+        assertTrue(commit.contains(
+                "| HISTORY_STRUCTURE_SUPPORTED | HISTORY_GAP_PENDING"));
         assertTrue(commit.contains("previousBlockCount = currentBlockCount"));
-        assertTrue(commit.contains("previousHistogram[index] = currentHistogram[index]"));
+        assertTrue(commit.contains("? HISTORY_STRUCTURE_SUPPORTED"));
+        assertTrue(commit.contains(
+                ": (persistentLowScene ? HISTORY_GAP_PENDING : 0u)"));
+        assertTrue(commit.contains(
+                "previousHistogram[block.x] = currentHistogram[block.x]"));
         assertFalse(commit.contains("previousLumaSum"));
         assertFalse(commit.contains("previousLumaSquaredSum"));
         assertFalse(commit.contains("SceneCutOutput"));
+
+        // COMMIT spans multiple workgroups. Its branch decision must come entirely from RESOLVE's
+        // immutable word; only the sole metadata writer may read previousBlockCount after that.
+        int main = commit.indexOf("void main()");
+        int blockDeclaration = commit.indexOf("ivec2 block", main);
+        int metadataWriter = commit.indexOf("if (block.x == 0)", main);
+        assertTrue(main >= 0 && blockDeclaration > main && metadataWriter > blockDeclaration);
+        String branchDecision = commit.substring(main, blockDeclaration);
+        assertTrue(branchDecision.contains("histogramL1 & COMMIT_HOLD_HISTORY"));
+        assertFalse(branchDecision.contains("previousBlockCount"));
+        String holdPath = commit.substring(blockDeclaration, metadataWriter);
+        assertTrue(holdPath.indexOf("if (all(equal(block, ivec2(0))))")
+                < holdPath.indexOf("previousBlockCount"));
+    }
+
+    @Test
+    public void explicitResetClearsEveryHistoryStateBitBeforeAFirstLowFrame() {
+        String reset = ClientSbsGpuSceneCutShaders.RESET;
+        assertTrue(reset.contains("uniform int uClearHistory"));
+        assertTrue(reset.contains(
+                "if (uClearHistory != 0) previousHistogram[index] = 0u"));
+        assertTrue(reset.contains(
+                "if (uClearHistory != 0) previousBlockCount = 0u"));
+
+        int[] structured = rampGrid(12, 10, 40, 16, 0);
+        int[] flat = repeatingLuma(structured.length, 32);
+        ReferenceDetector detector = new ReferenceDetector(12);
+        assertEquals(0, detector.detectAndCommit(structured));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
+                detector.detectAndCommit(flat));
+        assertEquals(2, detector.historyState);
+
+        detector.reset();
+        assertEquals(0, detector.historyState);
+        // The first accepted low-structure frame after reset is startup, not a stale persistent
+        // low interval. Its later supported successor therefore cannot manufacture RETURN.
+        assertEquals(0, detector.detectAndCommit(flat));
+        assertEquals(1, detector.historyState);
+        assertEquals(0, detector.detectAndCommit(structured)
+                & (ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START
+                | ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN));
     }
 
     @Test
@@ -216,6 +430,19 @@ public class ClientSbsGpuSceneCutShadersTest {
     }
 
     private static int referenceEvidence(int[] previous, int[] current, int width) {
+        return referenceClassification(previous, current, width).evidence;
+    }
+
+    private static ReferenceClassification referenceClassification(
+            int[] previous, int[] current, int width) {
+        return referenceClassification(
+                previous, current, width, false, false,
+                hasSufficientStructure(previous, width));
+    }
+
+    private static ReferenceClassification referenceClassification(
+            int[] previous, int[] current, int width, boolean historyGapPending,
+            boolean lowStructureScene, boolean historyStructureSupported) {
         if (previous.length == 0 || previous.length != current.length
                 || width <= 0 || previous.length % width != 0) {
             throw new IllegalArgumentException("Comparable luma grids must have equal size");
@@ -225,6 +452,8 @@ public class ClientSbsGpuSceneCutShadersTest {
         int rawDeltaSum = 0;
         int rawModerateCount = 0;
         int structuralChangeCount = 0;
+        int currentStructuralSupportCount = 0;
+        int commonStructuralSupportCount = 0;
         for (int index = 0; index < blocks; index++) {
             int rawDelta = Math.abs(current[index] - previous[index]);
             rawDeltaSum += rawDelta;
@@ -232,7 +461,15 @@ public class ClientSbsGpuSceneCutShadersTest {
 
             int x = index % width;
             int y = index / width;
-            if (ordinalStructureChanged(previous, current, width, height, x, y)) {
+            OrdinalEvidence ordinal =
+                    ordinalEvidence(previous, current, width, height, x, y);
+            if (ordinal.currentComparisons >= 4) {
+                currentStructuralSupportCount++;
+            }
+            if (ordinal.commonComparisons >= 4) {
+                commonStructuralSupportCount++;
+            }
+            if (ordinal.structureChanged()) {
                 structuralChangeCount++;
             }
         }
@@ -241,17 +478,53 @@ public class ClientSbsGpuSceneCutShadersTest {
         boolean enoughRawEnergy = rawDeltaSum >= blocks * 34;
         boolean broadStructuralChange =
                 fractionAtLeast(structuralChangeCount, blocks, 15);
+        boolean sufficientCurrentSupport =
+                fractionAtLeast(currentStructuralSupportCount, blocks, 5);
+        boolean sufficientCommonSupport =
+                fractionAtLeast(commonStructuralSupportCount, blocks, 5);
         boolean quietStructuralChange =
                 !fractionAtLeast(structuralChangeCount, blocks, 5);
         int evidence = broadRawChange && enoughRawEnergy && broadStructuralChange
                 ? ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE : 0;
-        if (broadRawChange && enoughRawEnergy && quietStructuralChange) {
+        boolean broadAppearanceReplacement = broadRawChange && enoughRawEnergy;
+        boolean structurelessInterval = historyStructureSupported && !historyGapPending
+                && !sufficientCurrentSupport;
+        boolean preservedExposure =
+                broadAppearanceReplacement && sufficientCommonSupport;
+        boolean sameSceneEndpoint = rawDeltaSum <= blocks * 2
+                && !fractionAtLeast(rawModerateCount, blocks, 1);
+        boolean bridgedReturn = historyGapPending && sufficientCurrentSupport
+                && sameSceneEndpoint;
+        boolean persistentLowStart = historyGapPending && !sufficientCurrentSupport;
+        boolean supportedReturn = lowStructureScene && sufficientCurrentSupport;
+        if (quietStructuralChange
+                && (structurelessInterval || preservedExposure || bridgedReturn)) {
             evidence |= ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE;
         }
-        return evidence;
+        if (persistentLowStart) {
+            evidence |= ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START;
+        }
+        if (supportedReturn) {
+            evidence |= ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN;
+        }
+        return new ReferenceClassification(evidence, sufficientCurrentSupport);
     }
 
-    private static boolean ordinalStructureChanged(
+    private static boolean hasSufficientStructure(int[] values, int width) {
+        if (values.length == 0 || width <= 0 || values.length % width != 0) {
+            throw new IllegalArgumentException("Luma grid dimensions must be valid");
+        }
+        int height = values.length / width;
+        int supported = 0;
+        for (int index = 0; index < values.length; index++) {
+            OrdinalEvidence ordinal = ordinalEvidence(
+                    values, values, width, height, index % width, index / width);
+            if (ordinal.currentComparisons >= 4) supported++;
+        }
+        return fractionAtLeast(supported, values.length, 5);
+    }
+
+    private static OrdinalEvidence ordinalEvidence(
             int[] previous, int[] current, int width, int height, int x, int y) {
         int[][] offsets = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
         int[] previousSamples = new int[5];
@@ -262,20 +535,93 @@ public class ClientSbsGpuSceneCutShadersTest {
             currentSamples[index] = sample(
                     current, width, height, x + offsets[index][0], y + offsets[index][1]);
         }
+        int currentComparisons = 0;
         int commonComparisons = 0;
         int orderingFlips = 0;
         for (int first = 0; first < 4; first++) {
             for (int second = first + 1; second < 5; second++) {
                 int previousDelta = previousSamples[first] - previousSamples[second];
                 int currentDelta = currentSamples[first] - currentSamples[second];
-                if (Math.abs(previousDelta) >= 4 && Math.abs(currentDelta) >= 4) {
-                    commonComparisons++;
-                    if ((previousDelta < 0) != (currentDelta < 0)) orderingFlips++;
+                if (Math.abs(currentDelta) >= 4) {
+                    currentComparisons++;
+                    if (Math.abs(previousDelta) >= 4) {
+                        commonComparisons++;
+                        if ((previousDelta < 0) != (currentDelta < 0)) orderingFlips++;
+                    }
                 }
             }
         }
-        return commonComparisons >= 4 && orderingFlips >= 2
-                && orderingFlips * 2 >= commonComparisons;
+        return new OrdinalEvidence(currentComparisons, commonComparisons, orderingFlips);
+    }
+
+    private static final class OrdinalEvidence {
+        final int currentComparisons;
+        final int commonComparisons;
+        final int orderingFlips;
+
+        OrdinalEvidence(int currentComparisons, int commonComparisons, int orderingFlips) {
+            this.currentComparisons = currentComparisons;
+            this.commonComparisons = commonComparisons;
+            this.orderingFlips = orderingFlips;
+        }
+
+        boolean structureChanged() {
+            return commonComparisons >= 4 && orderingFlips >= 2
+                    && orderingFlips * 2 >= commonComparisons;
+        }
+    }
+
+    private static final class ReferenceClassification {
+        final int evidence;
+        final boolean sufficientCurrentSupport;
+
+        ReferenceClassification(int evidence, boolean sufficientCurrentSupport) {
+            this.evidence = evidence;
+            this.sufficientCurrentSupport = sufficientCurrentSupport;
+        }
+    }
+
+    private static final class ReferenceDetector {
+        private final int width;
+        private int[] history;
+        private int historyState;
+        private boolean historyStructureSupported;
+
+        ReferenceDetector(int width) {
+            this.width = width;
+        }
+
+        void reset() {
+            history = null;
+            historyState = 0;
+            historyStructureSupported = false;
+        }
+
+        int detectAndCommit(int[] current) {
+            if (history == null) {
+                history = current.clone();
+                historyStructureSupported = hasSufficientStructure(current, width);
+                historyState = 1;
+                return 0;
+            }
+            boolean historyGapPending = historyState == 2;
+            boolean lowStructureScene = historyState == 3;
+            ReferenceClassification classification =
+                    referenceClassification(
+                            history, current, width, historyGapPending, lowStructureScene,
+                            historyStructureSupported);
+            boolean holdHistory = historyStructureSupported && !historyGapPending
+                    && !classification.sufficientCurrentSupport;
+            if (!holdHistory) {
+                history = current.clone();
+                historyStructureSupported = classification.sufficientCurrentSupport;
+                historyState = !classification.sufficientCurrentSupport
+                        && (historyGapPending || lowStructureScene) ? 3 : 1;
+            } else {
+                historyState = 2;
+            }
+            return classification.evidence;
+        }
     }
 
     private static int sample(int[] values, int width, int height, int x, int y) {

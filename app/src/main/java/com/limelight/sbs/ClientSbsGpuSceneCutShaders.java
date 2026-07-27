@@ -18,8 +18,8 @@ final class ClientSbsGpuSceneCutShaders {
     /*
      * Keep this std430 declaration byte-for-byte identical in every pass. Current-frame fields
      * are reset before each detection. The previous summary and histogram survive until COMMIT
-     * replaces them after the renderer accepts the frame, so no CPU-side history or readback is
-     * needed.
+     * either advances them to an accepted supported frame or bridges a structureless interval, so
+     * no CPU-side history or readback is needed.
      */
     private static final String STATS = lines(
             "layout(std430, binding = 0) buffer SceneCutStats {",
@@ -29,13 +29,28 @@ final class ClientSbsGpuSceneCutShaders {
             "    uint rawModerateCount;",
             "    uint structuralChangeCount;",
             "    uint histogramL1;",
-            // Keep the histogram arrays 16-byte aligned even though std430 only requires scalar
-            // alignment here. This preserves the conservative layout used by the original path.
-            "    uint statsPadding0;",
-            "    uint statsPadding1;",
+            // Reuse the two reserved words for current-frame and cross-frame structural support.
+            // The histogram offset and the detector's fixed SSBO size remain unchanged.
+            "    uint currentStructuralSupportCount;",
+            "    uint commonStructuralSupportCount;",
             "    uint currentHistogram[16];",
             "    uint previousHistogram[16];",
-            "};"
+            "};",
+            // Together these two bits encode the accepted-history state without growing the SSBO:
+            // 00 normal unsupported, 01 accepted persistent-low, 10 normal supported, 11 one-frame
+            // supported-history hold. The low 30 bits remain the exact block count.
+            "const uint HISTORY_GAP_PENDING = 0x80000000u;",
+            "const uint HISTORY_STRUCTURE_SUPPORTED = 0x40000000u;",
+            "const uint HISTORY_BLOCK_COUNT_MASK = 0x3fffffffu;",
+            // RESOLVE publishes this immutable decision for the later multi-workgroup COMMIT.
+            // It occupies a diagnostic word whose real L1 value is far below the high bit.
+            "const uint COMMIT_HOLD_HISTORY = 0x80000000u;"
+    );
+
+    private static final String FRACTION_AT_LEAST = lines(
+            "bool fractionAtLeast(uint value, uint total, uint percent) {",
+            "    return total != 0u && value >= (total * percent + 99u) / 100u;",
+            "}"
     );
 
     private static final String OUTPUT = lines(
@@ -45,21 +60,30 @@ final class ClientSbsGpuSceneCutShaders {
             "const uint SCENE_EVIDENCE_APPEARANCE = "
                     + ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE + "u;",
             "const uint SCENE_EVIDENCE_EXPOSURE_LIKE = "
-                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE + "u;"
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE + "u;",
+            "const uint SCENE_EVIDENCE_PERSISTENT_LOW_START = "
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START + "u;",
+            "const uint SCENE_EVIDENCE_SUPPORTED_RETURN = "
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN + "u;"
     );
 
     static final String RESET = HEADER + STATS + OUTPUT + lines(
             "layout(local_size_x = 16) in;",
             "uniform uint uOutputWordOffset;",
+            "uniform int uClearHistory;",
             "void main() {",
             "    uint index = gl_LocalInvocationID.x;",
             "    currentHistogram[index] = 0u;",
+            "    if (uClearHistory != 0) previousHistogram[index] = 0u;",
             "    if (index == 0u) {",
             "        sceneCutWords[uOutputWordOffset] = 0u;",
             "        currentBlockCount = 0u;",
+            "        if (uClearHistory != 0) previousBlockCount = 0u;",
             "        rawDeltaSum = 0u;",
             "        rawModerateCount = 0u;",
             "        structuralChangeCount = 0u;",
+            "        currentStructuralSupportCount = 0u;",
+            "        commonStructuralSupportCount = 0u;",
             "        histogramL1 = 0u;",
             "    }",
             "}"
@@ -187,21 +211,24 @@ final class ClientSbsGpuSceneCutShaders {
             "int ordinalMedian(uint packedBlock) {",
             "    return int((packedBlock >> 8u) & 255u);",
             "}",
-            "uvec2 orderingEvidence(int currentFirst, int currentSecond,",
+            "uvec3 orderingEvidence(int currentFirst, int currentSecond,",
             "                       int previousFirst, int previousSecond) {",
             "    int currentDelta = currentFirst - currentSecond;",
             "    int previousDelta = previousFirst - previousSecond;",
-            "    bool reliable = abs(currentDelta) >= ORDINAL_COMPARISON_FLOOR",
+            "    bool currentReliable = abs(currentDelta) >= ORDINAL_COMPARISON_FLOOR;",
+            "    bool commonReliable = currentReliable",
             "            && abs(previousDelta) >= ORDINAL_COMPARISON_FLOOR;",
-            "    bool reversed = reliable && ((currentDelta < 0) != (previousDelta < 0));",
-            "    return uvec2(reliable ? 1u : 0u, reversed ? 1u : 0u);",
+            "    bool reversed = commonReliable && ((currentDelta < 0) != (previousDelta < 0));",
+            "    return uvec3(currentReliable ? 1u : 0u,",
+            "            commonReliable ? 1u : 0u, reversed ? 1u : 0u);",
             "}",
             "void main() {",
             "    uint lane = gl_LocalInvocationIndex;",
             "    localDeltaTotals[lane] = uvec4(0u);",
             "    ivec2 block = ivec2(gl_GlobalInvocationID.xy);",
             "    bool comparable = uHistoryValid != 0 && all(lessThan(block, uBlockGrid))",
-            "            && currentBlockCount != 0u && previousBlockCount != 0u;",
+            "            && currentBlockCount != 0u",
+            "            && (previousBlockCount & HISTORY_BLOCK_COUNT_MASK) != 0u;",
             "    if (comparable) {",
             "        ivec2 leftBlock = clampedBlock(block + ivec2(-1, 0));",
             "        ivec2 rightBlock = clampedBlock(block + ivec2(1, 0));",
@@ -221,7 +248,7 @@ final class ClientSbsGpuSceneCutShaders {
             "        previousPacked[4] = imageLoad(uPreviousLuma, downBlock).r;",
             "        uint rawDelta = unsignedAbsoluteDifference(",
             "                blockLuma(currentPacked[0]), blockLuma(previousPacked[0]));",
-            "        uvec2 ordinalEvidence = uvec2(0u);",
+            "        uvec3 ordinalEvidence = uvec3(0u);",
             "        for (int first = 0; first < 5; ++first) {",
             "            for (int second = first + 1; second < 5; ++second) {",
             "                ordinalEvidence += orderingEvidence(",
@@ -233,12 +260,19 @@ final class ClientSbsGpuSceneCutShaders {
             "        }",
             // Require common support, at least two reversals, and a reversal majority. A single
             // noisy ordering cannot turn one site into structural evidence.
-            "        bool structureChanged = ordinalEvidence.x >= 4u",
-            "                && ordinalEvidence.y >= 2u",
-            "                && ordinalEvidence.y * 2u >= ordinalEvidence.x;",
+            "        bool currentStructureSupported = ordinalEvidence.x >= 4u;",
+            "        bool commonStructureSupported = ordinalEvidence.y >= 4u;",
+            "        bool structureChanged = commonStructureSupported",
+            "                && ordinalEvidence.z >= 2u",
+            "                && ordinalEvidence.z * 2u >= ordinalEvidence.y;",
+            // Each workgroup reduces at most 256 one-bit support votes. Pack current/common into
+            // the low/high 16-bit halves; their sums cannot carry across the boundary.
+            "        uint packedSupport = (currentStructureSupported ? 1u : 0u)",
+            "                | ((commonStructureSupported ? 1u : 0u) << 16u);",
             "        localDeltaTotals[lane] = uvec4(rawDelta,",
             "                rawDelta >= RAW_MODERATE_DELTA ? 1u : 0u,",
-            "                structureChanged ? 1u : 0u, 0u);",
+            "                structureChanged ? 1u : 0u,",
+            "                packedSupport);",
             "    }",
             "    barrier();",
             "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
@@ -252,20 +286,32 @@ final class ClientSbsGpuSceneCutShaders {
             "        if (delta.x != 0u) atomicAdd(rawDeltaSum, delta.x);",
             "        if (delta.y != 0u) atomicAdd(rawModerateCount, delta.y);",
             "        if (delta.z != 0u) atomicAdd(structuralChangeCount, delta.z);",
+            "        uint currentSupport = delta.w & 0xffffu;",
+            "        uint commonSupport = delta.w >> 16u;",
+            "        if (currentSupport != 0u)",
+            "            atomicAdd(currentStructuralSupportCount, currentSupport);",
+            "        if (commonSupport != 0u)",
+            "            atomicAdd(commonStructuralSupportCount, commonSupport);",
             "    }",
             "}"
     );
 
-    static final String RESOLVE = HEADER + STATS + OUTPUT + lines(
+    static final String RESOLVE = HEADER + STATS + OUTPUT + FRACTION_AT_LEAST + lines(
             "layout(local_size_x = 1) in;",
             "uniform int uHistoryValid;",
             "uniform uint uOutputWordOffset;",
-            "bool fractionAtLeast(uint value, uint total, uint percent) {",
-            "    return total != 0u && value >= (total * percent + 99u) / 100u;",
-            "}",
             "void main() {",
+            "    uint historyBlockCount = previousBlockCount & HISTORY_BLOCK_COUNT_MASK;",
+            "    bool historyStructureSupported =",
+            "            (previousBlockCount & HISTORY_STRUCTURE_SUPPORTED) != 0u;",
+            "    bool historyGapPending =",
+            "            (previousBlockCount & HISTORY_GAP_PENDING) != 0u",
+            "            && historyStructureSupported;",
+            "    bool lowStructureScene =",
+            "            (previousBlockCount & HISTORY_GAP_PENDING) != 0u",
+            "            && !historyStructureSupported;",
             "    bool comparable = uHistoryValid != 0 && currentBlockCount != 0u",
-            "            && currentBlockCount == previousBlockCount;",
+            "            && currentBlockCount == historyBlockCount;",
             "    uint l1 = 0u;",
             "    if (comparable) {",
             "        for (uint bin = 0u; bin < 16u; ++bin) {",
@@ -274,15 +320,21 @@ final class ClientSbsGpuSceneCutShaders {
             "            l1 += current >= previous ? current - previous : previous - current;",
             "        }",
             "    }",
-            "    histogramL1 = l1;",
             "    uint blocks = currentBlockCount;",
             "    bool broadRawChange = fractionAtLeast(rawModerateCount, blocks, 55u);",
             "    bool enoughRawEnergy = blocks != 0u && rawDeltaSum >= blocks * 34u;",
             "    bool broadStructuralChange = fractionAtLeast(",
             "            structuralChangeCount, blocks, 15u);",
-            // Reserve a deliberately quiet band for the exposure veto. The 5-15% ambiguous band
-            // is neither qualified appearance nor exposure-like, so standalone depth authority
-            // remains available for low-structure editorial cuts.
+            // Five percent is the existing client quiet-band boundary and remains below the
+            // measured preserved-exposure support floor. Requiring broad current support prevents
+            // a few reliable sites from deciding a frame-level classification.
+            "    bool sufficientCurrentSupport = fractionAtLeast(",
+            "            currentStructuralSupportCount, blocks, 5u);",
+            "    bool sufficientCommonSupport = fractionAtLeast(",
+            "            commonStructuralSupportCount, blocks, 5u);",
+            // Reserve a deliberately quiet band for the exposure veto. The 5-15% reversal band is
+            // neither qualified appearance nor exposure-like, so standalone depth authority
+            // remains available for ambiguous editorial cuts.
             "    bool quietStructuralChange = !fractionAtLeast(",
             "            structuralChangeCount, blocks, 5u);",
             // Histogram L1 remains diagnostic, but it is deliberately not authority: exposure can
@@ -290,22 +342,87 @@ final class ClientSbsGpuSceneCutShaders {
             // broad raw change proposes the cut, and depth geometry still owns shot relatching.
             "    bool hardCut = comparable && broadRawChange && enoughRawEnergy",
             "            && broadStructuralChange;",
-            "    bool exposureLike = comparable && broadRawChange && enoughRawEnergy",
-            "            && quietStructuralChange;",
+            "    bool broadAppearanceReplacement = broadRawChange && enoughRawEnergy;",
+            // If reliable history first loses structure, defer one accepted update and let COMMIT
+            // retain history. Bounding the deferral is essential: a real title/fog/sky/flat shot
+            // must expose A-vs-current depth geometry on its second accepted update rather than
+            // remaining classified as brightness forever. The first supported frame after a
+            // one-update gap is still suppressed when it closely matches the retained frame (the
+            // return edge of A->flat->A). A supported frame with broad raw replacement but no
+            // common structure remains ambiguous, leaving geometry authority for A->flat->B.
+            "    bool structurelessInterval = historyStructureSupported",
+            "            && !historyGapPending && !sufficientCurrentSupport;",
+            // All COMMIT workgroups must branch on a value that its (0,0) writer never mutates.
+            // Reading previousBlockCount there raced that writer and could copy only part of the
+            // held image.
+            "    histogramL1 = l1",
+            "            | (structurelessInterval ? COMMIT_HOLD_HISTORY : 0u);",
+            "    bool preservedExposure = broadAppearanceReplacement",
+            "            && sufficientCommonSupport;",
+            // Only a strict endpoint match may veto the supported edge after a one-frame hold.
+            // "Not broadly different" is far too wide: a quiet-color A->flat->B edit can carry
+            // authoritative depth geometry without crossing the appearance proposal thresholds.
+            "    bool sameSceneEndpoint = blocks != 0u && rawDeltaSum <= blocks * 2u",
+            "            && !fractionAtLeast(rawModerateCount, blocks, 1u);",
+            "    bool bridgedReturn = historyGapPending && sufficientCurrentSupport",
+            "            && sameSceneEndpoint;",
+            "    bool persistentLowStart = comparable && historyGapPending",
+            "            && !sufficientCurrentSupport;",
+            "    bool supportedReturn = comparable && lowStructureScene",
+            "            && sufficientCurrentSupport;",
+            "    bool exposureLike = comparable && quietStructuralChange",
+            "            && (structurelessInterval || preservedExposure || bridgedReturn);",
             "    uint evidence = hardCut ? SCENE_EVIDENCE_APPEARANCE : 0u;",
             "    if (exposureLike) evidence |= SCENE_EVIDENCE_EXPOSURE_LIKE;",
+            "    if (persistentLowStart)",
+            "        evidence |= SCENE_EVIDENCE_PERSISTENT_LOW_START;",
+            "    if (supportedReturn) evidence |= SCENE_EVIDENCE_SUPPORTED_RETURN;",
             "    sceneCutWords[uOutputWordOffset] = evidence;",
             "}"
     );
 
     /** Commits a resolved frame only after the renderer transfers it to the inference queue. */
-    static final String COMMIT = HEADER + STATS + lines(
-            "layout(local_size_x = 16) in;",
+    static final String COMMIT = HEADER + STATS + FRACTION_AT_LEAST + lines(
+            "layout(local_size_x = 16, local_size_y = 16) in;",
+            "layout(r32ui, binding = 0) uniform readonly highp uimage2D uPreviousLuma;",
+            "layout(r32ui, binding = 1) uniform writeonly highp uimage2D uCurrentLuma;",
+            "uniform ivec2 uBlockGrid;",
+            "uniform int uHistoryValid;",
             "void main() {",
-            "    uint index = gl_LocalInvocationID.x;",
-            "    previousHistogram[index] = currentHistogram[index];",
-            "    if (index == 0u) {",
-            "        previousBlockCount = currentBlockCount;",
+            "    bool currentStructureSupported = fractionAtLeast(",
+            "            currentStructuralSupportCount, currentBlockCount, 5u);",
+            "    bool holdHistory = uHistoryValid != 0",
+            "            && (histogramL1 & COMMIT_HOLD_HISTORY) != 0u;",
+            "    ivec2 block = ivec2(gl_GlobalInvocationID.xy);",
+            "    if (holdHistory) {",
+            // Java swaps the two ping-pong indices after this dispatch. Copying previous into the
+            // pending texture makes that swap retain the last structurally supported frame without
+            // a readback, third texture, or larger buffer.
+            "        if (all(lessThan(block, uBlockGrid)))",
+            "            imageStore(uCurrentLuma, block, imageLoad(uPreviousLuma, block));",
+            "        if (all(equal(block, ivec2(0))))",
+            "            previousBlockCount = (previousBlockCount & HISTORY_BLOCK_COUNT_MASK)",
+            "                    | HISTORY_STRUCTURE_SUPPORTED | HISTORY_GAP_PENDING;",
+            "    } else if (block.y == 0 && block.x < 16) {",
+            "        previousHistogram[block.x] = currentHistogram[block.x];",
+            "        if (block.x == 0) {",
+            // Only this invocation reads and writes previousBlockCount. No other workgroup can
+            // observe its new metadata while choosing whether to copy the held image.
+            "            bool historyStructureSupported =",
+            "                    (previousBlockCount & HISTORY_STRUCTURE_SUPPORTED) != 0u;",
+            "            bool historyGapPending =",
+            "                    (previousBlockCount & HISTORY_GAP_PENDING) != 0u",
+            "                    && historyStructureSupported;",
+            "            bool lowStructureScene =",
+            "                    (previousBlockCount & HISTORY_GAP_PENDING) != 0u",
+            "                    && !historyStructureSupported;",
+            "            bool persistentLowScene = !currentStructureSupported",
+            "                    && (historyGapPending || lowStructureScene);",
+            "            previousBlockCount = currentBlockCount",
+            "                    | (currentStructureSupported",
+            "                    ? HISTORY_STRUCTURE_SUPPORTED",
+            "                    : (persistentLowScene ? HISTORY_GAP_PENDING : 0u));",
+            "        }",
             "    }",
             "}"
     );

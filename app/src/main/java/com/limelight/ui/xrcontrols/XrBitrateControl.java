@@ -18,8 +18,8 @@ import java.util.List;
  * gaze-and-pinch — the eye position is sampled only at the instant the pinch registers, so dragging
  * is imprecise and holding a drag in the air is tiring — and the value it set was a float bandwidth
  * with no meaning attached. It is now a discrete {@link XrSegmentedLadder}: one pinchable segment
- * per rung, filled to the selection, with the rung recommended for the current stream shape marked
- * above it.</p>
+ * per rung, with the chosen one highlighted and the rung recommended for the current stream shape
+ * marked above it.</p>
  *
  * <p>The class survives only so the presenter's call site keeps a stable type; all behaviour lives
  * in the ladder.</p>
@@ -70,8 +70,7 @@ public final class XrBitrateControl extends LinearLayout {
         choices = Collections.unmodifiableList(ordered);
 
         String recommendedId = recommendedKbps > 0 ? String.valueOf(recommendedKbps) : null;
-        ladder.setChoices(choices, selectedChoiceId, recommendedId, hint,
-                (choice, index, count) -> choice.label,
+        ladder.setChoices(choices, selectedChoiceId, recommendedId, hint, null,
                 listener == null ? null : listener::onBitrateSelected);
     }
 

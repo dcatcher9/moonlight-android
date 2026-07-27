@@ -1,11 +1,15 @@
 package com.limelight.grid.assets;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
 
+@RunWith(RobolectricTestRunner.class)
 public class AppTileArtworkTest {
     @Test
     public void initialsComeFromTheFirstTwoWordsThatStartWithAnAlphanumeric() {
@@ -46,5 +50,32 @@ public class AppTileArtworkTest {
         assertNotEquals(a, b, 8f);
         assertNotEquals(b, c, 8f);
         assertNotEquals(a, c, 8f);
+    }
+
+    @Test
+    public void genericHostArtworkIsClassifiedForPerAppFallbackOnColdAndWarmPaths() {
+        assertTrue(CachedAppAssetLoader.isBitmapPlaceholder(
+                new ScaledBitmap(130, 180, null)));
+        assertTrue(CachedAppAssetLoader.isBitmapPlaceholder(
+                new ScaledBitmap(628, 888, null)));
+        assertFalse(CachedAppAssetLoader.isBitmapPlaceholder(
+                new ScaledBitmap(600, 900, null)));
+    }
+
+    @Test
+    public void generatedArtworkCacheIsByteBoundedAndExplicitlyTrimmable() {
+        AppTileArtwork.clearCache();
+        try {
+            for (int index = 0; index < 12; index++) {
+                AppTileArtwork.forApp("Generated fallback " + index, 480, 640);
+                assertTrue(AppTileArtwork.cacheSizeBytes()
+                        <= AppTileArtwork.CACHE_MAX_BYTES);
+            }
+            assertTrue(AppTileArtwork.cacheSizeBytes() > 0);
+        }
+        finally {
+            AppTileArtwork.clearCache();
+        }
+        assertEquals(0, AppTileArtwork.cacheSizeBytes());
     }
 }

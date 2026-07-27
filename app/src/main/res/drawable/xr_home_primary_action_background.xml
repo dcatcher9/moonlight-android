@@ -2,37 +2,37 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_enabled="false">
         <shape>
-            <solid android:color="#FF273442" />
+            <solid android:color="@color/xr_border" />
             <corners android:radius="14dp" />
-            <stroke android:width="1dp" android:color="#FF43566D" />
+            <stroke android:width="1dp" android:color="@color/xr_accent_deep" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape>
-            <solid android:color="#FF547DB8" />
+            <solid android:color="@color/xr_accent_deep" />
             <corners android:radius="14dp" />
-            <stroke android:width="2dp" android:color="#FFD7E5FF" />
+            <stroke android:width="2dp" android:color="@color/xr_accent_bright" />
         </shape>
     </item>
     <item android:state_focused="true">
         <shape>
-            <solid android:color="#FF456F9F" />
+            <solid android:color="@color/xr_accent_deep" />
             <corners android:radius="14dp" />
-            <stroke android:width="3dp" android:color="#FFD7E5FF" />
+            <stroke android:width="3dp" android:color="@color/xr_accent_bright" />
         </shape>
     </item>
     <item android:state_hovered="true">
         <shape>
-            <solid android:color="#FF456F9F" />
+            <solid android:color="@color/xr_accent_deep" />
             <corners android:radius="14dp" />
-            <stroke android:width="3dp" android:color="#FFD7E5FF" />
+            <stroke android:width="3dp" android:color="@color/xr_accent_bright" />
         </shape>
     </item>
     <item>
         <shape>
-            <solid android:color="#FF365F91" />
+            <solid android:color="@color/xr_accent_deep" />
             <corners android:radius="14dp" />
-            <stroke android:width="1dp" android:color="#FF78A7E2" />
+            <stroke android:width="1dp" android:color="@color/xr_accent" />
         </shape>
     </item>
 </selector>

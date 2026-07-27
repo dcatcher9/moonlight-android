@@ -635,6 +635,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             @Override
+            public void onLiveStreamQualityResyncRequired(boolean commitStagedSettings) {
+                scheduleMandatoryReconnectForAmbiguousLiveVideoMode(commitStagedSettings);
+            }
+
+            @Override
             public boolean onClientSbsModelSelected(String modelId,
                                                     ClientSbsModeSettingsModel current) {
                 if (reconnectScheduled) {
@@ -1471,7 +1476,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 try { streamSurfaceView.setZOrderMediaOverlay(false); } catch (Throwable ignored) {}
 
                 // 2) setFrameRate via reflection (compat < 30)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+                        && shouldVoteHolderSurfaceFrameRate(isXrPresentationActive())) {
                     float displayHz = 60f;
                     try {
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
@@ -1641,6 +1647,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         };
         displayManager.registerDisplayListener(panelRefreshListener, null);
+
+        // DisplayManager does not promise an initial callback. Seed the state machine now so a
+        // session that starts while the panel is thermally capped follows that rate after its
+        // first decoded frame instead of waiting for an unrelated display event.
+        Display display = getActiveDisplay(this, prefConfig);
+        XrStreamPresenter presenter = streamContainer != null
+                ? streamContainer.getXrPresenter() : null;
+        if (display != null && presenter != null) {
+            presenter.onClientRefreshRateChanged(display.getRefreshRate());
+        }
     }
 
     private void stopListeningForPanelRefreshRateChanges() {
@@ -4669,6 +4685,46 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         scheduleXrSessionReconnect();
     }
 
+    /**
+     * A missing, malformed, or unknown application ACK means the host's final tuple is unprovable.
+     * Reconnect even when a user-origin staged record went stale: commit failure leaves the last
+     * durable record intact, and reconnecting that record is still the only way to re-establish an
+     * authoritative stream. Automatic panel-follow callers pass false so unrelated staged UI edits
+     * are never consumed.
+     */
+    public void scheduleMandatoryReconnectForAmbiguousLiveVideoMode(
+            boolean commitStagedSettings) {
+        if (reconnectScheduled) {
+            return;
+        }
+        showCenteredStreamMessage(
+                getString(R.string.xr_session_live_change_needs_reconnect),
+                Toast.LENGTH_LONG);
+        boolean attemptStagedCommit = shouldAttemptStagedCommitForAmbiguousVideoMode(
+                commitStagedSettings, xrSessionSettingsController != null);
+        boolean stagedCommitSucceeded = attemptStagedCommit
+                && xrSessionSettingsController.commitPending();
+        if (commitStagedSettings && !stagedCommitSucceeded) {
+            showCenteredStreamMessage(
+                    getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
+        }
+        if (shouldReconnectAfterAmbiguousVideoMode(
+                reconnectScheduled, stagedCommitSucceeded)) {
+            scheduleXrSessionReconnect();
+        }
+    }
+
+    static boolean shouldReconnectAfterAmbiguousVideoMode(
+            boolean reconnectAlreadyScheduled, boolean stagedCommitSucceeded) {
+        // stagedCommitSucceeded deliberately does not gate mandatory resynchronization.
+        return !reconnectAlreadyScheduled;
+    }
+
+    static boolean shouldAttemptStagedCommitForAmbiguousVideoMode(
+            boolean commitStagedSettings, boolean controllerAvailable) {
+        return commitStagedSettings && controllerAvailable;
+    }
+
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if (!surfaceCreated) {
@@ -4752,6 +4808,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
+    /** Updates the durable Surface display hint without changing effective decoder cadence. */
+    public void updateDecoderSurfaceFrameRateCeiling(int fps) {
+        if (decoderRenderer != null) {
+            decoderRenderer.updateSurfaceFrameRateCeiling(fps);
+        }
+    }
+
+    /**
+     * The paused GLSurfaceView holder is only a lifecycle placeholder on XR. Voting it as a fixed
+     * source can override the SceneCore output Surface's durable ceiling after holder recreation.
+     */
+    static boolean shouldVoteHolderSurfaceFrameRate(boolean xrPresentationActive) {
+        return !xrPresentationActive;
+    }
+
+    private boolean isXrPresentationActive() {
+        return streamContainer != null && streamContainer.getXrPresenter() != null;
+    }
+
     /** Current visible decoder output size as {@code {width, height}}, or null when unavailable. */
     public int[] getDecoderOutputDimensions() {
         return decoderRenderer != null ? decoderRenderer.getCurrentOutputDimensions() : null;
@@ -4808,6 +4883,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         float desiredFrameRate;
 
         surfaceCreated = true;
+
+        // StreamContainer's GLSurfaceView is paused and hidden on XR. SceneCore owns the actual
+        // presentation Surface and its durable frame-rate vote, so this holder must remain neutral.
+        if (!shouldVoteHolderSurfaceFrameRate(isXrPresentationActive())) {
+            return;
+        }
 
         // Android will pick the lowest matching refresh rate for a given frame rate value, so we want
         // to report the true FPS value if refresh rate reduction is enabled. We also report the true

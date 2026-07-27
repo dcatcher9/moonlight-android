@@ -369,10 +369,41 @@ statistic of an exposure-equivariant scalar, so an identical global monotone RGB
 cannot reverse it. On the small persistent block grid the comparison pass checks all ten pairwise
 orderings in a center/left/right/up/down stencil. A relation votes only if it differs by at least
 four codes in both frames; a changed site needs at least four common relations, two reversals, and
-a reversal majority. This scope deliberately excludes codec noise, color matrices, and local tone
-mapping. A proposal requires at least 15% changed sites plus the existing spatially broad raw-change
-gates. Histogram L1 remains diagnostic, not cut authority: exposure can move a histogram, while
-real same-histogram edits exist. Across all six production DA-V2/MiDaS grids, the committed
+a reversal majority. The comparison separately counts sites with at least four reliable current
+relations and sites with at least four relations reliable in both frames. A proposal requires at
+least 15% changed sites plus the existing spatially broad raw-change gates. Five percent support is
+enough to classify a frame-level relation; this stays below the measured support of the committed
+preserved-structure exposure fixtures.
+
+A transition from supported history to a current frame without that support is suppressed for one
+update regardless of raw color distance; a flat value can match the preceding scene's dominant
+color, so raw delta cannot qualify structure loss. On commit, a GPU history bridge copies the last
+supported ordinal grid into the pending ping-pong texture and preserves its histogram. Two metadata
+bits in the block-count word encode normal, one-update hold, and accepted persistent-low history
+without growing the SSBO. The second accepted low-support update advances history and enters the
+persistent-low state; later low-support updates stay there without a timer or repeated event.
+Concretely, state 0 has no accepted history, state 1 advances normally, state 2 holds one update,
+and state 3 advances accepted persistent-low history.
+The same exposure-like hold also retains the prior effective normalization range and geometry
+baseline and copies the prior reliable depth texture through the temporal pass. The second
+low-support update therefore measures against one coherent pre-flash depth tuple rather than a
+blended flash result encoded under a different range. Because its event-only word supersedes the
+pending exposure classification, that second update is not held and advances the tuple.
+
+The first supported frame after a one-update hold is exposure-like only for a strict endpoint
+match: quiet ordinal change, at most two average luma codes per block, and fewer than 1% moderate
+block deltas. Thus `A -> saturated black/white -> A` cannot relatch on either edge, while a
+quiet-color but different-depth `B` retains standalone geometry authority. A different supported
+scene `B` is compared directly with `A`; structural replacement proposes a cut, while supported
+`B` with insufficient common ordering remains ambiguous and also leaves strong depth geometry
+authoritative.
+Startup flat history followed by supported content likewise leaves geometry authoritative. This
+preserves saturated-flash rejection without making a structureless frame the sole reference for the
+next real scene. Preserved-structure monotone exposure remains vetoed.
+
+This scope deliberately excludes codec noise, color matrices, and local tone mapping. Histogram L1
+remains diagnostic, not cut authority: exposure can move a histogram, while real same-histogram
+edits exist. Across all six production DA-V2/MiDaS grids, the committed
 `scene_cut` pairs measure 0.433–0.571 and `flat_transition` measures 0.201–0.266; the largest
 adjacent non-cut is 0.062. The weakest cut therefore retains an 11-site margin on its 224-site grid
 at the 15% threshold. The nonlinear clipped-plaid adversary produces zero ordinal reversals.
@@ -386,8 +417,18 @@ shift. Raw structural evidence may reset temporal filtering promptly, but it rel
 shot-owned zero plane, adaptive pop, subject state, and range only when moderate depth evidence
 corroborates it (`change >= 0.18`, or `>= 0.10` with range shift `>= 0.06`). Standalone strong
 depth evidence uses the same one-update shot pulse at `change >= 0.58`, or `>= 0.42` with range
-shift `>= 0.10`. Both branches remain blocked through valid-depth-update age 8, and arming happens
-after that update's decision.
+shift `>= 0.10`. On startup, both branches remain blocked through valid-depth-update age 8, and
+arming happens after that update's decision. After an accepted cut, the independent two-update
+rearm below can restore either absolute branch earlier; age 8 guards only the novel latched-geometry
+escape.
+
+When color history enters accepted persistent-low state, a typed event sets the reserved
+`cutStateCounters.y` marker. The first later supported update gets exactly one absolute standalone
+geometry decision independent of normal arming and refractory state, then clears the marker whether
+or not it cuts. Persistent low-support updates do not retrigger it. The mailbox uses bit 0 for an
+appearance proposal, bit 1 for the exposure veto, bit 2 for persistent-low start, and bit 3 for
+supported return. An all-invalid inference stores the complete negated word in GPU state, so event
+bits survive alongside classifications until the next valid depth update.
 
 Every accepted pulse latches both evidence sources, but they rearm independently: geometry needs
 two consecutive accepted depth updates below `0.08`, while appearance needs two consecutive
@@ -405,7 +446,8 @@ startup or refractory guard. The existing profile age remains reference-frame-sc
 pop and the second zero-plane resolution can still cross their wall-time settle boundary after a
 slow inference. In the 128-byte processor SSBO, the final 16 bytes are split into the existing
 two-float geometry-baseline state and a two-int cut-counter state; every preceding state and health
-offset is unchanged. This matches Apollo's one increment per valid completed depth update while
+offset is unchanged. The two cut-state integers are valid-depth-update age and the 0/1
+persistent-low marker. This matches Apollo's one increment per valid completed depth update while
 retaining the client's intentional wall-time normalization only where it belongs.
 
 These depth fractions are calibrated for the client's
@@ -420,11 +462,12 @@ depth update, where current geometry must still corroborate it. That first valid
 proposal whether or not it produces a shot pulse. The carry uses the existing GPU state and
 per-inference-slot mailbox ordering; it adds no CPU readback, wait, or cross-frame color/depth pair.
 
-Depth-health stats are diagnostics, not part of inference or reprojection. The renderer samples the
-GPU profile state through a nonblocking readback only while Stats or explicit performance logging is
-active. The lean health summary exposes valid-depth fraction, effective range width, pop strength,
-and whether the range is collapsed. A temporarily missing health sample must not stall or disable
-depth.
+Depth-health stats are diagnostics, not part of inference or reprojection. A tiny asynchronous GPU
+profile copy continues at a 30-depth-frame background cadence even while Stats and explicit
+performance logging are off, and sharpens to every 5 depth frames while Stats is visible. Its poll
+is nonblocking. The lean health summary exposes valid-depth fraction, effective range width, pop
+strength, whether the range is collapsed, and recent pop/edge/change/cut/anchor histories. A
+temporarily missing health sample must not stall or disable depth.
 
 ## Surface and lifecycle ownership
 
@@ -503,19 +546,62 @@ orientation-specific adaptive envelope rather than a synthetic `5120 x 5120` max
 within the current orientation remain live when that envelope and the active presentation
 pipeline allow them. Client SBS aspect-fits portrait color into its landscape model with reflected
 side padding and crops the matching padding from depth, avoiding a nonuniform portrait stretch;
-that immutable crop/shader contract participates in the reconnect decision.
+that immutable crop/shader contract participates in the reconnect decision. The model-input area
+filter divides its source-to-model ratio by the occupied `contentSize`, so a 9:16 frame is filtered
+over the real portrait-content grid rather than the wider padded tensor grid. Every footprint tap
+is reflected before the decoder transform; mirroring only the center is incorrect where a
+footprint crosses a padding fold.
 
 The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
 range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
 shared set. Global Settings provide the cross-session defaults for both the shared set and the
 quality baseline inherited independently by each mode.
 
-The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 130 Mbps, HEVC, HDR, Full
+The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 200 Mbps, HEVC, HDR, Full
 range, and latency pacing**, with stereo audio, host audio off, MiDaS v2.1 Small as the Client SBS
 model, and Full as Raw SBS per-eye resolution. In-session **Use global defaults** inherits the
 values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
 **Use session settings** discards staged edits and restores that mode's durable current-session
 values, falling back to its current global values where no session override exists.
+
+Normal, Raw Host SBS, and Host SBS AI therefore begin with a durable **90 FPS ceiling**. Client SBS
+keeps its intentional 30 FPS mode default. A headset panel/thermal transition may temporarily lower
+the effective on-wire rate to an offered rung, but it never rewrites the selected ceiling; the host
+automatically follows the panel back upward, at most to that ceiling, when the panel recovers. The
+SceneCore presentation Surface advertises the durable ceiling rather than the temporary effective
+rate so a recreated output swapchain cannot pin the panel at a throttled mode. In Client SBS the
+decoder writes to the renderer's offscreen `SurfaceTexture`; that input is not the display-rate
+authority. The actual `SurfaceEntity` output receives the durable vote after every `getSurface()`
+replacement and after every successful explicit ceiling change. The paused, hidden GLSurfaceView
+holder remains neutral on XR; ordinary non-XR presentation holders retain their legacy vote.
+
+An ACK may clamp a panel-follow request below both its temporary rung and the durable ceiling—for
+example ceiling 90, request 72, applied 60. That 60 is the effective on-wire rate only; dynamic
+panel/host throttling never ratchets the explicit 90 ceiling downward. ACK-clamped geometry and the
+requested total wire bitrate remain durable. Every explicit FPS selection is likewise a maximum:
+an ACK below a direct 90 request or a direct lower ceiling such as 60 changes only the effective
+on-wire rate and never lowers that durable ceiling. A missing application ACK proves no applied
+tuple, even when a matching fresh-IDR proves the requested geometry: the final FPS/bitrate clamps
+remain unknown. The same fail-closed rule covers an unknown/future ACK status, `APPLIED` with an
+unusable tuple, failure to adopt the host-authoritative geometry on the client, or any client resize
+failure after the reliable host request was already queued. Every decoder output received before a
+resolution request's valid `APPLIED` ACK is provisional. After adopting the authoritative,
+possibly clamped geometry, the client discards that evidence, supersedes the old decoder
+generation, and starts exactly one post-ACK confirmation transition while the quad remains hidden.
+Its watchdog may issue bounded IDR retries, but only matching output from that generation may settle
+and reveal the new geometry. A failed rearm, timeout, or post-ACK output whose dimensions
+contradict the ACK follows the same hidden
+mandatory-resync path, not the generic decoder-failure dialog. None may publish the previous tuple
+as a rollback or settle the requested tuple as a live success.
+Fast user changes, automatic panel-follow changes, and resolution changes therefore all fail closed
+to reconnect. The client clears local transition ownership but neither claims success nor restores
+an unacknowledged previous tuple. Fast paths and a resolution path with matching decoder output may
+reveal the quad while reconnect starts; unresolved/mismatched resolution geometry remains hidden.
+For a user-origin ambiguous result, the reconnect path may commit that user's staged target.
+Panel-follow recovery never commits staged UI edits: it reconnects the last durable ceiling and may
+reapply the observed lower rung afterward. If a user-origin staged commit lost its generation race,
+mandatory resynchronization still reconnects the last durable record; a stale-settings warning must
+never leave an ambiguous live stream running.
 
 **Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, the Client
 SBS model, and the selected startup mode as one guarded record replacement. It then waits for
@@ -583,9 +669,12 @@ its inner edge remains anchored outside the video and the panel yaws inward towa
 face. **Stats** uses the **right** side as a compact, single-column panel whose
 inner edge is anchored just beyond the video's right edge. It yaws inward around local Y so its
 outer edge wraps toward the current head position, with a clearance limit preventing it from
-approaching the viewer too closely. Recompute side-panel poses when they open, on video resize/mode
-change, after screen movement/Cinema View, and on the existing slow Stats refresh. Never poll head
-pose from the video frame loop or while the associated side panel is hidden.
+approaching the viewer too closely. Its Android raster and physical height grow together with the
+visible rows from the authored 1920 x 1440 / 1.05 m baseline to the deterministic 2538 px / 1.85 m
+cap; only content beyond that cap uses the bounded vertical `ScrollView`. Recompute side-panel
+poses when they open, on video resize/mode change, after screen movement/Cinema View, and on the
+existing slow Stats refresh. Never poll head pose from the video frame loop or while the associated
+side panel is hidden.
 
 Presentation modes form one single-select group. Navigation/disconnect actions remain separate
 one-shot controls. A new session highlights Normal; a resumed/restarted session highlights its
@@ -596,11 +685,11 @@ The four mode tiles live in one level toolbar `PanelEntity` and share one contex
 the active tile again toggles that mode's row. A passive down/up chevron with a conventional aspect
 ratio sits centered against the lower edge of the tile and communicates the expandable state
 without a small nested "Options" target. It does not change the fixed dock/tile geometry. Every
-mode row owns that mode's
-resolution/FPS/bitrate tuple. Resolution uses visual cards with every landscape choice in the
+mode row owns that mode's resolution/FPS/bitrate tuple. Resolution uses visual cards with every landscape choice in the
 first group and every portrait choice beginning on the row below; either group may wrap further
-when the panel is narrow. FPS uses a compact segmented control, and bitrate uses a bandwidth
-meter, discrete slider, exact value, and direct minus/plus steps. The
+when the panel is narrow. FPS uses a compact segmented control, and bitrate uses a connected
+six-rung segmented ladder at **50 / 70 / 100 / 140 / 200 / 300 Mbps**, with the stream-shape
+recommendation marked on its rung. The
 row identifies Global versus Current Session inheritance, shows the tuple currently backing the
 live decoder, and offers the same atomic **Apply & reconnect** action whenever any scoped change
 requires it.
@@ -636,7 +725,8 @@ connected segmented surface, not radio dialogs or cycle-only rows. Compact choic
 single-line horizontal segments with an 80 dp minimum gaze-target height. If every localized label
 cannot fit, the entire control becomes a
 full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
-make the user scroll an enum sideways. Numeric values use an inline slider with direct step buttons.
+make the user scroll an enum sideways. Bitrate follows the same direct-manipulation rule with its
+six-rung connected segmented ladder; do not regress it to an inline slider or bandwidth meter.
 The Client SBS model is selected from the same kind of two-button group inside its existing Options
 row, without opening another panel. Raw SBS uses an equivalent direct two-button **Full / Half**
 group labeled **Per-Eye Resolution**; it also shows the derived encoded-per-eye and packed-stream
@@ -673,8 +763,10 @@ depth normalization/profile, and stereo prefilter/warp/draw. The device GPU perc
 system-wide total: GL stages can overlap each other and OpenCL, so their durations must not be
 summed into a synthetic utilization percentage. Show XR composition as unavailable because
 SceneCore exposes no compositor timing. The only exceptional counters are occupied color slots
-(`color_busy`) and flat SBS outputs (`flat`). Depth health is intentionally limited to valid
-fraction, effective range width, pop strength, and collapsed-range state.
+(`color_busy`) and flat SBS outputs (`flat`). Depth health keeps the compact scalar summary and
+renders separately labelled recent trends for pop strength, edge fraction, changed-depth fraction,
+scene-cut events, and zero-plane anchor shift. The cut and anchor rows stay adjacent so repeated
+relatching can be distinguished from harmless classification changes.
 
 The depth policy row must say `Uncapped | one in flight | newest frame when free`; Android thermal
 status is reported separately so it is not mistaken for a hidden throttle. Do not add expected
@@ -718,11 +810,12 @@ Android thermal status. The former five-second renderer debug lines and separate
 intentionally omitted to avoid duplicate logging. Use these lines for repeatable A/B captures; they
 add no per-frame logging or GPU synchronization.
 When Stats is hidden and explicit performance logging is disabled, Client SBS disables timer
-queries plus the health-readback copy producer and poller, bypasses its detailed synchronized/atomic
-counter updates, and skips typed stats-table/log formatting. Opening Stats
-resets the CPU and Client-SBS sampling baselines; timer and health-readback state are created/reset
-only on the renderer thread with its EGL context current, so in-flight diagnostics never cross a
-visibility window.
+queries, bypasses its detailed synchronized/atomic performance-counter updates, and skips typed
+stats-table/log formatting. The cheap 30-frame health-copy producer and nonblocking poller remain
+active so the 120-sample diagnostic rings already contain pre-open context; opening Stats raises
+that copy cadence to 5 frames. Opening Stats resets only the CPU and detailed Client-SBS performance
+sampling baselines. Timer state is created/reset only on the renderer thread with its EGL context
+current.
 
 ### Spatial UI learnings
 

@@ -213,6 +213,10 @@ public final class XrPreferenceWidgetsTest {
 
         InlineListPreference fps = fragment.findPreference(
                 PreferenceConfiguration.FPS_PREF_STRING);
+        assertEquals("Max frame rate", fps.getTitle().toString());
+        assertTrue(fps.getSummary().toString().startsWith("Upper limit for the stream."));
+        assertEquals("Max bitrate", bitrate.getTitle().toString());
+        assertTrue(bitrate.getSummary().toString().startsWith("Upper limit for the stream."));
         XrChoiceGroup fpsChoices = bindChoices(fps);
         findChoice(fpsChoices, "60").performClick();
         assertEquals("60", fps.getValue());

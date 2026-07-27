@@ -45,12 +45,19 @@ public class HelpLauncher {
         context.startActivity(i);
     }
 
+    /**
+     * Artemis is an XR-only fork paired with an Apollo host, so upstream Moonlight's setup and
+     * troubleshooting pages describe a different product: different host, different pairing, no XR.
+     * Help points at this fork instead.
+     */
+    private static final String REPO = "https://github.com/dcatcher9/moonlight-android";
+
     public static void launchSetupGuide(Context context) {
-        launchUrl(context, "https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide");
+        launchUrl(context, REPO);
     }
 
     public static void launchTroubleshooting(Context context) {
-        launchUrl(context, "https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting");
+        launchUrl(context, REPO + "/issues");
     }
 
     public static void launchGameStreamEolFaq(Context context) {

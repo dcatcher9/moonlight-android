@@ -13,6 +13,34 @@ import org.junit.Test;
 
 public class MediaCodecDecoderRendererTelemetryTest {
     @Test
+    public void temporaryStreamThrottleDoesNotLowerTheSurfaceCeiling() {
+        MediaCodecDecoderRenderer.StreamFrameRateState rates =
+                new MediaCodecDecoderRenderer.StreamFrameRateState();
+        rates.initialize(90, 90);
+
+        rates.updateEffectiveStreamFps(72);
+
+        assertEquals(72, rates.getEffectiveStreamFps());
+        assertEquals(90, rates.getSurfaceFrameRateHintFps());
+    }
+
+    @Test
+    public void userCeilingAndSurfaceRecoveryReuseTheDurableHint() {
+        MediaCodecDecoderRenderer.StreamFrameRateState rates =
+                new MediaCodecDecoderRenderer.StreamFrameRateState();
+        rates.initialize(90, 90);
+        rates.updateEffectiveStreamFps(72);
+
+        // A replacement output Surface reads this same retained hint.
+        assertEquals(90, rates.getSurfaceFrameRateHintFps());
+
+        // Only a successfully settled user ceiling changes the fixed-source preference.
+        rates.updateSurfaceFrameRateCeilingFps(60);
+        assertEquals(72, rates.getEffectiveStreamFps());
+        assertEquals(60, rates.getSurfaceFrameRateHintFps());
+    }
+
+    @Test
     public void codecDescriptionReportsNegotiatedCodecAndProfile() {
         assertEquals("AV1 Main, 8-bit", MediaCodecDecoderRenderer.describeVideoCodec(
                 MoonBridge.VIDEO_FORMAT_AV1_MAIN8));

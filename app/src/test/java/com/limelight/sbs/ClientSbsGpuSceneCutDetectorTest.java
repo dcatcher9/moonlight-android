@@ -1,5 +1,7 @@
 package com.limelight.sbs;
 
+import android.opengl.GLES31;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -37,6 +39,14 @@ public class ClientSbsGpuSceneCutDetectorTest {
     }
 
     @Test
+    public void compareCompletionOrdersSsboWritesAndLaterLumaImageWrites() {
+        assertEquals(
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT
+                        | GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT,
+                ClientSbsGpuSceneCutDetector.compareCompletionBarrierBits());
+    }
+
+    @Test
     public void discardedFrameDoesNotAdvanceAcceptedHistory() {
         ClientSbsGpuSceneCutDetector.FrameTransaction transaction =
                 new ClientSbsGpuSceneCutDetector.FrameTransaction();
@@ -45,6 +55,7 @@ public class ClientSbsGpuSceneCutDetectorTest {
         assertFalse(transaction.hasPendingFrame());
         assertEquals(0L, transaction.getFrameSequence());
         assertEquals(1, transaction.beginPendingFrame());
+        assertEquals(1, transaction.getPendingLumaIndex());
         assertTrue(transaction.hasPendingFrame());
 
         transaction.discardPendingFrame();
@@ -54,6 +65,7 @@ public class ClientSbsGpuSceneCutDetectorTest {
         assertEquals(0, transaction.getPreviousLumaIndex());
         assertEquals(0L, transaction.getFrameSequence());
         assertEquals(1, transaction.beginPendingFrame());
+        assertEquals(1, transaction.getPendingLumaIndex());
     }
 
     @Test
@@ -62,6 +74,7 @@ public class ClientSbsGpuSceneCutDetectorTest {
                 new ClientSbsGpuSceneCutDetector.FrameTransaction();
 
         assertEquals(1, transaction.beginPendingFrame());
+        assertEquals(1, transaction.getPendingLumaIndex());
         transaction.commitAcceptedFrame();
         assertTrue(transaction.hasHistory());
         assertFalse(transaction.hasPendingFrame());
@@ -69,6 +82,7 @@ public class ClientSbsGpuSceneCutDetectorTest {
         assertEquals(1L, transaction.getFrameSequence());
 
         assertEquals(0, transaction.beginPendingFrame());
+        assertEquals(0, transaction.getPendingLumaIndex());
         transaction.commitAcceptedFrame();
         assertEquals(0, transaction.getPreviousLumaIndex());
         assertEquals(2L, transaction.getFrameSequence());

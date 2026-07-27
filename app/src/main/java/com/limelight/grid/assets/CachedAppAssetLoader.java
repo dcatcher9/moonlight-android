@@ -90,6 +90,7 @@ public class CachedAppAssetLoader {
 
     public void freeCacheMemory() {
         memoryLoader.clearCache();
+        AppTileArtwork.clearCache();
     }
 
     private ScaledBitmap doNetworkAssetLoad(LoaderTuple tuple, LoaderTask task) {
@@ -220,8 +221,13 @@ public class CachedAppAssetLoader {
             if (getLoaderTask(imageView) == this) {
                 // Fade in the box art
                 if (bitmap != null) {
-                    // Show the text if it's a placeholder
-                    textView.setVisibility(isBitmapPlaceholder(bitmap) ? View.VISIBLE : View.GONE);
+                    // Generic host placeholders carry no app identity. Keep them in the disk/memory
+                    // caches so we do not refetch them forever, but render the deterministic
+                    // per-app tile instead. This must happen on both cold and warm cache paths.
+                    final boolean placeholder = isBitmapPlaceholder(bitmap);
+                    final Bitmap displayBitmap = placeholder
+                            ? appTileFor(imageView, tuple) : bitmap.bitmap;
+                    textView.setVisibility(placeholder ? View.VISIBLE : View.GONE);
 
                     if (imageView.getVisibility() == View.VISIBLE) {
                         // Fade out the placeholder first
@@ -233,7 +239,7 @@ public class CachedAppAssetLoader {
                             @Override
                             public void onAnimationEnd(Animation animation) {
                                 // Fade in the new box art
-                                imageView.setImageBitmap(bitmap.bitmap);
+                                imageView.setImageBitmap(displayBitmap);
                                 imageView.startAnimation(AnimationUtils.loadAnimation(imageView.getContext(), R.anim.boxart_fadein));
                             }
 
@@ -244,7 +250,7 @@ public class CachedAppAssetLoader {
                     }
                     else {
                         // View is invisible already, so just fade in the new art
-                        imageView.setImageBitmap(bitmap.bitmap);
+                        imageView.setImageBitmap(displayBitmap);
                         imageView.startAnimation(AnimationUtils.loadAnimation(imageView.getContext(), R.anim.boxart_fadein));
                         imageView.setVisibility(View.VISIBLE);
                     }
@@ -342,7 +348,7 @@ public class CachedAppAssetLoader {
         return tile != null ? tile : noAppImageBitmap;
     }
 
-    private boolean isBitmapPlaceholder(ScaledBitmap bitmap) {
+    static boolean isBitmapPlaceholder(ScaledBitmap bitmap) {
         return (bitmap == null) ||
                 (bitmap.originalWidth == 130 && bitmap.originalHeight == 180) || // GFE 2.0
                 (bitmap.originalWidth == 628 && bitmap.originalHeight == 888); // GFE 3.0
@@ -366,7 +372,8 @@ public class CachedAppAssetLoader {
         if (bmp != null) {
             // Show the bitmap immediately
             imgView.setVisibility(View.VISIBLE);
-            imgView.setImageBitmap(bmp.bitmap);
+            imgView.setImageBitmap(isBitmapPlaceholder(bmp)
+                    ? appTileFor(imgView, tuple) : bmp.bitmap);
 
             // Show the text if it's a placeholder bitmap
             textView.setVisibility(isBitmapPlaceholder(bmp) ? View.VISIBLE : View.GONE);

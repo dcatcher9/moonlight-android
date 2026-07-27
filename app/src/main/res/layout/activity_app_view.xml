@@ -30,7 +30,7 @@
             android:paddingEnd="18dp"
             android:text="@string/xr_bar_machines"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
+            android:textColor="@color/xr_text_primary"
             android:textSize="16sp" />
 
         <LinearLayout
@@ -46,7 +46,7 @@
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#FFFFFFFF"
+                android:textColor="@color/xr_text_primary"
                 android:textSize="28sp"
                 android:textStyle="bold"
                 tools:text="Gaming PC" />
@@ -57,7 +57,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="3dp"
                 android:text="@string/pcview_menu_header_online"
-                android:textColor="#FF81C995"
+                android:textColor="@color/xr_status_ok"
                 android:textSize="15sp" />
         </LinearLayout>
 
@@ -87,7 +87,7 @@
             android:paddingEnd="18dp"
             android:text="@string/xr_home_settings"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
+            android:textColor="@color/xr_text_primary"
             android:textSize="16sp" />
 
     </LinearLayout>
@@ -113,7 +113,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/xr_home_current_session"
-                android:textColor="#FF8AB4F8"
+                android:textColor="@color/xr_accent"
                 android:textSize="15sp"
                 android:textStyle="bold" />
 
@@ -124,7 +124,7 @@
                 android:layout_marginTop="4dp"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="#FFFFFFFF"
+                android:textColor="@color/xr_text_primary"
                 android:textSize="21sp"
                 tools:text="Cyberpunk 2077" />
         </LinearLayout>
@@ -141,7 +141,7 @@
             android:paddingEnd="18dp"
             android:text="@string/applist_menu_resume"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
+            android:textColor="@color/xr_text_primary"
             android:textSize="16sp" />
 
         <Button
@@ -156,7 +156,7 @@
             android:paddingEnd="18dp"
             android:text="@string/xr_home_end_session"
             android:textAllCaps="false"
-            android:textColor="#FFFFB4AB"
+            android:textColor="@color/xr_danger"
             android:textSize="16sp" />
     </LinearLayout>
 
@@ -165,7 +165,7 @@
         android:layout_height="wrap_content"
         android:paddingBottom="10dp"
         android:text="@string/xr_home_apps"
-        android:textColor="#FFDADCE0"
+        android:textColor="@color/xr_text_secondary"
         android:textSize="22sp"
         android:textStyle="bold" />
 

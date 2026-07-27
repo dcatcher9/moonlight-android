@@ -32,11 +32,6 @@ public final class XrSessionSettingsController {
     private static final String CODEC_H264 = "neverh265";
     private static final String CLIENT_SBS_DEFAULT_RESOLUTION = "1920x1080";
     private static final String CLIENT_SBS_DEFAULT_FPS = "30";
-    // Host SBS encodes a double-width packed frame, so its per-frame cost is twice a flat stream
-    // at the same per-eye resolution, and the host cannot hold 90 at 4K per eye. 72 is the fastest
-    // rate it does sustain AND a native Galaxy XR panel mode, so the stream lands 1:1 on the
-    // display instead of beating against it the way 60 (6:5) or an undelivered 90 would.
-    private static final String HOST_SBS_DEFAULT_FPS = "72";
     private static final String MAX_RAW_SBS_RESOLUTION = "3840x2160";
     // Six rungs, derived by scoring candidates against every resolution x fps x codec x
     // packed/flat combination the picker can produce. The value is a ceiling rather than a target,
@@ -1049,9 +1044,6 @@ public final class XrSessionSettingsController {
             target.put(SessionSettingsModel.Key.RESOLUTION, CLIENT_SBS_DEFAULT_RESOLUTION);
             target.put(SessionSettingsModel.Key.FRAME_RATE, CLIENT_SBS_DEFAULT_FPS);
         }
-        else if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
-            target.put(SessionSettingsModel.Key.FRAME_RATE, HOST_SBS_DEFAULT_FPS);
-        }
     }
 
     private static StreamQualityTuple qualityTuple(
@@ -1079,11 +1071,6 @@ public final class XrSessionSettingsController {
         boolean usesClientFpsDefaults = clientSbsMode
                 && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
                 && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
-        boolean usesHostSbsFpsDefaults =
-                mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW
-                && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
-                && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
-
         // A per-machine/app session record can still hold a retired 720p; land it on the floor.
         String resolution = PreferenceConfiguration.migrateRetiredResolution(
                 preferences.getString(
@@ -1097,10 +1084,6 @@ public final class XrSessionSettingsController {
         if (usesClientFpsDefaults) {
             fps = CLIENT_SBS_DEFAULT_FPS;
         }
-        if (usesHostSbsFpsDefaults) {
-            fps = HOST_SBS_DEFAULT_FPS;
-        }
-
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
         output.put(SessionSettingsModel.Key.BITRATE, preferences.getInt(

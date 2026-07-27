@@ -11,15 +11,28 @@ import java.nio.ByteOrder;
 
 public class ClientSbsGpuDepthShadersTest {
     @Test
-    public void healthReadbackSchedulingStopsWhileDiagnosticsAreHidden() {
+    public void healthReadbackSchedulingContinuesAtBackgroundCadence() {
         assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, true, 30L));
+                false, 29L));
         assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                true, true, 1L));
+                true, 1L));
         assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                true, false, 30L));
+                false, 30L));
+    }
+
+    @Test
+    public void openingTheStatsPanelSharpensTheHealthSampleRate() {
+        // Background cadence is sized for a HUD. Cut retriggering happens at sub-second scale, so
+        // at 30-frame spacing a burst inside one second reads as a single sample or none; the
+        // history plots need to outpace the events they are meant to reveal.
         assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                true, false, 29L));
+                false, 5L, false));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
+                false, 5L, true));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
+                false, 30L, false));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
+                true, 1L, false));
     }
 
     @Test
@@ -119,9 +132,40 @@ public class ClientSbsGpuDepthShadersTest {
     @Test
     public void invalidRawPixelsRetainHistoryInsteadOfInjectingZeroDepth() {
         String shader = ClientSbsGpuDepthShaders.temporalFilter(true);
-        assertTrue(shader.contains("if (!currentValid)"));
+        assertTrue(shader.contains("if (!currentValid || holdDepthHistory)"));
         assertTrue(shader.contains("stateFlags.y != 0u ? previous : 0.5"));
         assertTrue(shader.contains("stateFlags.w != 0u"));
+    }
+
+    @Test
+    public void exposureHoldPreservesDepthButPersistentLowUpdateAdvancesIt() {
+        String rawResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
+        String temporal = ClientSbsGpuDepthShaders.temporalFilter(true);
+
+        assertTrue(rawResolve.contains(
+                "bool holdReliableHistory = exposureLikeTransition && !acceptedCut"));
+        assertTrue(rawResolve.contains(
+                "| (holdReliableHistory ? 2u : 0u)"));
+        assertTrue(rawResolve.contains(
+                "selectedSceneEvidence |= currentSceneEvidence != 0u"));
+        assertTrue(rawResolve.contains("if (!holdReliableHistory)"));
+        assertTrue(rawResolve.contains("} else if (!holdReliableHistory) {"));
+        int holdDeclaration = rawResolve.indexOf("bool holdReliableHistory");
+        int baselineUpdate = rawResolve.indexOf("cutStateAux.x = mix", holdDeclaration);
+        int rangeUpdate = rawResolve.indexOf("vec2 smoothed = mix", baselineUpdate);
+        assertTrue(holdDeclaration >= 0 && baselineUpdate > holdDeclaration);
+        assertTrue(rangeUpdate > baselineUpdate);
+        assertTrue(rawResolve.substring(holdDeclaration, baselineUpdate)
+                .contains("if (!holdReliableHistory)"));
+        assertTrue(rawResolve.substring(baselineUpdate, rangeUpdate)
+                .contains("else if (!holdReliableHistory)"));
+        assertTrue(temporal.contains(
+                "bool firstDepthFrame = (stateFlags.z & 1u) != 0u"));
+        assertTrue(temporal.contains(
+                "bool holdDepthHistory = (stateFlags.z & 2u) != 0u"));
+        assertTrue(temporal.contains("if (!currentValid || holdDepthHistory)"));
+        assertTrue(temporal.contains("bool resetHistory = firstDepthFrame"));
+        assertFalse(temporal.contains("stateFlags.z != 0u || stateFlags.w"));
     }
 
     @Test
@@ -144,9 +188,13 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(temporal.contains("externalSceneCutRequested()"));
         assertTrue(temporal.contains("externalExposureLikeTransition()"));
         assertTrue(temporal.contains(
+                "(evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u"));
+        assertTrue(temporal.contains(
                 "uExternalSceneCut != 0"));
         assertTrue(temporal.contains(
-                "return SCENE_EVIDENCE_APPEARANCE"));
+                "return events | SCENE_EVIDENCE_APPEARANCE"));
+        assertTrue(temporal.contains("SCENE_EVIDENCE_PERSISTENT_LOW_START"));
+        assertTrue(temporal.contains("SCENE_EVIDENCE_SUPPORTED_RETURN"));
         assertTrue(temporal.contains("profileC.w > 1.5"));
         assertTrue(rawResolve.contains("binding = 0) buffer RawStats"));
         assertTrue(rawResolve.contains("binding = 1) readonly buffer ExternalSceneCut"));
@@ -156,14 +204,21 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(rawResolve.contains("bool novelLatchedGeometryCut"));
         assertTrue(rawResolve.contains("bool exposureLikeTransition"));
         assertTrue(rawResolve.contains("uint currentSceneEvidence = externalSceneEvidence()"));
-        assertTrue(rawResolve.contains("uint selectedSceneEvidence = currentSceneEvidence != 0u"));
-        assertTrue(rawResolve.contains("? currentSceneEvidence : pendingSceneEvidence"));
+        assertTrue(rawResolve.contains("stateCounters.z < 0"));
+        assertTrue(rawResolve.contains("uint(-stateCounters.z)"));
+        assertTrue(rawResolve.contains(
+                "(currentSceneEvidence | pendingSceneEvidence)"));
+        assertTrue(rawResolve.contains("currentSceneEvidence != 0u"));
         assertTrue(rawResolve.contains(
                 "(selectedSceneEvidence & SCENE_EVIDENCE_APPEARANCE) != 0u"));
         assertTrue(rawResolve.contains(
                 "(selectedSceneEvidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u"));
         assertTrue(rawResolve.contains(
                 "bool exposureLikeTransition = !externalEvidence"));
+        assertTrue(rawResolve.contains("bool persistentLowStart"));
+        assertTrue(rawResolve.contains("bool supportedReturn"));
+        assertTrue(rawResolve.contains("bool lowStructureReturnCut"));
+        assertTrue(rawResolve.contains("cutStateCounters.y != 0 || persistentLowStart"));
         assertTrue(rawResolve.contains("geometryArmed && !exposureLikeTransition"));
         assertTrue(rawResolve.contains("geometryLatched && cutStateAux.y > 0.5"));
         assertTrue(rawResolve.contains("&& !exposureLikeTransition"));
@@ -174,6 +229,7 @@ public class ClientSbsGpuDepthShadersTest {
                 "stateCounters.x >= CUT_SETTLE_VALID_DEPTH_UPDATES"));
         assertTrue(rawResolve.contains(
                 "bool acceptedCut = internalCut || externalCut || novelLatchedGeometryCut"));
+        assertTrue(rawResolve.contains("|| lowStructureReturnCut"));
         assertFalse(rawResolve.contains("stateCounters.y >= 0"));
         assertTrue(rawResolve.contains("stateFlags.w = acceptedCut ? 1u : 0u"));
         assertTrue(rawResolve.contains("profileC.w = externalEvidence ? 2.0"));
@@ -181,7 +237,10 @@ public class ClientSbsGpuDepthShadersTest {
                 "externalSceneCutRequested() || pendingExternalEvidence"));
         assertFalse(rawResolve.contains(
                 "externalExposureLikeTransition() || pendingExposureLike"));
-        assertTrue(rawResolve.contains(": (exposureLikeTransition ? -2 : 0)"));
+        assertTrue(rawResolve.contains("? -int(selectedSceneEvidence) : 0"));
+        assertTrue(rawResolve.contains("cutStateCounters.y = supportedReturn ? 0"));
+        assertTrue(rawResolve.contains(
+                ": (persistentLowStart ? 1 : cutStateCounters.y)"));
         assertTrue(resolve.contains("externalSceneCutRequested()"));
         assertTrue(resolve.contains("requestedCutEvidence > 1.5"));
         assertTrue(resolve.contains("bool hardCut = wasInitialized && stateFlags.w != 0u"));

@@ -68,7 +68,10 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private int compareBlockGridUniform;
     private int compareHistoryValidUniform;
     private int resolveHistoryValidUniform;
+    private int commitBlockGridUniform;
+    private int commitHistoryValidUniform;
     private int resetOutputWordOffsetUniform;
+    private int resetClearHistoryUniform;
     private int resolveOutputWordOffsetUniform;
     private int validatedOutputBuffer;
     private int validatedOutputBufferSize;
@@ -112,8 +115,14 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
      * Enqueues detection for one renderer-owned SDR model-input texture without waiting.
      *
      * <p>The first accepted frame after construction or {@link #reset()} always publishes zero.
-     * Subsequent calls compare against the immediately preceding accepted frame. A successful
-     * call starts a transaction that must be finished with exactly one call to
+     * Subsequent calls normally compare against the preceding accepted frame. The first
+     * structureless current frame retains the last structurally supported history on the GPU so a
+     * one-frame saturated flash cannot replace that reference. A second consecutive
+     * structureless frame resolves, advances, and enters persistent-low state, preventing a real
+     * flat scene from vetoing geometry forever. The first later supported frame publishes a typed
+     * return event and restores normal history. A successful call starts a transaction that must
+     * be finished with
+     * exactly one call to
      * {@link #commitAcceptedFrame()} or {@link #discardPendingFrame()} before another frame is
      * processed. The returned object is reused and must not be retained as a per-frame
      * snapshot.</p>
@@ -158,6 +167,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
 
             GLES20.glUseProgram(resetProgram);
             GLES30.glUniform1ui(resetOutputWordOffsetUniform, outputWordOffset);
+            GLES20.glUniform1i(resetClearHistoryUniform, 0);
             dispatch(1, 1, 1, "reset color-cut stats");
             shaderStorageBarrier();
 
@@ -186,7 +196,10 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
                     GLES31.GL_READ_ONLY, GLES30.GL_R32UI);
             dispatch(workgroupsForItems(blockGridWidth), workgroupsForItems(blockGridHeight), 1,
                     "compare color-cut luma");
-            shaderStorageBarrier();
+            // COMPARE reads both luma images and writes the statistics SSBO. COMMIT can imageStore
+            // into the pending image as soon as this method returns, so order that later write
+            // after the reads as well as making the statistics visible to RESOLVE.
+            GLES31.glMemoryBarrier(compareCompletionBarrierBits());
 
             GLES20.glUseProgram(resolveProgram);
             GLES20.glUniform1i(resolveHistoryValidUniform,
@@ -220,8 +233,19 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         try {
             bindSsbo(STATS_SSBO_BINDING, statsBuffer);
             GLES20.glUseProgram(commitProgram);
-            dispatch(1, 1, 1, "commit accepted color-cut history");
-            shaderStorageBarrier();
+            GLES20.glUniform2i(commitBlockGridUniform, blockGridWidth, blockGridHeight);
+            GLES20.glUniform1i(commitHistoryValidUniform,
+                    frameTransaction.hasHistory() ? 1 : 0);
+            GLES31.glBindImageTexture(PREVIOUS_LUMA_IMAGE_BINDING,
+                    lumaTextures[frameTransaction.getPreviousLumaIndex()], 0, false, 0,
+                    GLES31.GL_READ_ONLY, GLES30.GL_R32UI);
+            GLES31.glBindImageTexture(CURRENT_LUMA_IMAGE_BINDING,
+                    lumaTextures[frameTransaction.getPendingLumaIndex()], 0, false, 0,
+                    GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI);
+            dispatch(workgroupsForItems(blockGridWidth), workgroupsForItems(blockGridHeight), 1,
+                    "commit accepted color-cut history");
+            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT
+                    | GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             checkGlError("commit accepted color-cut history");
         } finally {
             unbindRendererOwnedState();
@@ -251,6 +275,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
             bindSsbo(OUTPUT_SSBO_BINDING, outputBuffer);
             GLES20.glUseProgram(resetProgram);
             GLES30.glUniform1ui(resetOutputWordOffsetUniform, 0);
+            GLES20.glUniform1i(resetClearHistoryUniform, 1);
             dispatch(1, 1, 1, "reset color-cut history");
             shaderStorageBarrier();
         } finally {
@@ -338,7 +363,10 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         compareBlockGridUniform = requiredUniform(compareProgram, "uBlockGrid");
         compareHistoryValidUniform = requiredUniform(compareProgram, "uHistoryValid");
         resolveHistoryValidUniform = requiredUniform(resolveProgram, "uHistoryValid");
+        commitBlockGridUniform = requiredUniform(commitProgram, "uBlockGrid");
+        commitHistoryValidUniform = requiredUniform(commitProgram, "uHistoryValid");
         resetOutputWordOffsetUniform = requiredUniform(resetProgram, "uOutputWordOffset");
+        resetClearHistoryUniform = requiredUniform(resetProgram, "uClearHistory");
         resolveOutputWordOffsetUniform = requiredUniform(
                 resolveProgram, "uOutputWordOffset");
     }
@@ -422,6 +450,11 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
 
     static int workgroupsForItems(int items) {
         return ceilDivideByBlockSize(items, "items");
+    }
+
+    static int compareCompletionBarrierBits() {
+        return GLES31.GL_SHADER_STORAGE_BARRIER_BIT
+                | GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT;
     }
 
     private static int ceilDivideByBlockSize(int value, String name) {
@@ -573,6 +606,11 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
 
         int getPreviousLumaIndex() {
             return previousLumaIndex;
+        }
+
+        int getPendingLumaIndex() {
+            requirePendingFrame();
+            return pendingLumaIndex;
         }
 
         long getFrameSequence() {

@@ -80,7 +80,17 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private static final int SCENE_CUT_MAILBOX_BYTES =
             SCENE_CUT_MAILBOX_SLOT_COUNT * Integer.BYTES;
     private static final int HEALTH_READBACK_SLOT_COUNT = 3;
+    /**
+     * Background cadence: enough to keep a HUD current at negligible cost (~2.4 Hz at 72 fps),
+     * since each sample is a 128-byte copy plus a fence.
+     */
     private static final int HEALTH_SAMPLE_INTERVAL_FRAMES = 30;
+    /**
+     * Cadence while the stats panel is open. History is the reason: cut retriggering happens at
+     * sub-second scale, so at the background rate a burst of three cuts inside one second shows up
+     * as a single sample or none at all. Sampling has to outpace the thing being sampled.
+     */
+    private static final int HEALTH_SAMPLE_INTERVAL_FRAMES_FOCUSED = 5;
     /** LiteRT exposes two immutable output SSBOs that alternate as inference slots. */
     private static final int RAW_BUFFER_VALIDATION_CACHE_SIZE = 2;
 
@@ -152,10 +162,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int validatedExternalSceneCutBuffer;
     private int validatedExternalSceneCutBufferSize;
     private int healthGeneration = 1;
-    /** Health PBO copies are diagnostic work and stay disabled while XR Stats is hidden. */
-    private boolean healthDiagnosticsEnabled = true;
-    /** Requests one prompt sample when diagnostics are re-enabled between periodic boundaries. */
-    private boolean healthSampleRequested;
+    /** Requests one prompt sample after construction/reset, before the periodic cadence begins. */
+    private boolean healthSampleRequested = true;
+    /** Raised while the stats panel is visible; see the focused sample interval. */
+    private volatile boolean healthSamplingFocused;
     /** Successful process submission time used to preserve Apollo's wall-time EMA response. */
     private long lastProcessAtNs;
     /** First frame after construction/reset keeps per-dispatch diagnostics; steady state batches. */
@@ -451,6 +461,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             result.frameSequence = 0L;
             result.validFrame = false;
             healthGeneration = healthGeneration == Integer.MAX_VALUE ? 1 : healthGeneration + 1;
+            healthSampleRequested = true;
             healthSnapshot.reset();
         } finally {
             GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, STATE_SSBO_BINDING, 0);
@@ -470,9 +481,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      */
     public HealthSnapshot pollHealthSnapshot() {
         assertOwnerContext();
-        if (!healthDiagnosticsEnabled) {
-            return null;
-        }
         HealthReadbackSlot newestReady = null;
         for (HealthReadbackSlot slot : healthReadbackSlots) {
             if (slot.fence == 0L) {
@@ -525,24 +533,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         return healthSnapshot;
     }
 
-    /**
-     * Enables the asynchronous health-copy producer only while its Stats consumer is visible.
-     * This must run on the owning GL thread because disabling recycles GL sync objects.
-     */
-    public void setHealthDiagnosticsEnabled(boolean enabled) {
-        assertOwnerContext();
-        if (healthDiagnosticsEnabled == enabled) {
-            return;
-        }
-        healthDiagnosticsEnabled = enabled;
-        healthSampleRequested = enabled;
-        healthGeneration = healthGeneration == Integer.MAX_VALUE ? 1 : healthGeneration + 1;
-        healthSnapshot.reset();
-        if (!enabled) {
-            for (HealthReadbackSlot slot : healthReadbackSlots) {
-                recycleHealthReadbackSlot(slot);
-            }
-        }
+    /** Raises the sample rate while someone is watching the history plots. */
+    public void setHealthSamplingFocused(boolean focused) {
+        healthSamplingFocused = focused;
     }
 
     public int getOutputWidth() {
@@ -791,7 +784,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private void scheduleHealthReadbackIfDue() {
         if (!shouldScheduleHealthReadback(
-                healthDiagnosticsEnabled, healthSampleRequested, frameSequence)) {
+                healthSampleRequested, frameSequence, healthSamplingFocused)) {
             return;
         }
         HealthReadbackSlot available = null;
@@ -827,10 +820,19 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
     }
 
-    static boolean shouldScheduleHealthReadback(boolean enabled, boolean sampleRequested,
-                                                long frameSequence) {
-        return enabled && (sampleRequested
-                || frameSequence % HEALTH_SAMPLE_INTERVAL_FRAMES == 0L);
+    static boolean shouldScheduleHealthReadback(boolean sampleRequested, long frameSequence) {
+        return shouldScheduleHealthReadback(sampleRequested, frameSequence, false);
+    }
+
+    /**
+     * @param focused true while the stats panel is visible, which raises the sample rate so the
+     *                history plots can resolve events shorter than the background interval
+     */
+    static boolean shouldScheduleHealthReadback(boolean sampleRequested, long frameSequence,
+                                                boolean focused) {
+        int interval = focused
+                ? HEALTH_SAMPLE_INTERVAL_FRAMES_FOCUSED : HEALTH_SAMPLE_INTERVAL_FRAMES;
+        return sampleRequested || frameSequence % interval == 0L;
     }
 
     private void recycleCompletedStaleHealthReadbacks(HealthReadbackSlot except) {

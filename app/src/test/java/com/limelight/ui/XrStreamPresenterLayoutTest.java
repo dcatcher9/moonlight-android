@@ -190,28 +190,41 @@ public class XrStreamPresenterLayoutTest {
         // Reference pair is the authored panel: 1.05 m rendered into a 1440 px raster.
         float authored = 1.05f;
         int raster = 1440;
+        int maxRaster = 2538;
         float min = 1.05f;
         float max = 1.85f;
 
         // A mode whose rows fit exactly keeps the authored height.
+        assertEquals(raster,
+                XrStreamPresenter.calculateStatsRasterHeightPixels(
+                        raster, raster, maxRaster));
         assertEquals(authored,
                 XrStreamPresenter.calculateModeOptionsHeightMeters(
                         authored, raster, raster, min, max),
                 0.0001f);
-        // Client SBS adds a depth section: taller content grows the panel instead of scrolling.
+        // Client SBS adds a depth section: both the Android raster and physical panel grow.
+        assertEquals(2000,
+                XrStreamPresenter.calculateStatsRasterHeightPixels(
+                        2000, raster, maxRaster));
         assertEquals(1.4583f,
                 XrStreamPresenter.calculateModeOptionsHeightMeters(
                         authored, raster, 2000, min, max),
                 0.0001f);
         // Sparse content must not leave a sliver — the floor is the authored size.
+        assertEquals(raster,
+                XrStreamPresenter.calculateStatsRasterHeightPixels(
+                        400, raster, maxRaster));
         assertEquals(min,
                 XrStreamPresenter.calculateModeOptionsHeightMeters(
                         authored, raster, 400, min, max),
                 0.0001f);
-        // Past the cap the panel stops growing and the ScrollView takes over.
+        // Past the deterministic pixel cap the panel stops growing and the ScrollView takes over.
+        int cappedRaster = XrStreamPresenter.calculateStatsRasterHeightPixels(
+                4000, raster, maxRaster);
+        assertEquals(maxRaster, cappedRaster);
         assertEquals(max,
                 XrStreamPresenter.calculateModeOptionsHeightMeters(
-                        authored, raster, 4000, min, max),
+                        authored, raster, cappedRaster, min, max),
                 0.0001f);
     }
 

@@ -22,7 +22,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Discrete ladder picker: one pinchable segment per value, filled up to the selection.
+ * Discrete ladder picker: one pinchable segment per value, with the chosen one highlighted.
  *
  * <p>Replaces the seek bar these settings used to share. A seek bar is close to a worst case for
  * gaze-and-pinch: the eye position is only sampled at the instant the pinch registers, so dragging
@@ -201,21 +201,38 @@ public final class XrSegmentedLadder extends LinearLayout {
         boolean enabled = isEnabled();
         for (int i = 0; i < segments.size(); i++) {
             AppCompatButton segment = segments.get(i);
-            int fill = !enabled ? color(R.color.xr_segment_disabled) : (i <= selectedIndex ? color(R.color.xr_segment_filled) : color(R.color.xr_segment_empty));
+            // setChoices() replaces every child. Re-apply the parent state here so binding a
+            // disabled Preference cannot create fresh enabled/clickable segments.
+            segment.setEnabled(enabled);
+            segment.setClickable(enabled);
+            // Only the chosen rung is highlighted. Filling every segment up to it read as a
+            // magnitude bar, implying the lower rungs were somehow also in effect, when this is a
+            // single choice.
+            int fill = !enabled ? color(R.color.xr_segment_disabled)
+                    : (i == selectedIndex ? color(R.color.xr_segment_filled)
+                            : color(R.color.xr_segment_empty));
             GradientDrawable background = new GradientDrawable();
             background.setColor(fill);
             background.setCornerRadius(dp(9));
             segment.setBackground(background);
             // Filled segments are light, so their label must flip to dark to stay readable.
-            segment.setTextColor(color(i <= selectedIndex && enabled
+            segment.setTextColor(color(i == selectedIndex && enabled
                     ? R.color.xr_on_accent : R.color.xr_text_secondary));
         }
         if (selectedIndex >= 0 && selectedIndex < choices.size()) {
             SessionSettingsModel.Choice choice = choices.get(selectedIndex);
-            caption.setText(captionProvider == null ? choice.label
-                    : captionProvider.captionFor(choice, selectedIndex, choices.size()));
-            caption.setTextColor(color(enabled ? R.color.xr_accent : R.color.xr_text_disabled));
-            setContentDescription(caption.getText());
+            // No provider means no caption: the highlighted segment already shows the value, and
+            // the live figure belongs in the glance bar rather than under the control that sets it.
+            if (captionProvider == null) {
+                caption.setVisibility(GONE);
+                setContentDescription(choice.label);
+            }
+            else {
+                caption.setVisibility(VISIBLE);
+                caption.setText(captionProvider.captionFor(choice, selectedIndex, choices.size()));
+                caption.setTextColor(color(enabled ? R.color.xr_accent : R.color.xr_text_disabled));
+                setContentDescription(caption.getText());
+            }
         }
         updateHintPosition();
     }

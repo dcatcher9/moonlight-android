@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
@@ -497,7 +498,6 @@ public final class XrResolutionSelector extends ViewGroup {
                     context, option.aspectRatio(), option.densityLevel());
 
             setBackground(new CardBackgroundDrawable(context));
-            setSupportBackgroundTintList(null);
             ViewCompat.setBackgroundTintList(this, null);
             setStateListAnimator(null);
             setElevation(0f);
@@ -586,11 +586,14 @@ public final class XrResolutionSelector extends ViewGroup {
         private final float strokeWidth;
         private final float cornerRadius;
         private final float standHeight;
+        private final RectF cachedScreenBounds = new RectF();
+        private final float[] cachedDensityDotCenters;
         private int alpha = 255;
 
         ResolutionGlyphDrawable(Context context, float aspectRatio, int densityLevel) {
             this.aspectRatio = aspectRatio;
             this.densityLevel = Math.max(1, Math.min(4, densityLevel));
+            cachedDensityDotCenters = new float[this.densityLevel * 4];
             intrinsicWidth = dp(context, 60);
             intrinsicHeight = dp(context, 40);
             strokeWidth = dp(context, 2);
@@ -600,6 +603,7 @@ public final class XrResolutionSelector extends ViewGroup {
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
             paint.setStrokeWidth(strokeWidth);
+            updateCachedGeometry(getBounds());
         }
 
         float getAspectRatio() {
@@ -611,7 +615,16 @@ public final class XrResolutionSelector extends ViewGroup {
         }
 
         RectF getScreenBounds() {
-            RectF bounds = new RectF(getBounds());
+            return new RectF(cachedScreenBounds);
+        }
+
+        @Override
+        protected void onBoundsChange(@NonNull Rect bounds) {
+            super.onBoundsChange(bounds);
+            updateCachedGeometry(bounds);
+        }
+
+        private void updateCachedGeometry(Rect bounds) {
             float inset = strokeWidth * 0.75f;
             float availableWidth = Math.max(1f, bounds.width() - inset * 2f);
             float availableHeight = Math.max(1f,
@@ -622,10 +635,40 @@ public final class XrResolutionSelector extends ViewGroup {
                 screenHeight = availableHeight;
                 screenWidth = screenHeight * aspectRatio;
             }
-            float screenLeft = bounds.centerX() - screenWidth / 2f;
+            float screenLeft = bounds.exactCenterX() - screenWidth / 2f;
             float screenTop = bounds.top + inset;
-            return new RectF(screenLeft, screenTop,
+            cachedScreenBounds.set(screenLeft, screenTop,
                     screenLeft + screenWidth, screenTop + screenHeight);
+
+            RectF screen = cachedScreenBounds;
+            boolean portraitScreen = screen.height() > screen.width();
+            float alongExtent = portraitScreen ? screen.height() : screen.width();
+            float crossExtent = portraitScreen ? screen.width() : screen.height();
+            float alongCenter = portraitScreen ? screen.centerY() : screen.centerX();
+            float crossCenter = portraitScreen ? screen.centerX() : screen.centerY();
+            float usableAlong = alongExtent * 0.56f;
+            float firstAlong = alongCenter - usableAlong / 2f;
+            float stepAlong = densityLevel == 1 ? 0f : usableAlong / (densityLevel - 1);
+            // The narrow axis of a portrait rect would otherwise place the two rows close enough to
+            // merge. The floor keeps a visible gap and never moves the wider landscape rows.
+            float crossOffset = Math.max(densityDotRadius() * 1.8f, crossExtent * 0.12f);
+
+            for (int index = 0; index < densityLevel; index++) {
+                float along = densityLevel == 1 ? alongCenter : firstAlong + index * stepAlong;
+                int offset = index * 4;
+                if (portraitScreen) {
+                    cachedDensityDotCenters[offset] = crossCenter - crossOffset;
+                    cachedDensityDotCenters[offset + 1] = along;
+                    cachedDensityDotCenters[offset + 2] = crossCenter + crossOffset;
+                    cachedDensityDotCenters[offset + 3] = along;
+                }
+                else {
+                    cachedDensityDotCenters[offset] = along;
+                    cachedDensityDotCenters[offset + 1] = crossCenter - crossOffset;
+                    cachedDensityDotCenters[offset + 2] = along;
+                    cachedDensityDotCenters[offset + 3] = crossCenter + crossOffset;
+                }
+            }
         }
 
         float densityDotRadius() {
@@ -642,49 +685,19 @@ public final class XrResolutionSelector extends ViewGroup {
          * dot count and the spacing rule while leaving landscape glyphs pixel-identical.</p>
          */
         float[] densityDotCenters() {
-            RectF screen = getScreenBounds();
-            boolean portraitScreen = screen.height() > screen.width();
-            float alongExtent = portraitScreen ? screen.height() : screen.width();
-            float crossExtent = portraitScreen ? screen.width() : screen.height();
-            float alongCenter = portraitScreen ? screen.centerY() : screen.centerX();
-            float crossCenter = portraitScreen ? screen.centerX() : screen.centerY();
-            float usableAlong = alongExtent * 0.56f;
-            float firstAlong = alongCenter - usableAlong / 2f;
-            float stepAlong = densityLevel == 1 ? 0f : usableAlong / (densityLevel - 1);
-            // The narrow axis of a portrait rect would otherwise place the two rows close enough to
-            // merge. The floor keeps a visible gap and never moves the wider landscape rows.
-            float crossOffset = Math.max(densityDotRadius() * 1.8f, crossExtent * 0.12f);
-
-            float[] centers = new float[densityLevel * 4];
-            for (int index = 0; index < densityLevel; index++) {
-                float along = densityLevel == 1 ? alongCenter : firstAlong + index * stepAlong;
-                int offset = index * 4;
-                if (portraitScreen) {
-                    centers[offset] = crossCenter - crossOffset;
-                    centers[offset + 1] = along;
-                    centers[offset + 2] = crossCenter + crossOffset;
-                    centers[offset + 3] = along;
-                }
-                else {
-                    centers[offset] = along;
-                    centers[offset + 1] = crossCenter - crossOffset;
-                    centers[offset + 2] = along;
-                    centers[offset + 3] = crossCenter + crossOffset;
-                }
-            }
-            return centers;
+            return cachedDensityDotCenters.clone();
         }
 
         @Override
         public void draw(@NonNull Canvas canvas) {
             paint.setColor(glyphColorForState(getState()));
             paint.setAlpha(alpha);
-            RectF screen = getScreenBounds();
+            RectF screen = cachedScreenBounds;
             canvas.drawRoundRect(screen, cornerRadius, cornerRadius, paint);
 
             paint.setStyle(Paint.Style.FILL);
             float dotRadius = densityDotRadius();
-            float[] centers = densityDotCenters();
+            float[] centers = cachedDensityDotCenters;
             for (int i = 0; i < centers.length; i += 2) {
                 canvas.drawCircle(centers[i], centers[i + 1], dotRadius, paint);
             }
@@ -754,6 +767,8 @@ public final class XrResolutionSelector extends ViewGroup {
     /** Flat stateful card surface with distinct selected, focus, hover, and press treatment. */
     private static final class CardBackgroundDrawable extends Drawable {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF cachedBounds = new RectF();
+        private final RectF insetBounds = new RectF();
         private final float radius;
         private final float oneDp;
         private int alpha = 255;
@@ -761,6 +776,12 @@ public final class XrResolutionSelector extends ViewGroup {
         CardBackgroundDrawable(Context context) {
             radius = dp(context, 12);
             oneDp = dp(context, 1);
+        }
+
+        @Override
+        protected void onBoundsChange(@NonNull Rect bounds) {
+            super.onBoundsChange(bounds);
+            cachedBounds.set(bounds);
         }
 
         @Override
@@ -806,18 +827,18 @@ public final class XrResolutionSelector extends ViewGroup {
                 strokeWidth = oneDp;
             }
 
-            RectF bounds = new RectF(getBounds());
             paint.setAlpha(alpha);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(fill);
-            canvas.drawRoundRect(bounds, radius, radius, paint);
+            canvas.drawRoundRect(cachedBounds, radius, radius, paint);
 
             float inset = strokeWidth / 2f;
-            bounds.inset(inset, inset);
+            insetBounds.set(cachedBounds);
+            insetBounds.inset(inset, inset);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(strokeWidth);
             paint.setColor(stroke);
-            canvas.drawRoundRect(bounds, radius, radius, paint);
+            canvas.drawRoundRect(insetBounds, radius, radius, paint);
         }
 
         @Override

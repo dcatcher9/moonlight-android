@@ -1,10 +1,25 @@
 package com.limelight.ui.xrcontrols;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import org.junit.Test;
+import android.content.Context;
+import android.os.SystemClock;
+import android.view.MotionEvent;
+import android.widget.LinearLayout;
 
+import androidx.appcompat.view.ContextThemeWrapper;
+import androidx.test.core.app.ApplicationProvider;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+
+import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicInteger;
+
+@RunWith(RobolectricTestRunner.class)
 public class XrSegmentedLadderTest {
     @Test
     public void widthRampGrowsMonotonicallyAndStartsAtUnity() {
@@ -36,5 +51,41 @@ public class XrSegmentedLadderTest {
         assertEquals(0, XrSegmentedLadder.segmentWeights(-3).length);
         assertEquals(1, XrSegmentedLadder.segmentWeights(1).length);
         assertEquals(1.0f, XrSegmentedLadder.segmentWeights(1)[0], 0.0001f);
+    }
+
+    @Test
+    public void rebuildingChoicesPreservesDisabledStateAndBlocksSelection() {
+        Context context = new ContextThemeWrapper(
+                ApplicationProvider.getApplicationContext(),
+                androidx.appcompat.R.style.Theme_AppCompat);
+        XrSegmentedLadder ladder = new XrSegmentedLadder(context);
+        AtomicInteger callbacks = new AtomicInteger();
+
+        ladder.setEnabled(false);
+        ladder.setChoices(Arrays.asList(
+                        new SessionSettingsModel.Choice("50", "50 Mbps"),
+                        new SessionSettingsModel.Choice("100", "100 Mbps")),
+                "50", null, null, null, choice -> {
+                    callbacks.incrementAndGet();
+                    return true;
+                });
+
+        LinearLayout row = (LinearLayout) ladder.getChildAt(1);
+        assertEquals(2, row.getChildCount());
+        for (int i = 0; i < row.getChildCount(); i++) {
+            assertFalse(row.getChildAt(i).isEnabled());
+            assertFalse(row.getChildAt(i).isClickable());
+        }
+        long eventTime = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(
+                eventTime, eventTime, MotionEvent.ACTION_DOWN, 1f, 1f, 0);
+        MotionEvent up = MotionEvent.obtain(
+                eventTime, eventTime + 1L, MotionEvent.ACTION_UP, 1f, 1f, 0);
+        assertFalse(row.getChildAt(1).dispatchTouchEvent(down));
+        assertFalse(row.getChildAt(1).dispatchTouchEvent(up));
+        down.recycle();
+        up.recycle();
+        assertEquals(0, callbacks.get());
+        assertEquals(0, ladder.getSelectedIndex());
     }
 }

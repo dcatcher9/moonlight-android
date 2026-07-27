@@ -65,8 +65,19 @@ final class ClientSbsShaders {
      * gets a literal full-frame UV path. Portrait input uses the reflected-padding path with
      * {@code u_sourceAspect = sourceAspect / modelAspect}; expressing it relative to the model is
      * what preserves the source aspect on a rectangular landscape tensor. The external decoder
-     * texture is GL_LINEAR, so rendering into the fixed model target performs one bilinear resize.
+     * texture is GL_LINEAR; a fixed tap lattice integrates each tensor texel's source footprint,
+     * including the narrower occupied content grid used by portrait reflected padding.
      */
+    /**
+     * Taps per axis when integrating the source footprint. Fixed rather than derived because a
+     * GLSL ES 1.00 loop bound must be a constant expression, and kept small because each tap is a
+     * samplerExternalOES fetch carrying a YUV conversion on a GPU that is already this pipeline's
+     * thermal limit. Three taps of bilinear each cover roughly two source pixels, so a 3x3 grid
+     * integrates about six pixels per axis -- enough for the 5.5x ratio a 1080p stream produces,
+     * and a large improvement on the single tap at 4K's 11x even though it is not exhaustive.
+     */
+    static final int MODEL_INPUT_DOWNSAMPLE_TAPS = 3;
+
     static String createModelInputFragment(boolean directFullFrame) {
         String aspectUniform = directFullFrame ? "" : "uniform float u_sourceAspect;";
         String mirrorFunction = directFullFrame ? "" : String.join("\n",
@@ -80,12 +91,46 @@ final class ClientSbsShaders {
                 "  float aspect = max(u_sourceAspect, 0.0001);",
                 "  vec2 contentSize = vec2(min(1.0, aspect), min(1.0, 1.0 / aspect));",
                 "  vec2 padding = 0.5 * (vec2(1.0) - contentSize);",
-                "  vec2 sourceUv = (v_TexCoord - padding) / contentSize;",
-                "  sourceUv = vec2(mirrorCoordinate(sourceUv.x),",
+                "  vec2 sourceUv = (v_TexCoord - padding) / contentSize;");
+        String effectiveRatio = directFullFrame
+                ? "  vec2 effectiveDownsampleRatio = u_downsampleRatio;"
+                : "  vec2 effectiveDownsampleRatio = u_downsampleRatio / contentSize;";
+        String centerCoordinates = directFullFrame
+                ? "  vec2 centerUv = sourceUv;"
+                : String.join("\n",
+                "  vec2 centerUv = vec2(mirrorCoordinate(sourceUv.x),",
                 "      mirrorCoordinate(sourceUv.y));");
+        String footprintSteps = directFullFrame
+                ? String.join("\n",
+                // With no reflected boundary, the transform is affine over the whole footprint.
+                // Carry two pre-transformed basis steps through the inner loop.
+                "    vec2 stepX = ((u_TextureTransform * vec4(",
+                "        sourceUv + vec2(span.x, 0.0), 0.0, 1.0)).xy",
+                "        - baseUv) / float(TAPS);",
+                "    vec2 stepY = ((u_TextureTransform * vec4(",
+                "        sourceUv + vec2(0.0, span.y), 0.0, 1.0)).xy",
+                "        - baseUv) / float(TAPS);")
+                : "";
+        String footprintSample = directFullFrame
+                ? "        accumulated += texture2D(u_Texture,"
+                        + " baseUv + fx * stepX + fy * stepY);"
+                : String.join("\n",
+                // Reflection is piecewise affine. Mirror every tap before applying the decoder
+                // transform so a footprint crossing a padded-content boundary does not sample
+                // through the wrong side of the fold.
+                "        vec2 tapUv = sourceUv",
+                "            + vec2(fx * span.x, fy * span.y) / float(TAPS);",
+                "        tapUv = vec2(mirrorCoordinate(tapUv.x),",
+                "            mirrorCoordinate(tapUv.y));",
+                "        vec2 transformedTap = (u_TextureTransform",
+                "            * vec4(tapUv, 0.0, 1.0)).xy;",
+                "        accumulated += texture2D(u_Texture, transformedTap);");
         return String.join("\n",
             "#extension GL_OES_EGL_image_external : require",
             "precision highp float;",
+            "const int TAPS = " + MODEL_INPUT_DOWNSAMPLE_TAPS + ";",
+            "uniform vec2 u_downsampleRatio;",
+            "uniform vec2 u_sourceSize;",
             "varying vec2 v_TexCoord;",
             "uniform highp samplerExternalOES u_Texture;",
             "uniform mat4 u_TextureTransform;",
@@ -114,8 +159,34 @@ final class ClientSbsShaders {
             "}",
             "void main() {",
             sourceCoordinates,
-            "  sourceUv = (u_TextureTransform * vec4(sourceUv, 0.0, 1.0)).xy;",
-            "  vec4 color = texture2D(u_Texture, sourceUv);",
+            effectiveRatio,
+            centerCoordinates,
+            "  vec2 baseUv = (u_TextureTransform * vec4(centerUv, 0.0, 1.0)).xy;",
+            // Integrate the source cells this tensor texel covers. One bilinear tap aliases badly
+            // once the source is several times the model grid -- 1920 -> 350 is 5.5x per axis and
+            // 3840 -> 350 is 11x, so a single tap reads four of every thirty to one hundred and
+            // twenty source pixels and discards the rest. Fine structure then collapses into a
+            // near-uniform plane and the aliasing that survives inflates the depth edge fraction,
+            // which the adaptive-pop controller reads as scene complexity and backs off from.
+            "  vec2 span = max(effectiveDownsampleRatio, vec2(1.0)) / u_sourceSize;",
+            "  vec4 color;",
+            "  if (effectiveDownsampleRatio.x <= 1.0",
+            "      && effectiveDownsampleRatio.y <= 1.0) {",
+            // The estimator contract never upscales; this is the capped/native edge case, where a
+            // box smaller than a texel would only blur.
+            "    color = texture2D(u_Texture, baseUv);",
+            "  } else {",
+            footprintSteps,
+            "    vec4 accumulated = vec4(0.0);",
+            "    for (int ty = 0; ty < TAPS; ty++) {",
+            "      float fy = float(ty) - 0.5 * float(TAPS - 1);",
+            "      for (int tx = 0; tx < TAPS; tx++) {",
+            "        float fx = float(tx) - 0.5 * float(TAPS - 1);",
+            footprintSample,
+            "      }",
+            "    }",
+            "    color = accumulated / float(TAPS * TAPS);",
+            "  }",
             "  if (u_isHdr) {",
             // ST2084 is normalized to 10,000 nits. Express it in the 80-nit reference-white
             // units expected by the SDR model, then convert primaries before tonemapping.

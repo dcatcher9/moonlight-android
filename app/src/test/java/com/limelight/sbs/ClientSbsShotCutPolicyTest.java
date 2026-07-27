@@ -209,6 +209,22 @@ public class ClientSbsShotCutPolicyTest {
     }
 
     @Test
+    public void supportedTransitionWithoutCommonSupportLeavesStrongGeometryAuthority() {
+        // After a bridged gap, the color classifier emits neither typed bit for a supported broad
+        // transition without common ordinal support. That ambiguity must not act like the veto.
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false,
+                ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false,
+                0.50f, 0.0f, true, 0.20f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+    }
+
+    @Test
     public void currentTypedSceneEvidenceSupersedesPendingWithoutCrossTypeCollision() {
         int selected = ClientSbsShotCutPolicy.selectSceneEvidence(
                 ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
@@ -245,6 +261,73 @@ public class ClientSbsShotCutPolicyTest {
                         ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE
                                 | ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
                         0));
+    }
+
+    @Test
+    public void fullPendingWordPreservesLowStructureEventsAcrossInvalidDepth() {
+        int pendingStart = ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START
+                | ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE;
+        int encoded = ClientSbsShotCutPolicy.encodePendingSceneEvidence(pendingStart);
+        assertEquals(-pendingStart, encoded);
+        assertEquals(pendingStart,
+                ClientSbsShotCutPolicy.decodePendingSceneEvidence(encoded));
+
+        // A later current classification replaces only the stale classification. Both event
+        // transitions survive until a valid depth update can consume them.
+        int selected = ClientSbsShotCutPolicy.selectSceneEvidence(
+                ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN
+                        | ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
+                ClientSbsShotCutPolicy.decodePendingSceneEvidence(encoded));
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE
+                        | ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START
+                        | ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN,
+                selected);
+        assertEquals(-selected,
+                ClientSbsShotCutPolicy.encodePendingSceneEvidence(selected));
+        assertEquals(0, ClientSbsShotCutPolicy.decodePendingSceneEvidence(17));
+
+        // The second flat update is event-only. It must replace the stale first-flat exposure
+        // classification or the only persistent-low geometry decision would remain vetoed.
+        selected = ClientSbsShotCutPolicy.selectSceneEvidence(
+                ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START,
+                ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE);
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START, selected);
+        assertFalse(ClientSbsShotCutPolicy.isExposureLikeEvidence(selected));
+        assertFalse(ClientSbsShotCutPolicy.shouldHoldDepthHistory(selected));
+        assertTrue(ClientSbsShotCutPolicy.shouldHoldDepthHistory(
+                ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE));
+    }
+
+    @Test
+    public void persistentLowMarkerGrantsOneReturnDecisionWithoutTimerOrRetrigger() {
+        int marker = ClientSbsShotCutPolicy.nextLowStructureSceneMarker(
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                true, false);
+        assertEquals(ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_ACTIVE, marker);
+
+        // Later low-support updates carry no return event. Neither age nor repeated geometry can
+        // use the event-scoped bypass.
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, 1.0f, 1.0f, true, 1.0f, 65535,
+                marker, false, false));
+        assertEquals(marker, ClientSbsShotCutPolicy.nextLowStructureSceneMarker(
+                marker, false, false));
+
+        // The first supported return gets the absolute threshold even though the ordinary
+        // geometry arm is latched and refractory.
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 1.0f, 0, marker, false, true));
+        marker = ClientSbsShotCutPolicy.nextLowStructureSceneMarker(marker, false, true);
+        assertEquals(ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, marker);
+
+        // The event is consumed whether or not it cuts, so a later supported update cannot retry.
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 1.0f, 0, marker, false, false));
     }
 
     @Test
@@ -310,6 +393,8 @@ public class ClientSbsShotCutPolicyTest {
                 0.40f, true, false, 0.80f), 0.000001f);
         assertEquals(0.80f, ClientSbsShotCutPolicy.nextGeometryBaseline(
                 0.40f, true, true, 0.80f), 0.0f);
+        assertEquals(0.40f, ClientSbsShotCutPolicy.nextGeometryBaseline(
+                0.40f, true, false, 0.95f, true), 0.0f);
         assertEquals("0.125", ClientSbsShotCutPolicy.glsl(
                 ClientSbsShotCutPolicy.GEOMETRY_BASELINE_ALPHA));
     }

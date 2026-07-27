@@ -1,41 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Shared palette for the XR surfaces.
+  Shared palette for the XR surfaces: 14 colours.
 
-  These screens are composited over passthrough or over video, so the palette is deliberately
-  narrow and dark: large light areas glow in a headset and wash out whatever is behind them. One
-  accent hue carries every "selected / active / live" meaning, and semantic colours are reserved
-  for status so they keep their signal value.
+  Before this file the XR screens carried 54 distinct literals across 120 uses, most of them not
+  deliberate: six near-identical darks all doing one job, two different error reds, 28 colours used
+  once or twice.
 
-  Colours were previously written as literal hex in layouts and in Java, which is why the same
-  blue appeared in four slightly different values. Add to this file rather than inlining.
+  The first cut of this palette had 24 tokens, which was still too many, because it was derived
+  from the literals in the codebase rather than from the roles they serve, which preserved
+  accidents: `scrim` and `on_accent` were the SAME colour under two names, `surface_sunken` sat one
+  point away from both, and `accent` and `accent_soft` differed by eight points, invisible at
+  arm's length. A token has to earn its place by naming a distinct job, not by matching a hex value
+  someone once typed.
+
+  These screens composite over passthrough or over video, so the palette is dark: large light areas
+  glow in a headset and wash out what is behind them. One accent hue carries every
+  selected/active/live meaning. Status colours are held away from that hue so "good" never reads as
+  "selected", and destructive actions share the error red because an error and a delete are the same
+  warning to the eye. Add here rather than inlining, and only when no existing token fits.
 -->
 <resources>
-    <!-- Surfaces. Opaque, because blending a second large translucent panel over video costs fill
-         rate and muddies both. -->
+    <!-- Elevation. Three levels: the panel, a card on the panel, and the ground behind both.
+         They sit close together on purpose; that closeness is depth, not drift. -->
     <color name="xr_surface">#FF16181E</color>
-    <color name="xr_surface_raised">#FF1E212A</color>
-    <color name="xr_surface_sunken">#FF101319</color>
-    <color name="xr_divider">#FF2C3140</color>
+    <color name="xr_surface_raised">#FF22262B</color>
+    <color name="xr_surface_sunken">#FF0C0F14</color>
+    <!-- One token for every hairline: borders and dividers are the same visual job. -->
+    <color name="xr_border">#FF3C4043</color>
 
-    <!-- Accent: one hue for selection, focus and "live". -->
-    <color name="xr_accent">#FF60BEFF</color>
-    <color name="xr_accent_dim">#FF3E7FAD</color>
-    <!-- Text drawn ON the accent fill, which is light enough to need a dark foreground. -->
-    <color name="xr_on_accent">#FF101418</color>
+    <!-- Accent. Three steps: the hue itself, a light form for text on dark, and a deep form for
+         fills, pressed states and borders. -->
+    <color name="xr_accent">#FF8AB4F8</color>
+    <color name="xr_accent_bright">#FFD7E5FF</color>
+    <color name="xr_accent_deep">#FF36587F</color>
 
-    <!-- Text. Three weights is enough; more and the hierarchy stops reading at arm's length. -->
-    <color name="xr_text_primary">#FFE8EEF6</color>
-    <color name="xr_text_secondary">#FF96A2B4</color>
-    <color name="xr_text_disabled">#FF5C6472</color>
+    <!-- Text. Three weights; a fourth stopped being distinguishable at arm's length. -->
+    <color name="xr_text_primary">#FFFFFFFF</color>
+    <color name="xr_text_secondary">#FFB0B9C6</color>
+    <color name="xr_text_disabled">#FF71808F</color>
 
-    <!-- Status. Kept away from the accent hue so "good" never reads as "selected". -->
-    <color name="xr_status_ok">#FF7AD6A8</color>
-    <color name="xr_status_warn">#FFF5C06A</color>
-    <color name="xr_status_error">#FFFF9A8F</color>
+    <!-- Semantic. Deliberately off the accent hue. -->
+    <color name="xr_status_ok">#FF5CD65C</color>
+    <color name="xr_status_warn">#FFE0B020</color>
+    <!-- Errors and destructive actions share a red: to the eye both mean "stop and read this". -->
+    <color name="xr_danger">#FFFFB4AB</color>
+    <color name="xr_danger_container">#FF6D3A3E</color>
 
-    <!-- Controls. -->
+    <!-- Role aliases. Not new colours: they let a widget read as its job rather than as a hue. -->
+    <color name="xr_on_accent">@color/xr_surface_sunken</color>
+    <color name="xr_scrim">@color/xr_surface_sunken</color>
     <color name="xr_segment_filled">@color/xr_accent</color>
-    <color name="xr_segment_empty">#FF404A5A</color>
-    <color name="xr_segment_disabled">#FF33383F</color>
+    <color name="xr_segment_empty">@color/xr_border</color>
+    <color name="xr_segment_disabled">@color/xr_surface_raised</color>
 </resources>

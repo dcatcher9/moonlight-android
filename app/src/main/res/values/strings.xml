@@ -199,8 +199,14 @@
     <string name="text_native_res_dialog">Native resolution and/or FPS may not be supported by the streaming server. You will probably need to configure a matching custom display mode for the host PC manually.\n\nIf you choose to create a custom resolution in NVIDIA Control Panel to match your screen settings, please ensure you have read and understood NVIDIA\'s warning regarding possible monitor damage, PC instability, and other potential problems.\n\nWe are not responsible for any problems resulting from creating a custom resolution on your PC.\n\nIt may be that your monitor does not support a necessary display configuration. If so, you may try to set up a virtual monitor. Finally, if your device or host PC does not support streaming at a specific resolution or refresh rate, you\'re out of luck unfortunately.</string>
     <string name="title_fps_list">Max frame rate</string>
     <string name="summary_fps_list">Upper limit for the stream. Increase for smoother video, decrease for better performance on lower end devices. The stream drops below this automatically when the headset slows its display, and returns when it speeds back up.</string>
-    <string name="title_seekbar_bitrate">Bitrate</string>
-    <string name="summary_seekbar_bitrate">Increase for better image quality. Decrease to improve performance on slower connections.</string>
+    <string name="title_seekbar_bitrate">Max bitrate</string>
+    <string name="summary_seekbar_bitrate">Upper limit for the stream. The encoder spends only what the content needs, so raising this widens the ceiling rather than forcing more data.</string>
+    <!-- New semantic keys deliberately have no locale overrides until translations preserve the
+         max/upper-bound contract. Every untranslated locale therefore falls back to this English. -->
+    <string name="title_fps_ceiling">Max frame rate</string>
+    <string name="summary_fps_ceiling">Upper limit for the stream. Increase for smoother video, decrease for better performance on lower end devices. The stream drops below this automatically when the headset slows its display, and returns when it speeds back up.</string>
+    <string name="title_bitrate_ceiling">Max bitrate</string>
+    <string name="summary_bitrate_ceiling">Upper limit for the stream. The encoder spends only what the content needs, so raising this widens the ceiling rather than forcing more data.</string>
     <string name="title_seekbar_metered_bitrate">Video bitrate on metered networks</string>
     <string name="summary_seekbar_metered_bitrate">High bitrates consume more data, lower bitrates improve smoothness in metered networks.\nSet 0 for ¼ of the above bitrate settings.</string>
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>
@@ -480,10 +486,6 @@
     <string name="summary_import_special_button">Available in Back Menu and special keys.\nNote: Importing will overwrite current configuration, please backup accordingly.</string>
     <string name="summary_share_performance_logs">Share your performance with friends or the community</string>
     <string name="title_share_performance_logs_button">Share Performance Logs</string>
-    <string name="title_software_update">Software Update</string>
-    <string name="summary_software_update">Artemis Nior Version by ClassicOldSong - Visit GitHub Releases to get latest version</string>
-    <string name="title_follow_update">Follow Update</string>
-    <string name="summary_follow_update">Follow updates of Artemis with Obtainium</string>
     <string name="title_special_key_layout">Special Key Layout</string>
     <string name="title_show_virtual_key">Display virtual keys on screen</string>
     <string name="summary_show_virtual_key">Display a layer of virtual special keys on the touchscreen.\nKey opacity is shared with the virtual gamepad above.</string>
@@ -878,10 +880,9 @@
     <string name="xr_mode_quality_reconnect">%1$s &#x00B7; Live %2$s &#x00B7; Reconnect required</string>
     <string name="xr_mode_quality_apply_live">%1$s &#x00B7; Live %2$s &#x00B7; Applies without reconnect</string>
     <string name="xr_mode_quality_heading">Stream quality</string>
-    <string name="xr_fps_caption">%1$s FPS max</string>
     <string name="xr_bitrate_recommended">recommended</string>
     <string name="xr_bitrate_codec_too_slow">this codec cannot reach this resolution — switch codec</string>
-    <string name="xr_glance_stream">%1$s &#x00B7; %2$s FPS &#x00B7; %3$s</string>
+    <string name="xr_glance_stream">%1$s &#x00B7; %2$s FPS &#x00B7; %3$d Mbps &#x00B7; %4$s</string>
     <!-- Live rate followed by the selected ceiling, shown only while the stream runs below it. -->
     <string name="xr_glance_frame_rate_capped">%1$s / %2$d max</string>
     <string name="xr_glance_hdr" translatable="false">HDR</string>

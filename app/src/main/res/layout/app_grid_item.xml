@@ -42,7 +42,7 @@
                     android:gravity="center"
                     android:maxLines="2"
                     android:padding="16dp"
-                    android:textColor="#FFFFFFFF"
+                    android:textColor="@color/xr_text_primary"
                     android:textSize="17sp"
                     android:textStyle="bold" />
 
@@ -81,7 +81,7 @@
                     android:shadowDx="0"
                     android:shadowDy="1"
                     android:shadowRadius="3"
-                    android:textColor="#FFFFFFFF"
+                    android:textColor="@color/xr_text_primary"
                     android:textSize="19sp"
                     android:textStyle="bold" />
 
@@ -96,7 +96,7 @@
                     android:shadowDx="0"
                     android:shadowDy="1"
                     android:shadowRadius="2"
-                    android:textColor="#FFB8D5FF"
+                    android:textColor="@color/xr_accent_bright"
                     android:textSize="15sp"
                     android:textStyle="bold"
                     android:visibility="gone" />
@@ -119,7 +119,7 @@
         android:padding="14dp"
         android:scaleType="centerInside"
         android:src="@drawable/ic_close"
-        android:tint="#FFFFB4AB"
+        app:tint="@color/xr_danger"
         android:visibility="gone" />
 
     <Button
@@ -141,6 +141,6 @@
         android:singleLine="true"
         android:text="@string/xr_home_more_symbol"
         android:textAllCaps="false"
-        android:textColor="#FFFFFFFF"
+        android:textColor="@color/xr_text_primary"
         android:textSize="24sp" />
 </RelativeLayout>

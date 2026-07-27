@@ -329,6 +329,60 @@ public final class XrResolutionSelectorTest {
         }
     }
 
+    @Test
+    public void glyphGeometryCacheTracksBoundsTranslationAndResize() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, 6);
+        RectF originalScreen = glyph.getScreenBounds();
+        float[] originalCenters = glyph.densityDotCenters();
+        int width = glyph.getIntrinsicWidth();
+        int height = glyph.getIntrinsicHeight();
+        int dx = 13;
+        int dy = 17;
+
+        glyph.setBounds(dx, dy, dx + width, dy + height);
+        RectF translatedScreen = glyph.getScreenBounds();
+        float[] translatedCenters = glyph.densityDotCenters();
+        assertEquals(originalScreen.left + dx, translatedScreen.left, 0.001f);
+        assertEquals(originalScreen.top + dy, translatedScreen.top, 0.001f);
+        assertEquals(originalScreen.right + dx, translatedScreen.right, 0.001f);
+        assertEquals(originalScreen.bottom + dy, translatedScreen.bottom, 0.001f);
+        for (int i = 0; i < originalCenters.length; i += 2) {
+            assertEquals(originalCenters[i] + dx, translatedCenters[i], 0.001f);
+            assertEquals(originalCenters[i + 1] + dy, translatedCenters[i + 1], 0.001f);
+        }
+
+        glyph.setBounds(dx, dy, dx + width * 2, dy + height * 2);
+        RectF resizedScreen = glyph.getScreenBounds();
+        float[] resizedCenters = glyph.densityDotCenters();
+        assertEquals(glyph.getAspectRatio(),
+                resizedScreen.width() / resizedScreen.height(), 0.0001f);
+        assertTrue(resizedScreen.width() > translatedScreen.width());
+        assertTrue(resizedScreen.height() > translatedScreen.height());
+        assertTrue(resizedCenters[resizedCenters.length - 3] - resizedCenters[1]
+                > translatedCenters[translatedCenters.length - 3] - translatedCenters[1]);
+    }
+
+    @Test
+    public void glyphGeometryAccessorsReturnDefensiveCopies() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, 7);
+        RectF expectedScreen = glyph.getScreenBounds();
+        float[] expectedCenters = glyph.densityDotCenters();
+
+        RectF mutableScreen = glyph.getScreenBounds();
+        float[] mutableCenters = glyph.densityDotCenters();
+        assertFalse(expectedScreen == mutableScreen);
+        assertFalse(expectedCenters == mutableCenters);
+        mutableScreen.set(-100f, -100f, -50f, -50f);
+        for (int i = 0; i < mutableCenters.length; i++) {
+            mutableCenters[i] = -100f;
+        }
+
+        assertEquals(expectedScreen, glyph.getScreenBounds());
+        assertArrayEquals(expectedCenters, glyph.densityDotCenters(), 0f);
+    }
+
     private static XrResolutionSelector.ResolutionGlyphDrawable glyphAt(
             XrResolutionSelector selector, int index) {
         XrResolutionSelector.ResolutionGlyphDrawable glyph =

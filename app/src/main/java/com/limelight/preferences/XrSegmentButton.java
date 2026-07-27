@@ -31,7 +31,6 @@ public final class XrSegmentButton extends AppCompatButton {
                            int defStyleAttr) {
         super(context, attrs, defStyleAttr);
         setBackgroundColor(Color.TRANSPARENT);
-        setSupportBackgroundTintList(null);
         ViewCompat.setBackgroundTintList(this, null);
         setStateListAnimator(null);
         setElevation(0f);

@@ -1,7 +1,5 @@
 package com.limelight.ui.xrcontrols;
 
-import com.limelight.preferences.session.SessionSettingsStore;
-
 import java.util.Arrays;
 import java.util.List;
 
@@ -13,11 +11,11 @@ import java.util.List;
  * allowed", not "how much will be used", and precision matters less than reach — which is why the
  * ladder is only six rungs and starts at 50.</p>
  *
- * <p>The estimate is bits-per-pixel of the ENCODED frame. Host SBS packs both eyes side by side,
- * so it encodes twice the pixels of a flat mode at the same per-eye resolution; that single factor
- * is the difference between the two columns of the recommendation table. Frame rate divides the
- * budget rather than adding to it — bandwidth is fixed by the ceiling, so doubling the rate halves
- * the bits available per frame, which is why fps appears here at all.</p>
+ * <p>The estimate is bits-per-pixel of the ENCODED frame. Host SBS AI and Raw Full pack both eyes
+ * side by side, so they encode twice the pixels of a flat mode at the same per-eye resolution.
+ * Raw Half packs two half-width eyes into an ordinary-width frame and therefore uses the flat cost.
+ * Frame rate divides the budget rather than adding to it — bandwidth is fixed by the ceiling, so
+ * doubling the rate halves the bits available per frame, which is why fps appears here at all.</p>
  */
 public final class XrBitrateRecommendation {
     /**
@@ -46,12 +44,6 @@ public final class XrBitrateRecommendation {
     private XrBitrateRecommendation() {
     }
 
-    /** True when the mode encodes both eyes into one double-width frame. */
-    public static boolean isPackedMode(SessionSettingsStore.PresenterMode mode) {
-        return mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW
-                || mode == SessionSettingsStore.PresenterMode.HOST_SBS_AI;
-    }
-
     static double bitsPerPixelFor(String codecId) {
         if (CODEC_AV1.equals(codecId)) {
             return BPP_AV1;
@@ -68,11 +60,11 @@ public final class XrBitrateRecommendation {
      * Ideal ceiling in kbps before snapping, or a value above {@link #UNREACHABLE_KBPS} when no
      * rung suffices.
      */
-    static int idealKbps(boolean packed, int perEyeWidth, int height, int fps, String codecId) {
-        if (perEyeWidth <= 0 || height <= 0 || fps <= 0) {
+    static int idealKbps(boolean packed, int modeWidth, int height, int fps, String codecId) {
+        if (modeWidth <= 0 || height <= 0 || fps <= 0) {
             return 0;
         }
-        long pixels = (long) (packed ? perEyeWidth * 2 : perEyeWidth) * height;
+        long pixels = (long) (packed ? modeWidth * 2 : modeWidth) * height;
         double bits = bitsPerPixelFor(codecId) * pixels * fps / WIRE_OVERHEAD;
         return (int) Math.round(bits / 1000.0);
     }
@@ -82,9 +74,9 @@ public final class XrBitrateRecommendation {
      * offered bitrate. A -1 is a prompt to change codec, not to select the top rung: H.264 at 4K
      * host SBS needs roughly 470 Mbps, so pointing at 300 would imply a quality it cannot deliver.
      */
-    public static int recommendedKbps(boolean packed, int perEyeWidth, int height, int fps,
+    public static int recommendedKbps(boolean packed, int modeWidth, int height, int fps,
                                       String codecId) {
-        int ideal = idealKbps(packed, perEyeWidth, height, fps, codecId);
+        int ideal = idealKbps(packed, modeWidth, height, fps, codecId);
         if (ideal <= 0) {
             return -1;
         }

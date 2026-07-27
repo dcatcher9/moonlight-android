@@ -42,11 +42,11 @@ final class ClientSbsGpuDepthShaders {
             "    vec4 profileA;",        // stretch low/high/inverse, subject candidate
             "    vec4 profileB;",        // subject, recenter, anchor shift, settle-latched edge
             "    vec4 profileC;",        // change fraction, pop, pop ratio, cut evidence
-            "    uvec4 stateFlags;",     // range init, profile init, first frame, shot-relatch pulse
+            "    uvec4 stateFlags;",     // range init, profile init, first/hold bits, relatch pulse
             "    ivec4 stateCounters;",  // profile age, cut/hysteresis state, valid samples, frame number
             "    uvec4 healthCounters;", // hard cuts, external requests, empty, collapsed
             "    vec2 cutStateAux;",      // geometry-change EMA, initialized
-            "    ivec2 cutStateCounters;", // valid-depth-update age, reserved
+            "    ivec2 cutStateCounters;", // valid-depth-update age, low-structure scene marker
             "};"
     );
 
@@ -83,24 +83,36 @@ final class ClientSbsGpuDepthShaders {
                     + ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE + "u;",
             "const uint SCENE_EVIDENCE_EXPOSURE_LIKE = "
                     + ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE + "u;",
+            "const uint SCENE_EVIDENCE_PERSISTENT_LOW_START = "
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START + "u;",
+            "const uint SCENE_EVIDENCE_SUPPORTED_RETURN = "
+                    + ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN + "u;",
+            "const uint SCENE_EVIDENCE_CLASSIFICATION_MASK =",
+            "        SCENE_EVIDENCE_APPEARANCE | SCENE_EVIDENCE_EXPOSURE_LIKE;",
+            "const uint SCENE_EVIDENCE_EVENT_MASK =",
+            "        SCENE_EVIDENCE_PERSISTENT_LOW_START | SCENE_EVIDENCE_SUPPORTED_RETURN;",
             "uint externalSceneEvidence() {",
             // The explicit CPU request retains its historical cut semantics. Only the automatic
             // GPU classifier can assert the exposure-like geometry veto. Normalize to one typed
-            // classification; appearance wins malformed dual-bit input as a fail-safe.
+            // classification while retaining event-scoped history transitions; appearance wins
+            // malformed dual-classification input as a fail-safe.
             "    uint evidence = (uExternalSceneCut != 0",
             "            ? SCENE_EVIDENCE_APPEARANCE : 0u)",
             "            | externalSceneCutWords[uExternalSceneCutWordOffset];",
+            "    uint events = evidence & SCENE_EVIDENCE_EVENT_MASK;",
             "    if ((evidence & SCENE_EVIDENCE_APPEARANCE) != 0u)",
-            "        return SCENE_EVIDENCE_APPEARANCE;",
+            "        return events | SCENE_EVIDENCE_APPEARANCE;",
             "    if ((evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u)",
-            "        return SCENE_EVIDENCE_EXPOSURE_LIKE;",
-            "    return 0u;",
+            "        return events | SCENE_EVIDENCE_EXPOSURE_LIKE;",
+            "    return events;",
             "}",
             "bool externalSceneCutRequested() {",
             "    return (externalSceneEvidence() & SCENE_EVIDENCE_APPEARANCE) != 0u;",
             "}",
             "bool externalExposureLikeTransition() {",
-            "    return externalSceneEvidence() == SCENE_EVIDENCE_EXPOSURE_LIKE;",
+            "    uint evidence = externalSceneEvidence();",
+            "    return (evidence & SCENE_EVIDENCE_APPEARANCE) == 0u",
+            "            && (evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u;",
             "}"
     );
 
@@ -390,15 +402,23 @@ final class ClientSbsGpuDepthShaders {
             "    profileC.x = 0.0;",
             // The color frame can be accepted into inference even when that inference produces no
             // valid depth. Preserve its typed classification in the sign of the otherwise-zero
-            // valid-sample counter, then offer it to the next valid accepted depth update. A
-            // classification from the exact CURRENT color frame supersedes stale pending state;
-            // pending is consulted only when the current frame has neither classification.
+            // valid-sample counter, then offer it to the next valid accepted depth update. Encode
+            // the complete normalized word, not one sentinel per classification, so event-scoped
+            // persistent-low transitions also survive all-invalid inference.
             "    uint currentSceneEvidence = externalSceneEvidence();",
-            "    uint pendingSceneEvidence = stateCounters.z == -1",
-            "            ? SCENE_EVIDENCE_APPEARANCE",
-            "            : (stateCounters.z == -2 ? SCENE_EVIDENCE_EXPOSURE_LIKE : 0u);",
-            "    uint selectedSceneEvidence = currentSceneEvidence != 0u",
-            "            ? currentSceneEvidence : pendingSceneEvidence;",
+            "    uint pendingSceneEvidence = stateCounters.z < 0",
+            "            ? uint(-stateCounters.z) : 0u;",
+            // Any nonzero current word supersedes stale pending classification, including an
+            // event-only word with no classification. Event bits still accumulate: a
+            // persistent-low start and supported return can both occur before depth becomes valid.
+            "    uint currentClassification = currentSceneEvidence",
+            "            & SCENE_EVIDENCE_CLASSIFICATION_MASK;",
+            "    uint pendingClassification = pendingSceneEvidence",
+            "            & SCENE_EVIDENCE_CLASSIFICATION_MASK;",
+            "    uint selectedSceneEvidence = (currentSceneEvidence | pendingSceneEvidence)",
+            "            & SCENE_EVIDENCE_EVENT_MASK;",
+            "    selectedSceneEvidence |= currentSceneEvidence != 0u",
+            "            ? currentClassification : pendingClassification;",
             // externalSceneEvidence() already normalizes current input, and pending sentinels are
             // typed, but decode defensively as well: appearance/manual authority wins even if a
             // malformed dual-bit word ever reaches this phase.
@@ -406,12 +426,16 @@ final class ClientSbsGpuDepthShaders {
             "            (selectedSceneEvidence & SCENE_EVIDENCE_APPEARANCE) != 0u;",
             "    bool exposureLikeTransition = !externalEvidence",
             "            && (selectedSceneEvidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u;",
+            "    bool persistentLowStart = (selectedSceneEvidence",
+            "            & SCENE_EVIDENCE_PERSISTENT_LOW_START) != 0u;",
+            "    bool supportedReturn = (selectedSceneEvidence",
+            "            & SCENE_EVIDENCE_SUPPORTED_RETURN) != 0u;",
             // Preserve request diagnostics even when an invalid depth frame cannot corroborate it.
             "    profileC.w = externalEvidence ? 2.0 : 0.0;",
             "    stateCounters.z = int(rawValidCount);",
             "    if (rawValidCount == 0u) {",
-            "        stateCounters.z = externalEvidence ? -1",
-            "                : (exposureLikeTransition ? -2 : 0);",
+            "        stateCounters.z = selectedSceneEvidence != 0u",
+            "                ? -int(selectedSceneEvidence) : 0;",
             "        healthCounters.z = min(healthCounters.z + 1u, 0xfffffffeu);",
             "        return;",
             "    }",
@@ -470,6 +494,16 @@ final class ClientSbsGpuDepthShaders {
             "            && distributionShift >= APPEARANCE_DISTRIBUTION_SHIFT_ENTER);",
             "    bool externalCut = !firstFrame && stateFlags.y != 0u",
             "            && appearanceArmed && externalEvidence && colorGeometryCorroborated;",
+            // State 3's first supported update gets exactly one absolute geometry decision,
+            // independent of ordinary arming and the post-cut refractory. The typed return event
+            // is one-update-scoped; the separate reserved marker persists through intervening
+            // low-support updates and is cleared after this decision whether or not it cuts.
+            "    bool lowStructureScene = cutStateCounters.y != 0 || persistentLowStart;",
+            "    bool lowStructureReturnCut = !firstFrame && stateFlags.y != 0u",
+            "            && lowStructureScene && supportedReturn",
+            "            && (changeFraction >= STANDALONE_DEPTH_CHANGE_ENTER",
+            "            || (changeFraction >= STANDALONE_DEPTH_CHANGE_WITH_SHIFT_ENTER",
+            "            && distributionShift >= STANDALONE_DISTRIBUTION_SHIFT_ENTER));",
             // A latched detector must ignore persistent evidence without becoming permanently blind.
             // Compare against a slow per-update EMA and allow only a materially new geometry spike.
             "    bool novelLatchedGeometryCut = !firstFrame && stateFlags.y != 0u",
@@ -479,20 +513,27 @@ final class ClientSbsGpuDepthShaders {
             "            && changeFraction >= NOVEL_GEOMETRY_CHANGE_MINIMUM",
             "            && (changeFraction >= cutStateAux.x + NOVEL_GEOMETRY_CHANGE_DELTA",
             "            || changeFraction >= cutStateAux.x * NOVEL_GEOMETRY_CHANGE_RATIO);",
-            "    bool acceptedCut = internalCut || externalCut || novelLatchedGeometryCut;",
+            "    bool acceptedCut = internalCut || externalCut || novelLatchedGeometryCut",
+            "            || lowStructureReturnCut;",
+            // The exposure/structureless bridge retains one coherent depth reference tuple.
+            // Updating normalization or the novelty baseline while temporal depth is held would
+            // compare the next frame against depth encoded under a different range.
+            "    bool holdReliableHistory = exposureLikeTransition && !acceptedCut;",
             // Reset on each accepted shot, then track persistent evidence slowly. Updating only in
             // this valid-depth path means an all-invalid inference cannot age the novelty baseline.
-            "    if (cutStateAux.y <= 0.5 || acceptedCut) {",
-            "        cutStateAux.x = changeFraction;",
-            "        cutStateAux.y = 1.0;",
-            "    } else {",
-            "        cutStateAux.x = mix(cutStateAux.x, changeFraction,",
-            "                GEOMETRY_BASELINE_ALPHA);",
+            "    if (!holdReliableHistory) {",
+            "        if (cutStateAux.y <= 0.5 || acceptedCut) {",
+            "            cutStateAux.x = changeFraction;",
+            "            cutStateAux.y = 1.0;",
+            "        } else {",
+            "            cutStateAux.x = mix(cutStateAux.x, changeFraction,",
+            "                    GEOMETRY_BASELINE_ALPHA);",
+            "        }",
             "    }",
             "    if (firstFrame || acceptedCut) {",
             "        rangeState.zw = vec2(frameLow, frameHigh);",
             "        stateFlags.x = 1u;",
-            "    } else {",
+            "    } else if (!holdReliableHistory) {",
             // Attack fast, release slow. A symmetric EMA lags the live percentiles, and any frame
             // whose smoothed range is NARROWER than this frame's clips the difference away -- lag
             // becomes clipped depth. Expanding immediately makes that impossible; contraction still
@@ -504,9 +545,16 @@ final class ClientSbsGpuDepthShaders {
             "        rangeState.w = max(smoothed.y, frameHigh);",
             "    }",
             "    rangeState.xy = vec2(frameLow, frameHigh);",
-            "    stateFlags.z = firstFrame ? 1u : 0u;",
+            // Bit 0 is the historical first-frame pulse. Bit 1 holds the reliable depth texture
+            // across the one exposure/structureless update whose color history is also held.
+            // An event-only persistent-low word supersedes stale exposure classification above,
+            // so the second low update advances normally.
+            "    stateFlags.z = (firstFrame ? 1u : 0u)",
+            "            | (holdReliableHistory ? 2u : 0u);",
             "    stateFlags.w = acceptedCut ? 1u : 0u;",
             "    cutStateCounters.x = acceptedCut ? 0 : validDepthUpdateAge;",
+            "    cutStateCounters.y = supportedReturn ? 0",
+            "            : (persistentLowStart ? 1 : cutStateCounters.y);",
             "    profileC.x = changeFraction;",
             // Two is the existing GPU/health sentinel for an observed external request. The
             // one-frame stateFlags.w pulse separately says whether geometry accepted it.
@@ -540,7 +588,9 @@ final class ClientSbsGpuDepthShaders {
                 "    float previous = texelFetch(uPreviousDepth, point, 0).r;",
                 "    float current;",
                 "    bool currentValid = mappedDepth(point, current);",
-                "    if (!currentValid) {",
+                "    bool firstDepthFrame = (stateFlags.z & 1u) != 0u;",
+                "    bool holdDepthHistory = (stateFlags.z & 2u) != 0u;",
+                "    if (!currentValid || holdDepthHistory) {",
                 "        float retained = stateFlags.y != 0u ? previous : 0.5;",
                 "        imageStore(uCurrentDepth, point, vec4(retained, 0.0, 0.0, 1.0));",
                 "        return;",
@@ -549,7 +599,7 @@ final class ClientSbsGpuDepthShaders {
                 // profileC.w also carries an external proposal across an all-invalid accepted
                 // depth result. Reset history on that first valid update even when moderate depth
                 // corroboration is absent and the proposal therefore cannot relatch shot state.
-                "    bool resetHistory = stateFlags.z != 0u || stateFlags.w != 0u",
+                "    bool resetHistory = firstDepthFrame || stateFlags.w != 0u",
                 "            || profileC.w > 1.5 || externalSceneCutRequested();",
                 "    if (!resetHistory) {",
                 "        float change = abs(current - previous);",

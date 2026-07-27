@@ -6,6 +6,8 @@ import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
+import com.limelight.ui.xrcontrols.SessionSettingsModel;
 
 import org.junit.Test;
 
@@ -63,6 +65,40 @@ public class XrStreamPresenterTransitionTest {
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
         assertFalse(XrStreamPresenter.usesRawPackedTransport(
                 XrStreamPresenter.PresenterMode.NORMAL, FULL));
+    }
+
+    @Test
+    public void bitrateCostTracksTheEncodedWidthRatherThanTheRawModeName() {
+        assertTrue(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, HALF));
+        assertTrue(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+        assertFalse(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+        assertFalse(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, FULL));
+        assertFalse(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+    }
+
+    @Test
+    public void bitrateCostUsesTheStagedRawChoiceBeforeApply() {
+        RawSbsModeSettingsModel stagedHalf = new RawSbsModeSettingsModel(
+                FULL, HALF, SessionSettingsModel.Source.CURRENT_SESSION);
+        RawSbsModeSettingsModel stagedFull = new RawSbsModeSettingsModel(
+                HALF, FULL, SessionSettingsModel.Source.CURRENT_SESSION);
+
+        // The applied fallback deliberately disagrees with the staged value in both directions.
+        assertFalse(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, stagedHalf, FULL));
+        assertTrue(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, stagedFull, HALF));
+        assertTrue(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, stagedHalf, FULL));
+        assertTrue(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, null, null));
+        assertFalse(XrStreamPresenter.usesPackedBitrateCost(
+                XrStreamPresenter.PresenterMode.NORMAL, null, null));
     }
 
     @Test
@@ -269,5 +305,23 @@ public class XrStreamPresenterTransitionTest {
         assertEquals(0, terminations.get());
         assertTrue(gate.dispatchAnyIfCurrent(8, terminations::incrementAndGet));
         assertEquals(1, terminations.get());
+    }
+
+    @Test
+    public void postAckModeGenerationSupersedesPreAckCompletionAndTimeout() {
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        AtomicInteger completions = new AtomicInteger();
+        AtomicInteger terminations = new AtomicInteger();
+
+        assertTrue(gate.beginMode(319));
+        assertTrue(gate.beginMode(320));
+        assertFalse(gate.dispatchModeIfCurrent(319, completions::incrementAndGet));
+        assertFalse(gate.dispatchAnyIfCurrent(319, terminations::incrementAndGet));
+        assertEquals(0, completions.get());
+        assertEquals(0, terminations.get());
+
+        assertTrue(gate.dispatchModeIfCurrent(320, completions::incrementAndGet));
+        assertEquals(1, completions.get());
     }
 }

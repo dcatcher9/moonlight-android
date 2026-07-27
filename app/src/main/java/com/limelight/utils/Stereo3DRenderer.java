@@ -20,6 +20,7 @@ import com.limelight.sbs.ClientSbsFrameSlots;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
 import com.limelight.sbs.ClientSbsGpuTimer;
+import com.limelight.sbs.ClientSbsMetricHistory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -232,6 +233,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     /** Applies timer-query and GL-thread-only diagnostic resets at the next current-context draw. */
     private final AtomicBoolean performanceGlStateResetRequested = new AtomicBoolean(true);
     private boolean depthHealthPollingDisabled;
+    /** Retained across GL context loss and depth-processor reconstruction. */
+    private volatile boolean statsPanelVisible;
+    /** GL-thread cache preventing redundant focus writes to the current processor. */
+    private ClientSbsGpuDepthProcessor healthFocusProcessor;
+    private boolean appliedHealthSamplingFocused;
+    /**
+     * Recent history for the metrics a single reading cannot explain. Sampled here rather than in
+     * the panel because the ring must already be full when someone opens the panel to ask what
+     * just happened; the readback runs whether or not anything is watching.
+     */
+    private final ClientSbsMetricHistory popHistory = new ClientSbsMetricHistory();
+    private final ClientSbsMetricHistory edgeHistory = new ClientSbsMetricHistory();
+    private final ClientSbsMetricHistory changeHistory = new ClientSbsMetricHistory();
+    private final ClientSbsMetricHistory cutHistory = new ClientSbsMetricHistory();
+    private final ClientSbsMetricHistory anchorHistory = new ClientSbsMetricHistory();
     private volatile DepthHealthState depthHealthState = DepthHealthState.EMPTY;
     private final AtomicReference<GpuInferenceResult> latestGpuInferenceResult =
             new AtomicReference<>(null);
@@ -456,6 +472,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final boolean popClassified;
         final float changeFraction;
         final int sceneAge;
+        /**
+         * Accepted shot cuts since the session began. A running count is what separates "the cut
+         * detector fired once on a real cut" from "it is retriggering on ordinary motion", which a
+         * momentary sample of sceneAge cannot show.
+         */
+        final long hardCutCount;
+        /** Convergence plane in source pixels; content at this depth has zero disparity. */
+        final float zeroAnchorShift;
+        /** Ceiling multiplier the resolved popStrength came from, so the two can be compared. */
+        final float popRatio;
 
         private DepthHealthState() {
             available = false;
@@ -467,6 +493,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             popClassified = false;
             changeFraction = 0.0f;
             sceneAge = 0;
+            hardCutCount = 0L;
+            zeroAnchorShift = 0.0f;
+            popRatio = 1.0f;
         }
 
         DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
@@ -479,6 +508,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             changeFraction = snapshot.getChangeFraction();
             sceneAge = snapshot.getSceneAge();
             popStrength = snapshot.getPopStrength();
+            hardCutCount = snapshot.getHardCutCount();
+            zeroAnchorShift = snapshot.getZeroAnchorShift();
+            popRatio = snapshot.getPopRatio();
         }
     }
 
@@ -540,6 +572,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public final float depthEdgeFraction;
         public final float depthChangeFraction;
         public final int depthSceneAge;
+        public final long depthHardCutCount;
+        public final float depthZeroAnchorShift;
+        public final float stereoPopRatio;
+        /** Oldest-first history copies, taken under lock so a wrap cannot splice two eras. */
+        public final float[] popTrend;
+        public final float[] edgeTrend;
+        public final float[] changeTrend;
+        public final float[] cutTrend;
+        public final float[] anchorTrend;
 
         private ClientSbsPerformanceSnapshot(Stereo3DRenderer owner, boolean active,
                                              String backend, long elapsedNs) {
@@ -600,6 +641,25 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.depthEdgeFraction = health.edgeFraction;
             this.depthChangeFraction = health.changeFraction;
             this.depthSceneAge = health.sceneAge;
+            this.depthHardCutCount = health.hardCutCount;
+            this.depthZeroAnchorShift = health.zeroAnchorShift;
+            this.stereoPopRatio = health.popRatio;
+            this.popTrend = copyTrend(owner.popHistory);
+            this.edgeTrend = copyTrend(owner.edgeHistory);
+            this.changeTrend = copyTrend(owner.changeHistory);
+            this.cutTrend = copyTrend(owner.cutHistory);
+            this.anchorTrend = copyTrend(owner.anchorHistory);
+        }
+
+        private static float[] copyTrend(ClientSbsMetricHistory history) {
+            float[] buffer = new float[ClientSbsMetricHistory.CAPACITY];
+            int written = history.copyInto(buffer);
+            if (written == buffer.length) {
+                return buffer;
+            }
+            float[] trimmed = new float[written];
+            System.arraycopy(buffer, 0, trimmed, 0, written);
+            return trimmed;
         }
 
         private static float rate(long count, long elapsedNs) {
@@ -645,10 +705,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     /**
-     * Enables expensive diagnostics only while the XR Stats panel is visible. This method may run
-     * on the UI thread; GL query objects are created or destroyed later with the renderer context
-     * current. Enabling starts a fresh counter window rather than averaging hidden time.
+     * Raises the health sample rate while the stats panel is on screen, so the history plots can
+     * resolve events shorter than the background interval. The value is retained when no processor
+     * exists so a later mode switch or GL-context replacement inherits the focused cadence.
      */
+    public void setStatsPanelVisible(boolean visible) {
+        statsPanelVisible = visible;
+    }
+
     public void setPerformanceSamplingEnabled(boolean enabled) {
         boolean changed;
         synchronized (performanceSampleLock) {
@@ -659,7 +723,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             performanceSamplingEnabled = enabled;
             resetPerformanceCountersLocked(System.nanoTime());
         }
-        depthHealthState = DepthHealthState.EMPTY;
         drainCompletedGpuTimerSamples();
         if (changed) {
             performanceGlStateResetRequested.set(true);
@@ -783,17 +846,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void pollGpuTelemetry() {
-        if (!performanceSamplingEnabled) {
-            return;
-        }
-        if ((gpuTelemetryPollCounter++ % GPU_TELEMETRY_POLL_STRIDE) != 0) {
-            return;
-        }
-        ClientSbsGpuTimer timer = gpuTimer;
-        if (timer != null) {
-            timer.poll();
-        }
+        // Timer queries and their performance counters remain visibility/logging gated. The tiny
+        // health copy ring is intentionally independent: it builds useful pre-open history at the
+        // processor's 30-frame background cadence, then sharpens to 5 frames while Stats is open.
+        int pollCounter = gpuTelemetryPollCounter++;
         ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
+        applyHealthSamplingFocusOnGlThread(processor);
+        if (!shouldPollHealthTelemetry(pollCounter)) {
+            return;
+        }
+        if (shouldPollPerformanceTelemetry(performanceSamplingEnabled, pollCounter)) {
+            ClientSbsGpuTimer timer = gpuTimer;
+            if (timer != null) {
+                timer.poll();
+            }
+        }
         if (processor == null || depthHealthPollingDisabled) {
             return;
         }
@@ -802,6 +869,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     processor.pollHealthSnapshot();
             if (health != null) {
                 depthHealthState = new DepthHealthState(health);
+                popHistory.add(health.getPopStrength());
+                if (shouldAppendEdgeHistory(
+                        health.hasAdaptivePopClassification(), health.getEdgeFraction())) {
+                    edgeHistory.add(health.getEdgeFraction());
+                }
+                changeHistory.add(health.getChangeFraction());
+                // Stored raw; the panel differences it. A counter plotted directly is a staircase
+                // that flattens as the session lengthens, hiding the bursts being looked for.
+                cutHistory.add(health.getHardCutCount());
+                anchorHistory.add(health.getZeroAnchorShift());
             }
         } catch (Throwable error) {
             // Health data is diagnostic only. A driver that rejects asynchronous staging must not
@@ -809,6 +886,32 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             depthHealthPollingDisabled = true;
             LimeLog.warning("Client SBS depth health telemetry disabled: "
                     + error.getMessage());
+        }
+    }
+
+    static boolean shouldPollHealthTelemetry(int pollCounter) {
+        return pollCounter % GPU_TELEMETRY_POLL_STRIDE == 0;
+    }
+
+    static boolean shouldPollPerformanceTelemetry(
+            boolean performanceSamplingEnabled, int pollCounter) {
+        return performanceSamplingEnabled && shouldPollHealthTelemetry(pollCounter);
+    }
+
+    static boolean shouldAppendEdgeHistory(boolean classified, float edgeFraction) {
+        return classified && Float.isFinite(edgeFraction) && edgeFraction >= 0.0f;
+    }
+
+    private void applyHealthSamplingFocusOnGlThread(ClientSbsGpuDepthProcessor processor) {
+        if (processor == null) {
+            healthFocusProcessor = null;
+            return;
+        }
+        boolean focused = statsPanelVisible;
+        if (healthFocusProcessor != processor || appliedHealthSamplingFocused != focused) {
+            processor.setHealthSamplingFocused(focused);
+            healthFocusProcessor = processor;
+            appliedHealthSamplingFocused = focused;
         }
     }
 
@@ -834,11 +937,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         java.util.Arrays.fill(gpuTimerSampleCounters, 0);
         gpuTelemetryPollCounter = 0;
 
-        depthHealthState = DepthHealthState.EMPTY;
-        ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
-        if (processor != null) {
-            processor.setHealthDiagnosticsEnabled(performanceSamplingEnabled);
-        }
         lastThermalStatusPollNs = 0L;
         currentThermalStatus = PowerManager.THERMAL_STATUS_NONE;
     }
@@ -1745,7 +1843,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         pipelineContract.getModelContentAspect(),
                         !pipelineContract.usesDirectFullFrameResize(),
                         Math.max(prefConfig.fps, 1));
-                gpuDepthProcessor.setHealthDiagnosticsEnabled(performanceSamplingEnabled);
+                applyHealthSamplingFocusOnGlThread(gpuDepthProcessor);
                 gpuComputeReady = gpuDepthProcessor.getOutputWidth() == depthMapWidth
                         && gpuDepthProcessor.getOutputHeight() == depthMapHeight;
                 if (!gpuComputeReady) {
@@ -2252,6 +2350,18 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (bindings.sourceAspect != -1 && prefConfig != null) {
             GLES20.glUniform1f(bindings.sourceAspect,
                     pipelineContract.getModelContentAspect());
+        }
+        if (bindings.downsampleRatio != -1 && prefConfig != null) {
+            // Source pixels per model texel. 1920 -> 350 is 5.5x per axis and 3840 -> 350 is 11x,
+            // which is why the model-input pass integrates a footprint instead of taking one tap.
+            float sourceW = Math.max(prefConfig.width, 1);
+            float sourceH = Math.max(prefConfig.height, 1);
+            GLES20.glUniform2f(bindings.downsampleRatio,
+                    sourceW / Math.max(modelInputWidth, 1),
+                    sourceH / Math.max(modelInputHeight, 1));
+            if (bindings.sourceSize != -1) {
+                GLES20.glUniform2f(bindings.sourceSize, sourceW, sourceH);
+            }
         }
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -3696,6 +3806,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final int textureTransform;
         final int tonemapHdrToSdr;
         final int sourceAspect;
+        /** Source pixels per model texel, per axis; drives the model-input box filter. */
+        final int downsampleRatio;
+        final int sourceSize;
 
         QuadProgramBindings(int program) {
             position = GLES20.glGetAttribLocation(program, "a_Position");
@@ -3706,6 +3819,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             textureTransform = GLES20.glGetUniformLocation(program, "u_TextureTransform");
             tonemapHdrToSdr = GLES20.glGetUniformLocation(program, "u_tonemapHdrToSdr");
             sourceAspect = GLES20.glGetUniformLocation(program, "u_sourceAspect");
+            downsampleRatio = GLES20.glGetUniformLocation(program, "u_downsampleRatio");
+            sourceSize = GLES20.glGetUniformLocation(program, "u_sourceSize");
         }
     }
 

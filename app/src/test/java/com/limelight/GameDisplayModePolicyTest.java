@@ -23,4 +23,10 @@ public final class GameDisplayModePolicyTest {
         assertFalse(Game.shouldSkipWideDisplayMode(
                 3840, 2160, 3840, 2160, 3840));
     }
+
+    @Test
+    public void xrPlaceholderHolderNeverCastsAFixedSourceVote() {
+        assertFalse(Game.shouldVoteHolderSurfaceFrameRate(true));
+        assertTrue(Game.shouldVoteHolderSurfaceFrameRate(false));
+    }
 }

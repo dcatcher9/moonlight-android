@@ -23,9 +23,21 @@ import android.util.LruCache;
  * saturation are fixed.</p>
  */
 public final class AppTileArtwork {
-    /** Enough for a large app list; tiles are cheap to redraw and keyed by name and size. */
-    private static final int CACHE_ENTRIES = 32;
-    private static final LruCache<String, Bitmap> CACHE = new LruCache<>(CACHE_ENTRIES);
+    /**
+     * Keep generated fallback art materially smaller than the ordinary box-art cache.
+     *
+     * <p>An entry-counted cache is unsafe here because the key includes the density-scaled card
+     * size: 32 ARGB_8888 cards can retain tens of MiB on an XR-density display. Android's
+     * {@link LruCache} accepts arbitrary units, so account in actual allocated bytes.</p>
+     */
+    static final int CACHE_MAX_BYTES = 8 * 1024 * 1024;
+    private static final LruCache<String, Bitmap> CACHE =
+            new LruCache<String, Bitmap>(CACHE_MAX_BYTES) {
+                @Override
+                protected int sizeOf(String key, Bitmap bitmap) {
+                    return bitmap != null ? bitmap.getAllocationByteCount() : 0;
+                }
+            };
 
     private AppTileArtwork() {
     }
@@ -43,6 +55,14 @@ public final class AppTileArtwork {
         Bitmap tile = draw(name, widthPx, heightPx);
         CACHE.put(key, tile);
         return tile;
+    }
+
+    static int cacheSizeBytes() {
+        return CACHE.size();
+    }
+
+    static void clearCache() {
+        CACHE.evictAll();
     }
 
     private static Bitmap draw(String name, int widthPx, int heightPx) {

@@ -5,10 +5,7 @@ import static com.limelight.ui.xrcontrols.XrBitrateRecommendation.CODEC_AV1;
 import static com.limelight.ui.xrcontrols.XrBitrateRecommendation.CODEC_H264;
 import static com.limelight.ui.xrcontrols.XrBitrateRecommendation.CODEC_HEVC;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-
-import com.limelight.preferences.session.SessionSettingsStore;
 
 import org.junit.Test;
 
@@ -111,17 +108,5 @@ public class XrBitrateRecommendationTest {
         assertEquals(-1, packed(0, 1080, 60, CODEC_HEVC));
         assertEquals(-1, packed(1920, 0, 60, CODEC_HEVC));
         assertEquals(-1, packed(1920, 1080, 0, CODEC_HEVC));
-    }
-
-    @Test
-    public void packedModesAreTheHostSbsOnes() {
-        assertTrue(XrBitrateRecommendation.isPackedMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW));
-        assertTrue(XrBitrateRecommendation.isPackedMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI));
-        assertFalse(XrBitrateRecommendation.isPackedMode(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI));
-        assertFalse(XrBitrateRecommendation.isPackedMode(
-                SessionSettingsStore.PresenterMode.NORMAL));
     }
 }

@@ -15,7 +15,7 @@
         android:id="@android:id/title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#FFFFFFFF"
+        android:textColor="@color/xr_text_primary"
         android:textSize="18sp"
         android:textStyle="bold" />
 
@@ -24,7 +24,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:textColor="#FFBDC1C6"
+        android:textColor="@color/xr_text_secondary"
         android:textSize="14sp" />
 
     <com.limelight.preferences.XrChoiceGroup

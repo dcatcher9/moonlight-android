@@ -30,11 +30,21 @@ final class ClientSbsShotCutPolicy {
     static final float GEOMETRY_BASELINE_ALPHA = 0.125f;
     static final int CUT_SETTLE_VALID_DEPTH_UPDATES = 8;
 
-    // One per-slot mailbox word carries both mutually exclusive color classifications without a
-    // new buffer, binding, dispatch, or readback. A manual CPU request remains appearance
-    // authority and is never converted into the automatic exposure-like veto.
+    // One per-slot mailbox word carries the mutually exclusive color classification and
+    // event-scoped structureless-history transitions without a new buffer, binding, dispatch, or
+    // readback. A manual CPU request remains appearance authority and is never converted into the
+    // automatic exposure-like veto.
     static final int SCENE_EVIDENCE_APPEARANCE = 1 << 0;
     static final int SCENE_EVIDENCE_EXPOSURE_LIKE = 1 << 1;
+    static final int SCENE_EVIDENCE_PERSISTENT_LOW_START = 1 << 2;
+    static final int SCENE_EVIDENCE_SUPPORTED_RETURN = 1 << 3;
+    private static final int SCENE_EVIDENCE_CLASSIFICATION_MASK =
+            SCENE_EVIDENCE_APPEARANCE | SCENE_EVIDENCE_EXPOSURE_LIKE;
+    private static final int SCENE_EVIDENCE_EVENT_MASK =
+            SCENE_EVIDENCE_PERSISTENT_LOW_START | SCENE_EVIDENCE_SUPPORTED_RETURN;
+
+    static final int LOW_STRUCTURE_SCENE_INACTIVE = 0;
+    static final int LOW_STRUCTURE_SCENE_ACTIVE = 1;
 
     static final int CUT_STATE_SETTLED = 1 << 0;
     static final int CUT_STATE_GEOMETRY_ARMED = 1 << 1;
@@ -56,23 +66,61 @@ final class ClientSbsShotCutPolicy {
     /**
      * Selects the one typed color classification consumed by a valid depth update.
      *
-     * <p>A classification from the exact current color frame supersedes anything carried from an
-     * earlier all-invalid inference. Otherwise the pending classification survives unchanged.
-     * Appearance wins malformed dual-bit input, matching the explicit/manual cut's authority.</p>
+     * <p>Any nonzero word from the exact current color frame supersedes the classification carried
+     * from an earlier all-invalid inference, including an event-only word whose classification is
+     * deliberately empty. Event bits are accumulated because a persistent-low start and its
+     * supported return can both occur before depth becomes valid again. Appearance wins malformed
+     * dual-classification input, matching the explicit/manual cut's authority.</p>
      */
     static int selectSceneEvidence(int currentEvidence, int pendingEvidence) {
         int current = normalizeSceneEvidence(currentEvidence);
-        return current != 0 ? current : normalizeSceneEvidence(pendingEvidence);
+        int pending = normalizeSceneEvidence(pendingEvidence);
+        int currentClassification = current & SCENE_EVIDENCE_CLASSIFICATION_MASK;
+        int pendingClassification = pending & SCENE_EVIDENCE_CLASSIFICATION_MASK;
+        int classification = current != 0
+                ? currentClassification : pendingClassification;
+        return classification | ((current | pending) & SCENE_EVIDENCE_EVENT_MASK);
     }
 
     private static int normalizeSceneEvidence(int evidence) {
+        int events = evidence & SCENE_EVIDENCE_EVENT_MASK;
         if ((evidence & SCENE_EVIDENCE_APPEARANCE) != 0) {
-            return SCENE_EVIDENCE_APPEARANCE;
+            return events | SCENE_EVIDENCE_APPEARANCE;
         }
         if ((evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0) {
-            return SCENE_EVIDENCE_EXPOSURE_LIKE;
+            return events | SCENE_EVIDENCE_EXPOSURE_LIKE;
         }
-        return 0;
+        return events;
+    }
+
+    static int encodePendingSceneEvidence(int evidence) {
+        int normalized = normalizeSceneEvidence(evidence);
+        return normalized == 0 ? 0 : -normalized;
+    }
+
+    static int decodePendingSceneEvidence(int encodedEvidence) {
+        return encodedEvidence < 0 ? normalizeSceneEvidence(-encodedEvidence) : 0;
+    }
+
+    static boolean isAppearanceEvidence(int evidence) {
+        return (evidence & SCENE_EVIDENCE_APPEARANCE) != 0;
+    }
+
+    static boolean isExposureLikeEvidence(int evidence) {
+        return !isAppearanceEvidence(evidence)
+                && (evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0;
+    }
+
+    static boolean isPersistentLowStart(int evidence) {
+        return (evidence & SCENE_EVIDENCE_PERSISTENT_LOW_START) != 0;
+    }
+
+    static boolean isSupportedReturn(int evidence) {
+        return (evidence & SCENE_EVIDENCE_SUPPORTED_RETURN) != 0;
+    }
+
+    static boolean shouldHoldDepthHistory(int evidence) {
+        return isExposureLikeEvidence(evidence);
     }
 
     static boolean standaloneGeometryCut(float changeFraction, float distributionShift) {
@@ -121,11 +169,35 @@ final class ClientSbsShotCutPolicy {
                 && novelGeometryCut(changeFraction, geometryBaseline);
     }
 
+    static boolean acceptsLowStructureReturnShotCut(boolean initialized,
+                                                    int lowStructureSceneMarker,
+                                                    boolean persistentLowStart,
+                                                    boolean supportedReturn,
+                                                    float changeFraction,
+                                                    float distributionShift) {
+        boolean lowStructureScene = lowStructureSceneMarker
+                == LOW_STRUCTURE_SCENE_ACTIVE || persistentLowStart;
+        return initialized && lowStructureScene && supportedReturn
+                && standaloneGeometryCut(changeFraction, distributionShift);
+    }
+
     static boolean acceptsShotCut(boolean initialized, int cutState,
                                   boolean externalEvidence, boolean exposureLikeTransition,
                                   float changeFraction,
                                   float distributionShift, boolean baselineInitialized,
                                   float geometryBaseline, int validDepthUpdateAge) {
+        return acceptsShotCut(initialized, cutState, externalEvidence, exposureLikeTransition,
+                changeFraction, distributionShift, baselineInitialized, geometryBaseline,
+                validDepthUpdateAge, LOW_STRUCTURE_SCENE_INACTIVE, false, false);
+    }
+
+    static boolean acceptsShotCut(boolean initialized, int cutState,
+                                  boolean externalEvidence, boolean exposureLikeTransition,
+                                  float changeFraction,
+                                  float distributionShift, boolean baselineInitialized,
+                                  float geometryBaseline, int validDepthUpdateAge,
+                                  int lowStructureSceneMarker, boolean persistentLowStart,
+                                  boolean supportedReturn) {
         return acceptsStandaloneGeometryShotCut(
                 initialized, cutState, exposureLikeTransition,
                 changeFraction, distributionShift)
@@ -133,7 +205,23 @@ final class ClientSbsShotCutPolicy {
                 initialized, cutState, externalEvidence, changeFraction, distributionShift)
                 || acceptsLatchedGeometryShotCut(
                 initialized, cutState, baselineInitialized, validDepthUpdateAge,
-                exposureLikeTransition, changeFraction, geometryBaseline);
+                exposureLikeTransition, changeFraction, geometryBaseline)
+                || acceptsLowStructureReturnShotCut(
+                initialized, lowStructureSceneMarker, persistentLowStart, supportedReturn,
+                changeFraction, distributionShift);
+    }
+
+    static int nextLowStructureSceneMarker(int lowStructureSceneMarker,
+                                           boolean persistentLowStart,
+                                           boolean supportedReturn) {
+        if (supportedReturn) {
+            return LOW_STRUCTURE_SCENE_INACTIVE;
+        }
+        if (persistentLowStart) {
+            return LOW_STRUCTURE_SCENE_ACTIVE;
+        }
+        return lowStructureSceneMarker == LOW_STRUCTURE_SCENE_ACTIVE
+                ? LOW_STRUCTURE_SCENE_ACTIVE : LOW_STRUCTURE_SCENE_INACTIVE;
     }
 
     /**
@@ -225,6 +313,16 @@ final class ClientSbsShotCutPolicy {
 
     static float nextGeometryBaseline(float geometryBaseline, boolean baselineInitialized,
                                       boolean acceptedHardCut, float changeFraction) {
+        return nextGeometryBaseline(geometryBaseline, baselineInitialized, acceptedHardCut,
+                changeFraction, false);
+    }
+
+    static float nextGeometryBaseline(float geometryBaseline, boolean baselineInitialized,
+                                      boolean acceptedHardCut, float changeFraction,
+                                      boolean holdReliableHistory) {
+        if (holdReliableHistory) {
+            return geometryBaseline;
+        }
         if (!baselineInitialized || acceptedHardCut) {
             return changeFraction;
         }

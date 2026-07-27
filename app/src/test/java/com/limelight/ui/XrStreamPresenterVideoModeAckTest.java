@@ -79,6 +79,8 @@ public class XrStreamPresenterVideoModeAckTest {
         assertFalse(gate.onAppliedAck());
         assertTrue(gate.hasAppliedAck());
         assertFalse(gate.canSettle());
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.beginPostAckDecoderConfirmation());
 
         assertTrue(gate.onDecoderOutput(4096, 1728, 4096, 1728));
         assertTrue(gate.hasMatchingDecoderOutput());
@@ -86,7 +88,7 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
-    public void resolutionDecoderFirstRetainsItsConfirmationUntilAck() {
+    public void resolutionDecoderFirstIsInvalidatedAtTheAckBoundary() {
         XrStreamPresenter.LiveQualityConfirmationGate gate =
                 new XrStreamPresenter.LiveQualityConfirmationGate();
         gate.begin(true);
@@ -96,12 +98,38 @@ public class XrStreamPresenterVideoModeAckTest {
         assertTrue(gate.hasMatchingDecoderOutput());
         assertFalse(gate.canSettle());
 
-        assertTrue(gate.onAppliedAck());
+        assertFalse(gate.onAppliedAck());
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.hasDecoderOutput());
+        assertFalse(gate.hasMatchingDecoderOutput());
+        assertFalse(gate.canSettle());
+
+        assertTrue(gate.onDecoderOutput(3840, 2160, 3840, 2160));
         assertTrue(gate.canSettle());
     }
 
     @Test
-    public void decoderFirstCanBeRevalidatedAgainstAClampedAck() {
+    public void staleFourKIdrBeforeFullHdAckWaitsForPostAckFullHdIdr() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+
+        // Exact ordering from the field failure: the old 4K encoder satisfies the first decoder
+        // transition while the client is requesting a 1080p mode.
+        assertFalse(gate.onDecoderOutput(3840, 2160, 1920, 1080));
+        assertFalse(XrStreamPresenter.decoderMismatchRequiresMandatoryResync(true, gate));
+
+        assertFalse(gate.onAppliedAck());
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.hasDecoderOutput());
+        assertFalse(XrStreamPresenter.decoderMismatchRequiresMandatoryResync(true, gate));
+
+        assertTrue(gate.onDecoderOutput(1920, 1080, 1920, 1080));
+        assertTrue(gate.canSettle());
+    }
+
+    @Test
+    public void clampedAckRequiresOutputAfterFinalGeometryIsAdopted() {
         XrStreamPresenter.LiveQualityConfirmationGate gate =
                 new XrStreamPresenter.LiveQualityConfirmationGate();
         gate.begin(true);
@@ -113,7 +141,10 @@ public class XrStreamPresenterVideoModeAckTest {
         assertFalse(gate.hasMatchingDecoderOutput());
         assertFalse(gate.onAppliedAck());
 
-        assertTrue(gate.revalidateDecoderOutput(4096, 1728));
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.hasDecoderOutput());
+        assertFalse(gate.canSettle());
+        assertTrue(gate.onDecoderOutput(4096, 1728, 4096, 1728));
         assertTrue(gate.hasMatchingDecoderOutput());
     }
 
@@ -124,8 +155,26 @@ public class XrStreamPresenterVideoModeAckTest {
         gate.begin(false);
 
         assertTrue(gate.onAppliedAck());
+        assertFalse(gate.beginPostAckDecoderConfirmation());
         assertFalse(gate.hasDecoderOutput());
         assertTrue(gate.canSettle());
+    }
+
+    @Test
+    public void postAckConfirmationIsUnavailableBeforeAckAndResetsPerRequest() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+
+        assertFalse(gate.beginPostAckDecoderConfirmation());
+        gate.onAppliedAck();
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.beginPostAckDecoderConfirmation());
+
+        gate.clear();
+        gate.begin(true);
+        gate.onAppliedAck();
+        assertTrue(gate.beginPostAckDecoderConfirmation());
     }
 
     @Test
@@ -135,10 +184,36 @@ public class XrStreamPresenterVideoModeAckTest {
         gate.begin(true);
 
         assertFalse(gate.onAppliedAck());
+        assertTrue(gate.beginPostAckDecoderConfirmation());
         assertFalse(gate.onDecoderOutput(0, 0, 3840, 2160));
         assertTrue(gate.hasDecoderOutput());
         assertFalse(gate.hasMatchingDecoderOutput());
         assertFalse(gate.canSettle());
+    }
+
+    @Test
+    public void authoritativeAckWithMismatchedFreshIdrRequiresHiddenResync() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true);
+        gate.onAppliedAck();
+        gate.beginPostAckDecoderConfirmation();
+        gate.onDecoderOutput(1920, 1080, 3840, 2160);
+
+        assertTrue(XrStreamPresenter.decoderMismatchRequiresMandatoryResync(
+                true, gate));
+        assertFalse(XrStreamPresenter.shouldRevealSurfaceDuringMandatoryResync(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION,
+                gate.hasMatchingDecoderOutput(), false));
+
+        XrStreamPresenter.LiveQualityConfirmationGate matching =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        matching.begin(true);
+        matching.onAppliedAck();
+        matching.beginPostAckDecoderConfirmation();
+        matching.onDecoderOutput(3840, 2160, 3840, 2160);
+        assertFalse(XrStreamPresenter.decoderMismatchRequiresMandatoryResync(
+                true, matching));
     }
 
     @Test
@@ -150,16 +225,94 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
-    public void ackTimeoutFinalizesOnlyTheOptimisticFastPath() {
-        assertTrue(XrStreamPresenter.shouldFinalizeLiveQualityOnAckTimeout(false));
-        assertFalse(XrStreamPresenter.shouldFinalizeLiveQualityOnAckTimeout(true));
+    public void everyMissingApplicationAckFailsClosedToReconnect() {
+        assertEquals(XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_FAST_USER,
+                XrStreamPresenter.liveQualityAckTimeoutDisposition(
+                        false, XrStreamPresenter.LiveQualityRequestOrigin.USER));
+        assertEquals(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_FAST_PANEL_FOLLOW,
+                XrStreamPresenter.liveQualityAckTimeoutDisposition(
+                        false, XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW));
+        assertEquals(XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION,
+                XrStreamPresenter.liveQualityAckTimeoutDisposition(
+                        true, XrStreamPresenter.LiveQualityRequestOrigin.USER));
+        assertEquals(XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION,
+                XrStreamPresenter.liveQualityAckTimeoutDisposition(
+                        true, XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW));
+        assertTrue(XrStreamPresenter.shouldRevealSurfaceAfterAckTimeout(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_FAST_USER, false));
+        assertTrue(XrStreamPresenter.shouldRevealSurfaceAfterAckTimeout(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_FAST_PANEL_FOLLOW,
+                false));
+        assertFalse(XrStreamPresenter.shouldRevealSurfaceAfterAckTimeout(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION, false));
+        assertTrue(XrStreamPresenter.shouldRevealSurfaceAfterAckTimeout(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION, true));
+        assertFalse(XrStreamPresenter.shouldRevealSurfaceDuringMandatoryResync(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION,
+                true, false));
+        assertTrue(XrStreamPresenter.shouldRevealSurfaceDuringMandatoryResync(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION,
+                true, true));
     }
 
     @Test
-    public void anUnknownStatusIsTreatedAsATransientFailure() {
-        // Never silently adopt a mode the host may not be running.
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE,
+    public void missingPanelAckDoesNotConsumeRetryOrBlockPostReconnectFollow() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+        state.observe(72);
+
+        assertEquals(72, state.nextTarget(90, false));
+        assertEquals(
+                XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_FAST_PANEL_FOLLOW,
+                XrStreamPresenter.liveQualityAckTimeoutDisposition(
+                        false, XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW));
+        state.requestAbandonedForReconnect();
+        assertEquals(72, state.nextTarget(90, false));
+    }
+
+    @Test
+    public void anUnknownStatusRequiresMandatoryResynchronization() {
+        // Only the defined FAILED status proves rollback. A future status must not publish the
+        // previous tuple or consume panel-follow's retry budget.
+        assertEquals(XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC,
                 XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING, 99));
+    }
+
+    @Test
+    public void malformedAppliedAndUnknownStatusNeverClaimARollbackTuple() {
+        XrStreamPresenter.AcknowledgedVideoMode valid =
+                XrStreamPresenter.acknowledgedVideoMode(
+                        new StreamQualityTuple("1920x1080", "90", 100000),
+                        1920, 1080, 9000, 90000);
+
+        assertFalse(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, valid));
+        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, null));
+        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC, valid));
+        assertFalse(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, null));
+    }
+
+    @Test
+    public void acknowledgedGeometryMustBeAdoptedBeforeTheAckCanSettle() {
+        // FPS/bitrate-only ACKs need no Surface resize and retain their fast path.
+        assertTrue(XrStreamPresenter.acknowledgedGeometryAdoptionSucceeded(
+                false, false));
+        assertTrue(XrStreamPresenter.acknowledgedGeometryAdoptionSucceeded(
+                true, true));
+        // A host clamp that the client Surface cannot adopt is terminal, not local success.
+        assertFalse(XrStreamPresenter.acknowledgedGeometryAdoptionSucceeded(
+                true, false));
+    }
+
+    @Test
+    public void clientResizeFailureAfterReliableSendCannotClaimHostRollback() {
+        assertTrue(XrStreamPresenter.postSendGeometryFailureRequiresMandatoryResync(1));
+        assertFalse(XrStreamPresenter.postSendGeometryFailureRequiresMandatoryResync(0));
+        assertFalse(XrStreamPresenter.postSendGeometryFailureRequiresMandatoryResync(-1));
     }
 
     @Test
@@ -269,5 +422,168 @@ public class XrStreamPresenterVideoModeAckTest {
         assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(24));
         assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(1));
         assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(0));
+    }
+
+    @Test
+    public void panelFollowCoalescesTheNewestObservationWhileBusy() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        state.observe(72);
+        assertEquals(-1, state.nextTarget(90, true));
+        assertTrue(state.isReconcilePending());
+
+        // The intermediate 72 Hz event is superseded rather than marked handled.
+        state.observe(60);
+        assertEquals(60, state.nextTarget(90, false));
+        assertEquals(60, state.getInFlightTargetHz());
+    }
+
+    @Test
+    public void panelFollowReturnsUpwardToTheDurableNinetyFpsCeiling() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        state.observe(72);
+        assertEquals(72, state.nextTarget(90, false));
+        state.automaticRequestSucceeded(72);
+        assertEquals(90, state.getUserCeilingHz());
+
+        state.observe(90);
+        assertEquals(90, state.nextTarget(72, false));
+    }
+
+    @Test
+    public void sceneCoreSurfaceVoteSurvivesTemporaryPanelThrottling() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        state.observe(72);
+        assertEquals(72, state.nextTarget(90, false));
+        state.automaticRequestSucceeded(72);
+
+        // A recreated SceneCore surface still votes the durable ceiling, not effective 72.
+        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(state));
+    }
+
+    @Test
+    public void explicitUserCeilingImmediatelyChangesTheSceneCoreSurfaceVote() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        state.userRequestSucceeded(60);
+
+        assertEquals(60, XrStreamPresenter.durableSurfaceFrameRateVoteHz(state));
+    }
+
+    @Test
+    public void surfaceFrameRateFeedbackDoesNotRelockTheFollower() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        state.observe(72);
+        assertEquals(72, state.nextTarget(90, false));
+        // Surface/display feedback for the same effective panel mode is a duplicate.
+        state.observe(72);
+        state.automaticRequestSucceeded(72);
+
+        assertEquals(-1, state.nextTarget(72, false));
+        assertEquals(-1, state.getInFlightTargetHz());
+        assertFalse(state.isReconcilePending());
+    }
+
+    @Test
+    public void automaticFailureRetriesOnceThenWaitsForNewEvidence() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        state.observe(72);
+        assertEquals(72, state.nextTarget(90, false));
+        state.automaticRequestFailed(true);
+        assertEquals(72, state.nextTarget(90, false));
+        state.automaticRequestFailed(true);
+        assertEquals(-1, state.nextTarget(90, false));
+
+        // A genuinely new panel mode resets the retry block.
+        state.observe(60);
+        assertEquals(60, state.nextTarget(90, false));
+    }
+
+    @Test
+    public void userCeilingChangesOnlyAfterSuccessfulSettlement() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(90);
+
+        // Merely considering/queuing a 60 FPS user request has no state-machine mutation.
+        assertEquals(90, state.getUserCeilingHz());
+        state.otherTransactionSettled();
+        assertEquals(90, state.getUserCeilingHz());
+
+        state.userRequestSucceeded(60);
+        assertEquals(60, state.getUserCeilingHz());
+    }
+
+    @Test
+    public void panelCappedApplyPersistsCeilingButNotTheThrottledRate() {
+        StreamQualityTuple durable =
+                new StreamQualityTuple("3840x2160", "90", 100000);
+        StreamQualityTuple applied =
+                new StreamQualityTuple("4096x1728", "72", 100000);
+
+        StreamQualityTuple persisted = XrStreamPresenter.durableUserQuality(
+                applied, durable);
+        assertEquals("4096x1728", persisted.resolution);
+        assertEquals("90", persisted.frameRate);
+        assertEquals(100000, persisted.bitrateKbps);
+    }
+
+    @Test
+    public void hostFpsClampUnderPanelRequestChangesOnlyEffectiveRate() {
+        StreamQualityTuple durable =
+                new StreamQualityTuple("3840x2160", "90", 100000);
+        StreamQualityTuple hostApplied =
+                new StreamQualityTuple("4096x1728", "60", 100000);
+
+        StreamQualityTuple persisted = XrStreamPresenter.durableUserQuality(
+                hostApplied, durable);
+        // Geometry and requested wire bitrate adopt the ACK. Its 60 FPS is effective-only because
+        // both the 72 request and the host's further clamp are below the explicit 90 FPS ceiling.
+        assertEquals("4096x1728", persisted.resolution);
+        assertEquals("90", persisted.frameRate);
+        assertEquals(100000, persisted.bitrateKbps);
+    }
+
+    @Test
+    public void automaticPanelFollowNeverEntersTheDurableSettingsPath() {
+        assertTrue(XrStreamPresenter.shouldPersistLiveQualityRequest(
+                XrStreamPresenter.LiveQualityRequestOrigin.USER));
+        assertFalse(XrStreamPresenter.shouldPersistLiveQualityRequest(
+                XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW));
+        assertTrue(XrStreamPresenter.shouldCommitStagedSettingsForResync(
+                XrStreamPresenter.LiveQualityRequestOrigin.USER));
+        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForResync(
+                XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW));
+    }
+
+    @Test
+    public void directNinetyRequestClampKeepsTheExplicitCeiling() {
+        StreamQualityTuple durable =
+                new StreamQualityTuple("3840x2160", "90", 100000);
+        StreamQualityTuple applied =
+                new StreamQualityTuple("3840x2160", "60", 100000);
+
+        assertEquals("90", XrStreamPresenter.durableUserQuality(
+                applied, durable).frameRate);
+    }
+
+    @Test
+    public void directLowerCeilingClampAlsoKeepsTheExplicitCeiling() {
+        StreamQualityTuple durable =
+                new StreamQualityTuple("3840x2160", "60", 100000);
+        StreamQualityTuple applied =
+                new StreamQualityTuple("3840x2160", "30", 100000);
+
+        assertEquals("60", XrStreamPresenter.durableUserQuality(
+                applied, durable).frameRate);
     }
 }

@@ -36,7 +36,7 @@ for most of them.
 | Subject weighting: `centerWeight(σx 0.70, σy 0.55) * (1 - sigmoid(10*(g - 0.025)))` | identical |
 | Subject EMA 0.20, recenter strength 0.35 | identical |
 | Separate convergence EMA/bias | absent under the explicit zero plane |
-| Shot state machine: both arms blocked through valid-depth-update age 8; accepted cuts latch; geometry and appearance rearm independently after two low/quiet updates; relative-spike escape at valid-depth-update age 8 | same mechanism; absolute thresholds are calibrated per depth grid (P2 table below) |
+| Shot state machine: startup blocks both arms through valid-depth-update age 8; accepted cuts latch; geometry and appearance rearm independently after two low/quiet updates; relative-spike escape at valid-depth-update age 8 | same mechanism; absolute thresholds are calibrated per depth grid (P2 table below) |
 | Separable `[0.375, 0.25, 0.375]` depth prefilter | identical |
 | `spatialThresholdScale` reference-gradient normalization / `alphaForInterval` wall-time normalization | correct mechanism, keep |
 
@@ -192,7 +192,8 @@ radius is still the historical over-wide bound, and probes still use an output-r
 | per-depth-texel change | `0.05` | `0.12` |
 | armed standalone geometry cut | changed fraction `>= 0.60` | `>= 0.58`, or `>= 0.42` with distribution shift `>= 0.10` |
 | appearance proposal | raw-RGB delta `>= 0.20` on `>= 0.70` of texels **and** local max-RGB ordinal fraction `>= 0.03` | spatially broad raw change **and** max-RGB ordinal reversal on `>= 0.15` of 16x16 block sites |
-| exposure-like geometry veto | broad raw replacement and ordinal fraction `< 0.01`; vetoes standalone/relative depth routes only | broad raw/energy replacement and ordinal reversal on `< 0.05` of block sites; vetoes standalone/relative depth routes only |
+| exposure-like geometry veto | quiet supported exposure, one deferred reliable-to-structureless update regardless of raw color distance, or a strict same-scene return from that held gap; support floor `0.01`; a second persistent low-structure update restores geometry authority | quiet preserved exposure, one deferred supported-history-to-structureless update regardless of raw color distance, or a strict same-scene return (`<= 2` average luma codes/block and `< 1%` moderate blocks) from that bridged gap; current/common support floor `0.05`; a second persistent low-structure update restores geometry authority |
+| persistent-low supported return | one absolute standalone decision independent of ordinary arm/refractory, then consume | same; event bit plus `cutStateCounters.y` marker |
 | appearance/depth acceptance | proposal plus depth fraction `>= 0.25` | proposal plus depth `>= 0.18`, or `>= 0.10` with distribution shift `>= 0.06` |
 | initial arming | after valid-depth-update age 8; that update cannot fire | same |
 | geometry rearm | two consecutive depth updates `< 0.10` | two consecutive depth updates `< 0.08` |
@@ -207,14 +208,30 @@ median `max(R,G,B)` of a fixed 3x3 sample lattice. Like the host, it compares al
 orderings in a cross-five spatial stencil only when the same relation clears a reliability floor in
 both frames. Under the supported identical global monotone RGB exposure model, clipping and
 rounding can create a rejected tie but cannot reverse an ordering. At least 15% of block sites plus
-spatially broad raw change are required for a proposal. Fewer than 5% structural sites with the
-same broad raw/energy replacement instead marks the transition exposure-like; the 5%-to-15% band
-is deliberately ambiguous and leaves standalone geometry authority intact. Coarse histogram L1 is diagnostic rather
-than authority because exposure can move it and a real edit can preserve it. The former
+spatially broad raw change are required for a proposal. The client also counts sites with four
+reliable current relations and with four common relations. Five percent is sufficient frame-level
+support. Supported history losing current structure is exposure-like for one update regardless of
+raw color distance, and COMMIT preserves the last supported ordinal grid and histogram while setting
+supported-history and one-gap bits in the existing block count. The depth path also retains the
+pre-gap effective normalization range, geometry baseline, and depth texture on that exposure-like
+update. A second consecutive low-structure update resolves against that coherent tuple with
+geometry authority, advances history, and enters
+an accepted persistent-low state. Later unsupported updates remain there without a timer or event,
+so a real persistent flat scene cannot extend the brightness veto or periodically retrigger it.
+A supported return from the one-update hold is exposure-like only when it is a strict endpoint
+match: quiet structure, no more than two average luma codes per block, and fewer than 1% moderate
+block deltas. This prevents either edge of `A -> saturated black/white -> A` from relatching without
+letting a low-appearance `B` overrule authoritative depth geometry. A structurally different
+supported `B` is compared directly against `A` and can propose a cut; when current support exists
+but common support does not, the transition is ambiguous and leaves standalone geometry authority
+intact. Startup unsupported history followed by supported content follows that latter rule. The
+5%-to-15% reversal band is likewise ambiguous. Coarse histogram L1 is diagnostic rather than
+authority because exposure can move it and a real edit can preserve it. The former
 brightness-only `uniformHardTransition` override is gone. The detector publishes one per-slot
-uint32 evidence word: bit 0 is the qualified appearance proposal and bit 1 is the exposure-like
-veto. Both reach the depth pipeline without another buffer, dispatch, or readback. The explicit
-CPU/manual cut input still asserts appearance authority and never creates the automatic veto.
+uint32 evidence word: bit 0 is the qualified appearance proposal, bit 1 is the exposure-like veto,
+bit 2 marks accepted persistent-low start, and bit 3 marks its first supported return. All reach the
+depth pipeline without another buffer, dispatch, or readback. The explicit CPU/manual cut input
+still asserts appearance authority and never creates the automatic veto.
 
 That proposal may still reset temporal depth filtering, but it is not sufficient authority to move
 shot-owned state. `RESOLVE_RAW_RANGE` accepts it as a one-update shot pulse only when at least 18%
@@ -224,21 +241,32 @@ shot state. Geometry and appearance then recover independently: two low-depth up
 geometry, while two proposal-quiet updates rearm appearance. One noisy channel therefore cannot
 starve the other.
 
-Both implementations retain the latched bit while either arm recovers. On or after the eighth
-valid depth update following a cut, a new geometry spike can still cut through persistent above-low
-motion when it exceeds both the absolute `0.30` floor and the previous depth-change EMA by `+0.20`
-or `2x`, unless that exact color transition is exposure-like. Absolute standalone geometry is
-vetoed under the same condition. The depth-corroborated appearance route is unaffected. Constant
+Persistent-low start sets the existing reserved `cutStateCounters.y` lane to one. It stays one
+through later low-support updates. The typed first-supported-return event gets exactly one absolute
+standalone geometry decision independent of normal arm/refractory state, then clears the marker
+whether it cuts or not. This authority is event-scoped, not timer-based, so persistent content
+cannot periodically pulse.
+
+The host retains its global latched marker after the first accepted cut; the client instead clears
+each source-specific latch bit when that source rearms. In both implementations the route is
+eligible only while geometry remains unarmed, so the representation difference does not change
+relative-spike authority. On or after the eighth valid depth update following a cut, a new geometry
+spike can still cut through persistent above-low motion when it exceeds both the absolute `0.30`
+floor and the previous depth-change EMA by `+0.20` or `2x`, unless that exact color transition is
+exposure-like. Absolute standalone geometry is vetoed under the same condition. The
+depth-corroborated appearance route is unaffected. Constant
 motion converges into that EMA and cannot periodically retrigger; a genuinely
 stronger geometry event remains detectable. Client elapsed-time catch-up never advances this
 counter: `referenceFrameAdvance` applies only to the separate adaptive-pop/anchor profile age.
 
 If an accepted inference has no valid depth after its exact color frame has already committed
-detector history, the client carries either mailbox classification (qualified appearance or
-exposure-like) to exactly the next valid accepted depth update. Current geometry must corroborate
-an appearance proposal there; an exposure-like classification vetoes only the standalone and
-relative geometry routes there. That update consumes the classification. This is GPU-state
-evidence carry, not color/depth re-pairing.
+detector history, the client stores the complete negated evidence word in GPU state and offers it
+to the next valid accepted depth update. A nonzero current word replaces the pending
+classification—even when the current word is an event with no classification—while event bits
+accumulate. This prevents the first-flat exposure veto from leaking onto the event-only second
+flat. Current geometry must corroborate an appearance proposal; an exposure-like classification
+vetoes only the standalone and relative geometry routes. The valid update consumes the word. This
+is GPU-state evidence carry, not color/depth re-pairing.
 
 These numeric thresholds are intentionally not literal copies. The client evaluates a depth grid
 whose short side is roughly 2.4–3.4x coarser and has an authenticated range-distribution statistic

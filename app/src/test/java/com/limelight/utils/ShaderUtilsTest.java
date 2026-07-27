@@ -121,7 +121,7 @@ public class ShaderUtilsTest {
         assertTrue(shader.contains("pqToLinear"));
         assertTrue(shader.contains("uniform highp samplerExternalOES u_Texture"));
         assertTrue(shader.contains("uniform mat4 u_TextureTransform"));
-        assertTrue(shader.contains("u_TextureTransform * vec4(sourceUv"));
+        assertTrue(shader.contains("u_TextureTransform * vec4(centerUv"));
         assertTrue(shader.contains("bt2020ToBt709"));
         assertTrue(shader.contains("pqToLinear(color.rgb) * 125.0"));
         assertTrue(shader.contains("linearToSrgb"));
@@ -130,13 +130,63 @@ public class ShaderUtilsTest {
     }
 
     @Test
-    public void everyBucketedModelInputIsOneDirectFullFrameBilinearResize() {
+    public void everyBucketedModelInputIsADirectFullFrameFootprintIntegral() {
         String shader = ClientSbsShaders.createModelInputFragment(true);
         assertTrue(shader.contains("vec2 sourceUv = v_TexCoord;"));
-        assertTrue(shader.contains("u_TextureTransform * vec4(sourceUv"));
+        assertTrue(shader.contains("u_TextureTransform * vec4(centerUv"));
         assertFalse(shader.contains("u_sourceAspect"));
         assertFalse(shader.contains("contentSize"));
         assertFalse(shader.contains("padding"));
+        assertFalse(shader.contains("mirrorCoordinate"));
+    }
+
+    @Test
+    public void modelInputIntegratesTheSourceFootprintInsteadOfTakingOneTap() {
+        String shader = ClientSbsShaders.createModelInputFragment(true);
+        // A single bilinear tap reads four of every ~30 source pixels at 1080p and ~120 at 4K,
+        // which collapses fine structure and inflates the depth edge fraction the pop controller
+        // reads. The loop bound must stay a literal: GLSL ES 1.00 forbids a uniform bound.
+        assertTrue(shader.contains("const int TAPS = "
+                + ClientSbsShaders.MODEL_INPUT_DOWNSAMPLE_TAPS + ";"));
+        assertTrue(shader.contains("for (int ty = 0; ty < TAPS; ty++)"));
+        assertTrue(shader.contains("for (int tx = 0; tx < TAPS; tx++)"));
+        assertTrue(shader.contains("accumulated / float(TAPS * TAPS)"));
+        // Offsets ride the transform's linear part, so the matrix cost is per axis not per tap.
+        assertTrue(shader.contains("vec2 stepX = ((u_TextureTransform"));
+        assertTrue(shader.contains("vec2 stepY = ((u_TextureTransform"));
+        // Never box a footprint smaller than a texel; that would only blur a capped/native source.
+        assertTrue(shader.contains("effectiveDownsampleRatio.x <= 1.0"));
+        assertTrue(shader.contains("uniform vec2 u_downsampleRatio;"));
+    }
+
+    @Test
+    public void portraitModelInputFiltersTheActualPaddedContentFootprint() {
+        String shader = ClientSbsShaders.createModelInputFragment(false);
+
+        // A portrait frame occupies only contentSize.x of the landscape tensor. Dividing by that
+        // fraction turns source/model-grid scaling into source/content-grid scaling; omitting it
+        // underfilters 9:16 input by roughly 3.16x.
+        assertTrue(shader.contains(
+                "vec2 effectiveDownsampleRatio = u_downsampleRatio / contentSize;"));
+        assertTrue(shader.contains(
+                "max(effectiveDownsampleRatio, vec2(1.0)) / u_sourceSize"));
+
+        // Reflected padding is piecewise affine, so each footprint tap must be mirrored separately.
+        assertTrue(shader.contains("vec2 tapUv = sourceUv"));
+        assertTrue(shader.contains("mirrorCoordinate(tapUv.x)"));
+        assertTrue(shader.contains("mirrorCoordinate(tapUv.y)"));
+        assertTrue(shader.contains("vec4(tapUv, 0.0, 1.0)"));
+        assertFalse(shader.contains("baseUv + fx * stepX + fy * stepY"));
+    }
+
+    @Test
+    public void landscapeModelInputKeepsTheDirectFootprintAndAffineFastPath() {
+        String shader = ClientSbsShaders.createModelInputFragment(true);
+
+        assertTrue(shader.contains(
+                "vec2 effectiveDownsampleRatio = u_downsampleRatio;"));
+        assertTrue(shader.contains("baseUv + fx * stepX + fy * stepY"));
+        assertFalse(shader.contains("u_downsampleRatio / contentSize"));
         assertFalse(shader.contains("mirrorCoordinate"));
     }
 

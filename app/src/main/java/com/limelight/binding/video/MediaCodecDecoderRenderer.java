@@ -416,7 +416,48 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numFramesIn;
     private int numFramesOut;
 
-    private int targetFps = 0;
+    /**
+     * Decoder cadence and display preference are intentionally independent. XR panel/thermal
+     * follow may temporarily lower the stream to 72 FPS while the user's durable display ceiling
+     * remains 90 Hz; using the effective stream rate as a fixed-source Surface hint would pin the
+     * panel low and prevent the display callback that restores the stream upward.
+     */
+    static final class StreamFrameRateState {
+        private int effectiveStreamFps;
+        private int surfaceFrameRateCeilingFps;
+
+        void initialize(int effectiveFps, int preferredSurfaceCeilingFps) {
+            updateEffectiveStreamFps(effectiveFps > 0 ? effectiveFps : 60);
+            if (surfaceFrameRateCeilingFps <= 0) {
+                updateSurfaceFrameRateCeilingFps(
+                        preferredSurfaceCeilingFps > 0
+                                ? preferredSurfaceCeilingFps : effectiveStreamFps);
+            }
+        }
+
+        void updateEffectiveStreamFps(int fps) {
+            if (fps > 0) {
+                effectiveStreamFps = fps;
+            }
+        }
+
+        void updateSurfaceFrameRateCeilingFps(int fps) {
+            if (fps > 0) {
+                surfaceFrameRateCeilingFps = fps;
+            }
+        }
+
+        int getEffectiveStreamFps() {
+            return effectiveStreamFps;
+        }
+
+        int getSurfaceFrameRateHintFps() {
+            return surfaceFrameRateCeilingFps > 0
+                    ? surfaceFrameRateCeilingFps : effectiveStreamFps;
+        }
+    }
+
+    private final StreamFrameRateState streamFrameRateState = new StreamFrameRateState();
 
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -691,6 +732,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.context = activity;
         this.activity = activity;
         this.prefs = prefs;
+        int configuredFpsCeiling = Float.isFinite(prefs.fps) && prefs.fps > 0f
+                ? Math.round(prefs.fps) : 60;
+        streamFrameRateState.initialize(configuredFpsCeiling, configuredFpsCeiling);
         this.performanceTelemetryEnabled = shouldDispatchPerformanceSnapshot(
                 prefs.enablePerfOverlay, prefs.enablePerfLogging);
         this.crashListener = crashListener;
@@ -1160,12 +1204,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     /**
      * Adopts a live video-mode change that the host has already been asked to perform.
      *
-     * <p>{@code initialWidth}/{@code initialHeight}/{@code refreshRate}/{@code targetFps} and the
-     * retained {@code configuredFormat} are replayed by the codec-recovery paths
+     * <p>{@code initialWidth}/{@code initialHeight}/{@code refreshRate}, the effective stream FPS,
+     * and the retained {@code configuredFormat} are replayed by the codec-recovery paths
      * ({@code configureAndStartDecoder(configuredFormat)} on RESTART/RESET, and
      * {@code initializeDecoder(true)} on recreation), so they must all move together. This holds
      * {@code codecRecoveryMonitor} — the same monitor {@link #setOutputSurface} uses — so a
-     * recovery can never observe half-updated geometry.</p>
+     * recovery can never observe half-updated geometry. The Surface frame-rate ceiling is
+     * intentionally not changed here: panel-follow FPS is temporary display evidence, not a new
+     * durable display preference.</p>
      */
     public void updateStreamGeometry(int width, int height, int fps) {
         if (width <= 0 || height <= 0) {
@@ -1182,12 +1228,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 return;
             }
 
-            boolean fpsChanged = fps > 0 && fps != targetFps;
             initialWidth = newWidth;
             initialHeight = newHeight;
             if (fps > 0) {
                 refreshRate = fps;
-                targetFps = fps;
+                streamFrameRateState.updateEffectiveStreamFps(fps);
             }
             if (configuredFormat != null) {
                 configuredFormat.setInteger(MediaFormat.KEY_WIDTH, newWidth);
@@ -1196,12 +1241,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     configuredFormat.setInteger(MediaFormat.KEY_FRAME_RATE, refreshRate);
                 }
             }
-            if (fpsChanged) {
-                // Frame-rate metadata belongs to the Surface, not the codec.
-                applySurfaceFrameRate(renderTarget, targetFps);
-            }
             LimeLog.info("Live stream geometry now " + newWidth + "x" + newHeight
-                    + " @ " + targetFps + " FPS");
+                    + " @ " + streamFrameRateState.getEffectiveStreamFps()
+                    + " FPS (Surface ceiling "
+                    + streamFrameRateState.getSurfaceFrameRateHintFps() + " Hz)");
+        }
+    }
+
+    /**
+     * Updates the durable fixed-source display hint independently of effective stream cadence.
+     * Called after a live-quality transaction settles; automatic panel following may reapply the
+     * existing value but never replaces it with the temporary effective rate.
+     */
+    public void updateSurfaceFrameRateCeiling(int fps) {
+        if (fps <= 0) {
+            return;
+        }
+        synchronized (codecRecoveryMonitor) {
+            streamFrameRateState.updateSurfaceFrameRateCeilingFps(fps);
+            applySurfaceFrameRate(
+                    renderTarget, streamFrameRateState.getSurfaceFrameRateHintFps());
         }
     }
 
@@ -1243,7 +1302,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         videoDecoder.configure(format, renderTarget, null, 0);
         inputBufferCapacityLogged = false;
 
-        try { applySurfaceFrameRate(renderTarget, targetFps); } catch (Throwable ignored) {}
+        try {
+            applySurfaceFrameRate(
+                    renderTarget, streamFrameRateState.getSurfaceFrameRateHintFps());
+        } catch (Throwable ignored) {}
 
         try {
             MediaCodecInfo __info = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
@@ -1457,7 +1519,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
-        this.targetFps = (redrawRate > 0 ? redrawRate : 60);
+        streamFrameRateState.initialize(
+                redrawRate > 0 ? redrawRate : 60,
+                Float.isFinite(prefs.fps) && prefs.fps > 0f
+                        ? Math.round(prefs.fps) : 60);
         this.initialWidth = invertResolution ? height : width;
         this.initialHeight = invertResolution ? width : height;
         currentOutputDimensions.set(
@@ -1517,7 +1582,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 renderTarget = surface;
                 // SceneCore may return a replacement Surface after a resize or an EGL handoff.
                 // Frame-rate metadata belongs to the Surface, so restore it after every live swap.
-                applySurfaceFrameRate(surface, targetFps);
+                applySurfaceFrameRate(
+                        surface, streamFrameRateState.getSurfaceFrameRateHintFps());
                 return true;
             } catch (Exception e) {
                 LimeLog.warning("Decoder output-surface switch failed: " + e);
@@ -3427,19 +3493,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
 
-    private void applySurfaceFrameRate(android.view.Surface surface, int targetFps) {
-        if (surface == null) return;
+    private void applySurfaceFrameRate(android.view.Surface surface, int surfaceFrameRateFps) {
+        if (surface == null || surfaceFrameRateFps <= 0) return;
         try {
             if (android.os.Build.VERSION.SDK_INT >= 31) {
                 surface.setFrameRate(
-                        (float) targetFps,
+                        (float) surfaceFrameRateFps,
                         android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
                         android.view.Surface.CHANGE_FRAME_RATE_ALWAYS);
-                LimeLog.info("Applied fixed-source Surface frame rate: " + targetFps + " Hz");
+                LimeLog.info("Applied fixed-source Surface frame-rate ceiling: "
+                        + surfaceFrameRateFps + " Hz");
             } else if (android.os.Build.VERSION.SDK_INT >= 30) {
-                surface.setFrameRate((float) targetFps,
+                surface.setFrameRate((float) surfaceFrameRateFps,
                         android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-                LimeLog.info("Applied fixed-source Surface frame rate: " + targetFps + " Hz");
+                LimeLog.info("Applied fixed-source Surface frame-rate ceiling: "
+                        + surfaceFrameRateFps + " Hz");
             }
         } catch (Throwable t) {
             // best-effort

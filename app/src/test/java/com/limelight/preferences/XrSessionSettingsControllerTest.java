@@ -188,19 +188,18 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void hostSbsDefaultsTo72EvenWhenTheGlobalRateIsHigher() {
-        // The packed host-SBS frame is double width, so it costs the encoder twice a flat stream
-        // at the same per-eye resolution and 90 is not deliverable at 4K per eye. 72 is both
-        // sustainable and a native panel mode, so it lands 1:1 on the display.
+    public void normalAndBothHostSbsModesDefaultToThe90FpsCeiling() {
         assertTrue(globals.edit()
-                .putString(PreferenceConfiguration.FPS_PREF_STRING, "90")
+                .remove(PreferenceConfiguration.FPS_PREF_STRING)
                 .commit());
         XrSessionSettingsController controller = controller();
 
-        assertEquals("72", controller.getModeStreamQualityModel(
+        assertEquals("90", controller.getModeStreamQualityModel(
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
-        // Only host SBS is redirected; every other mode still follows the global rate.
+        assertEquals("90", controller.getModeStreamQualityModel(
+                SessionSettingsStore.PresenterMode.HOST_SBS_AI)
+                .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
         assertEquals("90", controller.getModeStreamQualityModel(
                 SessionSettingsStore.PresenterMode.NORMAL)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
@@ -209,12 +208,14 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void hostSbsKeepsAnExplicitRateInsteadOfTheDefault() {
         XrSessionSettingsController controller = controller();
-        SessionSettingsStore.PresenterMode mode =
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW;
-
-        controller.selectModeQualitySetting(mode, SessionSettingsModel.Key.FRAME_RATE, "90");
-        assertEquals("90", controller.getModeStreamQualityModel(mode)
-                .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
+        for (SessionSettingsStore.PresenterMode mode : new SessionSettingsStore.PresenterMode[] {
+                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                SessionSettingsStore.PresenterMode.HOST_SBS_AI}) {
+            controller.selectModeQualitySetting(
+                    mode, SessionSettingsModel.Key.FRAME_RATE, "90");
+            assertEquals("90", controller.getModeStreamQualityModel(mode)
+                    .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
+        }
     }
 
     @Test
@@ -774,8 +775,8 @@ public final class XrSessionSettingsControllerTest {
         assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                 restarted.getStartupMode());
         // Resolution and bitrate were overridden for this mode; the frame rate was not, so it
-        // takes the host-SBS default rather than the global rate.
-        assertEquals(new StreamQualityTuple("3840x2160", "72", 80000),
+        // retains the explicit global 60-FPS choice used by this fixture.
+        assertEquals(new StreamQualityTuple("3840x2160", "60", 80000),
                 restarted.getLiveStreamQuality());
     }
 
@@ -1199,11 +1200,11 @@ public final class XrSessionSettingsControllerTest {
                 .get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
         assertTrue(controller.commitPending());
 
-        // Resetting to global defaults still lands on the host-SBS frame-rate default, the same
-        // way CLIENT_SBS_AI keeps its own resolution/rate defaults through this path.
+        // Host SBS uses the same durable ceiling as Normal. Only Client SBS has a lower
+        // mode-specific frame-rate default.
         assertQuality(store.snapshot(pc, globals),
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
-                "1920x1080", "72", 200000);
+                "1920x1080", "60", 200000);
     }
 
     @Test
