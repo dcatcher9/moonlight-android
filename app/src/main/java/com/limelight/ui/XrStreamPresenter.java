@@ -1515,7 +1515,7 @@ public class XrStreamPresenter {
             View tile = buildBarItemView(item);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.MATCH_PARENT, item.widthUnits);
-            int m = dp(2);
+            int m = dp(4);
             lp.setMargins(m, m, m, m);
             bar.addView(tile, lp);
             item.root = tile;
@@ -1537,7 +1537,7 @@ public class XrStreamPresenter {
         Button revealButton = new Button(activity);
         styleControlButton(revealButton);
         revealButton.setText("\u25B4");
-        revealButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
+        revealButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f);
         revealButton.setAllCaps(false);
         revealButton.setMinWidth(0);
         revealButton.setMinHeight(0);
@@ -1658,7 +1658,7 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER_VERTICAL);
-        root.setPadding(dp(14), dp(5), dp(14), dp(5));
+        root.setPadding(dp(12), dp(4), dp(12), dp(4));
         root.setBackground(controlSurfaceBackground(0xE6101418, 0xFF3C4043, 1));
         root.setClickable(false);
         root.setFocusable(false);
@@ -2188,12 +2188,12 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(18);
-        root.setPadding(padding, dp(14), padding, dp(14));
+        root.setPadding(padding, dp(12), padding, dp(12));
 
         LinearLayout header = new LinearLayout(activity);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(12), dp(16), dp(12));
+        header.setPadding(dp(18), dp(12), dp(18), dp(12));
         header.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
         addModeOptionsHeading(header, mode);
@@ -2224,7 +2224,7 @@ public class XrStreamPresenter {
         qualityHeading.setLetterSpacing(0.08f);
         qualityHeading.setTypeface(qualityHeading.getTypeface(),
                 android.graphics.Typeface.BOLD);
-        qualityHeading.setPadding(dp(4), dp(12), 0, dp(7));
+        qualityHeading.setPadding(dp(4), dp(12), 0, dp(8));
         root.addView(qualityHeading);
 
         addModeQualityControls(root, mode);
@@ -2235,14 +2235,14 @@ public class XrStreamPresenter {
             LinearLayout clientRow = new LinearLayout(activity);
             clientRow.setOrientation(LinearLayout.HORIZONTAL);
             clientRow.setGravity(Gravity.CENTER_VERTICAL);
-            clientRow.setPadding(dp(14), dp(12), dp(14), dp(12));
+            clientRow.setPadding(dp(12), dp(12), dp(12), dp(12));
             clientRow.setBackground(controlSurfaceBackground(
                     PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
             addClientSbsModeOptions(clientRow);
             LinearLayout.LayoutParams clientParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
-            clientParams.topMargin = dp(10);
+            clientParams.topMargin = dp(12);
             root.addView(clientRow, clientParams);
         }
         addModeOptionsFooter(root, mode);
@@ -2272,7 +2272,7 @@ public class XrStreamPresenter {
 
         LinearLayout resolutionColumn = new LinearLayout(activity);
         resolutionColumn.setOrientation(LinearLayout.VERTICAL);
-        resolutionColumn.setPadding(dp(14), dp(12), dp(14), dp(12));
+        resolutionColumn.setPadding(dp(12), dp(12), dp(12), dp(12));
         resolutionColumn.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
         TextView resolutionTitle = controlText(
@@ -2292,7 +2292,7 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams resolutionParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.55f);
-        resolutionParams.rightMargin = dp(6);
+        resolutionParams.rightMargin = dp(8);
         qualityRow.addView(resolutionColumn, resolutionParams);
 
         LinearLayout tuningColumn = new LinearLayout(activity);
@@ -2301,7 +2301,7 @@ public class XrStreamPresenter {
         SessionSettingsModel.Value fps = model.get(SessionSettingsModel.Key.FRAME_RATE);
         LinearLayout fpsCard = new LinearLayout(activity);
         fpsCard.setOrientation(LinearLayout.VERTICAL);
-        fpsCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        fpsCard.setPadding(dp(12), dp(12), dp(12), dp(12));
         fpsCard.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
         LinearLayout fpsHeading = new LinearLayout(activity);
@@ -2324,7 +2324,7 @@ public class XrStreamPresenter {
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
         LinearLayout bitrateCard = new LinearLayout(activity);
         bitrateCard.setOrientation(LinearLayout.VERTICAL);
-        bitrateCard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        bitrateCard.setPadding(dp(12), dp(12), dp(12), dp(12));
         bitrateCard.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
         TextView bitrateTitle = controlText(
@@ -2352,7 +2352,7 @@ public class XrStreamPresenter {
         tuningColumn.addView(bitrateCard, bitrateParams);
         LinearLayout.LayoutParams tuningParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.35f);
-        tuningParams.leftMargin = dp(6);
+        tuningParams.leftMargin = dp(8);
         qualityRow.addView(tuningColumn, tuningParams);
 
         root.addView(qualityRow, new LinearLayout.LayoutParams(
@@ -2361,13 +2361,13 @@ public class XrStreamPresenter {
 
         modeQualityCueView = controlText(modeQualityCue(model), 22f,
                 model.requiresReconnect() ? STATS_WARN_COLOR : STATS_LABEL_COLOR);
-        modeQualityCueView.setPadding(dp(14), dp(9), dp(14), dp(9));
+        modeQualityCueView.setPadding(dp(12), dp(8), dp(12), dp(8));
         modeQualityCueView.setBackground(controlSurfaceBackground(
                 PANEL_SUBTLE_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
         LinearLayout.LayoutParams cueParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        cueParams.topMargin = dp(9);
+        cueParams.topMargin = dp(8);
         root.addView(modeQualityCueView, cueParams);
     }
 
@@ -2375,7 +2375,7 @@ public class XrStreamPresenter {
         LinearLayout footer = new LinearLayout(activity);
         footer.setOrientation(LinearLayout.HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        footer.setPadding(0, dp(10), 0, 0);
+        footer.setPadding(0, dp(12), 0, 0);
 
         modeDefaultsButton = compactButton(
                 activity.getString(R.string.xr_session_use_session));
@@ -2392,7 +2392,7 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        applyParams.leftMargin = dp(10);
+        applyParams.leftMargin = dp(12);
         footer.addView(modeApplyButton, applyParams);
         root.addView(footer);
     }
@@ -2501,7 +2501,7 @@ public class XrStreamPresenter {
         modelColumn.addView(clientModelChoiceGroup, choiceParams);
 
         clientModelPendingView = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
-        clientModelPendingView.setPadding(0, dp(3), 0, 0);
+        clientModelPendingView.setPadding(0, dp(4), 0, 0);
         modelColumn.addView(clientModelPendingView);
         updateClientModelPendingView(model);
         row.addView(modelColumn, new LinearLayout.LayoutParams(0,
@@ -2528,7 +2528,7 @@ public class XrStreamPresenter {
         RawSbsModeSettingsModel model = rawSbsModeSettingsModel;
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
         card.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
 
@@ -2554,12 +2554,12 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dp(7);
+        choiceParams.topMargin = dp(8);
         card.addView(rawSbsPerEyeResolutionChoiceGroup, choiceParams);
 
         rawSbsGeometryView = controlText(
                 rawSbsGeometryText(model), 20f, STATS_LABEL_COLOR);
-        rawSbsGeometryView.setPadding(0, dp(7), 0, 0);
+        rawSbsGeometryView.setPadding(0, dp(8), 0, 0);
         card.addView(rawSbsGeometryView);
 
         rawSbsPerEyeResolutionPendingView =
@@ -2571,7 +2571,7 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(10);
+        params.topMargin = dp(12);
         root.addView(card, params);
     }
 
@@ -2841,7 +2841,7 @@ public class XrStreamPresenter {
         TextView summary = controlText(
                 activity.getString(R.string.xr_session_settings_summary),
                 SESSION_SUMMARY_TEXT_SP, STATS_LABEL_COLOR);
-        summary.setPadding(0, dp(6), 0, dp(10));
+        summary.setPadding(0, dp(8), 0, dp(12));
         root.addView(summary);
 
         LinearLayout rows = new LinearLayout(activity);
@@ -2863,11 +2863,11 @@ public class XrStreamPresenter {
         }
         LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        videoParams.rightMargin = dp(6);
+        videoParams.rightMargin = dp(8);
         rows.addView(videoColumn, videoParams);
         LinearLayout.LayoutParams deliveryParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        deliveryParams.leftMargin = dp(6);
+        deliveryParams.leftMargin = dp(8);
         rows.addView(deliveryColumn, deliveryParams);
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
@@ -2885,7 +2885,7 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         applyParams.gravity = Gravity.END;
-        applyParams.topMargin = dp(10);
+        applyParams.topMargin = dp(12);
         root.addView(sessionApplyButton, applyParams);
         return root;
     }
@@ -2896,7 +2896,7 @@ public class XrStreamPresenter {
         TextView heading = controlText(label, SESSION_GROUP_TEXT_SP,
                 TILE_ACTIVE_BORDER_COLOR);
         heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
-        heading.setPadding(dp(2), 0, 0, dp(6));
+        heading.setPadding(dp(4), 0, 0, dp(8));
         column.addView(heading);
         return column;
     }
@@ -2926,7 +2926,7 @@ public class XrStreamPresenter {
         }
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(18), dp(16), dp(18), dp(16));
+        row.setPadding(dp(18), dp(18), dp(18), dp(18));
         row.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
 
@@ -2959,7 +2959,7 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dp(7);
+        choiceParams.topMargin = dp(8);
         row.addView(choices, choiceParams);
 
         TextView pending = controlText("", SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
@@ -2978,7 +2978,7 @@ public class XrStreamPresenter {
                                                SessionSettingsModel.Value value) {
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(18), dp(16), dp(18), dp(16));
+        row.setPadding(dp(18), dp(18), dp(18), dp(18));
         row.setBackground(controlSurfaceBackground(
                 PANEL_SECTION_COLOR, PANEL_SECTION_BORDER_COLOR, 1));
 
@@ -3002,7 +3002,7 @@ public class XrStreamPresenter {
         TextView scopeNote = controlText(
                 activity.getString(R.string.xr_session_bitrate_scope),
                 SESSION_META_TEXT_SP, STATS_LABEL_COLOR);
-        scopeNote.setPadding(0, dp(2), 0, dp(4));
+        scopeNote.setPadding(0, dp(4), 0, dp(4));
         row.addView(scopeNote);
 
         XrBitrateControl bitrateControl = new XrBitrateControl(activity);
@@ -3095,7 +3095,7 @@ public class XrStreamPresenter {
 
     private LinearLayout.LayoutParams glyphLayoutParams() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(48), dp(48));
-        params.rightMargin = dp(10);
+        params.rightMargin = dp(12);
         return params;
     }
 
@@ -3223,7 +3223,7 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(PANEL_BACKGROUND_COLOR);
-        int padding = dp(22);
+        int padding = dp(24);
         root.setPadding(padding, padding, padding, padding);
         return root;
     }
@@ -3252,7 +3252,8 @@ public class XrStreamPresenter {
         button.setText(text);
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         button.setAllCaps(false);
-        button.setMinHeight(dp(72));
+        button.setMinHeight(activity.getResources()
+                .getDimensionPixelSize(R.dimen.xr_control_primary));
         button.setFocusable(true);
         return button;
     }
@@ -3402,12 +3403,12 @@ public class XrStreamPresenter {
         ProgressBar spinner = new ProgressBar(activity);
         spinner.setIndeterminate(true);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(dp(28), dp(28));
-        sp.setMargins(0, 0, dp(14), 0);
+        sp.setMargins(0, 0, dp(12), 0);
         root.addView(spinner, sp);
 
         depthStatusText = new TextView(activity);
         depthStatusText.setTextColor(Color.WHITE);
-        depthStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+        depthStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         root.addView(depthStatusText);
 
         depthStatusPanel = PanelEntity.create(
@@ -3426,12 +3427,12 @@ public class XrStreamPresenter {
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER);
         root.setBackgroundColor(0xE6101418);
-        int padding = dp(14);
+        int padding = dp(12);
         root.setPadding(padding, padding, padding, padding);
 
         transientMessageText = new TextView(activity);
         transientMessageText.setTextColor(Color.WHITE);
-        transientMessageText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f);
+        transientMessageText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         transientMessageText.setGravity(Gravity.CENTER);
         transientMessageText.setMaxLines(3);
         root.addView(transientMessageText, new LinearLayout.LayoutParams(
@@ -4251,7 +4252,7 @@ public class XrStreamPresenter {
         View d = new View(activity);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 dp(2), LinearLayout.LayoutParams.MATCH_PARENT);
-        int vm = dp(10);
+        int vm = dp(12);
         lp.topMargin = vm;
         lp.bottomMargin = vm;
         lp.leftMargin = dp(4);
@@ -6228,7 +6229,7 @@ public class XrStreamPresenter {
         col.setFocusable(true);
         col.setFocusableInTouchMode(false);
         col.setContentDescription(item.label);
-        int pad = dp(3);
+        int pad = dp(4);
         col.setPadding(pad, pad, pad, item.selectsMode != null ? dp(24) : pad);
         col.setOnClickListener(v -> {
             revealDockTemporarily();
@@ -6250,7 +6251,7 @@ public class XrStreamPresenter {
             FrameLayout.LayoutParams chevronParams = new FrameLayout.LayoutParams(
                     dp(40), dp(18),
                     Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            chevronParams.bottomMargin = dp(5);
+            chevronParams.bottomMargin = dp(4);
             root.addView(chevron, chevronParams);
             item.optionsIndicator = chevron;
         }
@@ -6283,7 +6284,7 @@ public class XrStreamPresenter {
         TextView text = new TextView(activity);
         text.setText(item.label);
         text.setTextColor(Color.WHITE);
-        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
         text.setGravity(Gravity.CENTER);
         text.setSingleLine(true);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(

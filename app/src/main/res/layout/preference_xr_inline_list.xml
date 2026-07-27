@@ -6,37 +6,37 @@
     android:clipToPadding="false"
     android:focusable="false"
     android:orientation="vertical"
-    android:paddingStart="18dp"
-    android:paddingTop="14dp"
-    android:paddingEnd="18dp"
-    android:paddingBottom="14dp">
+    android:paddingStart="@dimen/xr_space_lg"
+    android:paddingTop="@dimen/xr_space_md"
+    android:paddingEnd="@dimen/xr_space_lg"
+    android:paddingBottom="@dimen/xr_space_md">
 
     <TextView
         android:id="@android:id/title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:textColor="@color/xr_text_primary"
-        android:textSize="18sp"
+        android:textSize="@dimen/xr_text_emphasis"
         android:textStyle="bold" />
 
     <TextView
         android:id="@android:id/summary"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="@dimen/xr_space_xs"
         android:textColor="@color/xr_text_secondary"
-        android:textSize="14sp" />
+        android:textSize="@dimen/xr_text_caption" />
 
     <com.limelight.preferences.XrChoiceGroup
         android:id="@+id/xr_choice_group"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp" />
+        android:layout_marginTop="@dimen/xr_space_md" />
 
     <com.limelight.ui.xrcontrols.XrResolutionSelector
         android:id="@+id/xr_resolution_selector"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/xr_space_md"
         android:visibility="gone" />
 </LinearLayout>

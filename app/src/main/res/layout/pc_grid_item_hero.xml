@@ -10,7 +10,7 @@
     android:focusableInTouchMode="false"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:padding="24dp">
+    android:padding="@dimen/xr_space_xl">
 
     <RelativeLayout
         android:id="@+id/grid_image_layout"
@@ -43,7 +43,7 @@
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_marginStart="24dp"
+        android:layout_marginStart="@dimen/xr_space_xl"
         android:layout_weight="1"
         android:gravity="center_vertical"
         android:orientation="vertical">
@@ -54,58 +54,58 @@
             android:letterSpacing="0.12"
             android:text="@string/xr_home_single_machine_label"
             android:textColor="@color/xr_accent"
-            android:textSize="15sp"
+            android:textSize="@dimen/xr_text_caption"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/grid_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="@dimen/xr_space_sm"
             android:ellipsize="end"
             android:maxLines="1"
             android:textColor="@color/xr_text_primary"
-            android:textSize="30sp"
+            android:textSize="@dimen/xr_text_display"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/grid_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="7dp"
+            android:layout_marginTop="@dimen/xr_space_sm"
             android:textColor="@color/xr_text_secondary"
-            android:textSize="20sp"
+            android:textSize="@dimen/xr_text_emphasis"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/grid_hint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="@dimen/xr_space_sm"
             android:maxLines="2"
             android:textColor="#FFB7C9DA"
-            android:textSize="17sp" />
+            android:textSize="@dimen/xr_text_body" />
 
         <Button
             android:id="@+id/grid_primary_action"
             android:layout_width="wrap_content"
-            android:layout_height="60dp"
-            android:layout_marginTop="12dp"
+            android:layout_height="@dimen/xr_control_standard"
+            android:layout_marginTop="@dimen/xr_space_md"
             android:background="@drawable/xr_home_primary_action_background"
             android:minWidth="150dp"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:textAllCaps="false"
             android:textColor="@color/xr_text_primary"
-            android:textSize="18sp"
+            android:textSize="@dimen/xr_text_emphasis"
             app:backgroundTint="@null" />
     </LinearLayout>
 
     <View
         android:layout_width="1dp"
         android:layout_height="154dp"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp"
+        android:layout_marginStart="@dimen/xr_space_lg"
+        android:layout_marginEnd="@dimen/xr_space_lg"
         android:background="@color/xr_accent_deep" />
 
     <LinearLayout
@@ -120,24 +120,24 @@
             android:letterSpacing="0.1"
             android:text="@string/xr_home_host_details"
             android:textColor="#FF829AB1"
-            android:textSize="14sp"
+            android:textSize="@dimen/xr_text_caption"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/grid_address"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="13dp"
+            android:layout_marginTop="@dimen/xr_space_md"
             android:ellipsize="end"
             android:maxLines="1"
             android:textColor="#FFE7EDF4"
-            android:textSize="17sp" />
+            android:textSize="@dimen/xr_text_body" />
 
         <LinearLayout
             android:id="@+id/grid_connection_speed"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="@dimen/xr_space_sm"
             android:importantForAccessibility="noHideDescendants"
             android:orientation="vertical">
 
@@ -146,7 +146,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/xr_home_headset_wifi"
                 android:textColor="#FF829AB1"
-                android:textSize="15sp"
+                android:textSize="@dimen/xr_text_caption"
                 android:textStyle="bold" />
 
             <LinearLayout
@@ -165,19 +165,19 @@
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:textColor="#FFB7C9DA"
-                    android:textSize="17sp" />
+                    android:textSize="@dimen/xr_text_emphasis" />
 
                 <TextView
                     android:id="@+id/grid_upload_speed"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginStart="@dimen/xr_space_sm"
                     android:layout_weight="1"
                     android:ellipsize="end"
                     android:gravity="end"
                     android:maxLines="1"
                     android:textColor="#FFB7C9DA"
-                    android:textSize="17sp" />
+                    android:textSize="@dimen/xr_text_emphasis" />
             </LinearLayout>
         </LinearLayout>
 
@@ -185,36 +185,36 @@
             android:id="@+id/grid_display_fact"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="@dimen/xr_space_sm"
             android:maxLines="2"
             android:textColor="#FFE7EDF4"
-            android:textSize="17sp" />
+            android:textSize="@dimen/xr_text_body" />
 
         <TextView
             android:id="@+id/grid_session_fact"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="@dimen/xr_space_sm"
             android:maxLines="2"
             android:textColor="#FFE7EDF4"
-            android:textSize="17sp" />
+            android:textSize="@dimen/xr_text_body" />
     </LinearLayout>
 
     <Button
         android:id="@+id/grid_more_button"
         android:layout_width="60dp"
-        android:layout_height="60dp"
+        android:layout_height="@dimen/xr_control_standard"
         android:layout_gravity="center_vertical"
-        android:layout_marginStart="14dp"
+        android:layout_marginStart="@dimen/xr_space_md"
         android:background="@drawable/xr_home_action_background"
         android:gravity="center"
         android:minWidth="60dp"
-        android:minHeight="60dp"
+        android:minHeight="@dimen/xr_control_standard"
         android:padding="0dp"
         android:singleLine="true"
         android:text="@string/xr_setting_plus"
         android:textAllCaps="false"
         android:textColor="@color/xr_text_primary"
-        android:textSize="28sp"
+        android:textSize="@dimen/xr_text_display"
         app:backgroundTint="@null" />
 </LinearLayout>

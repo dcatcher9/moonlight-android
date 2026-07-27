@@ -70,13 +70,14 @@ public final class XrSegmentedLadder extends LinearLayout {
 
         hint = new TextView(context);
         hint.setTextColor(color(R.color.xr_status_ok));
-        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
         hint.setVisibility(GONE);
         addView(hint, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
         row = new LinearLayout(context);
         row.setOrientation(HORIZONTAL);
-        LayoutParams rowParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(52));
+        LayoutParams rowParams = new LayoutParams(LayoutParams.MATCH_PARENT,
+                getResources().getDimensionPixelSize(R.dimen.xr_control_standard));
         rowParams.topMargin = dp(4);
         addView(row, rowParams);
 
@@ -86,7 +87,7 @@ public final class XrSegmentedLadder extends LinearLayout {
         caption.setTypeface(caption.getTypeface(), android.graphics.Typeface.BOLD);
         LayoutParams captionParams = new LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        captionParams.topMargin = dp(6);
+        captionParams.topMargin = dp(8);
         addView(caption, captionParams);
     }
 
@@ -164,7 +165,7 @@ public final class XrSegmentedLadder extends LinearLayout {
             AppCompatButton segment = new AppCompatButton(getContext());
             segment.setAllCaps(false);
             segment.setText(choice.label);
-            segment.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f);
+            segment.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f);
             segment.setGravity(Gravity.CENTER);
             segment.setPadding(0, 0, 0, 0);
             segment.setStateListAnimator(null);
@@ -178,7 +179,7 @@ public final class XrSegmentedLadder extends LinearLayout {
 
             LayoutParams params = new LayoutParams(0, LayoutParams.MATCH_PARENT, weights[i]);
             if (i > 0) {
-                params.leftMargin = dp(6);
+                params.leftMargin = dp(8);
             }
             row.addView(segment, params);
             segments.add(segment);
@@ -213,7 +214,8 @@ public final class XrSegmentedLadder extends LinearLayout {
                             : color(R.color.xr_segment_empty));
             GradientDrawable background = new GradientDrawable();
             background.setColor(fill);
-            background.setCornerRadius(dp(9));
+            background.setCornerRadius(
+                    getResources().getDimension(R.dimen.xr_radius_control));
             segment.setBackground(background);
             // Filled segments are light, so their label must flip to dark to stay readable.
             segment.setTextColor(color(i == selectedIndex && enabled

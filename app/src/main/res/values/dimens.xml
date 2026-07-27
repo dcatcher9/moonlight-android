@@ -13,4 +13,37 @@
     <dimen name="xr_pc_hero_grid_height">278dp</dimen>
     <dimen name="xr_pc_grid_card_width">390dp</dimen>
 
+
+    <!--
+      XR design scales.
+
+      Before these, the XR surfaces carried 11 distinct text sizes, 8 corner radii and a dozen
+      spacing values, none of them chosen against each other: 17/18/19sp were three sizes within
+      2sp, and 12dp and 14dp radii were indistinguishable at arm's length. A value is picked from
+      a scale or it is not picked at all.
+
+      Legacy phone and TV layouts are deliberately out of scope; they are a different product
+      surface with a different viewing distance.
+    -->
+    <dimen name="xr_text_caption">14sp</dimen>
+    <dimen name="xr_text_body">16sp</dimen>
+    <dimen name="xr_text_emphasis">19sp</dimen>
+    <dimen name="xr_text_title">23sp</dimen>
+    <dimen name="xr_text_display">28sp</dimen>
+
+    <!-- Control, card, pill. -->
+    <dimen name="xr_radius_control">8dp</dimen>
+    <dimen name="xr_radius_card">14dp</dimen>
+    <dimen name="xr_radius_pill">24dp</dimen>
+
+    <dimen name="xr_space_xs">4dp</dimen>
+    <dimen name="xr_space_sm">8dp</dimen>
+    <dimen name="xr_space_md">12dp</dimen>
+    <dimen name="xr_space_lg">18dp</dimen>
+    <dimen name="xr_space_xl">24dp</dimen>
+
+    <!-- Gaze targets: compact rows, standard controls, primary actions. -->
+    <dimen name="xr_control_compact">40dp</dimen>
+    <dimen name="xr_control_standard">56dp</dimen>
+    <dimen name="xr_control_primary">64dp</dimen>
 </resources>

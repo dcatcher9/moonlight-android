@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:background="#FF121316"
     android:orientation="vertical"
-    android:padding="24dp"
+    android:padding="@dimen/xr_space_xl"
     tools:context=".AppView">
 
     <LinearLayout
@@ -14,7 +14,7 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingBottom="16dp">
+        android:paddingBottom="@dimen/xr_space_lg">
 
         <Button
             android:id="@+id/backButton"
@@ -26,17 +26,17 @@
             android:drawablePadding="10dp"
             android:minWidth="144dp"
             android:minHeight="56dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/xr_bar_machines"
             android:textAllCaps="false"
             android:textColor="@color/xr_text_primary"
-            android:textSize="16sp" />
+            android:textSize="@dimen/xr_text_body" />
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="18dp"
+            android:layout_marginStart="@dimen/xr_space_lg"
             android:layout_weight="1"
             android:orientation="vertical">
 
@@ -47,7 +47,7 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="@color/xr_text_primary"
-                android:textSize="28sp"
+                android:textSize="@dimen/xr_text_display"
                 android:textStyle="bold"
                 tools:text="Gaming PC" />
 
@@ -55,40 +55,40 @@
                 android:id="@+id/computerStatusText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
+                android:layout_marginTop="@dimen/xr_space_xs"
                 android:text="@string/pcview_menu_header_online"
                 android:textColor="@color/xr_status_ok"
-                android:textSize="15sp" />
+                android:textSize="@dimen/xr_text_caption" />
         </LinearLayout>
 
         <SearchView
             android:id="@+id/appSearch"
             android:layout_width="240dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_action_background"
             android:iconifiedByDefault="false"
             android:maxWidth="240dp"
             android:minHeight="56dp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
+            android:paddingStart="@dimen/xr_space_sm"
+            android:paddingEnd="@dimen/xr_space_sm"
             android:queryHint="@string/xr_home_apps" />
 
         <Button
             android:id="@+id/settingsButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_action_background"
             app:backgroundTint="@null"
             android:minWidth="128dp"
             android:minHeight="56dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/xr_home_settings"
             android:textAllCaps="false"
             android:textColor="@color/xr_text_primary"
-            android:textSize="16sp" />
+            android:textSize="@dimen/xr_text_body" />
 
     </LinearLayout>
 
@@ -96,11 +96,11 @@
         android:id="@+id/currentSessionPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="@dimen/xr_space_lg"
         android:background="@drawable/xr_home_card_background"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="16dp"
+        android:padding="@dimen/xr_space_lg"
         android:visibility="gone">
 
         <LinearLayout
@@ -114,18 +114,18 @@
                 android:layout_height="wrap_content"
                 android:text="@string/xr_home_current_session"
                 android:textColor="@color/xr_accent"
-                android:textSize="15sp"
+                android:textSize="@dimen/xr_text_caption"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/currentSessionAppText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="@dimen/xr_space_xs"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="@color/xr_text_primary"
-                android:textSize="21sp"
+                android:textSize="@dimen/xr_text_emphasis"
                 tools:text="Cyberpunk 2077" />
         </LinearLayout>
 
@@ -133,40 +133,40 @@
             android:id="@+id/resumeSessionButton"
             android:layout_width="wrap_content"
             android:layout_height="56dp"
-            android:layout_marginStart="16dp"
+            android:layout_marginStart="@dimen/xr_space_lg"
             android:background="@drawable/xr_home_primary_action_background"
             app:backgroundTint="@null"
             android:minWidth="140dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/applist_menu_resume"
             android:textAllCaps="false"
             android:textColor="@color/xr_text_primary"
-            android:textSize="16sp" />
+            android:textSize="@dimen/xr_text_body" />
 
         <Button
             android:id="@+id/endSessionButton"
             android:layout_width="wrap_content"
             android:layout_height="56dp"
-            android:layout_marginStart="12dp"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_destructive_action_background"
             app:backgroundTint="@null"
             android:minWidth="132dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/xr_home_end_session"
             android:textAllCaps="false"
             android:textColor="@color/xr_danger"
-            android:textSize="16sp" />
+            android:textSize="@dimen/xr_text_body" />
     </LinearLayout>
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingBottom="10dp"
+        android:paddingBottom="@dimen/xr_space_md"
         android:text="@string/xr_home_apps"
         android:textColor="@color/xr_text_secondary"
-        android:textSize="22sp"
+        android:textSize="@dimen/xr_text_title"
         android:textStyle="bold" />
 
     <FrameLayout
@@ -175,5 +175,5 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:background="@drawable/xr_home_panel_background"
-        android:padding="12dp" />
+        android:padding="@dimen/xr_space_md" />
 </LinearLayout>
