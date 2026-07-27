@@ -256,6 +256,22 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
+    public void sceneCutStatusExposesArmingAndExternalAttribution() {
+        assertEquals("7 total | scene age 19 frames | geometry armed | external requests 2",
+                XrStreamPresenter.formatSceneCutStatus(7L, 19, true, 2L));
+        assertEquals("7 total | scene age 19 frames | geometry disarmed | external requests 0",
+                XrStreamPresenter.formatSceneCutStatus(7L, 19, false, 0L));
+    }
+
+    @Test
+    public void depthHealthReadbackFailureIsVisibleInsteadOfLookingLikeWarmup() {
+        assertEquals("Waiting for sample",
+                XrStreamPresenter.formatDepthHealthUnavailable(false));
+        assertEquals("Telemetry unavailable | retrying",
+                XrStreamPresenter.formatDepthHealthUnavailable(true));
+    }
+
+    @Test
     public void healthTrendRowsRenderEveryHistoryAndReuseTheirSparklines() throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
@@ -303,6 +319,14 @@ public final class XrStreamPresenterViewTest {
             LinearLayout trendContent = (LinearLayout) firstRows[i].getChildAt(1);
             assertEquals(2, trendContent.getChildCount());
             firstSparklines[i] = trendContent.getChildAt(1);
+            int plottedSamples = "Scene cuts".equals(labels[i]) ? 2 : 3;
+            String summary = "Scene cuts".equals(labels[i])
+                    ? "steady, recent range 0.5 to 0.5, latest 0.5"
+                    : "rising, recent range " + (float) i + " to " + (i + 1.0f)
+                            + ", latest " + (i + 1.0f);
+            assertEquals(labels[i] + " trend, " + plottedSamples
+                            + " samples, " + summary,
+                    firstSparklines[i].getContentDescription().toString());
         }
 
         begin.invoke(presenter);

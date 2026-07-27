@@ -59,6 +59,22 @@ public class ClientSbsMetricHistoryTest {
     }
 
     @Test
+    public void clearDropsEverySampleBeforeTelemetryRecovery() {
+        ClientSbsMetricHistory history = new ClientSbsMetricHistory();
+        history.add(1.0f);
+        history.add(2.0f);
+
+        history.clear();
+
+        assertEquals(0, history.size());
+        assertEquals(0, history.copyInto(new float[4]));
+        history.add(3.0f);
+        float[] recovered = new float[4];
+        assertEquals(1, history.copyInto(recovered));
+        assertEquals(3.0f, recovered[0], 0.0001f);
+    }
+
+    @Test
     public void countersBecomeSpikesWhenDifferenced() {
         // A cut counter climbs and never falls, so plotted raw it is a staircase that flattens as
         // the session lengthens. Deltas put one spike where each cut actually happened.

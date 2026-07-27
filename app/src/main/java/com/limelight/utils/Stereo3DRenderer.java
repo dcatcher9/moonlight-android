@@ -233,6 +233,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private volatile ClientSbsGpuTimer gpuTimer;
     private static final int GPU_TIMER_SAMPLE_STRIDE = 4;
     private static final int GPU_TELEMETRY_POLL_STRIDE = 4;
+    /** Health polls skipped after a transient readback failure, measured in poll opportunities. */
+    private static final int HEALTH_TELEMETRY_RETRY_BASE_POLLS = 15;
+    /** Persistent driver failures remain diagnostic-only and retry at a bounded, quiet cadence. */
+    private static final int HEALTH_TELEMETRY_RETRY_MAX_POLLS = 240;
     private final int[] gpuTimerSampleCounters =
             new int[ClientSbsGpuTimer.Stage.values().length];
     private int gpuTelemetryPollCounter;
@@ -242,7 +246,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final AtomicLong performanceSamplingEpoch = new AtomicLong(1L);
     /** Applies timer-query and GL-thread-only diagnostic resets at the next current-context draw. */
     private final AtomicBoolean performanceGlStateResetRequested = new AtomicBoolean(true);
-    private boolean depthHealthPollingDisabled;
+    private int depthHealthRetryPollsRemaining;
+    private int depthHealthConsecutiveFailures;
     /** Retained across GL context loss and depth-processor reconstruction. */
     private volatile boolean statsPanelVisible;
     /** GL-thread cache preventing redundant focus writes to the current processor. */
@@ -488,9 +493,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     /** Immutable copy of the processor's reused asynchronous health-readback view. */
     private static final class DepthHealthState {
-        static final DepthHealthState EMPTY = new DepthHealthState();
+        static final DepthHealthState EMPTY = new DepthHealthState(false);
+        static final DepthHealthState READBACK_FAILED = new DepthHealthState(true);
 
         final boolean available;
+        /** True after a readback error and until a fresh GPU health sample arrives. */
+        final boolean readbackFailed;
         final float validFraction;
         final float effectiveRangeWidth;
         final boolean rangeCollapsed;
@@ -529,8 +537,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final long collapsedRawFrames;
 
 
-        private DepthHealthState() {
+        private DepthHealthState(boolean readbackFailed) {
             available = false;
+            this.readbackFailed = readbackFailed;
             validFraction = 0.0f;
             effectiveRangeWidth = 0.0f;
             rangeCollapsed = true;
@@ -551,6 +560,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
             available = true;
+            readbackFailed = false;
             validFraction = snapshot.getValidRawFraction();
             effectiveRangeWidth = snapshot.getEffectiveRangeWidth();
             rangeCollapsed = snapshot.isPercentileRangeCollapsed();
@@ -619,6 +629,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         /** Low-frequency, nonblocking depth-health telemetry copied from a signaled staging slot. */
         public final boolean depthHealthAvailable;
+        /** A readback failed and the diagnostic path is waiting for its bounded retry. */
+        public final boolean depthHealthReadbackFailed;
         public final float validDepthFraction;
         public final float effectiveDepthRangeWidth;
         public final boolean rawDepthRangeCollapsed;
@@ -694,6 +706,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
             DepthHealthState health = owner.depthHealthState;
             this.depthHealthAvailable = health.available;
+            this.depthHealthReadbackFailed = health.readbackFailed;
             this.validDepthFraction = health.validFraction;
             this.effectiveDepthRangeWidth = health.effectiveRangeWidth;
             this.rawDepthRangeCollapsed = health.rangeCollapsed;
@@ -927,14 +940,20 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 timer.poll();
             }
         }
-        if (processor == null || depthHealthPollingDisabled) {
+        if (processor == null) {
+            return;
+        }
+        if (depthHealthRetryPollsRemaining > 0) {
+            depthHealthRetryPollsRemaining--;
             return;
         }
         try {
             ClientSbsGpuDepthProcessor.HealthSnapshot health =
                     processor.pollHealthSnapshot();
             if (health != null) {
-                depthHealthState = new DepthHealthState(health);
+                // A completed, mapped sample is the recovery boundary. A nonthrowing null poll
+                // means only that no fence is ready, so it must not erase the visible failure state.
+                depthHealthConsecutiveFailures = 0;
                 popHistory.add(health.getPopStrength());
                 if (shouldAppendEdgeHistory(
                         health.hasAdaptivePopClassification(), health.getEdgeFraction())) {
@@ -945,14 +964,41 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 // that flattens as the session lengthens, hiding the bursts being looked for.
                 cutHistory.add(health.getHardCutCount());
                 anchorHistory.add(health.getZeroAnchorShift());
+                depthHealthState = new DepthHealthState(health);
             }
         } catch (Throwable error) {
             // Health data is diagnostic only. A driver that rejects asynchronous staging must not
-            // disable otherwise-valid GPU depth rendering.
-            depthHealthPollingDisabled = true;
-            LimeLog.warning("Client SBS depth health telemetry disabled: "
+            // disable otherwise-valid GPU depth rendering. Do not retain a live-looking old sample:
+            // mark health unavailable, then retry with bounded exponential backoff so a transient
+            // map/query failure can recover without turning a persistent driver fault into log spam.
+            depthHealthState = DepthHealthState.READBACK_FAILED;
+            clearDepthHealthMetricHistory();
+            if (depthHealthConsecutiveFailures < Integer.MAX_VALUE) {
+                depthHealthConsecutiveFailures++;
+            }
+            depthHealthRetryPollsRemaining =
+                    healthTelemetryRetryPolls(depthHealthConsecutiveFailures);
+            LimeLog.warning("Client SBS depth health telemetry unavailable; retrying after "
+                    + depthHealthRetryPollsRemaining + " poll opportunities: "
                     + error.getMessage());
         }
+    }
+
+    static int healthTelemetryRetryPolls(int consecutiveFailures) {
+        if (consecutiveFailures <= 0) {
+            return 0;
+        }
+        int shift = Math.min(consecutiveFailures - 1, 30);
+        long retryPolls = (long) HEALTH_TELEMETRY_RETRY_BASE_POLLS << shift;
+        return (int) Math.min(HEALTH_TELEMETRY_RETRY_MAX_POLLS, retryPolls);
+    }
+
+    private void clearDepthHealthMetricHistory() {
+        popHistory.clear();
+        edgeHistory.clear();
+        changeHistory.clear();
+        cutHistory.clear();
+        anchorHistory.clear();
     }
 
     static boolean shouldPollHealthTelemetry(int pollCounter) {
@@ -1105,7 +1151,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             abandonedTimer.abandonAfterContextLoss();
         }
         depthHealthState = DepthHealthState.EMPTY;
-        depthHealthPollingDisabled = false;
+        depthHealthRetryPollsRemaining = 0;
+        depthHealthConsecutiveFailures = 0;
         gpuDepthTextureId = 0;
         gpuProfileTextureId = 0;
         gpuDepthActive = false;
@@ -2004,7 +2051,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         gpuTimer = null;
         performanceGlStateResetRequested.set(true);
         depthHealthState = DepthHealthState.EMPTY;
-        depthHealthPollingDisabled = false;
+        depthHealthRetryPollsRemaining = 0;
+        depthHealthConsecutiveFailures = 0;
 
         simple3dProgram = createProgram(
                 ShaderUtils.SIMPLE_VERTEX_SHADER, ClientSbsShaders.FLAT_FRAGMENT);
@@ -3255,7 +3303,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
         }
         depthHealthState = DepthHealthState.EMPTY;
-        depthHealthPollingDisabled = false;
+        depthHealthRetryPollsRemaining = 0;
+        depthHealthConsecutiveFailures = 0;
         hasFrameForActiveGeneration = false;
         lastCapturedFrameSequence = latchedFrameSequence;
     }

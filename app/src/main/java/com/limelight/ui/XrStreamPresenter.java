@@ -3592,7 +3592,8 @@ public class XrStreamPresenter {
         if (clientSbsLoggingActive) {
             String depthHealth;
             if (!clientSbs.depthHealthAvailable) {
-                depthHealth = "unavailable";
+                depthHealth = clientSbs.depthHealthReadbackFailed
+                        ? "readback_failed_retrying" : "unavailable";
             } else {
                 String classifiedEdge = clientSbs.adaptivePopClassified
                         ? String.format(Locale.US, "%.4f", clientSbs.depthEdgeFraction)
@@ -3902,10 +3903,11 @@ public class XrStreamPresenter {
                     // ordinary motion is retriggering; a simultaneous anchor jump proves that the
                     // convergence plane was relatched rather than merely reclassified.
                     addTrendStatsRow("Scene cuts",
-                            String.format(Locale.US,
-                                    "%d total | scene age %d frames",
+                            formatSceneCutStatus(
                                     clientSbs.depthHardCutCount,
-                                    clientSbs.depthSceneAge),
+                                    clientSbs.depthSceneAge,
+                                    clientSbs.depthCutArmed,
+                                    clientSbs.depthExternalCutRequests),
                             paletteColor(R.color.xr_text_secondary),
                             // Deltas: one cut is one spike whenever it happened.
                             clientSbs.cutTrend, true, Float.NaN, Float.NaN);
@@ -3925,8 +3927,12 @@ public class XrStreamPresenter {
                             paletteColor(R.color.xr_text_secondary),
                             clientSbs.anchorTrend, false, Float.NaN, Float.NaN);
                 } else {
-                    addStatsRow("Depth health", "Waiting for sample",
-                            paletteColor(R.color.xr_text_disabled));
+                    addStatsRow("Depth health",
+                            formatDepthHealthUnavailable(
+                                    clientSbs.depthHealthReadbackFailed),
+                            clientSbs.depthHealthReadbackFailed
+                                    ? paletteColor(R.color.xr_status_warn)
+                                    : paletteColor(R.color.xr_text_disabled));
                 }
             }
         }
@@ -3946,6 +3952,20 @@ public class XrStreamPresenter {
             default:
                 return "Normal";
         }
+    }
+
+    static String formatSceneCutStatus(long totalCuts, int sceneAgeFrames,
+                                       boolean cutArmed, long externalCutRequests) {
+        return String.format(Locale.US,
+                "%d total | scene age %d frames | geometry %s | external requests %d",
+                totalCuts, sceneAgeFrames, cutArmed ? "armed" : "disarmed",
+                externalCutRequests);
+    }
+
+    static String formatDepthHealthUnavailable(boolean readbackFailed) {
+        return readbackFailed
+                ? "Telemetry unavailable | retrying"
+                : "Waiting for sample";
     }
 
     static String formatStatsTitle(PresenterMode mode,
@@ -4258,8 +4278,8 @@ public class XrStreamPresenter {
      * only the trend separates those.
      */
     private void addTrendStatsRow(String label, String value, int valueColor,
-                                  float[] trend, boolean asDeltas,
-                                  float rangeMin, float rangeMax) {
+                                   float[] trend, boolean asDeltas,
+                                   float rangeMin, float rangeMax) {
         float[] plotted = trend;
         int count = trend == null ? 0 : trend.length;
         if (asDeltas && count > 1) {
@@ -4275,6 +4295,14 @@ public class XrStreamPresenter {
             addStatsRow(label, value, valueColor);
             return;
         }
+        String trendSummary = XrSparklineView.describeTrend(plotted, count);
+        if (asDeltas) {
+            String restart = XrSparklineView.describeCounterRestart(
+                    trend, trend != null ? trend.length : 0);
+            if (restart != null) {
+                trendSummary += ", " + restart;
+            }
+        }
 
         TableRow row = obtainStatsRow(STATS_ROW_TREND);
         ((TextView) row.getChildAt(0)).setText(label);
@@ -4283,10 +4311,11 @@ public class XrStreamPresenter {
         valueView.setText(value);
         valueView.setTextColor(valueColor);
         XrSparklineView spark = (XrSparklineView) trendContent.getChildAt(1);
-        // A plain View carries no accessibility role, so the plot is absent from both the
-        // accessibility tree and any hierarchy dump taken from it -- which also makes "is the
-        // sparkline there at all" unanswerable from outside the process.
-        spark.setContentDescription(label + " trend, " + count + " samples");
+        // A plain View has neither a role nor a text equivalent. Include the actual recent shape,
+        // rather than merely proving the sparkline exists, so accessibility users receive the
+        // distinction this plot was added to expose.
+        spark.setContentDescription(label + " trend, " + count + " samples, "
+                + trendSummary);
         spark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         spark.setColors(valueColor, paletteColor(R.color.xr_border_panel));
         spark.setRange(rangeMin, rangeMax);
