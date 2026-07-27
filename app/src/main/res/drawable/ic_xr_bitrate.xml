@@ -10,25 +10,25 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="32dp"
     android:height="32dp"
-    android:tint="@color/xr_text_primary"
+    android:tint="@color/xr_accent"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <!-- Dial: open at the bottom, where a gauge's scale ends. -->
     <path
         android:pathData="M5.3,18.7 A9.5,9.5 0 1 1 18.7,18.7"
-        android:strokeColor="@color/xr_text_primary"
+        android:strokeColor="@color/xr_accent"
         android:strokeWidth="2.4"
         android:strokeLineCap="round"
         android:fillColor="@android:color/transparent" />
     <!-- Needle, swung toward the top of the scale. -->
     <path
         android:pathData="M12,12 L16.7,7.3"
-        android:strokeColor="@color/xr_text_primary"
+        android:strokeColor="@color/xr_accent"
         android:strokeWidth="2.4"
         android:strokeLineCap="round"
         android:fillColor="@android:color/transparent" />
     <!-- Hub. -->
     <path
-        android:fillColor="@color/xr_text_primary"
+        android:fillColor="@color/xr_accent"
         android:pathData="M10.2,12a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0z" />
 </vector>

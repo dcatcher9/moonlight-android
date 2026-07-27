@@ -133,6 +133,35 @@ public class XrDesignScaleTest {
     }
 
     @Test
+    public void xrIconsAreDrawnInTheAccentColour() throws IOException {
+        // Every xr_* icon is accent. The control bar looks white because it force-filters its
+        // tiles at runtime, not because those drawables differ -- so this rule has no exceptions
+        // to encode, and an icon that opts out here is a mistake rather than a special case.
+        List<String> offenders = new ArrayList<>();
+        File dir = new File("src/main/res/drawable");
+        assertTrue("drawable sources not found", dir.isDirectory());
+        File[] files = dir.listFiles();
+        if (files == null) {
+            fail("drawable directory could not be listed");
+            return;
+        }
+        for (File file : files) {
+            if (!file.getName().startsWith("ic_xr_")) {
+                continue;
+            }
+            String source = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            if (!source.contains("@color/xr_accent")
+                    || source.contains("@color/xr_text_primary")) {
+                offenders.add(file.getName());
+            }
+        }
+        if (!offenders.isEmpty()) {
+            fail("XR icons must be tinted @color/xr_accent:\n  "
+                    + String.join("\n  ", offenders));
+        }
+    }
+
+    @Test
     public void typeScaleStepsAreDistinctAndOrdered() {
         int[] steps = {
                 R.dimen.xr_text_caption,
