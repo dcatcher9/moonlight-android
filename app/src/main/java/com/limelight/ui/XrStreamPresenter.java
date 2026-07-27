@@ -749,6 +749,14 @@ public class XrStreamPresenter {
             return postAckDecoderConfirmationStarted;
         }
 
+        boolean isWaitingForPresentationAfterMatchingPostAckOutput() {
+            return appliedAckReceived
+                    && postAckDecoderConfirmationStarted
+                    && matchingDecoderOutputReceived
+                    && presentationConfirmationRequired
+                    && !presentationReady;
+        }
+
         void clear() {
             decoderConfirmationRequired = false;
             presentationConfirmationRequired = false;
@@ -5459,6 +5467,15 @@ public class XrStreamPresenter {
         int actualHeight = actual != null ? actual[1] : 0;
         liveQualityConfirmations.onDecoderOutput(
                 actualWidth, actualHeight, expected[0], expected[1]);
+        if (liveQualityRequestMode() == PresenterMode.CLIENT_SBS_AI
+                && liveQualityConfirmations
+                .isWaitingForPresentationAfterMatchingPostAckOutput()) {
+            StreamContainer streamContainer = game.getStreamContainer();
+            if (streamContainer != null) {
+                streamContainer.onClientSbsPostAckDecoderOutput(
+                        actualWidth, actualHeight);
+            }
+        }
         finishConfirmedLiveQualityChange(game);
     }
 
@@ -5501,7 +5518,16 @@ public class XrStreamPresenter {
                 int[] expected = expectedLiveQualityDecoderDimensions();
                 int[] actual = game.getDecoderOutputDimensions();
                 if (liveQualityConfirmations.hasMatchingDecoderOutput()) {
-                    LimeLog.info("XR: matching fresh-IDR output arrived before the host ack");
+                    if (!liveQualityConfirmations.hasAppliedAck()) {
+                        LimeLog.info("XR: matching fresh-IDR output arrived before the host ack");
+                    } else if (liveQualityConfirmations
+                            .isWaitingForPresentationAfterMatchingPostAckOutput()) {
+                        LimeLog.info("XR: matching post-ack fresh-IDR output reached Client SBS; "
+                                + "waiting for packed EGL presentation");
+                    } else {
+                        LimeLog.info("XR: matching fresh-IDR output is waiting for the remaining "
+                                + "live-quality confirmation");
+                    }
                 } else {
                     LimeLog.info("XR: decoder output "
                             + (actual == null ? "unknown" : actual[0] + "x" + actual[1])

@@ -152,6 +152,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private int mQueuedClientSbsResizeWidth;
     private int mQueuedClientSbsResizeHeight;
     private int mClientSbsResizeTimeoutToken;
+    /** Active resize generation causally matched by the current post-ACK decoder transition. */
+    private int mClientSbsPostAckResizeGeneration;
+    private int mClientSbsPostAckResizeWidth;
+    private int mClientSbsPostAckResizeHeight;
     private ClientSbsResizePolicy.Stage mClientSbsResizeStage =
             ClientSbsResizePolicy.Stage.IDLE;
     private SurfaceSwitchCallback mPendingClientSbsHdrSwitch;
@@ -584,6 +588,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                                 resizeGeneration, true)));
                 if (!armed) {
                     completeClientSbsResize(resizeGeneration, false);
+                } else {
+                    armClientSbsResizeTimeoutForActiveStage();
                 }
             }
         } else if (!success && game != null) {
@@ -753,7 +759,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * Surface needs a replacement EGLWindowSurface before EGL reports the new size. Pause/resume
      * destroys only the EGL output while preserving the renderer context and its MediaCodec input
      * SurfaceTexture in the normal path. The callback fires only after the replacement output has
-     * passed exact EGL validation.</p>
+     * passed exact EGL validation and the renderer has proven two draws on that same attachment.</p>
      *
      * @return false when the request cannot start; accepted requests complete asynchronously
      */
@@ -768,6 +774,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
 
         final int resizeGeneration = nextClientSbsEglOperationGeneration();
+        if (mClientSbsResizeStage == ClientSbsResizePolicy.Stage.IDLE) {
+            clearClientSbsPostAckResizeBoundary();
+        }
         if (ClientSbsResizePolicy.queueSupersedingRequest(mClientSbsResizeStage)) {
             // onResume() does not prove that EGL has created a window surface yet. Pausing again
             // in that gap can produce no destroySurface callback and strand the clamp. Retain only
@@ -793,9 +802,14 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
             mRequestedEglDetachGeneration = resizeGeneration;
             ((GLSurfaceView) mSurfaceView).onPause();
+            armClientSbsResizeTimeoutForActiveStage();
+        } else if (mClientSbsResizeStage
+                == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
+            // A newer request can safely replace the geometry while the same acknowledged detach
+            // is in flight. Rebind the watchdog to that latest active generation.
+            armClientSbsResizeTimeoutForActiveStage();
         }
 
-        armClientSbsResizeTimeout(resizeGeneration, width, height);
         return true;
     }
 
@@ -834,6 +848,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mRequestedEglAttachGeneration = resizeGeneration;
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH;
         ((GLSurfaceView) mSurfaceView).onResume();
+        armClientSbsResizeTimeoutForActiveStage();
     }
 
     private void completeClientSbsResize(int generation, boolean success) {
@@ -866,6 +881,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mPendingClientSbsResizeWidth = 0;
         mPendingClientSbsResizeHeight = 0;
         clearQueuedClientSbsResize();
+        clearClientSbsPostAckResizeBoundary();
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
         if (callback != null) {
             callback.onComplete(success);
@@ -887,10 +903,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         clearQueuedClientSbsResize();
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
         mRequestedEglDetachGeneration = mPendingClientSbsResizeGeneration;
-        armClientSbsResizeTimeout(
-                mPendingClientSbsResizeGeneration,
-                mPendingClientSbsResizeWidth,
-                mPendingClientSbsResizeHeight);
+        armClientSbsResizeTimeoutForActiveStage();
         ((GLSurfaceView) mSurfaceView).onPause();
     }
 
@@ -901,6 +914,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             SurfaceSwitchCallback callback = mQueuedClientSbsResize;
             mClientSbsResizeTimeoutToken++;
             clearQueuedClientSbsResize();
+            clearClientSbsPostAckResizeBoundary();
             mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
             callback.onComplete(false);
         }
@@ -913,21 +927,101 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mQueuedClientSbsResizeHeight = 0;
     }
 
-    private void armClientSbsResizeTimeout(int generation, int width, int height) {
+    /**
+     * Marks the exact active/queued Client-SBS resize reached by the current post-ACK decoder
+     * generation. XrStreamPresenter rejects stale decoder generations before invoking this method;
+     * retaining the resize generation here also prevents an A -> B -> A geometry cycle from
+     * borrowing an older boundary.
+     */
+    void onClientSbsPostAckDecoderOutput(int width, int height) {
+        if (mDestroyed || width <= 0 || height <= 0) {
+            return;
+        }
+
+        int matchedGeneration = 0;
+        if (mQueuedClientSbsResize != null
+                && ClientSbsResizePolicy.sameGeometry(
+                        width, height,
+                        mQueuedClientSbsResizeWidth, mQueuedClientSbsResizeHeight)) {
+            matchedGeneration = mQueuedClientSbsResizeGeneration;
+        } else if (mPendingClientSbsResize != null
+                && ClientSbsResizePolicy.sameGeometry(
+                        width, height,
+                        mPendingClientSbsResizeWidth, mPendingClientSbsResizeHeight)) {
+            matchedGeneration = mPendingClientSbsResizeGeneration;
+        }
+        if (matchedGeneration <= 0) {
+            return;
+        }
+
+        mClientSbsPostAckResizeGeneration = matchedGeneration;
+        mClientSbsPostAckResizeWidth = width;
+        mClientSbsPostAckResizeHeight = height;
+        if (ClientSbsResizePolicy.shouldRequestPostAckProofDraw(
+                mClientSbsResizeStage, matchedGeneration,
+                mPendingClientSbsResizeGeneration)) {
+            LimeLog.info("Client SBS post-ack decoder output matched " + width + "x" + height
+                    + "; allowing a fresh packed-presentation proof window");
+            if (mStereoRenderer == null
+                    || !mStereoRenderer.requestLiveStreamResizeProofDraw()) {
+                LimeLog.warning("Client SBS post-ack decoder output could not nudge the active "
+                        + "packed-presentation proof");
+            }
+            armClientSbsResizeTimeoutForActiveStage();
+        }
+    }
+
+    private boolean hasClientSbsPostAckBoundaryForActiveResize() {
+        return mClientSbsPostAckResizeGeneration > 0
+                && mClientSbsPostAckResizeGeneration == mPendingClientSbsResizeGeneration
+                && ClientSbsResizePolicy.sameGeometry(
+                        mClientSbsPostAckResizeWidth, mClientSbsPostAckResizeHeight,
+                        mPendingClientSbsResizeWidth, mPendingClientSbsResizeHeight);
+    }
+
+    private void clearClientSbsPostAckResizeBoundary() {
+        mClientSbsPostAckResizeGeneration = 0;
+        mClientSbsPostAckResizeWidth = 0;
+        mClientSbsPostAckResizeHeight = 0;
+    }
+
+    private void armClientSbsResizeTimeoutForActiveStage() {
         int timeoutToken = ++mClientSbsResizeTimeoutToken;
+        if (mPendingClientSbsResize == null) {
+            return;
+        }
+        int generation = mPendingClientSbsResizeGeneration;
+        int width = mPendingClientSbsResizeWidth;
+        int height = mPendingClientSbsResizeHeight;
+        ClientSbsResizePolicy.Stage stage = mClientSbsResizeStage;
+        boolean postAckDecoderOutputReady = hasClientSbsPostAckBoundaryForActiveResize();
+        long timeoutMillis = ClientSbsResizePolicy.timeoutMillis(
+                stage, postAckDecoderOutputReady);
+        if (timeoutMillis <= 0L) {
+            return;
+        }
         postDelayed(() -> {
             if (timeoutToken != mClientSbsResizeTimeoutToken) {
                 return;
             }
-            if ((generation == mPendingClientSbsResizeGeneration
-                    && mPendingClientSbsResize != null)
-                    || (generation == mQueuedClientSbsResizeGeneration
-                    && mQueuedClientSbsResize != null)) {
-                LimeLog.severe("Timed out waiting for generation-acknowledged Client SBS "
-                        + "live resize to " + width + "x" + height);
+            if (generation == mPendingClientSbsResizeGeneration
+                    && mPendingClientSbsResize != null
+                    && stage == mClientSbsResizeStage) {
+                String boundary;
+                if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
+                    boundary = "EGL detachment";
+                } else if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH) {
+                    boundary = "exact EGL attachment";
+                } else if (postAckDecoderOutputReady) {
+                    boundary = "post-ack packed presentation";
+                } else {
+                    boundary = "packed presentation or authoritative host outcome";
+                }
+                LimeLog.severe("Timed out waiting for Client SBS " + boundary
+                        + " at " + width + "x" + height);
                 failClientSbsResizeChain();
             }
-        }, 2000L);
+        }, timeoutMillis);
     }
 
     public boolean resizeHostSbsSurface(boolean sbs) {
@@ -1125,6 +1219,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mPendingClientSbsResizeHeight = 0;
         clearQueuedClientSbsResize();
         mClientSbsResizeTimeoutToken++;
+        clearClientSbsPostAckResizeBoundary();
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
         mClientSbsHdrSwitchGeneration++;
         mPendingClientSbsHdrSwitch = null;

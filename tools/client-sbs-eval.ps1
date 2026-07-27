@@ -51,11 +51,14 @@ try {
         "--tests" "com.limelight.utils.ClientSbsModelArchiveTest" `
         "--tests" "com.limelight.utils.ClientSbsPackagedModelArchiveTest" `
         "--tests" "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
+        "--tests" "com.limelight.utils.ClientSbsSwapProofTest" `
         "--tests" "com.limelight.utils.ClientSbsModelManifestTest" `
         "--tests" "com.limelight.utils.Stereo3DRendererSchedulingTest" `
         "--tests" "com.limelight.utils.ShaderUtilsTest" `
+        "--tests" "com.limelight.ui.ClientSbsResizePolicyTest" `
         "--tests" "com.limelight.ui.XrStreamPresenterLayoutTest" `
         "--tests" "com.limelight.ui.XrStreamPresenterTransitionTest" `
+        "--tests" "com.limelight.ui.XrStreamPresenterVideoModeAckTest" `
         "--tests" "com.limelight.ui.XrViewStateStoreTest" `
         "--console=plain"
     if ($LASTEXITCODE -ne 0) {

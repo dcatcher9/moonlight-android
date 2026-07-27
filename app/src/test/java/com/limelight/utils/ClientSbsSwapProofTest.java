@@ -33,4 +33,18 @@ public final class ClientSbsSwapProofTest {
         proof.reset();
         assertFalse(proof.observe(7, 11, 21));
     }
+
+    @Test
+    public void queuedPostSwapDrawConfirmsWithoutWeakeningTheAttachmentFence() {
+        ClientSbsSwapProof proof = new ClientSbsSwapProof();
+
+        // Draw one only arms the candidate. A queued render runs after that draw's swap and
+        // confirms solely if both renderer generation and exact EGL attachment remain current.
+        assertFalse(proof.observe(7, 11, 20));
+        assertTrue(proof.observe(7, 11, 21));
+
+        // A queued callback from the retired attachment cannot confirm the replacement.
+        assertFalse(proof.observe(7, 12, 22));
+        assertTrue(proof.observe(7, 12, 23));
+    }
 }

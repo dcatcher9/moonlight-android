@@ -1517,8 +1517,46 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             clearLiveStreamResizeSwapCandidate();
             liveStreamResizeCompletion = completion;
         }
-        glSurfaceView.requestRender();
-        return true;
+        try {
+            glSurfaceView.requestRender();
+            return true;
+        } catch (RuntimeException error) {
+            synchronized (liveStreamResizeLock) {
+                if (liveStreamResizeCompletion == completion
+                        && liveStreamResizeCompletionGeneration
+                        == clientSbsGeneration.get()) {
+                    liveStreamResizeCompletion = null;
+                    liveStreamResizeCompletionGeneration = 0;
+                    clearLiveStreamResizeSwapCandidate();
+                }
+            }
+            LimeLog.warning("Unable to arm Client SBS packed-presentation proof: " + error);
+            return false;
+        }
+    }
+
+    /**
+     * Nudges an already-armed packed-output proof at the post-ACK decoder boundary.
+     *
+     * <p>The request is not an acknowledgement: {@link ClientSbsSwapProof} still requires two
+     * distinct draws on the exact renderer generation and validated EGL attachment.</p>
+     */
+    public boolean requestLiveStreamResizeProofDraw() {
+        synchronized (liveStreamResizeLock) {
+            if (liveStreamResizeCompletion == null
+                    || liveStreamResizeCompletionGeneration <= 0
+                    || liveStreamResizeCompletionGeneration != clientSbsGeneration.get()
+                    || shuttingDown.get() || !clientSbs || !outputSurfaceValidated) {
+                return false;
+            }
+        }
+        try {
+            glSurfaceView.requestRender();
+            return true;
+        } catch (RuntimeException error) {
+            LimeLog.warning("Unable to request Client SBS packed-presentation proof: " + error);
+            return false;
+        }
     }
 
     /** Cancels a superseded swap acknowledgement without invalidating the attached EGL output. */
@@ -2447,9 +2485,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             return;
         }
         Runnable completion;
+        int outputGeneration;
+        int validationEpoch;
+        long drawSequence;
         synchronized (liveStreamResizeLock) {
             completion = liveStreamResizeCompletion;
-            int outputGeneration = liveStreamResizeCompletionGeneration;
+            outputGeneration = liveStreamResizeCompletionGeneration;
             if (completion == null || outputGeneration <= 0
                     || outputGeneration != activeClientSbsGeneration
                     || !clientSbs || !hasFrameForActiveGeneration
@@ -2457,8 +2498,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 return;
             }
 
+            validationEpoch = outputSurfaceValidationEpoch;
+            drawSequence = outputDrawSequence;
             if (liveStreamResizeSwapProof.observe(
-                    outputGeneration, outputSurfaceValidationEpoch, outputDrawSequence)) {
+                    outputGeneration, validationEpoch, drawSequence)) {
                 liveStreamResizeCompletion = null;
                 liveStreamResizeCompletionGeneration = 0;
                 clearLiveStreamResizeSwapCandidate();
@@ -2468,13 +2511,49 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         if (completion == null) {
             // A second draw on the same renderer generation and exact EGL attachment is the proof
-            // that GLSurfaceView returned from the prior draw and accepted its swap. queueEvent()
-            // alone is insufficient because Android services queued events before it handles a
-            // failed eglSwapBuffers()/EGL_CONTEXT_LOST result.
-            glSurfaceView.requestRender();
+            // that GLSurfaceView returned from the prior draw and accepted its swap. Queue the
+            // render request itself so GLSurfaceView services it only after this callback returns
+            // through the current eglSwapBuffers() iteration. The queued callback is only a draw
+            // trigger; a failed/context-replaced swap changes the validation epoch and restarts
+            // the proof instead of publishing success.
+            LimeLog.info("Client SBS packed swap proof candidate: generation="
+                    + outputGeneration + " validationEpoch=" + validationEpoch
+                    + " draw=" + drawSequence);
+            queueLiveStreamResizeProofDrawAfterSwap(outputGeneration, validationEpoch);
             return;
         }
+        LimeLog.info("Client SBS packed swap proof confirmed: generation="
+                + outputGeneration + " validationEpoch=" + validationEpoch
+                + " draw=" + drawSequence);
         completion.run();
+    }
+
+    private void queueLiveStreamResizeProofDrawAfterSwap(int expectedGeneration,
+                                                         int expectedValidationEpoch) {
+        try {
+            glSurfaceView.queueEvent(() -> {
+                synchronized (liveStreamResizeLock) {
+                    if (liveStreamResizeCompletion == null
+                            || liveStreamResizeCompletionGeneration != expectedGeneration
+                            || clientSbsGeneration.get() != expectedGeneration
+                            || outputSurfaceValidationEpoch != expectedValidationEpoch
+                            || shuttingDown.get() || !clientSbs || !outputSurfaceValidated) {
+                        return;
+                    }
+                }
+                glSurfaceView.requestRender();
+            });
+        } catch (RuntimeException error) {
+            // The current draw proves a GL thread exists, but retain a direct request as a
+            // lifecycle-race fallback if GLSurfaceView rejects the queued callback.
+            LimeLog.warning("Unable to queue Client SBS packed-presentation proof draw: " + error);
+            try {
+                glSurfaceView.requestRender();
+            } catch (RuntimeException fallbackError) {
+                LimeLog.warning("Unable to request fallback Client SBS packed-presentation "
+                        + "proof draw: " + fallbackError);
+            }
+        }
     }
 
     private void clearLiveStreamResizeSwapCandidate() {

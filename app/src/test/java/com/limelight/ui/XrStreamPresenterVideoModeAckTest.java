@@ -119,9 +119,11 @@ public class XrStreamPresenterVideoModeAckTest {
         assertFalse(gate.onDecoderOutput(1920, 1080, 1920, 1080));
         assertFalse(gate.canSettle());
         assertFalse(gate.isPresentationReady());
+        assertTrue(gate.isWaitingForPresentationAfterMatchingPostAckOutput());
 
         assertTrue(gate.onPresentationReady());
         assertTrue(gate.canSettle());
+        assertFalse(gate.isWaitingForPresentationAfterMatchingPostAckOutput());
     }
 
     @Test

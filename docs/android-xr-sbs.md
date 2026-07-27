@@ -593,6 +593,13 @@ and reveal the new geometry. A failed rearm, timeout, or post-ACK output whose d
 contradict the ACK follows the same hidden
 mandatory-resync path, not the generic decoder-failure dialog. None may publish the previous tuple
 as a rollback or settle the requested tuple as a live success.
+Client SBS bounds its local EGL detach and exact-attach stages independently. Its packed-output
+swap wait retains a longer fail-closed fallback while the reliable host outcome and decoder
+transition are outstanding. A matching post-ACK decoder output then re-arms a fresh short window
+and explicitly nudges the renderer for the same-generation, same-attachment two-draw presentation
+proof; time spent waiting for the host ACK can never consume that proof budget. After draw one arms
+the candidate, its second render request is queued behind the current EGL-swap iteration so an
+in-draw dirty request cannot be coalesced before the first swap returns.
 Fast user changes, automatic panel-follow changes, and resolution changes therefore all fail closed
 to reconnect. The client clears local transition ownership but neither claims success nor restores
 an unacknowledged previous tuple. Fast paths and a resolution path with matching decoder output may
