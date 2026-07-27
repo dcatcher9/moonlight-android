@@ -3557,18 +3557,24 @@ public class XrStreamPresenter {
                         ? String.format(Locale.US, "%.4f", clientSbs.depthEdgeFraction)
                         : "unsettled";
                 depthHealth = String.format(Locale.US,
-                        "valid=%.1f%% range=%.4f edge=%s pop=%.3f/%.3f change=%.3f age=%d"
-                                + " cuts=%d anchor=%.1fpx"
+                        "valid=%.1f%% range=%.4f edge=%s pop=%.3f change=%.3f age=%d"
+                                + " cuts=%d armed=%s ext=%d anchor=%.1fpx subject=%.3f"
+                                + " faults=%d/%d profile=%s"
                                 + " collapsed=%s",
                         clientSbs.validDepthFraction * 100.0f,
                         clientSbs.effectiveDepthRangeWidth,
                         classifiedEdge,
                         clientSbs.stereoPopStrength,
-                        clientSbs.stereoPopRatio,
                         clientSbs.depthChangeFraction,
                         clientSbs.depthSceneAge,
                         clientSbs.depthHardCutCount,
+                        clientSbs.depthCutArmed,
+                        clientSbs.depthExternalCutRequests,
                         clientSbs.depthZeroAnchorShift,
+                        clientSbs.depthSubjectDepth,
+                        clientSbs.depthEmptyRawFrames,
+                        clientSbs.depthCollapsedRawFrames,
+                        clientSbs.stereoProfileInitialized,
                         clientSbs.rawDepthRangeCollapsed);
             }
             // Machine-readable A/B output is intentionally separate from the visible panel. Log
@@ -3827,11 +3833,17 @@ public class XrStreamPresenter {
                 if (clientSbs.depthHealthAvailable) {
                     addTrendStatsRow("Pop strength",
                             String.format(Locale.US,
-                                    "valid %.1f%% | range %.4f | pop %.3f of %.3f | collapsed %s",
+                                    "valid %.1f%% | range %.4f | pop %s"
+                                            + " | subject %.3f | collapsed %s",
                                     clientSbs.validDepthFraction * 100.0f,
                                     clientSbs.effectiveDepthRangeWidth,
-                                    clientSbs.stereoPopStrength,
-                                    clientSbs.stereoPopRatio,
+                                    // Without this a pop of 1.20 reads as a decision when it may
+                                    // simply be the value before any profile exists.
+                                    clientSbs.stereoProfileInitialized
+                                            ? String.format(Locale.US, "%.3f",
+                                                    clientSbs.stereoPopStrength)
+                                            : "no profile",
+                                    clientSbs.depthSubjectDepth,
                                     clientSbs.rawDepthRangeCollapsed ? "yes" : "no"),
                             clientSbs.rawDepthRangeCollapsed
                                     ? STATS_WARN_COLOR : STATS_ON_COLOR,
@@ -3864,6 +3876,16 @@ public class XrStreamPresenter {
                             STATS_LABEL_COLOR,
                             // Deltas: one cut is one spike whenever it happened.
                             clientSbs.cutTrend, true, Float.NaN, Float.NaN);
+                    if (clientSbs.depthEmptyRawFrames > 0L
+                            || clientSbs.depthCollapsedRawFrames > 0L) {
+                        // Only rendered once non-zero: a permanent "0 | 0" row is noise, while a
+                        // climbing count is an estimator failing in a way no live value shows.
+                        addStatsRow("Depth faults",
+                                String.format(Locale.US, "empty %d | collapsed %d",
+                                        clientSbs.depthEmptyRawFrames,
+                                        clientSbs.depthCollapsedRawFrames),
+                                STATS_WARN_COLOR);
+                    }
                     addTrendStatsRow("Zero-plane anchor shift",
                             String.format(Locale.US, "%.1f px",
                                     clientSbs.depthZeroAnchorShift),

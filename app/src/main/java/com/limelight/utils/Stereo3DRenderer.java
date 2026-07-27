@@ -480,8 +480,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final long hardCutCount;
         /** Convergence plane in source pixels; content at this depth has zero disparity. */
         final float zeroAnchorShift;
-        /** Ceiling multiplier the resolved popStrength came from, so the two can be compared. */
-        final float popRatio;
+        /** Depth the anchor is derived from, so anchor movement can be attributed. */
+        final float subjectDepth;
+        /** False while no profile exists yet: distinguishes "pop is at the floor" from "no pop". */
+        final boolean profileInitialized;
+        /**
+         * Whether the cut detector can fire at all. Without it a flat cut count is ambiguous --
+         * no cuts happened, or the detector has been disarmed and could not have reported them.
+         */
+        final boolean cutArmed;
+        /** Cuts the host asked for, as opposed to ones this client detected. */
+        final long externalCutRequests;
+        /** Cumulative estimator faults; a climbing count is invisible in any instantaneous value. */
+        final long emptyRawFrames;
+        final long collapsedRawFrames;
+
 
         private DepthHealthState() {
             available = false;
@@ -495,7 +508,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             sceneAge = 0;
             hardCutCount = 0L;
             zeroAnchorShift = 0.0f;
-            popRatio = 1.0f;
+            subjectDepth = 0.0f;
+            profileInitialized = false;
+            cutArmed = false;
+            externalCutRequests = 0L;
+            emptyRawFrames = 0L;
+            collapsedRawFrames = 0L;
         }
 
         DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
@@ -510,7 +528,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             popStrength = snapshot.getPopStrength();
             hardCutCount = snapshot.getHardCutCount();
             zeroAnchorShift = snapshot.getZeroAnchorShift();
-            popRatio = snapshot.getPopRatio();
+            subjectDepth = snapshot.getSubjectDepth();
+            profileInitialized = snapshot.isStereoProfileInitialized();
+            cutArmed = snapshot.isDepthCutArmed();
+            externalCutRequests = snapshot.getExternalCutRequestCount();
+            emptyRawFrames = snapshot.getEmptyRawFrameCount();
+            collapsedRawFrames = snapshot.getCollapsedRawFrameCount();
         }
     }
 
@@ -574,7 +597,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public final int depthSceneAge;
         public final long depthHardCutCount;
         public final float depthZeroAnchorShift;
-        public final float stereoPopRatio;
+        public final float depthSubjectDepth;
+        public final boolean stereoProfileInitialized;
+        public final boolean depthCutArmed;
+        public final long depthExternalCutRequests;
+        public final long depthEmptyRawFrames;
+        public final long depthCollapsedRawFrames;
         /** Oldest-first history copies, taken under lock so a wrap cannot splice two eras. */
         public final float[] popTrend;
         public final float[] edgeTrend;
@@ -643,7 +671,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.depthSceneAge = health.sceneAge;
             this.depthHardCutCount = health.hardCutCount;
             this.depthZeroAnchorShift = health.zeroAnchorShift;
-            this.stereoPopRatio = health.popRatio;
+            this.depthSubjectDepth = health.subjectDepth;
+            this.stereoProfileInitialized = health.profileInitialized;
+            this.depthCutArmed = health.cutArmed;
+            this.depthExternalCutRequests = health.externalCutRequests;
+            this.depthEmptyRawFrames = health.emptyRawFrames;
+            this.depthCollapsedRawFrames = health.collapsedRawFrames;
             this.popTrend = copyTrend(owner.popHistory);
             this.edgeTrend = copyTrend(owner.edgeHistory);
             this.changeTrend = copyTrend(owner.changeHistory);
