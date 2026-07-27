@@ -43,9 +43,11 @@
     <dimen name="xr_space_xl">24dp</dimen>
 
     <!-- Gaze targets: compact rows, standard controls, primary actions. -->
-    <!-- Icon sizes. Two steps only: inline sits beside text, tile stands alone on a control. -->
-    <dimen name="xr_icon_inline">24dp</dimen>
-    <dimen name="xr_icon_tile">40dp</dimen>
+    <!-- Icon sizes. Two steps only: inline sits beside text, tile stands alone on a control.
+         Both are larger than a handheld UI would use. These panes are read at XR focal distance,
+         where an icon sized to the text beside it stops being identifiable. -->
+    <dimen name="xr_icon_inline">32dp</dimen>
+    <dimen name="xr_icon_tile">48dp</dimen>
 
     <dimen name="xr_control_compact">40dp</dimen>
     <dimen name="xr_control_standard">56dp</dimen>

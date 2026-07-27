@@ -1,4 +1,4 @@
-<!-- Nested frames: a screen and the smaller screen inside it. -->
+<!-- A frame split into two eyes: side-by-side content the host sends as-is. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="32dp"
     android:height="32dp"
@@ -6,16 +6,16 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:pathData="M2.5,4.5h19v15h-19z"
+        android:pathData="M2,5h20v14h-20z"
         android:strokeColor="@color/xr_text_primary"
-        android:strokeWidth="2.0"
+        android:strokeWidth="2.2"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="@android:color/transparent" />
     <path
-        android:pathData="M8,10h8v4h-8z"
+        android:pathData="M12,5v14"
         android:strokeColor="@color/xr_text_primary"
-        android:strokeWidth="1.7"
+        android:strokeWidth="2.2"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="@android:color/transparent" />

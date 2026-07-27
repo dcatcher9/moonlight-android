@@ -1429,7 +1429,7 @@ public class XrStreamPresenter {
                 R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS_AI);
         BarItem hostSbsRaw = new BarItem(
                 activity.getString(R.string.xr_bar_host_sbs_raw),
-                R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_RAW);
+                R.drawable.ic_xr_mode_host_sbs_raw, PresenterMode.HOST_SBS_RAW);
         BarItem hostSbsAi = new BarItem(
                 activity.getString(R.string.xr_bar_host_sbs_ai),
                 R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_AI);
