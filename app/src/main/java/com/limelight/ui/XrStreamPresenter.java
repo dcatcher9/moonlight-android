@@ -3836,23 +3836,15 @@ public class XrStreamPresenter {
                             formatGpuStage(clientSbs.averageGpuMatchedColorMs,
                                     clientSbs.gpuMatchedColorSamples, "full-size capture"),
                             gpuStageColor(clientSbs.gpuMatchedColorSamples));
-                    addStatsRow("Depth/profile GL GPU",
-                            formatGpuStage(clientSbs.averageGpuDepthProfileMs,
-                                    clientSbs.gpuDepthProfileSamples, "normalize + profile"),
-                            gpuStageColor(clientSbs.gpuDepthProfileSamples));
                     addStatsRow("Stereo render GL GPU",
                             formatGpuStage(clientSbs.averageGpuSbsComposeMs,
                                     clientSbs.gpuSbsComposeSamples,
                                     "prefilter + warp + draw"),
                             gpuStageColor(clientSbs.gpuSbsComposeSamples));
-                    addStatsRow("GPU timing note", "Stages can overlap; do not add as busy %",
-                            paletteColor(R.color.xr_text_disabled));
                 } else {
                     addStatsRow("Client GL GPU stages", "Timer queries unavailable",
                             paletteColor(R.color.xr_text_disabled));
                 }
-                addStatsRow("XR composition", "SceneCore does not expose compositor timing",
-                        paletteColor(R.color.xr_text_disabled));
 
                 long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs;
                 if (faults > 0L) {
@@ -4268,6 +4260,11 @@ public class XrStreamPresenter {
         valueView.setText(value);
         valueView.setTextColor(valueColor);
         XrSparklineView spark = (XrSparklineView) row.getChildAt(2);
+        // A plain View carries no accessibility role, so the plot is absent from both the
+        // accessibility tree and any hierarchy dump taken from it -- which also makes "is the
+        // sparkline there at all" unanswerable from outside the process.
+        spark.setContentDescription(label + " trend, " + count + " samples");
+        spark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         spark.setColors(valueColor, paletteColor(R.color.xr_border_panel));
         spark.setRange(rangeMin, rangeMax);
         spark.setValues(plotted, count);
