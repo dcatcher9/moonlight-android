@@ -1,0 +1,14 @@
+<!-- Selection highlight for rounded XR surfaces.
+
+     The platform's selectableItemBackground has no mask, so as a foreground it paints a square
+     over a rounded tile: the fill and the outline disagree at every corner. Masking the ripple to
+     the same radius as the surface underneath is the whole point of this drawable. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="?android:attr/colorControlHighlight">
+    <item android:id="@android:id/mask">
+        <shape>
+            <solid android:color="@android:color/white" />
+            <corners android:radius="@dimen/xr_radius_card" />
+        </shape>
+    </item>
+</ripple>

@@ -7,6 +7,8 @@ import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -50,9 +52,15 @@ public final class XrSegmentedLadder extends LinearLayout {
     /** Each segment is this much wider than the one before it. */
     private static final float WIDTH_RAMP = 1.18f;
 
+    /** Star marking the recommended segment, in dp. */
+    private static final int MARKER_SIZE_DP = 20;
+    /** How far the star is inset from the segment's top-right corner. */
+    private static final int MARKER_INSET_DP = 4;
+
     private final LinearLayout row;
+    private final FrameLayout rowHost;
+    private final ImageView marker;
     private final TextView caption;
-    private final TextView hint;
     private final List<AppCompatButton> segments = new ArrayList<>();
     private List<SessionSettingsModel.Choice> choices = Collections.emptyList();
     private OnSegmentSelectedListener listener;
@@ -68,18 +76,27 @@ public final class XrSegmentedLadder extends LinearLayout {
         super(context, attrs);
         setOrientation(VERTICAL);
 
-        hint = new TextView(context);
-        hint.setTextColor(color(R.color.xr_status_ok));
-        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        hint.setVisibility(GONE);
-        addView(hint, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-
         row = new LinearLayout(context);
         row.setOrientation(HORIZONTAL);
+        // The star overlays the row rather than sitting above it, so the marker needs a frame it
+        // can be positioned inside without pushing the segments down.
+        rowHost = new FrameLayout(context);
+        rowHost.setClipChildren(false);
+        rowHost.setClipToPadding(false);
+        rowHost.addView(row, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                getResources().getDimensionPixelSize(R.dimen.xr_control_standard)));
+
+        marker = new ImageView(context);
+        marker.setImageResource(R.drawable.ic_xr_recommended);
+        marker.setVisibility(GONE);
+        rowHost.addView(marker, new FrameLayout.LayoutParams(dp(MARKER_SIZE_DP),
+                dp(MARKER_SIZE_DP), Gravity.TOP | Gravity.START));
+
         LayoutParams rowParams = new LayoutParams(LayoutParams.MATCH_PARENT,
-                getResources().getDimensionPixelSize(R.dimen.xr_control_standard));
+                LayoutParams.WRAP_CONTENT);
         rowParams.topMargin = dp(4);
-        addView(row, rowParams);
+        addView(rowHost, rowParams);
 
         caption = new TextView(context);
         caption.setTextColor(color(R.color.xr_accent));
@@ -109,8 +126,10 @@ public final class XrSegmentedLadder extends LinearLayout {
         this.captionProvider = captions;
         this.recommendedIndex = indexOf(recommendedChoiceId);
 
-        hint.setText(hintText == null ? "" : hintText);
-        hint.setVisibility(hintText == null || recommendedIndex < 0 ? GONE : VISIBLE);
+        // The hint text survives as the marker's description: it was never legible at the size that
+        // fits over a segment, but a screen reader still needs the words.
+        marker.setContentDescription(hintText);
+        marker.setVisibility(hintText == null || recommendedIndex < 0 ? GONE : VISIBLE);
 
         rebuildSegments();
         int index = indexOf(selectedChoiceId);
@@ -140,6 +159,16 @@ public final class XrSegmentedLadder extends LinearLayout {
             segment.setEnabled(enabled);
         }
         applySelection();
+    }
+
+    /** The row of segment buttons. Exposed so tests need not guess at the view hierarchy. */
+    LinearLayout segmentRow() {
+        return row;
+    }
+
+    /** The star marking the recommended segment, visible only when one is recommended. */
+    ImageView recommendationMarker() {
+        return marker;
     }
 
     /**
@@ -239,9 +268,9 @@ public final class XrSegmentedLadder extends LinearLayout {
         updateHintPosition();
     }
 
-    /** Keeps the hint sitting over its segment as the row's weights resolve. */
+    /** Pins the star to its segment's top-right corner as the row's weights resolve. */
     private void updateHintPosition() {
-        if (hint.getVisibility() != VISIBLE || recommendedIndex < 0
+        if (marker.getVisibility() != VISIBLE || recommendedIndex < 0
                 || recommendedIndex >= segments.size()) {
             return;
         }
@@ -250,7 +279,9 @@ public final class XrSegmentedLadder extends LinearLayout {
             target.post(this::updateHintPosition);
             return;
         }
-        hint.setTranslationX(target.getLeft());
+        int inset = dp(MARKER_INSET_DP);
+        marker.setTranslationX(target.getRight() - dp(MARKER_SIZE_DP) - inset);
+        marker.setTranslationY(inset);
     }
 
     @Override

@@ -70,7 +70,7 @@ public class XrSegmentedLadderTest {
                     return true;
                 });
 
-        LinearLayout row = (LinearLayout) ladder.getChildAt(1);
+        LinearLayout row = ladder.segmentRow();
         assertEquals(2, row.getChildCount());
         for (int i = 0; i < row.getChildCount(); i++) {
             assertFalse(row.getChildAt(i).isEnabled());

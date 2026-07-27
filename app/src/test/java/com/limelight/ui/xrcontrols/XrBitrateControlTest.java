@@ -46,14 +46,7 @@ public class XrBitrateControlTest {
 
     /** The row of segments inside the control's ladder. */
     private static LinearLayout segmentRow(XrBitrateControl control) {
-        XrSegmentedLadder ladder = (XrSegmentedLadder) control.getChildAt(0);
-        for (int i = 0; i < ladder.getChildCount(); i++) {
-            View child = ladder.getChildAt(i);
-            if (child instanceof LinearLayout) {
-                return (LinearLayout) child;
-            }
-        }
-        throw new AssertionError("no segment row");
+        return ((XrSegmentedLadder) control.getChildAt(0)).segmentRow();
     }
 
     @Test
@@ -157,10 +150,15 @@ public class XrBitrateControlTest {
         XrBitrateControl withHint = new XrBitrateControl(themedContext());
         withHint.setChoices(ladder(), "50000", 100000, "recommended", value -> true);
         assertEquals(3, segmentRow(withHint).getChildCount());
+        XrSegmentedLadder marked = (XrSegmentedLadder) withHint.getChildAt(0);
+        assertEquals(View.VISIBLE, marked.recommendationMarker().getVisibility());
+        assertEquals("recommended", marked.recommendationMarker().getContentDescription());
 
         // -1 means no rung suits the stream shape; the control must still render.
         XrBitrateControl noHint = new XrBitrateControl(themedContext());
         noHint.setChoices(ladder(), "50000", -1, null, value -> true);
         assertEquals("50000", noHint.getSelectedChoiceId());
+        XrSegmentedLadder unmarked = (XrSegmentedLadder) noHint.getChildAt(0);
+        assertEquals(View.GONE, unmarked.recommendationMarker().getVisibility());
     }
 }

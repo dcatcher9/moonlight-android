@@ -15,6 +15,9 @@
         android:id="@android:id/title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:drawablePadding="@dimen/xr_space_sm"
+        android:drawableStart="@drawable/ic_xr_bitrate"
+        android:gravity="center_vertical"
         android:textColor="@color/xr_text_primary"
         android:textSize="@dimen/xr_text_emphasis"
         android:textStyle="bold" />

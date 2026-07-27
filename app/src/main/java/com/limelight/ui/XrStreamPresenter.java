@@ -2331,6 +2331,9 @@ public class XrStreamPresenter {
                 activity.getString(R.string.title_bitrate_ceiling), 24f, Color.WHITE);
         bitrateTitle.setTypeface(bitrateTitle.getTypeface(),
                 android.graphics.Typeface.BOLD);
+        bitrateTitle.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                R.drawable.ic_xr_bitrate, 0, 0, 0);
+        bitrateTitle.setCompoundDrawablePadding(dp(8));
         bitrateCard.addView(bitrateTitle);
         modeBitrateControl = new XrBitrateControl(activity);
         String bitrateId = qualityChoiceId(bitrate,
@@ -6261,11 +6264,9 @@ public class XrStreamPresenter {
 
     /** Visible press/hover feedback on top of the dark fill. */
     private void applySelectableForeground(View view) {
-        TypedValue fg = new TypedValue();
-        if (activity.getTheme().resolveAttribute(
-                android.R.attr.selectableItemBackground, fg, true) && fg.resourceId != 0) {
-            view.setForeground(ContextCompat.getDrawable(activity, fg.resourceId));
-        }
+        // Not the platform selectableItemBackground: it is unmasked, so over a rounded tile the
+        // highlight paints square corners inside the border.
+        view.setForeground(ContextCompat.getDrawable(activity, R.drawable.xr_selectable_overlay));
     }
 
     private void addBarItemContent(LinearLayout col, BarItem item) {

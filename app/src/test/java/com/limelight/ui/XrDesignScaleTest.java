@@ -107,6 +107,31 @@ public class XrDesignScaleTest {
     }
 
     @Test
+    public void xrLayoutsUseTheMaskedSelectionHighlight() throws IOException {
+        // The platform highlight has no mask, so on a rounded XR surface it fills the corners
+        // square inside the border. xr_selectable_overlay is the same highlight, masked.
+        List<String> offenders = new ArrayList<>();
+        File[] files = layoutDir().listFiles();
+        if (files == null) {
+            fail("layout directory could not be listed");
+            return;
+        }
+        for (File file : files) {
+            if (!isXrLayout(file.getName())) {
+                continue;
+            }
+            String source = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            if (source.contains("selectableItemBackground")) {
+                offenders.add(file.getName());
+            }
+        }
+        if (!offenders.isEmpty()) {
+            fail("XR layouts must use @drawable/xr_selectable_overlay so the highlight follows the"
+                    + " rounded outline:\n  " + String.join("\n  ", offenders));
+        }
+    }
+
+    @Test
     public void typeScaleStepsAreDistinctAndOrdered() {
         int[] steps = {
                 R.dimen.xr_text_caption,

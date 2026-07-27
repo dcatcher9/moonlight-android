@@ -14,12 +14,14 @@
         android:clickable="true"
         android:focusable="true"
         android:focusableInTouchMode="true"
-        android:foreground="?android:attr/selectableItemBackground">
+        android:foreground="@drawable/xr_selectable_overlay">
 
         <RelativeLayout
             android:id="@+id/grid_image_layout"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+            android:background="@drawable/xr_thumbnail_clip"
+            android:clipToOutline="true">
 
             <ImageView
                 android:id="@+id/grid_image"

@@ -1,0 +1,10 @@
+<!-- Rounded clip for app-card artwork.
+
+     The card is inset from its own rounded outline by a padding step, so art clipped to the card
+     radius would still show square corners inside the curve. Concentric corners want the inner
+     radius to be the outer radius minus the inset; the control step is the scale value nearest
+     that, which keeps the two curves reading as parallel. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@android:color/transparent" />
+    <corners android:radius="@dimen/xr_radius_control" />
+</shape>
