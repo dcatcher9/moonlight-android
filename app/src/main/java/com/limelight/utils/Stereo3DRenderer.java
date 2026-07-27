@@ -63,9 +63,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final int modelInputWidth;
     /**
      * Stream aspect. Not final: a live resolution change may move it, but only while the complete
-     * immutable pipeline contract stays equal — see {@link #requestLiveStreamResize}.
+     * immutable pipeline contract stays equal — see {@link #prepareLiveStreamResize}.
      */
     private volatile float sourceAspect;
+    /** Renderer-owned source geometry; never aliases the presenter's optimistic preferences. */
+    private int sourceWidth;
+    private int sourceHeight;
     /** Compiled once from its own static probe bucket. */
     private final int reprojectionProbeSteps;
     private long latchedFrameSequence;
@@ -83,6 +86,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private volatile Runnable hdrInputTransitionCompletion;
     private volatile int hdrInputTransitionCompletionGeneration;
     private volatile int hdrInputTransitionOutputGeneration;
+    /** Resize readiness is published only after one new-generation packed buffer is swapped. */
+    private volatile Runnable liveStreamResizeCompletion;
+    private volatile int liveStreamResizeCompletionGeneration;
+    /** GL-thread two-draw fence proving a prior swap survived on the same output attachment. */
+    private final ClientSbsSwapProof liveStreamResizeSwapProof = new ClientSbsSwapProof();
+    private int outputSurfaceValidationEpoch;
+    private long outputDrawSequence;
 
     // Final Member Variables
     private final Context context;
@@ -312,6 +322,27 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     // SurfaceHolder size.
     private volatile int outputWidthOverride;
     private volatile int outputHeightOverride;
+    private final Object liveStreamResizeLock = new Object();
+    /**
+     * A UI-thread resize request consumed only after EGL has attached the replacement packed
+     * output. Keeping this immutable request separate from the shared preferences prevents an
+     * onSurfaceChanged callback from publishing a half-applied source/output geometry.
+     */
+    private volatile LiveStreamResize pendingLiveStreamResize;
+
+    private static final class LiveStreamResize {
+        final int width;
+        final int height;
+        final int packedWidth;
+        final int packedHeight;
+
+        LiveStreamResize(int width, int height, int packedWidth, int packedHeight) {
+            this.width = width;
+            this.height = height;
+            this.packedWidth = packedWidth;
+            this.packedHeight = packedHeight;
+        }
+    }
 
 
     public interface OnSurfaceReadyListener {
@@ -425,7 +456,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         this.prefConfig = prefConfig;
         this.performanceSamplingEnabled = performanceSamplingEnabled;
         resetPerformanceCountersLocked(System.nanoTime());
-        sourceAspect = (float) prefConfig.width / Math.max(prefConfig.height, 1);
+        sourceWidth = prefConfig.width;
+        sourceHeight = prefConfig.height;
+        sourceAspect = (float) sourceWidth / Math.max(sourceHeight, 1);
         clientSbsModelId = prefConfig.clientSbsDepthModelId;
         pipelineContract = ClientSbsPipelineContract.forStream(clientSbsModelId, sourceAspect);
         reprojectionProbeSteps = pipelineContract.getReprojectionProbeSteps();
@@ -1252,6 +1285,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 pendingFrameGeneration = -1;
             }
             invalidateQueuedFrameDrain();
+            if (!enabled) {
+                synchronized (liveStreamResizeLock) {
+                    pendingLiveStreamResize = null;
+                    liveStreamResizeCompletion = null;
+                    liveStreamResizeCompletionGeneration = 0;
+                    clearLiveStreamResizeSwapCandidate();
+                }
+            }
             glSurfaceView.requestRender();
         }
     }
@@ -1341,61 +1382,164 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     /**
-     * Re-pins the resolution-derived color targets to a new stream size on the GL thread.
+     * Establishes a draw barrier before the UI publishes new shared stream dimensions.
      *
-     * <p>Deliberately touches only {@code colorFrameWidth/Height} and the color-frame FBO/texture
-     * slots. The depth targets, the RG16F warp map, the model-input FBO and every compiled shader
-     * program are left alone because none of them is resolution-derived.</p>
-     *
-     * @return false when the change needs a reconnect instead (see {@link #canResizeStreamLive})
+     * <p>Taking the GL callback lock waits for an already-running draw to finish; clearing
+     * validation before releasing it guarantees every later draw returns before reading the
+     * mutable PreferenceConfiguration. The actual targets and override move only after EGL has
+     * detached.</p>
      */
-    public boolean requestLiveStreamResize(int width, int height) {
-        if (!canResizeStreamLive(width, height)) {
-            return false;
-        }
-        try {
-            glSurfaceView.queueEvent(() -> resizeStreamOnGlThread(width, height));
+    public boolean suspendPresentationForLiveStreamResize(int width, int height) {
+        synchronized (glCallbackLifecycleLock) {
+            if (!canResizeStreamLive(width, height)) {
+                return false;
+            }
+            outputSurfaceValidated = false;
+            rejectedOutputSurfaceGeneration = 0;
+            invalidateQueuedFrameDrain();
+            synchronized (frameLock) {
+                frameAvailable.set(false);
+                pendingFrameGeneration = -1;
+            }
             return true;
-        } catch (RuntimeException error) {
-            LimeLog.warning("Unable to queue Client SBS live resize: " + error);
-            return false;
         }
     }
 
-    private void resizeStreamOnGlThread(int width, int height) {
-        synchronized (glCallbackLifecycleLock) {
-            if (shuttingDown.get() || !clientSbs || prefConfig == null) {
-                return;
+    /**
+     * Stages one source-and-output resize for the next replacement EGL attachment.
+     *
+     * <p>The packed override is part of the resize contract, not a renderer initialization
+     * constant. It must move from {@code 2*oldW x oldH} to {@code 2*newW x newH} atomically with
+     * the full-resolution color targets. StreamContainer destroys the old EGL window surface
+     * before calling this method and resumes GLSurfaceView afterwards; onSurfaceChanged consumes
+     * the request before it validates or publishes the replacement surface.</p>
+     *
+     * @return false when the immutable depth pipeline changes or the packed geometry is invalid
+     */
+    public boolean prepareLiveStreamResize(int width, int height,
+                                           int packedWidth, int packedHeight) {
+        if (!canResizeStreamLive(width, height)
+                || packedWidth <= 0 || packedHeight <= 0
+                || (long) width * 2L != packedWidth || packedHeight != height
+                || prefConfig == null) {
+            return false;
+        }
+
+        // Stop draw adoption before publishing either half of the new geometry. Serialize against
+        // a GL-thread apply so a fast host clamp cannot clear or overwrite the newer request.
+        synchronized (liveStreamResizeLock) {
+            outputSurfaceValidated = false;
+            rejectedOutputSurfaceGeneration = 0;
+            outputWidthOverride = packedWidth;
+            outputHeightOverride = packedHeight;
+            pendingLiveStreamResize =
+                    new LiveStreamResize(width, height, packedWidth, packedHeight);
+        }
+        invalidateQueuedFrameDrain();
+        synchronized (frameLock) {
+            frameAvailable.set(false);
+            pendingFrameGeneration = -1;
+        }
+        return true;
+    }
+
+    /** Applies the staged resize with the replacement EGL surface current on the GL thread. */
+    private boolean applyPendingLiveStreamResize() {
+        synchronized (liveStreamResizeLock) {
+            LiveStreamResize resize = pendingLiveStreamResize;
+            if (resize == null) {
+                return true;
             }
-            float newAspect = (float) width / Math.max(height, 1);
+            if (shuttingDown.get() || !clientSbs || prefConfig == null
+                    || resize.packedWidth != outputWidthOverride
+                    || resize.packedHeight != outputHeightOverride) {
+                return false;
+            }
+
+            float newAspect = (float) resize.width / Math.max(resize.height, 1);
             ClientSbsPipelineContract resizedContract =
                     ClientSbsPipelineContract.forStream(clientSbsModelId, newAspect);
             if (!pipelineContract.equals(resizedContract)) {
-                LimeLog.severe("Client SBS refused queued live resize across immutable pipeline "
+                LimeLog.severe("Client SBS refused live resize across immutable pipeline "
                         + "contract: " + pipelineContract + " -> " + resizedContract);
-                return;
+                pendingLiveStreamResize = null;
+                return false;
             }
 
-            // Invalidate first so no in-flight result can be adopted into the retired color slots,
+            // Invalidate first so no in-flight result can be adopted into retired color slots,
             // then drain every outstanding lease exactly like a same-context generation reset.
             int resizedGeneration = clientSbsGeneration.incrementAndGet();
+            liveStreamResizeCompletion = null;
+            liveStreamResizeCompletionGeneration = 0;
+            clearLiveStreamResizeSwapCandidate();
             resetPresentationForGeneration(resizedGeneration);
 
-            releaseColorFrameTargets();
-            prefConfig.width = width;
-            prefConfig.height = height;
+            boolean targetsAlreadyMatch = colorFrameWidth == resize.width
+                    && colorFrameHeight == resize.height
+                    && colorFrameTextures[0] != 0 && colorFrameFbos[0] != 0;
+            if (!targetsAlreadyMatch) {
+                releaseColorFrameTargets();
+            }
+            sourceWidth = resize.width;
+            sourceHeight = resize.height;
             sourceAspect = newAspect;
-            if (!initializeColorFrameSlots()) {
+            if (!targetsAlreadyMatch && !initializeColorFrameSlots()) {
+                pendingLiveStreamResize = null;
                 LimeLog.severe("Client SBS live resize could not recreate color targets");
                 requestGpuShutdown("color target resize failed");
-                return;
+                return false;
             }
 
-            LimeLog.info("Client SBS live resize to " + width + "x" + height
+            pendingLiveStreamResize = null;
+            LimeLog.info("Client SBS live resize to " + resize.width + "x" + resize.height
+                    + ", packed " + resize.packedWidth + "x" + resize.packedHeight
                     + " (aspect " + sourceAspect + ", pipeline unchanged: "
                     + resizedContract + ")");
-            glSurfaceView.requestRender();
+            return true;
         }
+    }
+
+    /**
+     * Arms acknowledgement after the first new-generation packed buffer is drawn and swapped.
+     * Exact EGL validation has already succeeded when StreamContainer calls this method.
+     */
+    public boolean completeLiveStreamResizeAfterSwap(Runnable completion) {
+        if (completion == null || shuttingDown.get() || !clientSbs
+                || !outputSurfaceValidated || pendingLiveStreamResize != null) {
+            return false;
+        }
+        synchronized (liveStreamResizeLock) {
+            if (shuttingDown.get() || !clientSbs
+                    || !outputSurfaceValidated || pendingLiveStreamResize != null) {
+                return false;
+            }
+            liveStreamResizeCompletionGeneration = clientSbsGeneration.get();
+            clearLiveStreamResizeSwapCandidate();
+            liveStreamResizeCompletion = completion;
+        }
+        glSurfaceView.requestRender();
+        return true;
+    }
+
+    /** Cancels a superseded swap acknowledgement without invalidating the attached EGL output. */
+    public void cancelLiveStreamResizeCompletion() {
+        synchronized (liveStreamResizeLock) {
+            liveStreamResizeCompletion = null;
+            liveStreamResizeCompletionGeneration = 0;
+            clearLiveStreamResizeSwapCandidate();
+        }
+    }
+
+    /** Abandons a failed transaction so no late attachment can apply or publish its geometry. */
+    public void abandonLiveStreamResize() {
+        synchronized (liveStreamResizeLock) {
+            pendingLiveStreamResize = null;
+            liveStreamResizeCompletion = null;
+            liveStreamResizeCompletionGeneration = 0;
+            clearLiveStreamResizeSwapCandidate();
+            outputSurfaceValidated = false;
+        }
+        invalidateQueuedFrameDrain();
     }
 
     /**
@@ -1451,9 +1595,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     /** Force the render viewport to a fixed output size when the GL output is an independently
      * sized XR compositor surface. Pass 0,0 to fall back to the SurfaceHolder/view size. */
     public void setOutputSizeOverride(int width, int height) {
-        outputSurfaceValidated = false;
-        this.outputWidthOverride = width;
-        this.outputHeightOverride = height;
+        synchronized (liveStreamResizeLock) {
+            outputSurfaceValidated = false;
+            rejectedOutputSurfaceGeneration = 0;
+            pendingLiveStreamResize = null;
+            liveStreamResizeCompletion = null;
+            liveStreamResizeCompletionGeneration = 0;
+            clearLiveStreamResizeSwapCandidate();
+            this.outputWidthOverride = width;
+            this.outputHeightOverride = height;
+        }
         // StreamContainer sets the initial override before GLSurfaceView.setRenderer(), when
         // requestRender() would dereference GLSurfaceView's not-yet-created GLThread. Initial
         // surface creation and later decoder/onResume events already schedule a draw.
@@ -2226,6 +2377,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (shuttingDown.get() || !surfaceLifecycleReady || !outputSurfaceValidated) {
             return;
         }
+        outputDrawSequence++;
 
         applyPerformanceSamplingStateOnGlThread();
         // Polls availability only; neither timer queries nor depth-health staging ever wait.
@@ -2261,6 +2413,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         // transition must not throw away the last valid matched stereo pair.
         presentClientSbs();
         scheduleHdrInputTransitionCompletionAfterSwap();
+        scheduleLiveStreamResizeCompletionAfterSwap();
     }
 
     private void scheduleHdrInputTransitionCompletionAfterSwap() {
@@ -2287,6 +2440,45 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         } catch (RuntimeException error) {
             LimeLog.warning("Unable to queue Client SBS HDR swap acknowledgement: " + error);
         }
+    }
+
+    private void scheduleLiveStreamResizeCompletionAfterSwap() {
+        if (liveStreamResizeCompletion == null) {
+            return;
+        }
+        Runnable completion;
+        synchronized (liveStreamResizeLock) {
+            completion = liveStreamResizeCompletion;
+            int outputGeneration = liveStreamResizeCompletionGeneration;
+            if (completion == null || outputGeneration <= 0
+                    || outputGeneration != activeClientSbsGeneration
+                    || !clientSbs || !hasFrameForActiveGeneration
+                    || !outputSurfaceValidated) {
+                return;
+            }
+
+            if (liveStreamResizeSwapProof.observe(
+                    outputGeneration, outputSurfaceValidationEpoch, outputDrawSequence)) {
+                liveStreamResizeCompletion = null;
+                liveStreamResizeCompletionGeneration = 0;
+                clearLiveStreamResizeSwapCandidate();
+            } else {
+                completion = null;
+            }
+        }
+        if (completion == null) {
+            // A second draw on the same renderer generation and exact EGL attachment is the proof
+            // that GLSurfaceView returned from the prior draw and accepted its swap. queueEvent()
+            // alone is insufficient because Android services queued events before it handles a
+            // failed eglSwapBuffers()/EGL_CONTEXT_LOST result.
+            glSurfaceView.requestRender();
+            return;
+        }
+        completion.run();
+    }
+
+    private void clearLiveStreamResizeSwapCandidate() {
+        liveStreamResizeSwapProof.reset();
     }
 
     private void presentClientSbs() {
@@ -2380,15 +2572,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             GLES20.glUniform1i(bindings.tonemapHdrToSdr,
                     hdrInput && !hdrOutputCapable ? 1 : 0);
         }
-        if (bindings.sourceAspect != -1 && prefConfig != null) {
+        if (bindings.sourceAspect != -1) {
             GLES20.glUniform1f(bindings.sourceAspect,
                     pipelineContract.getModelContentAspect());
         }
-        if (bindings.downsampleRatio != -1 && prefConfig != null) {
+        if (bindings.downsampleRatio != -1) {
             // Source pixels per model texel. 1920 -> 350 is 5.5x per axis and 3840 -> 350 is 11x,
             // which is why the model-input pass integrates a footprint instead of taking one tap.
-            float sourceW = Math.max(prefConfig.width, 1);
-            float sourceH = Math.max(prefConfig.height, 1);
+            float sourceW = Math.max(sourceWidth, 1);
+            float sourceH = Math.max(sourceHeight, 1);
             GLES20.glUniform2f(bindings.downsampleRatio,
                     sourceW / Math.max(modelInputWidth, 1),
                     sourceH / Math.max(modelInputHeight, 1));
@@ -3249,8 +3441,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                                                  int surfaceGeneration) {
         int requestedWidth = outputWidthOverride;
         int requestedHeight = outputHeightOverride;
-        int perEyeWidth = prefConfig != null ? prefConfig.width : 0;
-        int perEyeHeight = prefConfig != null ? prefConfig.height : 0;
+        int perEyeWidth = sourceWidth;
+        int perEyeHeight = sourceHeight;
 
         int[] maxViewport = new int[2];
         int[] maxTextureSize = new int[1];
@@ -3346,6 +3538,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int validationGeneration = requestedGeneration > 0
                 ? requestedGeneration : decoderSurfaceGeneration;
         outputSurfaceValidated = false;
+        if (!applyPendingLiveStreamResize()) {
+            rejectCurrentOutputSurface(validationGeneration,
+                    "unable to apply the pending source/output resize");
+            return;
+        }
         if (validationGeneration > 0
                 && rejectedOutputSurfaceGeneration == validationGeneration) {
             return;
@@ -3388,10 +3585,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             decoderSurfaceGeneration = requestedGeneration;
             lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
         }
+        outputSurfaceValidationEpoch++;
+        if (outputSurfaceValidationEpoch <= 0) {
+            outputSurfaceValidationEpoch = 1;
+        }
         outputSurfaceValidated = true;
         // Keep a legal per-eye default. The optional cached-warp path installs a 2W viewport only
         // after checking it against GL_MAX_VIEWPORT_DIMS; otherwise composition uses two W draws.
-        GLES20.glViewport(0, 0, prefConfig.width, prefConfig.height);
+        GLES20.glViewport(0, 0, sourceWidth, sourceHeight);
         matchedOutputPresented = false;
         if (onSurfaceReadyListener != null && videoSurface != null && videoSurface.isValid()
                 && decoderSurfaceGeneration > 0) {
@@ -3426,8 +3627,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private boolean initializeColorFrameSlots() {
         // Keep the color frame at the client request/output resolution. A legacy host that
         // negotiates a lower decode is sampled into this target; depth inference remains low resolution.
-        colorFrameWidth = Math.max(1, prefConfig.width);
-        colorFrameHeight = Math.max(1, prefConfig.height);
+        colorFrameWidth = Math.max(1, sourceWidth);
+        colorFrameHeight = Math.max(1, sourceHeight);
         // Names from a lost context are not valid deletion targets in this new context.
         for (int slot = 0; slot < colorFrameTextures.length; slot++) {
             colorFrameTextures[slot] = 0;
@@ -3470,8 +3671,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         activeColorFrameLease = null;
         pendingColorFrameLease = null;
         colorFrameSlots.reset();
-        LimeLog.info("Client SBS render size: source=" + prefConfig.width + "x"
-                + prefConfig.height + ", perEye=" + colorFrameWidth + "x" + colorFrameHeight
+        LimeLog.info("Client SBS render size: source=" + sourceWidth + "x"
+                + sourceHeight + ", perEye=" + colorFrameWidth + "x" + colorFrameHeight
                 + ", packed=" + getOutputWidth() + "x" + getOutputHeight()
                 + ", color=" + presentationColorFormat
                 + ", HDR output=" + (hdrOutputCapable ? "preserved" : "SDR tonemap"));

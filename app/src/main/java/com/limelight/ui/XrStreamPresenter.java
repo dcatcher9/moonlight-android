@@ -640,17 +640,20 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Two-source completion gate for a live video-mode request.
+     * Completion gate for a live video-mode request.
      *
      * <p>A fast bitrate/frame-rate request needs only its correlated APPLIED ACK. A resolution
      * request additionally needs MediaCodec to release a fresh IDR at the acknowledged geometry.
      * A decoder event that arrives before the APPLIED ACK is retained only for diagnostics. The
      * ACK invalidates that provisional evidence and arms exactly one post-ACK decoder transition,
-     * which supplies the only decoder output allowed to settle the request.</p>
+     * which supplies the only decoder output allowed to settle the request. Client SBS resolution
+     * changes additionally wait for exact validation of the replacement packed EGL output.</p>
      */
     static final class LiveQualityConfirmationGate {
         private boolean decoderConfirmationRequired;
+        private boolean presentationConfirmationRequired;
         private boolean appliedAckReceived;
+        private boolean presentationReady;
         private boolean postAckDecoderConfirmationStarted;
         private boolean decoderOutputReceived;
         private boolean matchingDecoderOutputReceived;
@@ -658,8 +661,15 @@ public class XrStreamPresenter {
         private int decoderOutputHeight;
 
         void begin(boolean decoderConfirmationRequired) {
+            begin(decoderConfirmationRequired, false);
+        }
+
+        void begin(boolean decoderConfirmationRequired,
+                   boolean presentationConfirmationRequired) {
             this.decoderConfirmationRequired = decoderConfirmationRequired;
+            this.presentationConfirmationRequired = presentationConfirmationRequired;
             appliedAckReceived = false;
+            presentationReady = !presentationConfirmationRequired;
             postAckDecoderConfirmationStarted = false;
             decoderOutputReceived = false;
             matchingDecoderOutputReceived = false;
@@ -669,6 +679,17 @@ public class XrStreamPresenter {
 
         boolean onAppliedAck() {
             appliedAckReceived = true;
+            return canSettle();
+        }
+
+        /** Re-arms readiness when a host clamp supersedes an in-flight packed-output resize. */
+        void expectPresentationConfirmation() {
+            presentationConfirmationRequired = true;
+            presentationReady = false;
+        }
+
+        boolean onPresentationReady() {
+            presentationReady = true;
             return canSettle();
         }
 
@@ -702,6 +723,7 @@ public class XrStreamPresenter {
 
         boolean canSettle() {
             return appliedAckReceived
+                    && (!presentationConfirmationRequired || presentationReady)
                     && (!decoderConfirmationRequired
                     || (postAckDecoderConfirmationStarted
                     && matchingDecoderOutputReceived));
@@ -709,6 +731,10 @@ public class XrStreamPresenter {
 
         boolean hasAppliedAck() {
             return appliedAckReceived;
+        }
+
+        boolean isPresentationReady() {
+            return presentationReady;
         }
 
         boolean hasDecoderOutput() {
@@ -725,7 +751,9 @@ public class XrStreamPresenter {
 
         void clear() {
             decoderConfirmationRequired = false;
+            presentationConfirmationRequired = false;
             appliedAckReceived = false;
+            presentationReady = false;
             postAckDecoderConfirmationStarted = false;
             decoderOutputReceived = false;
             matchingDecoderOutputReceived = false;
@@ -3336,7 +3364,11 @@ public class XrStreamPresenter {
 
     private TableLayout createStatsTable() {
         TableLayout table = new TableLayout(activity);
-        table.setColumnShrinkable(0, true);
+        // Column 0 holds the metric name and is deliberately NOT shrinkable. When it was, the
+        // longest names wrapped onto a second line and the whole pane gained a ragged rhythm for
+        // the sake of a few characters. Sizing the column to its widest label costs horizontal
+        // space once; wrapping costs vertical space on every affected row.
+        table.setColumnShrinkable(0, false);
         table.setColumnShrinkable(1, true);
         table.setColumnStretchable(1, true);
         return table;
@@ -4853,7 +4885,8 @@ public class XrStreamPresenter {
         }
 
         liveQualityChangeInProgress = true;
-        liveQualityConfirmations.begin(true);
+        liveQualityConfirmations.begin(
+                true, currentPresenterMode == PresenterMode.CLIENT_SBS_AI);
         previousLiveQuality = previous;
         pendingLiveQuality = target;
         acknowledgedLiveQuality = null;
@@ -5092,6 +5125,13 @@ public class XrStreamPresenter {
      * {@link PreferenceConfiguration#bitrate}.
      */
     private boolean applyAcknowledgedQuality(com.limelight.Game game, StreamQualityTuple applied) {
+        return applyAcknowledgedQuality(
+                game, applied, this::onClientSbsLiveResizeComplete);
+    }
+
+    private boolean applyAcknowledgedQuality(
+            com.limelight.Game game, StreamQualityTuple applied,
+            StreamContainer.SurfaceSwitchCallback clientSbsResizeCallback) {
         int[] size = parseResolutionSize(applied.resolution);
         float fps = parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null) {
@@ -5104,7 +5144,8 @@ public class XrStreamPresenter {
                     + "; adopting it as authoritative");
             return acknowledgedGeometryAdoptionSucceeded(true,
                     applyLiveStreamGeometry(
-                            game, size[0], size[1], fps, applied.bitrateKbps));
+                            game, size[0], size[1], fps, applied.bitrateKbps,
+                            clientSbsResizeCallback));
         }
         prefConfig.fps = fps;
         prefConfig.bitrate = applied.bitrateKbps;
@@ -5120,8 +5161,38 @@ public class XrStreamPresenter {
                 stillInEffect != null ? stillInEffect : previousLiveQuality;
         PresenterMode requestMode = liveQualityRequestMode();
         LiveQualityRequestOrigin requestOrigin = pendingLiveQualityOrigin;
+        int[] rollbackSize = durableStillInEffect != null
+                ? parseResolutionSize(durableStillInEffect.resolution) : null;
+        boolean asynchronousClientRollback = liveQualityChangeInProgress
+                && currentPresenterMode == PresenterMode.CLIENT_SBS_AI
+                && rollbackSize != null
+                && (rollbackSize[0] != prefConfig.width
+                || rollbackSize[1] != prefConfig.height);
         if (durableStillInEffect != null) {
-            if (!applyAcknowledgedQuality(game, durableStillInEffect)) {
+            StreamContainer.SurfaceSwitchCallback rollbackCompletion =
+                    asynchronousClientRollback
+                            ? success -> {
+                                if (!liveQualityChangeInProgress) {
+                                    return;
+                                }
+                                if (!success) {
+                                    LimeLog.severe("XR: Client SBS could not restore the "
+                                            + "authoritative geometry after host refusal");
+                                    boolean commitRequestedAfterReconnect =
+                                            requestOrigin == LiveQualityRequestOrigin.USER
+                                                    && status == MoonBridge
+                                                    .VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT;
+                                    requireMandatoryLiveQualityResync(
+                                            commitRequestedAfterReconnect, false);
+                                    return;
+                                }
+                                finishVideoModeRefusal(
+                                        status, durableStillInEffect,
+                                        requestMode, requestOrigin);
+                            }
+                            : this::onClientSbsLiveResizeComplete;
+            if (!applyAcknowledgedQuality(
+                    game, durableStillInEffect, rollbackCompletion)) {
                 LimeLog.severe("XR: host refused the request, but the client could not restore "
                         + "the authoritative previous presentation geometry");
                 // Only NEEDS_RECONNECT says the requested USER target is valid for a fresh stream.
@@ -5133,7 +5204,16 @@ public class XrStreamPresenter {
                         commitRequestedAfterReconnect, false);
                 return;
             }
+            if (asynchronousClientRollback) {
+                return;
+            }
         }
+        finishVideoModeRefusal(status, durableStillInEffect, requestMode, requestOrigin);
+    }
+
+    private void finishVideoModeRefusal(
+            int status, StreamQualityTuple durableStillInEffect,
+            PresenterMode requestMode, LiveQualityRequestOrigin requestOrigin) {
         boolean wasResolutionTransaction = liveQualityChangeInProgress;
         if (wasResolutionTransaction && surfaceEntity != null && !surfaceEntity.isDisposed()) {
             surfaceEntity.setAlpha(1.0f);
@@ -5230,10 +5310,41 @@ public class XrStreamPresenter {
      */
     private boolean applyLiveStreamGeometry(com.limelight.Game game, int width, int height,
                                             float fps, int bitrateKbps) {
+        return applyLiveStreamGeometry(
+                game, width, height, fps, bitrateKbps,
+                this::onClientSbsLiveResizeComplete);
+    }
+
+    private boolean applyLiveStreamGeometry(
+            com.limelight.Game game, int width, int height,
+            float fps, int bitrateKbps,
+            StreamContainer.SurfaceSwitchCallback clientSbsResizeCallback) {
         StreamContainer streamContainer = game.getStreamContainer();
         if (streamContainer == null || surfaceEntity == null || surfaceEntity.isDisposed()) {
             return false;
         }
+
+        // Client SBS owns its own GL color targets and presents a packed 2W x H swapchain, so it
+        // resizes through the renderer rather than the host-surface dummy-park handoff.
+        boolean clientSbsResize = currentPresenterMode == PresenterMode.CLIENT_SBS_AI;
+        boolean resized;
+        if (clientSbsResize) {
+            liveQualityConfirmations.expectPresentationConfirmation();
+            // StreamContainer first takes the renderer's GL callback lock and invalidates output.
+            // Only then is it safe to publish new dimensions through the shared preferences.
+            resized = streamContainer.resizeClientSbsSurface(
+                    width, height, clientSbsResizeCallback);
+        } else {
+            prefConfig.width = width;
+            prefConfig.height = height;
+            resized = streamContainer.resizeHostSbsSurface(
+                    prefConfig.isHostDoubledWidthMode()
+                            && isHostDepthPresenterMode(currentPresenterMode));
+        }
+        if (!resized) {
+            return false;
+        }
+
         prefConfig.width = width;
         prefConfig.height = height;
         prefConfig.fps = fps;
@@ -5241,17 +5352,6 @@ public class XrStreamPresenter {
         // The only cached dimension-derived field in this class.
         fullAspect = (float) width / height;
         game.updateDecoderStreamGeometry(width, height, Math.round(fps));
-
-        // Client SBS owns its own GL color targets and presents a packed 2W x H swapchain, so it
-        // resizes through the renderer rather than the host-surface dummy-park handoff.
-        boolean resized = currentPresenterMode == PresenterMode.CLIENT_SBS_AI
-                ? streamContainer.resizeClientSbsSurface(width, height)
-                : streamContainer.resizeHostSbsSurface(
-                        prefConfig.isHostDoubledWidthMode()
-                                && isHostDepthPresenterMode(currentPresenterMode));
-        if (!resized) {
-            return false;
-        }
 
         float aspect = aspectFor(currentPresenterMode);
         SurfaceEntity.Shape shape = surfaceEntity.getShape();
@@ -5265,6 +5365,27 @@ public class XrStreamPresenter {
         repositionControlBar(quadHeight);
         updateGlancePanel();
         return true;
+    }
+
+    /** Third completion boundary for Client SBS: exact packed EGL output at the new geometry. */
+    private void onClientSbsLiveResizeComplete(boolean success) {
+        if (!liveQualityChangeInProgress) {
+            return;
+        }
+        if (!success) {
+            LimeLog.severe("XR: Client SBS could not validate its resized packed output; "
+                    + "forcing authoritative reconnect");
+            requireMandatoryLiveQualityResync(
+                    shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin),
+                    false);
+            return;
+        }
+        liveQualityConfirmations.onPresentationReady();
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        if (game != null) {
+            finishConfirmedLiveQualityChange(game);
+        }
     }
 
     /**
@@ -6435,14 +6556,43 @@ public class XrStreamPresenter {
         adoptVideoSurface(surfaceEntity.getSurface());
     }
 
+    /**
+     * Resizes the Client-SBS SceneCore swapchain from one explicit per-eye geometry.
+     *
+     * <p>The live path uses the same immutable values for this swapchain and the renderer's
+     * packed override so a mutable preference update cannot leave one side at the previous
+     * resolution.</p>
+     *
+     * @return true when SceneCore returned a valid (possibly replacement) Surface
+     */
+    public boolean setClientSbsSurfaceSize(int perEyeWidth, int perEyeHeight) {
+        int[] packed = clientSbsPackedDimensions(perEyeWidth, perEyeHeight);
+        if (packed == null || surfaceEntity == null || surfaceEntity.isDisposed()) {
+            return false;
+        }
+        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(packed[0], packed[1]));
+        adoptVideoSurface(surfaceEntity.getSurface());
+        return videoSurface != null && videoSurface.isValid();
+    }
+
     /** Final XR swapchain width for Client SBS: two negotiated-size eye views side by side. */
     public int getClientSbsSurfaceWidth() {
-        return prefConfig.width * 2;
+        int[] packed = clientSbsPackedDimensions(prefConfig.width, prefConfig.height);
+        return packed != null ? packed[0] : 0;
     }
 
     /** Final XR height for Client SBS, identical to the negotiated stream height. */
     public int getClientSbsSurfaceHeight() {
         return prefConfig.height;
+    }
+
+    /** Exact packed output for two full-resolution Client-SBS eyes, or null when invalid. */
+    static int[] clientSbsPackedDimensions(int perEyeWidth, int perEyeHeight) {
+        long packedWidth = (long) perEyeWidth * 2L;
+        if (perEyeWidth <= 0 || perEyeHeight <= 0 || packedWidth > Integer.MAX_VALUE) {
+            return null;
+        }
+        return new int[] {(int) packedWidth, perEyeHeight};
     }
 
     private int hostSbsVideoFormat = MoonBridge.VIDEO_FORMAT_H265;

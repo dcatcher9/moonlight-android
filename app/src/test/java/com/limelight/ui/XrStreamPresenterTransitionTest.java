@@ -1,7 +1,9 @@
 package com.limelight.ui;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
@@ -171,6 +173,14 @@ public class XrStreamPresenterTransitionTest {
                         XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF)[1]);
+    }
+
+    @Test
+    public void clientSbsLiveResizePacksTwoNewFullHdEyesInsteadOfOldFourKEyes() {
+        assertArrayEquals(new int[] {3840, 1080},
+                XrStreamPresenter.clientSbsPackedDimensions(1920, 1080));
+        assertNull(XrStreamPresenter.clientSbsPackedDimensions(
+                Integer.MAX_VALUE, 1080));
     }
 
     @Test

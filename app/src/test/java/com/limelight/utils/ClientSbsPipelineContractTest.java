@@ -66,4 +66,15 @@ public class ClientSbsPipelineContractTest {
         assertTrue(ClientSbsPipelineContract.sameForStream(
                 MIDAS_V2, 1080.0 / 1920.0, 1440.0 / 2560.0));
     }
+
+    @Test
+    public void fourKTo1080pLiveResizeKeepsBothLandscapePipelineContracts() {
+        double fourKAspect = 3840.0 / 2160.0;
+        double fullHdAspect = 1920.0 / 1080.0;
+
+        assertTrue(ClientSbsPipelineContract.sameForStream(
+                DA_V2, fourKAspect, fullHdAspect));
+        assertTrue(ClientSbsPipelineContract.sameForStream(
+                MIDAS_V2, fourKAspect, fullHdAspect));
+    }
 }

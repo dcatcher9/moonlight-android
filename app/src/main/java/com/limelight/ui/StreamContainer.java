@@ -132,12 +132,28 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private SurfaceView mSurfaceView;
     private Surface mCurrentSurface;
-    private Surface mClientSbsSurface;
+    private volatile Surface mClientSbsSurface;
     private volatile Surface mBoundDecoderSurface;
     private SurfaceSwitchCallback mPendingClientSbsSwitch;
     private volatile int mClientSbsSwitchGeneration;
+    /** EGL attachment/detachment identity is independent from the renderer input generation. */
+    private int mClientSbsEglOperationGeneration;
+    private int mPendingClientSbsSwitchEglGeneration;
+    private volatile int mActiveClientSbsDecoderGeneration;
     private boolean mPendingClientSbsEnable;
     private boolean mPendingHostSbsTarget;
+    private SurfaceSwitchCallback mPendingClientSbsResize;
+    private int mPendingClientSbsResizeGeneration;
+    private int mPendingClientSbsResizeWidth;
+    private int mPendingClientSbsResizeHeight;
+    /** Latest host clamp received while the current replacement EGL surface is still attaching. */
+    private SurfaceSwitchCallback mQueuedClientSbsResize;
+    private int mQueuedClientSbsResizeGeneration;
+    private int mQueuedClientSbsResizeWidth;
+    private int mQueuedClientSbsResizeHeight;
+    private int mClientSbsResizeTimeoutToken;
+    private ClientSbsResizePolicy.Stage mClientSbsResizeStage =
+            ClientSbsResizePolicy.Stage.IDLE;
     private SurfaceSwitchCallback mPendingClientSbsHdrSwitch;
     private int mClientSbsHdrSwitchGeneration;
     private int mRendererHdrTransitionGeneration;
@@ -447,20 +463,32 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
         // at the same time (so host SBS stops when you switch to Client SBS).
         if (mStereoRenderer == null || mDestroyed || mDummySurface == null
-                || !mDummySurface.isValid()) {
+                || !mDummySurface.isValid() || mPendingClientSbsResize != null) {
             callback.onComplete(false);
             return;
         }
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
         final int switchGeneration = ++mClientSbsSwitchGeneration;
+        final int eglOperationGeneration = nextClientSbsEglOperationGeneration();
         mPendingClientSbsSwitch = callback;
+        mPendingClientSbsSwitchEglGeneration = eglOperationGeneration;
         mPendingClientSbsEnable = enable;
         mPendingHostSbsTarget = hostSbsTarget;
 
         if (enable) {
-            // Match the renderer viewport to the negotiated-size Client SBS surface.
-            mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
-                    mXrPresenter.getClientSbsSurfaceHeight());
+            // Client SBS may have been inactive while Normal/Host changed resolution. Re-pin the
+            // renderer-owned per-eye geometry as well as its packed override before resume; the
+            // paused GL thread consumes this at onSurfaceChanged. A pipeline-contract change
+            // cannot be absorbed by this renderer instance and fails the mode transaction closed.
+            int perEyeWidth = prefConfig.width;
+            int perEyeHeight = prefConfig.height;
+            int packedWidth = mXrPresenter.getClientSbsSurfaceWidth();
+            int packedHeight = mXrPresenter.getClientSbsSurfaceHeight();
+            if (!mStereoRenderer.prepareLiveStreamResize(
+                    perEyeWidth, perEyeHeight, packedWidth, packedHeight)) {
+                completeClientSbsSwitch(switchGeneration, false);
+                return;
+            }
 
             // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
             // null/garbage-collected surface crashes MediaCodec).
@@ -474,7 +502,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mXrPresenter.setClientSbsSurfaceSize(true);
             mExpectedEglOutputSurface = mXrPresenter.getVideoSurface();
             mCreatedEglAttachGeneration = 0;
-            mRequestedEglAttachGeneration = switchGeneration;
+            mRequestedEglAttachGeneration = eglOperationGeneration;
             mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
 
             // XR surface is now free. Resume the GLSurfaceView so EGL connects to it.
@@ -489,7 +517,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
             // onPause() only requests a pause. Wait for the EGL factory to acknowledge this exact
             // generation after eglDestroySurface() releases the XR producer.
-            mRequestedEglDetachGeneration = switchGeneration;
+            mRequestedEglDetachGeneration = eglOperationGeneration;
             glView.onPause();
         }
 
@@ -507,8 +535,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private void onClientSbsRendererSurfaceReady(Surface surface, int surfaceGeneration,
                                                   int eglAttachGeneration) {
         if (mDestroyed || surface == null || !surface.isValid()
-                || surfaceGeneration <= 0 || surfaceGeneration != eglAttachGeneration
-                || surfaceGeneration != mRequestedEglAttachGeneration
+                || surfaceGeneration <= 0 || eglAttachGeneration <= 0
+                || eglAttachGeneration != mRequestedEglAttachGeneration
                 || mXrPresenter == null
                 || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
             return;
@@ -516,18 +544,48 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         boolean pendingEnable = mPendingClientSbsSwitch != null
                 && mPendingClientSbsEnable
-                && surfaceGeneration == mClientSbsSwitchGeneration;
+                && surfaceGeneration == mClientSbsSwitchGeneration
+                && eglAttachGeneration == mPendingClientSbsSwitchEglGeneration;
+        boolean pendingResize = mPendingClientSbsResize != null
+                && ClientSbsResizePolicy.acceptsRendererReady(mClientSbsResizeStage)
+                && surfaceGeneration == mActiveClientSbsDecoderGeneration
+                && eglAttachGeneration == mPendingClientSbsResizeGeneration;
         boolean contextRecovery = mPendingClientSbsSwitch == null
+                && mPendingClientSbsResize == null
+                && surfaceGeneration == mActiveClientSbsDecoderGeneration
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs();
-        if (!pendingEnable && !contextRecovery) {
+        if (!pendingEnable && !pendingResize && !contextRecovery) {
             return;
         }
 
-        mClientSbsSurface = surface;
         mXrPresenter.onClientSbsOutputCapabilityChanged();
-        boolean success = game != null && bindDecoderSurface(surface);
+        boolean success = surface == mClientSbsSurface && mBoundDecoderSurface == surface;
+        if (!success) {
+            success = game != null && bindDecoderSurface(surface);
+        }
+        if (success) {
+            mClientSbsSurface = surface;
+            mActiveClientSbsDecoderGeneration = surfaceGeneration;
+        }
         if (pendingEnable) {
             completeClientSbsSwitch(surfaceGeneration, success);
+        } else if (pendingResize) {
+            if (!success) {
+                completeClientSbsResize(eglAttachGeneration, false);
+            } else if (mQueuedClientSbsResize != null) {
+                // The host has already superseded this geometry. EGL now owns an exact surface,
+                // so detach it immediately without exposing or waiting for a retired-size frame.
+                advanceToQueuedClientSbsResize();
+            } else {
+                int resizeGeneration = eglAttachGeneration;
+                mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP;
+                boolean armed = mStereoRenderer.completeLiveStreamResizeAfterSwap(
+                        () -> post(() -> completeClientSbsResize(
+                                resizeGeneration, true)));
+                if (!armed) {
+                    completeClientSbsResize(resizeGeneration, false);
+                }
+            }
         } else if (!success && game != null) {
             game.handleDecoderSurfaceSwitchFailure();
         }
@@ -536,8 +594,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private void onClientSbsRendererSurfaceValidationFailed(
             int surfaceGeneration, int eglAttachGeneration, String reason) {
         if (mDestroyed || surfaceGeneration <= 0
-                || surfaceGeneration != eglAttachGeneration
-                || surfaceGeneration != mRequestedEglAttachGeneration
+                || eglAttachGeneration <= 0
+                || eglAttachGeneration != mRequestedEglAttachGeneration
                 || mXrPresenter == null
                 || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
             return;
@@ -545,17 +603,25 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         boolean pendingEnable = mPendingClientSbsSwitch != null
                 && mPendingClientSbsEnable
-                && surfaceGeneration == mClientSbsSwitchGeneration;
-        boolean contextRecovery = mPendingClientSbsSwitch == null
                 && surfaceGeneration == mClientSbsSwitchGeneration
+                && eglAttachGeneration == mPendingClientSbsSwitchEglGeneration;
+        boolean pendingResize = mPendingClientSbsResize != null
+                && ClientSbsResizePolicy.acceptsRendererReady(mClientSbsResizeStage)
+                && surfaceGeneration == mActiveClientSbsDecoderGeneration
+                && eglAttachGeneration == mPendingClientSbsResizeGeneration;
+        boolean contextRecovery = mPendingClientSbsSwitch == null
+                && mPendingClientSbsResize == null
+                && surfaceGeneration == mActiveClientSbsDecoderGeneration
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs();
-        if (!pendingEnable && !contextRecovery) {
+        if (!pendingEnable && !pendingResize && !contextRecovery) {
             return;
         }
         LimeLog.severe("Client SBS EGL output validation failed for generation "
                 + surfaceGeneration + ": " + reason);
         if (pendingEnable) {
             completeClientSbsSwitch(surfaceGeneration, false);
+        } else if (pendingResize) {
+            completeClientSbsResize(eglAttachGeneration, false);
         } else if (contextRecovery && game != null) {
             game.handleDecoderSurfaceSwitchFailure();
         }
@@ -580,7 +646,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             if (mBoundDecoderSurface == mDummySurface) {
                 return true;
             }
-            if (surfaceGeneration != mRequestedEglAttachGeneration) {
+            if (surfaceGeneration != mActiveClientSbsDecoderGeneration) {
                 return false;
             }
             if (mBoundDecoderSurface != oldSurface || mClientSbsSurface != oldSurface) {
@@ -591,9 +657,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     private void onClientSbsEglDetached(int detachGeneration) {
-        if (mDestroyed || detachGeneration != mClientSbsSwitchGeneration
+        if (mDestroyed || detachGeneration <= 0
                 || detachGeneration != mRequestedEglDetachGeneration
-                || mPendingClientSbsSwitch == null || mPendingClientSbsEnable
                 || mXrPresenter == null) {
             return;
         }
@@ -601,11 +666,23 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mRequestedEglDetachGeneration = 0;
         mCreatedEglAttachGeneration = 0;
         mExpectedEglOutputSurface = null;
+
+        if (mPendingClientSbsResize != null
+                && mClientSbsResizeStage
+                == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
+            attachPendingClientSbsResize();
+            return;
+        }
+
+        if (mPendingClientSbsSwitch == null || mPendingClientSbsEnable
+                || detachGeneration != mPendingClientSbsSwitchEglGeneration) {
+            return;
+        }
         // Client -> Normal or Raw Half goes directly to W x H; Client -> Host SBS AI goes directly
         // to its packed target. Only a Raw Full transport boundary reconnects before this path.
         mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
         Surface target = mXrPresenter.getVideoSurface();
-        completeClientSbsSwitch(detachGeneration,
+        completeClientSbsSwitch(mClientSbsSwitchGeneration,
                 target != null && target.isValid() && bindDecoderSurface(target));
     }
 
@@ -620,7 +697,13 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             }
             return;
         }
+        boolean completedEnable = mPendingClientSbsEnable;
         mPendingClientSbsSwitch = null;
+        mPendingClientSbsSwitchEglGeneration = 0;
+        if (success && !completedEnable) {
+            mActiveClientSbsDecoderGeneration = 0;
+            mClientSbsSurface = null;
+        }
         // The GL detach/attach acknowledgement can arrive just before Activity teardown and be
         // queued on the main thread behind onDestroy(). Revalidate the generation at execution
         // time so a stale completion cannot touch the disposed Activity-bound SurfaceEntity.
@@ -630,6 +713,14 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             }
             callback.onComplete(success);
         });
+    }
+
+    private int nextClientSbsEglOperationGeneration() {
+        mClientSbsEglOperationGeneration++;
+        if (mClientSbsEglOperationGeneration <= 0) {
+            mClientSbsEglOperationGeneration = 1;
+        }
+        return mClientSbsEglOperationGeneration;
     }
 
     private synchronized boolean bindDecoderSurface(Surface surface) {
@@ -656,24 +747,187 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
      * the negotiated base width and therefore reconnects before any live surface switch.
      */
     /**
-     * Re-pins the Client SBS pipeline to a new stream size: the renderer's resolution-derived
-     * color targets on the GL thread, then the XR swapchain that presents its packed {@code 2W x H}
-     * output. The decoder stays on the renderer's SurfaceTexture throughout, so unlike the
-     * host-surface path there is no dummy-surface park.
+     * Re-pins the Client SBS source targets and packed SceneCore/EGL output to {@code 2W x H}.
      *
-     * @return false when the renderer refuses the change (an immutable pipeline-contract change
-     *         needs a reconnect)
+     * <p>SceneCore may replace its Surface when pixel dimensions change, and even a retained Java
+     * Surface needs a replacement EGLWindowSurface before EGL reports the new size. Pause/resume
+     * destroys only the EGL output while preserving the renderer context and its MediaCodec input
+     * SurfaceTexture in the normal path. The callback fires only after the replacement output has
+     * passed exact EGL validation.</p>
+     *
+     * @return false when the request cannot start; accepted requests complete asynchronously
      */
-    public boolean resizeClientSbsSurface(int width, int height) {
-        if (mXrPresenter == null || mDestroyed || mStereoRenderer == null
-                || !mStereoRenderer.isClientSbs()) {
+    public boolean resizeClientSbsSurface(int width, int height,
+                                          SurfaceSwitchCallback callback) {
+        int[] packed = XrStreamPresenter.clientSbsPackedDimensions(width, height);
+        if (callback == null || packed == null || mXrPresenter == null || mDestroyed
+                || mStereoRenderer == null || !mStereoRenderer.isClientSbs()
+                || mPendingClientSbsSwitch != null
+                || !mStereoRenderer.suspendPresentationForLiveStreamResize(width, height)) {
             return false;
         }
-        if (!mStereoRenderer.requestLiveStreamResize(width, height)) {
-            return false;
+
+        final int resizeGeneration = nextClientSbsEglOperationGeneration();
+        if (ClientSbsResizePolicy.queueSupersedingRequest(mClientSbsResizeStage)) {
+            // onResume() does not prove that EGL has created a window surface yet. Pausing again
+            // in that gap can produce no destroySurface callback and strand the clamp. Retain only
+            // the newest clamp, let the current exact attachment finish while hidden, then detach
+            // that known surface and apply the queued geometry.
+            mQueuedClientSbsResize = callback;
+            mQueuedClientSbsResizeGeneration = resizeGeneration;
+            mQueuedClientSbsResizeWidth = width;
+            mQueuedClientSbsResizeHeight = height;
+            if (mClientSbsResizeStage == ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP) {
+                advanceToQueuedClientSbsResize();
+            }
+        } else {
+            // While a detach is already acknowledged-in-flight, coalescing is safe: its factory
+            // callback will attach these latest values regardless of the older operation token.
+            mPendingClientSbsResize = callback;
+            mPendingClientSbsResizeGeneration = resizeGeneration;
+            mPendingClientSbsResizeWidth = width;
+            mPendingClientSbsResizeHeight = height;
         }
-        mXrPresenter.setClientSbsSurfaceSize(true);
+
+        if (mClientSbsResizeStage == ClientSbsResizePolicy.Stage.IDLE) {
+            mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
+            mRequestedEglDetachGeneration = resizeGeneration;
+            ((GLSurfaceView) mSurfaceView).onPause();
+        }
+
+        armClientSbsResizeTimeout(resizeGeneration, width, height);
         return true;
+    }
+
+    /** Runs after eglDestroySurface() has released SceneCore's previous producer. */
+    private void attachPendingClientSbsResize() {
+        if (mPendingClientSbsResize == null
+                || mClientSbsResizeStage
+                != ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH
+                || mStereoRenderer == null || mXrPresenter == null || mDestroyed) {
+            return;
+        }
+
+        int resizeGeneration = mPendingClientSbsResizeGeneration;
+        int width = mPendingClientSbsResizeWidth;
+        int height = mPendingClientSbsResizeHeight;
+        int[] packed = XrStreamPresenter.clientSbsPackedDimensions(width, height);
+        boolean prepared = packed != null
+                && mStereoRenderer.prepareLiveStreamResize(
+                        width, height, packed[0], packed[1]);
+        boolean surfaceReady = false;
+        if (prepared) {
+            try {
+                surfaceReady = mXrPresenter.setClientSbsSurfaceSize(width, height);
+            } catch (RuntimeException error) {
+                LimeLog.severe("Unable to resize the Client SBS SceneCore surface: " + error);
+            }
+        }
+        Surface replacement = surfaceReady ? mXrPresenter.getVideoSurface() : null;
+        if (!prepared || replacement == null || !replacement.isValid()) {
+            completeClientSbsResize(resizeGeneration, false);
+            return;
+        }
+
+        mExpectedEglOutputSurface = replacement;
+        mCreatedEglAttachGeneration = 0;
+        mRequestedEglAttachGeneration = resizeGeneration;
+        mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH;
+        ((GLSurfaceView) mSurfaceView).onResume();
+    }
+
+    private void completeClientSbsResize(int generation, boolean success) {
+        if (generation != mPendingClientSbsResizeGeneration) {
+            return;
+        }
+        if (success && mQueuedClientSbsResize != null) {
+            advanceToQueuedClientSbsResize();
+            return;
+        }
+
+        // On failure, report through the newest queued request because it owns the presenter's
+        // currently armed confirmation boundary.
+        SurfaceSwitchCallback callback = mQueuedClientSbsResize != null
+                ? mQueuedClientSbsResize : mPendingClientSbsResize;
+        mClientSbsResizeTimeoutToken++;
+        if (!success) {
+            // A late factory/renderer callback must not be reclassified as ordinary context
+            // recovery after the presenter has already handed this failure to reconnect.
+            mRequestedEglAttachGeneration = 0;
+            mCreatedEglAttachGeneration = 0;
+            mRequestedEglDetachGeneration = 0;
+            mExpectedEglOutputSurface = null;
+            if (mStereoRenderer != null) {
+                mStereoRenderer.abandonLiveStreamResize();
+            }
+        }
+        mPendingClientSbsResize = null;
+        mPendingClientSbsResizeGeneration = 0;
+        mPendingClientSbsResizeWidth = 0;
+        mPendingClientSbsResizeHeight = 0;
+        clearQueuedClientSbsResize();
+        mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
+        if (callback != null) {
+            callback.onComplete(success);
+        }
+    }
+
+    private void advanceToQueuedClientSbsResize() {
+        if (mQueuedClientSbsResize == null || mStereoRenderer == null) {
+            return;
+        }
+        // The authoritative clamp arrived while another replacement was attaching/presenting.
+        // Its exact EGL surface now exists, so it is safe to detach. Never report the superseded
+        // geometry as ready, even if its after-swap acknowledgement was already queued.
+        mStereoRenderer.cancelLiveStreamResizeCompletion();
+        mPendingClientSbsResize = mQueuedClientSbsResize;
+        mPendingClientSbsResizeGeneration = mQueuedClientSbsResizeGeneration;
+        mPendingClientSbsResizeWidth = mQueuedClientSbsResizeWidth;
+        mPendingClientSbsResizeHeight = mQueuedClientSbsResizeHeight;
+        clearQueuedClientSbsResize();
+        mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
+        mRequestedEglDetachGeneration = mPendingClientSbsResizeGeneration;
+        armClientSbsResizeTimeout(
+                mPendingClientSbsResizeGeneration,
+                mPendingClientSbsResizeWidth,
+                mPendingClientSbsResizeHeight);
+        ((GLSurfaceView) mSurfaceView).onPause();
+    }
+
+    private void failClientSbsResizeChain() {
+        if (mPendingClientSbsResize != null) {
+            completeClientSbsResize(mPendingClientSbsResizeGeneration, false);
+        } else if (mQueuedClientSbsResize != null) {
+            SurfaceSwitchCallback callback = mQueuedClientSbsResize;
+            mClientSbsResizeTimeoutToken++;
+            clearQueuedClientSbsResize();
+            mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
+            callback.onComplete(false);
+        }
+    }
+
+    private void clearQueuedClientSbsResize() {
+        mQueuedClientSbsResize = null;
+        mQueuedClientSbsResizeGeneration = 0;
+        mQueuedClientSbsResizeWidth = 0;
+        mQueuedClientSbsResizeHeight = 0;
+    }
+
+    private void armClientSbsResizeTimeout(int generation, int width, int height) {
+        int timeoutToken = ++mClientSbsResizeTimeoutToken;
+        postDelayed(() -> {
+            if (timeoutToken != mClientSbsResizeTimeoutToken) {
+                return;
+            }
+            if ((generation == mPendingClientSbsResizeGeneration
+                    && mPendingClientSbsResize != null)
+                    || (generation == mQueuedClientSbsResizeGeneration
+                    && mQueuedClientSbsResize != null)) {
+                LimeLog.severe("Timed out waiting for generation-acknowledged Client SBS "
+                        + "live resize to " + width + "x" + height);
+                failClientSbsResizeChain();
+            }
+        }, 2000L);
     }
 
     public boolean resizeHostSbsSurface(boolean sbs) {
@@ -863,6 +1117,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mDestroyed = true;
         mClientSbsSwitchGeneration++;
         mPendingClientSbsSwitch = null;
+        mPendingClientSbsSwitchEglGeneration = 0;
+        mActiveClientSbsDecoderGeneration = 0;
+        mPendingClientSbsResize = null;
+        mPendingClientSbsResizeGeneration = 0;
+        mPendingClientSbsResizeWidth = 0;
+        mPendingClientSbsResizeHeight = 0;
+        clearQueuedClientSbsResize();
+        mClientSbsResizeTimeoutToken++;
+        mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
         mClientSbsHdrSwitchGeneration++;
         mPendingClientSbsHdrSwitch = null;
         mRendererHdrTransitionGeneration = 0;

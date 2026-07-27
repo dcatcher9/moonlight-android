@@ -15,6 +15,33 @@ public final class ClientSbsOutputSurfaceValidationTest {
     }
 
     @Test
+    public void acceptsExactPackedSurfaceAfterFourKTo1080pLiveResize() {
+        assertNull(ClientSbsOutputSurfaceValidation.validate(
+                3840, 1080, 3840, 1080,
+                1920, 1080, 16384, 16384, 16384));
+    }
+
+    @Test
+    public void rejectsStaleFourKPackedOverrideAfter1080pLiveResize() {
+        String reason = ClientSbsOutputSurfaceValidation.validate(
+                7680, 2160, 3840, 1080,
+                1920, 1080, 16384, 16384, 16384);
+
+        assertNotNull(reason);
+        assertTrue(reason.contains("2W x H"));
+    }
+
+    @Test
+    public void rejectsStaleFourKEglSurfaceAfter1080pLiveResize() {
+        String reason = ClientSbsOutputSurfaceValidation.validate(
+                3840, 1080, 7680, 2160,
+                1920, 1080, 16384, 16384, 16384);
+
+        assertNotNull(reason);
+        assertTrue(reason.contains("does not match"));
+    }
+
+    @Test
     public void rejectsEglSurfaceThatWasSilentlyClamped() {
         String reason = ClientSbsOutputSurfaceValidation.validate(
                 7680, 2160, 4096, 2160,

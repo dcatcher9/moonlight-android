@@ -109,6 +109,39 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
+    public void clientSbsWaitsForExactPackedPresentationAfterAckAndFreshIdr() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true, true);
+
+        assertFalse(gate.onAppliedAck());
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.onDecoderOutput(1920, 1080, 1920, 1080));
+        assertFalse(gate.canSettle());
+        assertFalse(gate.isPresentationReady());
+
+        assertTrue(gate.onPresentationReady());
+        assertTrue(gate.canSettle());
+    }
+
+    @Test
+    public void clientSbsRetainsEarlyPresentationReadyAndRearmsForHostClamp() {
+        XrStreamPresenter.LiveQualityConfirmationGate gate =
+                new XrStreamPresenter.LiveQualityConfirmationGate();
+        gate.begin(true, true);
+
+        assertFalse(gate.onPresentationReady());
+        assertTrue(gate.isPresentationReady());
+        gate.expectPresentationConfirmation();
+        assertFalse(gate.isPresentationReady());
+
+        assertFalse(gate.onAppliedAck());
+        assertTrue(gate.beginPostAckDecoderConfirmation());
+        assertFalse(gate.onDecoderOutput(1920, 1080, 1920, 1080));
+        assertTrue(gate.onPresentationReady());
+    }
+
+    @Test
     public void staleFourKIdrBeforeFullHdAckWaitsForPostAckFullHdIdr() {
         XrStreamPresenter.LiveQualityConfirmationGate gate =
                 new XrStreamPresenter.LiveQualityConfirmationGate();
