@@ -1,4 +1,4 @@
-<!-- Gamepad. -->
+<!-- Monitor with a speaker: audio played on the host rather than the headset. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
@@ -6,20 +6,27 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:pathData="M6.5,7.5h11a5.5,5.5 0 0,1 0,11h-11a5.5,5.5 0 0,1 0,-11z"
+        android:pathData="M2,4.5h20v12h-20z"
         android:strokeColor="@color/xr_text_primary"
-        android:strokeWidth="2.0"
+        android:strokeWidth="2.2"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="@android:color/transparent" />
     <path
-        android:pathData="M9,10.8v4.4 M6.8,13h4.4"
+        android:pathData="M8.5,21h7"
         android:strokeColor="@color/xr_text_primary"
-        android:strokeWidth="1.8"
+        android:strokeWidth="2.2"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:fillColor="@android:color/transparent" />
     <path
         android:fillColor="@color/xr_text_primary"
-        android:pathData="M15.6,11.6a1.35,1.35 0 1,0 0.01,0z M18,15.2a1.35,1.35 0 1,0 0.01,0z" />
+        android:pathData="M8,9h1.8l2.4,-2.4v7.8l-2.4,-2.4h-1.8z" />
+    <path
+        android:pathData="M15,9.4a3,3 0 0,1 0,4.2"
+        android:strokeColor="@color/xr_text_primary"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="@android:color/transparent" />
 </vector>

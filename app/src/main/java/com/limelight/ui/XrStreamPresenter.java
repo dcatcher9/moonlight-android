@@ -68,7 +68,6 @@ import com.limelight.ui.xrcontrols.XrSegmentedLadder;
 import com.limelight.ui.xrcontrols.XrControlPanelLayout;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrModeChevronView;
-import com.limelight.ui.xrcontrols.XrParameterGlyphView;
 import com.limelight.ui.xrcontrols.XrResolutionSelector;
 import com.limelight.utils.Stereo3DRenderer;
 
@@ -381,14 +380,11 @@ public class XrStreamPresenter {
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, TextView> sessionPendingViews =
             new EnumMap<>(SessionSettingsModel.Key.class);
-    private final EnumMap<SessionSettingsModel.Key, XrParameterGlyphView> sessionGlyphViews =
-            new EnumMap<>(SessionSettingsModel.Key.class);
     private Button sessionDefaultsButton;
     private Button sessionApplyButton;
     private PresenterMode renderedModeOptionsMode;
     private XrResolutionSelector modeResolutionSelector;
     private XrSegmentedLadder modeFpsLadder;
-    private XrParameterGlyphView modeFpsGlyph;
     private XrBitrateControl modeBitrateControl;
     private TextView modeQualityCueView;
     private Button modeDefaultsButton;
@@ -1445,7 +1441,7 @@ public class XrStreamPresenter {
                 R.drawable.ic_xr_cinema_view, /* selectsMode= */ null);
         BarItem stats = new BarItem(
                 activity.getString(R.string.xr_bar_stats),
-                R.drawable.ic_xr_stats, /* selectsMode= */ null);
+                R.drawable.ic_xr_diagnostics, /* selectsMode= */ null);
         BarItem library = new BarItem(
                 activity.getString(R.string.xr_bar_library),
                 R.drawable.ic_xr_library, /* selectsMode= */ null);
@@ -2308,11 +2304,10 @@ public class XrStreamPresenter {
         LinearLayout fpsHeading = new LinearLayout(activity);
         fpsHeading.setOrientation(LinearLayout.HORIZONTAL);
         fpsHeading.setGravity(Gravity.CENTER_VERTICAL);
-        modeFpsGlyph = parameterGlyph(XrParameterGlyphView.Kind.FPS_MOTION_BARS,
-                model.pendingQuality.frameRate);
-        fpsHeading.addView(modeFpsGlyph, glyphLayoutParams());
-        fpsHeading.addView(controlText(activity.getString(R.string.title_fps_ceiling),
-                24f, Color.WHITE));
+        TextView fpsTitle = controlText(activity.getString(R.string.title_fps_ceiling),
+                24f, Color.WHITE);
+        applyTitleIcon(fpsTitle, R.drawable.ic_xr_frame_rate);
+        fpsHeading.addView(fpsTitle);
         fpsCard.addView(fpsHeading);
         modeFpsLadder = new XrSegmentedLadder(activity);
         configureFpsLadder(mode, fps, model);
@@ -2626,7 +2621,6 @@ public class XrStreamPresenter {
         renderedModeOptionsMode = null;
         modeResolutionSelector = null;
         modeFpsLadder = null;
-        modeFpsGlyph = null;
         modeBitrateControl = null;
         modeQualityCueView = null;
         modeDefaultsButton = null;
@@ -2666,10 +2660,6 @@ public class XrStreamPresenter {
             configureFpsLadder(mode, fps, model);
         }
         modeFpsLadder.setEnabled(sessionControlsEnabled);
-        if (modeFpsGlyph != null) {
-            modeFpsGlyph.setParameter(XrParameterGlyphView.Kind.FPS_MOTION_BARS,
-                    model.pendingQuality.frameRate);
-        }
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
         String bitrateId = qualityChoiceId(bitrate,
                 String.valueOf(model.pendingQuality.bitrateKbps));
@@ -2935,11 +2925,6 @@ public class XrStreamPresenter {
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        XrParameterGlyphView glyph = sessionSettingGlyph(key, value);
-        if (glyph != null) {
-            sessionGlyphViews.put(key, glyph);
-            heading.addView(glyph, glyphLayoutParams());
-        }
         TextView title = controlText(sessionSettingLabel(key),
                 SESSION_ROW_TITLE_TEXT_SP, Color.WHITE);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
@@ -3032,77 +3017,6 @@ public class XrStreamPresenter {
         return row;
     }
 
-    private XrParameterGlyphView sessionSettingGlyph(
-            SessionSettingsModel.Key key, SessionSettingsModel.Value value) {
-        XrParameterGlyphView.Kind kind;
-        switch (key) {
-            case HDR:
-                kind = XrParameterGlyphView.Kind.HDR_SUN;
-                break;
-            case VIDEO_RANGE:
-                kind = XrParameterGlyphView.Kind.VIDEO_RANGE;
-                break;
-            case FRAME_PACING:
-                kind = XrParameterGlyphView.Kind.FRAME_PACING;
-                break;
-            case AUDIO_LAYOUT:
-                kind = XrParameterGlyphView.Kind.AUDIO_LAYOUT;
-                break;
-            case PLAY_AUDIO_ON_PC:
-                kind = XrParameterGlyphView.Kind.PRODUCER;
-                break;
-            case CODEC:
-            default:
-                return null;
-        }
-        XrParameterGlyphView glyph = new XrParameterGlyphView(activity);
-        updateSessionSettingGlyph(glyph, key, value);
-        return glyph;
-    }
-
-    private void updateSessionSettingGlyph(XrParameterGlyphView glyph,
-                                           SessionSettingsModel.Key key,
-                                           SessionSettingsModel.Value value) {
-        String stableValue = value.selectedChoiceId != null
-                ? value.selectedChoiceId : value.pendingValue;
-        XrParameterGlyphView.Kind kind;
-        switch (key) {
-            case HDR:
-                kind = XrParameterGlyphView.Kind.HDR_SUN;
-                break;
-            case VIDEO_RANGE:
-                kind = XrParameterGlyphView.Kind.VIDEO_RANGE;
-                break;
-            case FRAME_PACING:
-                kind = XrParameterGlyphView.Kind.FRAME_PACING;
-                break;
-            case AUDIO_LAYOUT:
-                kind = XrParameterGlyphView.Kind.AUDIO_LAYOUT;
-                break;
-            case PLAY_AUDIO_ON_PC:
-                kind = XrParameterGlyphView.Kind.PRODUCER;
-                // Host-audio true means the PC is also a producer; false keeps audio in-headset.
-                stableValue = "true".equals(value.selectedChoiceId) ? "pc" : "headset";
-                break;
-            default:
-                return;
-        }
-        glyph.setParameter(kind, stableValue);
-    }
-
-    private XrParameterGlyphView parameterGlyph(XrParameterGlyphView.Kind kind,
-                                                 String stableValue) {
-        XrParameterGlyphView glyph = new XrParameterGlyphView(activity);
-        glyph.setParameter(kind, stableValue);
-        return glyph;
-    }
-
-    private LinearLayout.LayoutParams glyphLayoutParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(48), dp(48));
-        params.rightMargin = dp(12);
-        return params;
-    }
-
     private XrChoiceGroup buildChoiceGroup(List<SessionSettingsModel.Choice> choices,
                                            String selectedChoiceId,
                                            CharSequence fallbackLabel,
@@ -3137,7 +3051,6 @@ public class XrStreamPresenter {
         sessionChoiceGroups.clear();
         sessionSourceViews.clear();
         sessionPendingViews.clear();
-        sessionGlyphViews.clear();
         sessionBitrateControls.clear();
         sessionDefaultsButton = null;
         sessionApplyButton = null;
@@ -3182,10 +3095,6 @@ public class XrStreamPresenter {
                         : activity.getString(R.string.xr_setting_source_session));
             }
             updateSessionPendingView(sessionPendingViews.get(key), value);
-            XrParameterGlyphView glyph = sessionGlyphViews.get(key);
-            if (glyph != null) {
-                updateSessionSettingGlyph(glyph, key, value);
-            }
         }
         if (sessionDefaultsButton != null) {
             sessionDefaultsButton.setEnabled(sessionControlsEnabled);
@@ -3384,10 +3293,18 @@ public class XrStreamPresenter {
             case BITRATE:
                 return R.drawable.ic_xr_bitrate;
             case CODEC:
-                // The only shared-session row with no parameter glyph of its own.
                 return R.drawable.ic_xr_codec;
+            case HDR:
+                return R.drawable.ic_xr_hdr;
+            case VIDEO_RANGE:
+                return R.drawable.ic_xr_video_range;
+            case FRAME_PACING:
+                return R.drawable.ic_xr_frame_pacing;
+            case AUDIO_LAYOUT:
+                return R.drawable.ic_xr_audio;
+            case PLAY_AUDIO_ON_PC:
+                return R.drawable.ic_xr_audio_host;
             default:
-                // The rest carry an XrParameterGlyphView, which is their icon.
                 return 0;
         }
     }
@@ -6310,7 +6227,7 @@ public class XrStreamPresenter {
                 .getDimensionPixelSize(R.dimen.xr_icon_tile);
         icon.setLayoutParams(new LinearLayout.LayoutParams(iconSize, iconSize));
         icon.setImageResource(item.iconRes);
-        icon.setColorFilter(ContextCompat.getColor(activity, R.color.xr_accent));
+        icon.setColorFilter(ContextCompat.getColor(activity, R.color.xr_text_primary));
         item.iconView = icon;
 
         col.addView(icon);
