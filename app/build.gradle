@@ -77,7 +77,7 @@ android {
 
             resValue "string",
                     "obtainium_app_url",
-                    "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.noir%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FClassicOldSong%2Fmoonlight-android%22%2C%22author%22%3A%22ClassicOldSong%22%2C%22name%22%3A%22Artemis%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v(.%2B)%5C%22%7D%22%7D"
+                    "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.moonlight3d%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fdcatcher9%2Fmoonlight-android%22%2C%22author%22%3A%22Yang%20Qu%22%2C%22name%22%3A%22Moonlight%203D%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v%28.%2B%29%5C%22%7D%22%7D"
 
             applicationId "com.limelight"
             dimension "root"
@@ -134,7 +134,7 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".noirdebug"
+            applicationIdSuffix ".moonlight3ddebug"
             resValue "string", "app_label", "Moonlight 3D"
             resValue "string", "app_label_root", "Moonlight 3D (Root)"
             resValue "string", "app_label_game", "Moonlight 3D (Game)"
@@ -175,7 +175,12 @@ android {
             // is to please change the applicationId before you publish.
             //
             // TL;DR: Leave the following line alone!
-            applicationIdSuffix ".noir"
+            //
+            // Moonlight 3D honours that request twice over. Upstream Moonlight is
+            // com.limelight; Artemis, which this is forked from, moved to com.limelight.noir;
+            // this fork moves again rather than publishing under either. Crashes and store
+            // listings belong to whoever shipped the build.
+            applicationIdSuffix ".moonlight3d"
             resValue "string", "app_label", "Moonlight 3D"
             resValue "string", "app_label_root", "Moonlight 3D (Root)"
             resValue "string", "app_label_game", "Moonlight 3D (Game)"
