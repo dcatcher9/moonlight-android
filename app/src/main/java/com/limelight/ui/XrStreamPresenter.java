@@ -2331,9 +2331,7 @@ public class XrStreamPresenter {
                 activity.getString(R.string.title_bitrate_ceiling), 24f, Color.WHITE);
         bitrateTitle.setTypeface(bitrateTitle.getTypeface(),
                 android.graphics.Typeface.BOLD);
-        bitrateTitle.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                R.drawable.ic_xr_bitrate, 0, 0, 0);
-        bitrateTitle.setCompoundDrawablePadding(dp(8));
+        applyTitleIcon(bitrateTitle, R.drawable.ic_xr_bitrate);
         bitrateCard.addView(bitrateTitle);
         modeBitrateControl = new XrBitrateControl(activity);
         String bitrateId = qualityChoiceId(bitrate,
@@ -2944,6 +2942,7 @@ public class XrStreamPresenter {
         TextView title = controlText(sessionSettingLabel(key),
                 SESSION_ROW_TITLE_TEXT_SP, Color.WHITE);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        applyTitleIcon(title, sessionSettingIconRes(key));
         heading.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
         String source = value.source == SessionSettingsModel.Source.GLOBAL
@@ -2991,6 +2990,7 @@ public class XrStreamPresenter {
         TextView title = controlText(sessionSettingLabel(key),
                 SESSION_ROW_TITLE_TEXT_SP, Color.WHITE);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        applyTitleIcon(title, sessionSettingIconRes(key));
         heading.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
         String source = value.source == SessionSettingsModel.Source.GLOBAL
@@ -3355,6 +3355,27 @@ public class XrStreamPresenter {
         return recommendedKbps > 0
                 ? activity.getString(R.string.xr_bitrate_recommended)
                 : activity.getString(R.string.xr_bitrate_codec_too_slow);
+    }
+
+    /** Applies a row-title icon at the inline size every icon on this pane shares. */
+    private void applyTitleIcon(TextView title, int iconRes) {
+        if (iconRes == 0) {
+            return;
+        }
+        android.graphics.drawable.Drawable icon =
+                ContextCompat.getDrawable(activity, iconRes);
+        if (icon == null) {
+            return;
+        }
+        int size = activity.getResources().getDimensionPixelSize(R.dimen.xr_icon_inline);
+        icon.setBounds(0, 0, size, size);
+        title.setCompoundDrawablesRelative(icon, null, null, null);
+        title.setCompoundDrawablePadding(dp(8));
+    }
+
+    /** Icon shown beside a settings row title, or 0 where the row has no icon of its own. */
+    private int sessionSettingIconRes(SessionSettingsModel.Key key) {
+        return key == SessionSettingsModel.Key.BITRATE ? R.drawable.ic_xr_bitrate : 0;
     }
 
     private String sessionSettingLabel(SessionSettingsModel.Key key) {
@@ -6271,10 +6292,11 @@ public class XrStreamPresenter {
 
     private void addBarItemContent(LinearLayout col, BarItem item) {
         ImageView icon = new ImageView(activity);
-        int iconSize = dp(item.iconOnly ? 42 : 48);
+        int iconSize = activity.getResources()
+                .getDimensionPixelSize(R.dimen.xr_icon_tile);
         icon.setLayoutParams(new LinearLayout.LayoutParams(iconSize, iconSize));
         icon.setImageResource(item.iconRes);
-        icon.setColorFilter(Color.WHITE);
+        icon.setColorFilter(ContextCompat.getColor(activity, R.color.xr_text_primary));
         item.iconView = icon;
 
         col.addView(icon);

@@ -1,12 +1,34 @@
-<!-- Gauge with the needle at the top of its sweep: the "Max bitrate" ceiling. Deliberately not the
-     ascending bars used for Stats, which mean measured throughput rather than a limit. -->
+<!-- Gauge with the needle high in its sweep: the "Max bitrate" ceiling.
+
+     A 270-degree dial rather than the usual half-circle speedometer. A semicircular gauge is a 2:1
+     shape in a 1:1 box, so half the icon is empty and the dial collapses at the inline size this
+     pane uses; closing the ring to a bottom gap fills the square and keeps the needle legible at
+     24dp without granting this one icon a size of its own.
+
+     Deliberately not the ascending bars used for Stats: those mean measured throughput, this
+     means a limit. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:tint="@color/xr_text_primary"
     android:viewportWidth="24"
     android:viewportHeight="24">
+    <!-- Dial: open at the bottom, where a gauge's scale ends. -->
+    <path
+        android:pathData="M5.3,18.7 A9.5,9.5 0 1 1 18.7,18.7"
+        android:strokeColor="@color/xr_text_primary"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent" />
+    <!-- Needle, swung toward the top of the scale. -->
+    <path
+        android:pathData="M12,12 L16.7,7.3"
+        android:strokeColor="@color/xr_text_primary"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent" />
+    <!-- Hub. -->
     <path
         android:fillColor="@color/xr_text_primary"
-        android:pathData="M20.38,8.57l-1.23,1.85a8,8 0,0 1,-0.22 7.58H5.07A8,8 0,0 1,15.58 6.85l1.85,-1.23A10,10 0,0 0,3.35 19a2,2 0,0 0,1.72 1h13.85a2,2 0,0 0,1.74 -1,10 10,0 0,0 -0.27,-10.44zM10.59,15.41a2,2 0,0 0,2.83 0l5.66,-8.49 -8.49,5.66a2,2 0,0 0,0 2.83z" />
+        android:pathData="M10.2,12a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0z" />
 </vector>

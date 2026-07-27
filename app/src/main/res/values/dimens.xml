@@ -43,6 +43,10 @@
     <dimen name="xr_space_xl">24dp</dimen>
 
     <!-- Gaze targets: compact rows, standard controls, primary actions. -->
+    <!-- Icon sizes. Two steps only: inline sits beside text, tile stands alone on a control. -->
+    <dimen name="xr_icon_inline">24dp</dimen>
+    <dimen name="xr_icon_tile">40dp</dimen>
+
     <dimen name="xr_control_compact">40dp</dimen>
     <dimen name="xr_control_standard">56dp</dimen>
     <dimen name="xr_control_primary">64dp</dimen>

@@ -10,6 +10,8 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+
+import com.limelight.R;
 import androidx.core.view.ViewCompat;
 
 import java.util.Locale;
@@ -33,13 +35,18 @@ public final class XrParameterGlyphView extends View {
         STATUS
     }
 
-    private static final int COLOR_PRIMARY = Color.rgb(232, 234, 237);
-    private static final int COLOR_MUTED = Color.rgb(154, 160, 166);
-    private static final int COLOR_ACCENT = Color.rgb(138, 180, 248);
-    private static final int COLOR_HDR = Color.rgb(255, 214, 90);
-    private static final int COLOR_GREEN = Color.rgb(91, 185, 116);
-    private static final int COLOR_AMBER = Color.rgb(249, 171, 0);
-    private static final int COLOR_RED = Color.rgb(242, 139, 130);
+    // Palette tokens, not hand-picked hues. These glyphs were the only XR icons carrying colours
+    // of their own, which is what made them read as decoration beside the monochrome vector set.
+    // Colour now means state and nothing else: ok/warn/danger for health, accent for "this
+    // parameter is on", and the two text colours for everything that is merely an icon. The gold
+    // that HDR used to get was the one hue with no such meaning, so it becomes accent like every
+    // other enabled parameter.
+    private final int colorPrimary;
+    private final int colorMuted;
+    private final int colorAccent;
+    private final int colorOk;
+    private final int colorWarn;
+    private final int colorDanger;
 
     private static final int VARIANT_DEFAULT = 0;
     private static final int VARIANT_ONE = 1;
@@ -57,7 +64,7 @@ public final class XrParameterGlyphView extends View {
     private Kind kind = Kind.STATUS;
     private String stableValue = "unknown";
     private int variant = VARIANT_THREE;
-    private int semanticColor = COLOR_MUTED;
+    private int semanticColor;
     private int audioDotCount;
     private int geometryCount;
 
@@ -72,15 +79,22 @@ public final class XrParameterGlyphView extends View {
     public XrParameterGlyphView(@NonNull Context context, @Nullable AttributeSet attrs,
                                 int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        preferredSize = dp(40);
+        colorPrimary = color(R.color.xr_text_primary);
+        colorMuted = color(R.color.xr_text_secondary);
+        colorAccent = color(R.color.xr_accent);
+        colorOk = color(R.color.xr_status_ok);
+        colorWarn = color(R.color.xr_status_warn);
+        colorDanger = color(R.color.xr_danger);
+        semanticColor = colorMuted;
+        preferredSize = getResources().getDimensionPixelSize(R.dimen.xr_icon_tile);
         strokeWidth = dp(2);
         thinStrokeWidth = Math.max(1f, dp(1));
         cornerRadius = dp(2);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
 
-        setMinimumWidth(dp(36));
-        setMinimumHeight(dp(36));
+        setMinimumWidth(preferredSize);
+        setMinimumHeight(preferredSize);
         setClickable(false);
         setLongClickable(false);
         setFocusable(false);
@@ -162,25 +176,25 @@ public final class XrParameterGlyphView extends View {
             case FPS_MOTION_BARS:
                 int fps = parsePositiveInt(stableValue);
                 variant = fps >= 90 ? VARIANT_THREE : fps >= 60 ? VARIANT_TWO : VARIANT_ONE;
-                semanticColor = COLOR_ACCENT;
+                semanticColor = colorAccent;
                 break;
             case HDR_SUN:
                 if (matches("on", "true", "hdr")) {
                     variant = VARIANT_TWO;
-                    semanticColor = COLOR_HDR;
+                    semanticColor = colorAccent;
                 }
                 else if (matches("auto", "automatic")) {
                     variant = VARIANT_ONE;
-                    semanticColor = COLOR_ACCENT;
+                    semanticColor = colorAccent;
                 }
                 else {
                     variant = VARIANT_DEFAULT;
-                    semanticColor = COLOR_MUTED;
+                    semanticColor = colorMuted;
                 }
                 break;
             case VIDEO_RANGE:
                 variant = matches("full", "true") ? VARIANT_ONE : VARIANT_DEFAULT;
-                semanticColor = variant == VARIANT_ONE ? COLOR_PRIMARY : COLOR_MUTED;
+                semanticColor = variant == VARIANT_ONE ? colorPrimary : colorMuted;
                 break;
             case FRAME_PACING:
                 if (matches("balanced")) {
@@ -195,7 +209,7 @@ public final class XrParameterGlyphView extends View {
                 else {
                     variant = VARIANT_DEFAULT;
                 }
-                semanticColor = COLOR_ACCENT;
+                semanticColor = colorAccent;
                 break;
             case AUDIO_LAYOUT:
                 if (matches("71", "7.1", "8")) {
@@ -210,30 +224,30 @@ public final class XrParameterGlyphView extends View {
                     audioDotCount = 2;
                     variant = VARIANT_ONE;
                 }
-                semanticColor = COLOR_PRIMARY;
+                semanticColor = colorPrimary;
                 break;
             case PRODUCER:
                 variant = matches("headset", "client", "device", "xr")
                         ? VARIANT_ONE : VARIANT_DEFAULT;
-                semanticColor = variant == VARIANT_ONE ? COLOR_ACCENT : COLOR_PRIMARY;
+                semanticColor = variant == VARIANT_ONE ? colorAccent : colorPrimary;
                 break;
             case STATUS:
             default:
                 if (matches("green", "ready", "ok", "success", "healthy")) {
                     variant = VARIANT_DEFAULT;
-                    semanticColor = COLOR_GREEN;
+                    semanticColor = colorOk;
                 }
                 else if (matches("amber", "warning", "warn", "pending", "busy")) {
                     variant = VARIANT_ONE;
-                    semanticColor = COLOR_AMBER;
+                    semanticColor = colorWarn;
                 }
                 else if (matches("red", "error", "failed", "failure", "unavailable")) {
                     variant = VARIANT_TWO;
-                    semanticColor = COLOR_RED;
+                    semanticColor = colorDanger;
                 }
                 else {
                     variant = VARIANT_THREE;
-                    semanticColor = COLOR_MUTED;
+                    semanticColor = colorMuted;
                 }
                 break;
         }
@@ -396,7 +410,7 @@ public final class XrParameterGlyphView extends View {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(strokeWidth);
         for (int i = 0; i < 3; i++) {
-            paint.setColor(i < variant ? semanticColor : COLOR_MUTED);
+            paint.setColor(i < variant ? semanticColor : colorMuted);
             paint.setAlpha(i < variant ? 255 : 90);
             int offset = i * 4;
             canvas.drawLine(geometry[offset], geometry[offset + 1],
@@ -432,7 +446,7 @@ public final class XrParameterGlyphView extends View {
         }
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(thinStrokeWidth);
-        paint.setColor(COLOR_MUTED);
+        paint.setColor(colorMuted);
         scratchRect.set(geometry[0], geometry[1], geometry[14], geometry[15]);
         canvas.drawRoundRect(scratchRect, cornerRadius, cornerRadius, paint);
     }
@@ -534,6 +548,10 @@ public final class XrParameterGlyphView extends View {
         catch (NumberFormatException ignored) {
             return 0;
         }
+    }
+
+    private int color(int resourceId) {
+        return androidx.core.content.ContextCompat.getColor(getContext(), resourceId);
     }
 
     private int dp(int value) {
