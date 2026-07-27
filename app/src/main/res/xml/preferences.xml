@@ -12,6 +12,7 @@
             android:entries="@array/xr_resolution_names"
             android:entryValues="@array/xr_resolution_values"
             android:key="list_resolution"
+        android:icon="@drawable/ic_xr_resolution"
             android:summary="@string/summary_resolution_list"
             android:title="@string/title_resolution_list"
             app:iconSpaceReserved="false" />
@@ -21,6 +22,7 @@
             android:entries="@array/xr_raw_sbs_per_eye_resolution_names"
             android:entryValues="@array/xr_raw_sbs_per_eye_resolution_values"
             android:key="list_raw_sbs_per_eye_resolution"
+        android:icon="@drawable/ic_xr_resolution"
             android:summary="@string/summary_raw_sbs_per_eye_resolution"
             android:title="@string/title_raw_sbs_per_eye_resolution"
             app:iconSpaceReserved="false" />
@@ -30,6 +32,7 @@
             android:entries="@array/xr_fps_names"
             android:entryValues="@array/xr_fps_values"
             android:key="list_fps"
+        android:icon="@drawable/ic_xr_frame_rate"
             android:summary="@string/summary_fps_ceiling"
             android:title="@string/title_fps_ceiling"
             app:iconSpaceReserved="false" />
@@ -37,6 +40,7 @@
         <com.limelight.preferences.BitrateLadderPreference
             android:defaultValue="200000"
             android:key="seekbar_bitrate_kbps"
+        android:icon="@drawable/ic_xr_bitrate"
             android:summary="@string/summary_bitrate_ceiling"
             android:title="@string/title_bitrate_ceiling"
             app:iconSpaceReserved="false" />
@@ -44,6 +48,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="true"
             android:key="checkbox_enable_hdr"
+        android:icon="@drawable/ic_xr_hdr"
             android:summary="@string/summary_enable_hdr"
             android:title="@string/title_enable_hdr"
             app:iconSpaceReserved="false" />
@@ -51,6 +56,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="true"
             android:key="checkbox_full_range"
+        android:icon="@drawable/ic_xr_video_range"
             android:summary="@string/summary_full_range"
             android:title="@string/title_full_range"
             app:iconSpaceReserved="false" />
@@ -60,6 +66,7 @@
             android:entries="@array/xr_video_format_names"
             android:entryValues="@array/xr_video_format_values"
             android:key="video_format"
+        android:icon="@drawable/ic_xr_codec"
             android:summary="@string/summary_video_format"
             android:title="@string/title_video_format"
             app:iconSpaceReserved="false" />
@@ -69,6 +76,7 @@
             android:entries="@array/xr_video_frame_pacing_names"
             android:entryValues="@array/xr_video_frame_pacing_values"
             android:key="frame_pacing"
+        android:icon="@drawable/ic_xr_frame_pacing"
             android:summary="@string/summary_frame_pacing"
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
@@ -78,6 +86,7 @@
             android:entries="@array/xr_client_sbs_depth_model_names"
             android:entryValues="@array/xr_client_sbs_depth_model_values"
             android:key="list_client_sbs_depth_model"
+        android:icon="@drawable/ic_xr_depth_model"
             android:summary="@string/summary_client_sbs_depth_model"
             android:title="@string/title_client_sbs_depth_model"
             app:iconSpaceReserved="false" />
@@ -92,6 +101,7 @@
             android:entries="@array/xr_audio_config_names"
             android:entryValues="@array/xr_audio_config_values"
             android:key="list_audio_config"
+        android:icon="@drawable/ic_xr_audio"
             android:summary="@string/summary_audio_config_list"
             android:title="@string/title_audio_config_list"
             app:iconSpaceReserved="false" />
@@ -99,6 +109,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_host_audio"
+        android:icon="@drawable/ic_xr_audio"
             android:summary="@string/summary_checkbox_host_audio"
             android:title="@string/title_checkbox_host_audio"
             app:iconSpaceReserved="false" />
@@ -106,6 +117,7 @@
         <com.limelight.preferences.SeekBarPreference
             android:defaultValue="5"
             android:key="seekbar_deadzone"
+        android:icon="@drawable/ic_xr_gamepad"
             android:max="20"
             android:summary="@string/summary_seekbar_deadzone"
             android:text="@string/suffix_seekbar_deadzone"
@@ -116,6 +128,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="true"
             android:key="checkbox_enable_rumble"
+        android:icon="@drawable/ic_xr_gamepad"
             android:summary="@string/summary_enable_rumble"
             android:title="@string/title_enable_rumble"
             app:iconSpaceReserved="false" />
@@ -123,6 +136,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_flip_face_buttons"
+        android:icon="@drawable/ic_xr_gamepad"
             android:summary="@string/summary_checkbox_flip_face_buttons"
             android:title="@string/title_checkbox_flip_face_buttons"
             app:iconSpaceReserved="false" />
@@ -130,6 +144,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_gamepad_touchpad_as_mouse"
+        android:icon="@drawable/ic_xr_mouse"
             android:summary="@string/summary_checkbox_gamepad_touchpad_as_mouse"
             android:title="@string/title_checkbox_gamepad_touchpad_as_mouse"
             app:iconSpaceReserved="false" />
@@ -137,6 +152,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="true"
             android:key="checkbox_mouse_emulation"
+        android:icon="@drawable/ic_xr_mouse"
             android:summary="@string/summary_checkbox_mouse_emulation"
             android:title="@string/title_checkbox_mouse_emulation"
             app:iconSpaceReserved="false" />
@@ -144,6 +160,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_absolute_mouse_mode"
+        android:icon="@drawable/ic_xr_mouse"
             android:summary="@string/summary_checkbox_absolute_mouse_mode"
             android:title="@string/title_checkbox_absolute_mouse_mode"
             app:iconSpaceReserved="false" />
@@ -151,6 +168,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_mouse_local_cursor"
+        android:icon="@drawable/ic_xr_mouse"
             android:summary="@string/summary_checkbox_mouse_local_cursor"
             android:title="@string/title_checkbox_mouse_local_cursor"
             app:iconSpaceReserved="false" />
@@ -158,6 +176,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_smart_clipboard_sync"
+        android:icon="@drawable/ic_xr_clipboard"
             android:summary="@string/summary_smart_clipboard_sync"
             android:title="@string/title_smart_clipboard_sync"
             app:iconSpaceReserved="false" />
@@ -166,6 +185,7 @@
             android:defaultValue="true"
             android:dependency="checkbox_smart_clipboard_sync"
             android:key="checkbox_hide_clipboard_content"
+        android:icon="@drawable/ic_xr_clipboard"
             android:summary="@string/summary_hide_clipboard_content"
             android:title="@string/title_hide_clipboard_content"
             app:iconSpaceReserved="false" />
@@ -192,6 +212,7 @@
         <SwitchPreferenceCompat
             android:defaultValue="@bool/default_enable_perf_logging"
             android:key="checkbox_enable_perf_logging"
+        android:icon="@drawable/ic_xr_diagnostics"
             android:summary="@string/summary_checkbox_enable_perf_logging"
             android:title="@string/title_checkbox_enable_perf_logging"
             app:iconSpaceReserved="false" />
@@ -199,12 +220,14 @@
         <Preference
             android:dependency="checkbox_enable_perf_logging"
             android:key="share_performance_logs"
+        android:icon="@drawable/ic_xr_share"
             android:summary="@string/summary_share_performance_logs"
             android:title="@string/title_share_performance_logs_button"
             app:iconSpaceReserved="false" />
 
         <Preference
             android:key="pref_debug_info"
+        android:icon="@drawable/ic_xr_dump"
             android:summary="@string/summary_debug_info"
             android:title="@string/title_debug_info"
             app:iconSpaceReserved="false" />

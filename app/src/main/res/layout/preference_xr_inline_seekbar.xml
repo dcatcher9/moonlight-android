@@ -17,6 +17,13 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
+        <ImageView
+            android:id="@android:id/icon"
+            android:layout_width="@dimen/xr_icon_inline"
+            android:layout_height="@dimen/xr_icon_inline"
+            android:layout_marginEnd="@dimen/xr_space_sm"
+            android:contentDescription="@null" />
+
         <TextView
             android:id="@android:id/title"
             android:layout_width="0dp"

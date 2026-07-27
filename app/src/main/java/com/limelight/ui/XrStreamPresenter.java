@@ -2279,6 +2279,7 @@ public class XrStreamPresenter {
                 activity.getString(R.string.title_resolution_list), 24f, Color.WHITE);
         resolutionTitle.setTypeface(resolutionTitle.getTypeface(),
                 android.graphics.Typeface.BOLD);
+        applyTitleIcon(resolutionTitle, R.drawable.ic_xr_resolution);
         resolutionColumn.addView(resolutionTitle);
         modeResolutionSelector = new XrResolutionSelector(activity);
         modeResolutionSelector.setSelectedResolutionId(model.pendingQuality.resolution);
@@ -3375,7 +3376,20 @@ public class XrStreamPresenter {
 
     /** Icon shown beside a settings row title, or 0 where the row has no icon of its own. */
     private int sessionSettingIconRes(SessionSettingsModel.Key key) {
-        return key == SessionSettingsModel.Key.BITRATE ? R.drawable.ic_xr_bitrate : 0;
+        switch (key) {
+            case RESOLUTION:
+                return R.drawable.ic_xr_resolution;
+            case FRAME_RATE:
+                return R.drawable.ic_xr_frame_rate;
+            case BITRATE:
+                return R.drawable.ic_xr_bitrate;
+            case CODEC:
+                // The only shared-session row with no parameter glyph of its own.
+                return R.drawable.ic_xr_codec;
+            default:
+                // The rest carry an XrParameterGlyphView, which is their icon.
+                return 0;
+        }
     }
 
     private String sessionSettingLabel(SessionSettingsModel.Key key) {
@@ -6296,7 +6310,7 @@ public class XrStreamPresenter {
                 .getDimensionPixelSize(R.dimen.xr_icon_tile);
         icon.setLayoutParams(new LinearLayout.LayoutParams(iconSize, iconSize));
         icon.setImageResource(item.iconRes);
-        icon.setColorFilter(ContextCompat.getColor(activity, R.color.xr_text_primary));
+        icon.setColorFilter(ContextCompat.getColor(activity, R.color.xr_accent));
         item.iconView = icon;
 
         col.addView(icon);

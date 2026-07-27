@@ -1,4 +1,4 @@
-<!-- Single flat panel: the "Normal" (mono) presentation mode on the XR control bar. -->
+<!-- Bars at an even cadence: deliberately equal, unlike the ascending Stats bars. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
@@ -7,5 +7,5 @@
     android:viewportHeight="24">
     <path
         android:fillColor="@color/xr_accent"
-        android:pathData="M19,5H5C3.9,5 3,5.9 3,7v10c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2V7C21,5.9 20.1,5 19,5zM19,17H5V7h14V17z" />
+        android:pathData="M3.5,6h3.6v12h-3.6z M10.2,6h3.6v12h-3.6z M16.9,6h3.6v12h-3.6z" />
 </vector>

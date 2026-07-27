@@ -99,21 +99,6 @@ public class BitrateLadderPreference extends Preference {
         holder.itemView.setClickable(false);
         holder.itemView.setFocusable(false);
 
-        // Set here rather than as a drawableStart so the size comes from the icon scale
-        // explicitly, instead of from whatever intrinsic size a future icon happens to carry.
-        View titleView = holder.findViewById(android.R.id.title);
-        if (titleView instanceof TextView) {
-            Drawable icon = ContextCompat.getDrawable(getContext(), R.drawable.ic_xr_bitrate);
-            if (icon != null) {
-                int size = getContext().getResources()
-                        .getDimensionPixelSize(R.dimen.xr_icon_inline);
-                icon.setBounds(0, 0, size, size);
-                TextView title = (TextView) titleView;
-                title.setCompoundDrawablesRelative(icon, null, null, null);
-                title.setCompoundDrawablePadding(getContext().getResources()
-                        .getDimensionPixelSize(R.dimen.xr_space_sm));
-            }
-        }
 
         if (shouldPersist()) {
             currentValue = migrateToLadder(getPersistedInt(currentValue));
