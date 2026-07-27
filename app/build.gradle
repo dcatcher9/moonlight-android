@@ -135,9 +135,9 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".moonlight3ddebug"
-            resValue "string", "app_label", "Moonlight 3D"
-            resValue "string", "app_label_root", "Moonlight 3D (Root)"
-            resValue "string", "app_label_game", "Moonlight 3D (Game)"
+            resValue "string", "app_label", "Moonlight 3d"
+            resValue "string", "app_label_root", "Moonlight 3d (Root)"
+            resValue "string", "app_label_game", "Moonlight 3d (Game)"
             resValue "bool", "default_enable_perf_logging", "true"
 
             // minifyEnabled is OFF for debug for faster builds.
@@ -176,14 +176,14 @@ android {
             //
             // TL;DR: Leave the following line alone!
             //
-            // Moonlight 3D honours that request twice over. Upstream Moonlight is
+            // Moonlight 3d honours that request twice over. Upstream Moonlight is
             // com.limelight; Artemis, which this is forked from, moved to com.limelight.noir;
             // this fork moves again rather than publishing under either. Crashes and store
             // listings belong to whoever shipped the build.
             applicationIdSuffix ".moonlight3d"
-            resValue "string", "app_label", "Moonlight 3D"
-            resValue "string", "app_label_root", "Moonlight 3D (Root)"
-            resValue "string", "app_label_game", "Moonlight 3D (Game)"
+            resValue "string", "app_label", "Moonlight 3d"
+            resValue "string", "app_label_root", "Moonlight 3d (Root)"
+            resValue "string", "app_label_game", "Moonlight 3d (Game)"
             resValue "bool", "default_enable_perf_logging", "false"
 
             minifyEnabled true
