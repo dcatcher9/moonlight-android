@@ -4246,11 +4246,10 @@ public class XrStreamPresenter {
         }
         if (count < 2) {
             // Nothing to plot yet: fall back to a plain row so the value still shows during the
-            // first seconds of a session rather than leaving a gap. The sample count rides along
-            // because a silently absent plot is indistinguishable from a broken one -- a reading
-            // stuck at "history 0" says the ring is not being fed, which no other row reveals.
-            addStatsRow(label, value + "  [history " + (trend == null ? 0 : trend.length) + "]",
-                    valueColor);
+            // first seconds of a session rather than leaving a gap. The sample count is not
+            // appended here -- the sparkline's content description carries it, in the working
+            // case as well as this one.
+            addStatsRow(label, value, valueColor);
             return;
         }
 
