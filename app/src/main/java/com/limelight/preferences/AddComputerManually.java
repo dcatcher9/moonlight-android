@@ -38,6 +38,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 public class AddComputerManually extends AppCompatActivity {
     private TextView hostText;
@@ -418,7 +419,8 @@ public class AddComputerManually extends AppCompatActivity {
                 return;
             }
             connectionStageTitle.setText(title);
-            connectionStageTitle.setTextColor(error ? 0xFFFF8A80 : 0xFFFFFFFF);
+            connectionStageTitle.setTextColor(ContextCompat.getColor(this,
+                    error ? R.color.xr_danger : R.color.xr_text_primary));
             connectionStageDetail.setText(detail);
             connectionProgress.setVisibility(busy ? View.VISIBLE : View.INVISIBLE);
             addPcButton.setEnabled(!busy);

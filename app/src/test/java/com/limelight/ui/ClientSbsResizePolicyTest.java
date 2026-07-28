@@ -50,6 +50,37 @@ public final class ClientSbsResizePolicyTest {
     }
 
     @Test
+    public void coldBackendExtendsOnlyTheConfirmedPostAckSwapBoundary() {
+        assertTrue(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, 2_000L));
+        assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                false, true, 2_000L));
+        assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH,
+                true, true, 2_000L));
+        assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, false, 2_000L));
+    }
+
+    @Test
+    public void coldBackendWaitRemainsBoundedAndUsesShortPolls() {
+        assertEquals(ClientSbsResizePolicy.POST_ACK_SWAP_TIMEOUT_MS,
+                ClientSbsResizePolicy.boundedColdBackendPollMillis(0L));
+        assertEquals(500L,
+                ClientSbsResizePolicy.boundedColdBackendPollMillis(
+                        ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS - 500L));
+        assertEquals(0L,
+                ClientSbsResizePolicy.boundedColdBackendPollMillis(
+                        ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+        assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+    }
+
+    @Test
     public void staleOrInvalidGeometryCannotArmThePresentationBoundary() {
         assertTrue(ClientSbsResizePolicy.sameGeometry(1920, 1080, 1920, 1080));
         assertFalse(ClientSbsResizePolicy.sameGeometry(3840, 2160, 1920, 1080));

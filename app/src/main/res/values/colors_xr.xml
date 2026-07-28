@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Shared palette for the XR surfaces: 14 colours.
+  Shared palette for the XR surfaces: 16 base colours, plus semantic aliases and translucent
+  interaction/compositing roles.
 
   Before this file the XR screens carried 54 distinct literals across 120 uses, most of them not
   deliberate: six near-identical darks all doing one job, two different error reds, 28 colours used
   once or twice.
 
-  The first cut of this palette had 24 tokens, which was still too many, because it was derived
-  from the literals in the codebase rather than from the roles they serve, which preserved
-  accidents: `scrim` and `on_accent` were the SAME colour under two names, `surface_sunken` sat one
-  point away from both, and `accent` and `accent_soft` differed by eight points, invisible at
-  arm's length. A token has to earn its place by naming a distinct job, not by matching a hex value
-  someone once typed.
+  The first cut called all 24 role names separate colours even where aliases such as `scrim` and
+  `on_accent` intentionally resolved to the same base, while also preserving near-duplicate base
+  values such as `accent` and `accent_soft`. This file counts distinct opaque bases instead:
+  aliases may name different jobs without inventing another hue, and translucent variants derive
+  their RGB from a base. A token has to earn its place by naming a distinct job, not by matching a
+  hex value someone once typed.
 
   These screens composite over passthrough or over video, so the palette is dark: large light areas
   glow in a headset and wash out what is behind them. One accent hue carries every
@@ -57,4 +58,16 @@
          these tie a tile or panel edge to the accent without drawing as a line of its own. -->
     <color name="xr_border_tile">#FF455466</color>
     <color name="xr_border_panel">#FF34485D</color>
+
+    <!-- Alpha variants are named for their compositing job. Their RGB always comes from one of
+         the base roles above, so translucent chrome does not create another near-duplicate hue. -->
+    <color name="xr_panel_surface">#F216181E</color>
+    <color name="xr_surface_raised_80">#CC22262B</color>
+    <color name="xr_surface_raised_90">#E622262B</color>
+    <color name="xr_accent_pressed_overlay">#338AB4F8</color>
+    <color name="xr_accent_focus_overlay">#268AB4F8</color>
+    <color name="xr_scrim_strong">#E60C0F14</color>
+    <color name="xr_scrim_medium">#800C0F14</color>
+    <color name="xr_scrim_clear">#000C0F14</color>
+    <color name="xr_shadow_strong">#CC0C0F14</color>
 </resources>

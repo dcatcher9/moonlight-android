@@ -16,7 +16,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.widget.CompoundButton;
 import android.widget.FrameLayout;
-import android.util.TypedValue;
 
 import androidx.appcompat.view.ContextThemeWrapper;
 import androidx.appcompat.widget.AppCompatButton;
@@ -87,8 +86,8 @@ public final class XrResolutionSelectorTest {
             assertFalse(card.isFocusableInTouchMode());
             assertTrue(card.getMinimumWidth() >= dp(112));
             assertTrue(card.getMinimumHeight() >= dp(104));
-            assertEquals(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 22f,
-                    context.getResources().getDisplayMetrics()), card.getTextSize(), 0.5f);
+            assertEquals(context.getResources().getDimension(R.dimen.xr_text_title),
+                    card.getTextSize(), 0.5f);
             XrResolutionSelector.ResolutionCard resolutionCard =
                     (XrResolutionSelector.ResolutionCard) card;
             assertEquals(dp(60), resolutionCard.glyph.getIntrinsicWidth());

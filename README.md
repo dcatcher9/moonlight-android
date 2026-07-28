@@ -1,84 +1,258 @@
-# Artemis Android
+<p align="center">
+  <img src="./moonlight3d.svg" width="136" alt="">
+</p>
 
-Previously named Moonlight Noir
+<h1 align="center">Moonlight 3D</h1>
 
-An open source client for [Apollo](https://github.com/ClassicOldSong/Apollo)/[Sunshine](https://github.com/LizardByte/Sunshine).
+<p align="center">
+  <strong>Everything you love on your PC, now in 3D.</strong><br>
+  Watch, play, and work in immersive 3D on your Android XR headset.
+</p>
 
-Artemis Android will allow you to stream your collection of games from your Windows PC to your Android device,
-whether in your own home or over the internet.
+> [!IMPORTANT]
+> **The full Sunshine 3D + Moonlight 3D experience currently requires a Windows 11 PC with an NVIDIA GPU.**
+> Sunshine 3D does not support AMD or Intel GPUs, software encoding, Linux, or macOS hosts.
 
-Artemis is currently the best fork of Moonlight with loads of optimizations for office usage.
+<p align="center">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="./docs/assets/readme/sunshine3d-moonlight3d-workflow.png">
+    <img src="./docs/assets/readme/sunshine3d-moonlight3d-workflow.gif" width="760"
+         alt="Sunshine 3D converts a flat PC scene, then either streams it to Moonlight 3D on Android XR or presents it directly to PC-connected AR glasses without Moonlight 3D.">
+  </picture>
+</p>
 
-A more seamless experience with virtual display will be Artemis paired with [Apollo](https://github.com/ClassicOldSong/Apollo).
+<p align="center">
+  Stream to Moonlight 3D on Android XR, or let Sunshine 3D drive connected AR glasses directly.
+</p>
 
-# Features
+<p align="center">
+  <a href="https://github.com/dcatcher9/Apollo-3D"><strong>Set up Sunshine 3D →</strong></a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#build-from-source">Build the APK</a>
+  ·
+  <a href="./docs/android-xr-sbs.md">XR architecture</a>
+</p>
 
-If you switch back to the main stream version, you'll be missing the following awesome features which are very unlikely to be added there:
+Moonlight 3D is an Android XR streaming client designed and tested with
+[Sunshine 3D](https://github.com/dcatcher9/Apollo-3D). It combines Moonlight’s low-latency
+streaming foundation with a spatial application library, in-headset session controls, native
+side-by-side (SBS) presentation, and optional GPU depth conversion. Create 3D on the Windows PC or
+on the headset without requiring game mods, player plug-ins, or application-specific stereo
+support.
 
-1. Custom virtual buttons with import and export support.
-2. [Custom resolutions](https://github.com/moonlight-stream/moonlight-android/pull/1349).
-3. Custom bitrates.
-4. [Multiple mouse mode switching](https://github.com/moonlight-stream/moonlight-android/pull/1304) (normal mouse, [multi-touch](https://github.com/moonlight-stream/moonlight-android/pull/1364), touchpad, disabled, local cursor mode).
-5. Optimized virtual gamepad skins and free joystick.
-6. External monitor mode.
-7. Joycon D-pad support.
-8. Simplified performance information display.
-9. [Game back menu](https://github.com/moonlight-stream/moonlight-android/pull/1171).
-10. Custom shortcut commands.
-11. Easy soft keyboard switching.
-12. Portrait mode.
-13. Display on top mode, useful for foldable phones.
-14. [Virtual touchpad space and sensitivity adjustment](https://github.com/moonlight-stream/moonlight-android/issues/1348#issuecomment-2236344729) for playing right-click view games, such as Warcraft.
-15. Force use device's own vibration motor (in case your gamepad's vibration is not effective).
-16. Gamepad debugging page to view gamepad vibration and gyroscope information, as well as Android kernel version information.
-17. Trackpad tap/scrolling support
-18. Natural track pad mode with touch screen
-19. Non-QWERTY keyboard layout support
-20. Quick Meta key with physical BACK button
-21. Frame rate lock fix for some devices
-22. Video scale mode: Fit/Fill/Stretch
-23. View pan/zoom support
-24. Rotate screen in-game
-25. Add option to quit app directly
-26. Samsung DeX scrolling support
-27. Proper click/scroll/right-click for trackpad on generic Android tablet when using local cursor
-28. Virtual Display integration with [Apollo](https://github.com/ClassicOldSong/Apollo)
-29. Server Command integration with [Apollo](https://github.com/ClassicOldSong/Apollo)
-30. Clipboard sync (requires Apollo)
-31. SBS 3D for external Displays (Using AI MiDaS v2 Lite)
+> **XR-only build:** the application requires Android XR spatial APIs. Samsung Galaxy XR is the
+> validated hardware target; the x86_64 build exists for the Android XR emulator.
 
-# Disclaimer
+> **What “content-universal” means:** the AI path can process content visible to the supported
+> Windows capture path. Protected or otherwise noncapturable surfaces remain outside the pipeline,
+> and monocular depth is an estimate rather than authored stereo geometry.
 
-This is the `go away` version of Moonlight Android.
+## Popular use cases
 
-I got kicked from Moonlight and Sunshine's Discord server literally for helping people out.
+| What you want to do | Best path and payoff |
+|---|---|
+| **🎬 Watch capturable browser or local video in 3D** | When Windows capture can see the decoded frames, choose Host 3D or Client 3D to convert the player output live |
+| **🎮 Turn an existing flat PC game into 3D** | Use the PC GPU with Host 3D or the headset GPU with Client 3D—no game-specific stereo mod or profile required |
+| **🖥️ Use a private spatial Windows desktop** | Stay in 2D for maximum text clarity or enable AI depth when useful; the virtual display negotiates landscape or portrait geometry, refresh rate, HDR state, and scale |
+| **🎞️ Present native SBS games and media** | Select Raw SBS to preserve the source’s authored left/right views without estimating depth again |
+| **⚡ Choose where the AI runs** | Move between Host 3D and Client 3D while keeping the same app library, controls, audio, and input loop |
+| **👓 Drive tethered AR glasses directly** | Use Sunshine 3D’s local presenter for 2D or host-generated full SBS while bypassing network encode/decode |
 
-This is what I got for finding a bug, opened an issue, getting no response, troubleshoot myself, fixed the issue myself, shared it by PR to the main repo hoping my efforts can help someone else during the maintainance gap.
+## PC, Android XR, and AR glasses
 
-Yes, I'm going away. Fixes and improvements on this fork are not necessarily be merged to the main repo either. I have also started [a fork of Sunshine called Apollo](https://github.com/ClassicOldSong/Apollo) and will add useful features that will never get merged by the main repo shortly. [Apollo](https://github.com/ClassicOldSong/Apollo) and [Moonlight Noir](https://github.com/ClassicOldSong/moonlight-android) will no longer be compatible with OG Sunshine and OG Moonlight eventually, but they'll work even better with much more carefully designed features.
+The product boundary is intentionally simple: Sunshine 3D owns the PC; Moonlight 3D owns the
+Android XR experience; directly attached AR glasses stay on the PC path.
 
-The main repo had stayed silent for 5 months, with nobody actually responding to issues, and people are getting totally no help besides the limited FAQ in their Discord server. I tried to answer issues and questions, solve problems within my ablilty but I got kicked out just for helping others.
+```mermaid
+flowchart TD
+    SOURCE["Capturable Windows content"]
+    SOURCE --> PC["PC · Sunshine 3D<br/>capture · optional Host 3D"]
+    PC -->|"Encrypted mono or packed SBS"| XR["Android XR · Moonlight 3D<br/>decode · optional Client 3D"]
+    PC -->|"Direct D3D11<br/>no Moonlight 3D or network"| GLASSES["PC-connected AR glasses<br/>2D · Host 3D full SBS"]
+```
 
-**PRs for feature improvements are welcomed here unlike the main repo, your ideas are more likely to be appreciated and your efforts are actually being respected. We welcome people who can and willing to share their efforts, helping yourselves and other people in need.**
+Direct AR output is a Sunshine 3D feature, not a Moonlight 3D client path. It is currently
+video-only and supports 1920×1080 2D or 3840×1080 host-generated full SBS on an approved,
+non-primary, non-cloned display. A remote XR virtual-display session that is connecting, active,
+or retained for resume takes priority over the local glasses presenter. Windows audio remains on
+its current default endpoint. See the
+[Sunshine 3D local-glasses guide](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/sbs-local-ar-glasses.md).
 
-**Update**: They have contacted me and apologized for this incident, but the fact it **happened** still motivated me to start my own fork.
+## Conversion and passthrough modes
 
-## Downloads
-* [Download APK directly](https://github.com/ClassicOldSong/moonlight-android/releases)
-* [Use Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.noir%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FClassicOldSong%2Fmoonlight-android%22%2C%22author%22%3A%22ClassicOldSong%22%2C%22name%22%3A%22Artemis%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v(.%2B)%5C%22%7D%22%7D) (recommended)
+| Mode | Where 3D is produced | Use when |
+|---|---|---|
+| **2D** | No 3D processing | You want a direct mono SceneCore panel with the lowest processing cost |
+| **Client 3D** | Galaxy XR GPU using Depth Anything V2 Small or MiDaS 2.1 | The host sends mono video and the headset should create depth |
+| **Raw SBS** | The source creates both views; Moonlight 3D splits them | The source renders packed left/right views inside a Virtual Display-backed session, which Raw SBS requires |
+| **Host 3D** | Windows CUDA/TensorRT-capable NVIDIA GPU | Sunshine 3D should convert mono content before encoding |
 
-## Building
-* Install Android Studio and the Android NDK
-* Run ‘git submodule update --init --recursive’ from within moonlight-android/
-* In moonlight-android/, create a file called ‘local.properties’. Add an ‘ndk.dir=’ property to the local.properties file and set it equal to your NDK directory.
-* Build the APK using Android Studio or gradle
+Raw SBS presents stereo content that already exists; it does not estimate depth. Full packing
+sends two complete eye views at double width, while Half packing keeps the selected stream width
+and gives each eye half of its horizontal pixels.
 
-## Authors
+Host 3D and Client 3D are the real-time 2D-to-3D paths. Raw SBS preserves stereo supplied by the
+source, while 2D bypasses conversion entirely.
 
-* [Cameron Gutman](https://github.com/cgutman)  
-* [Diego Waxemberg](https://github.com/dwaxemberg)  
-* [Aaron Neyer](https://github.com/Aaronneyer)  
-* [Andrew Hennessy](https://github.com/yetanothername)
+## Quick start
 
-Moonlight is the work of students at [Case Western](http://case.edu) and was
-started as a project at [MHacks](http://mhacks.org).
+1. Install and configure [Sunshine 3D](https://github.com/dcatcher9/Apollo-3D) with its bundled
+   SudoVDA driver on the Windows PC, then run the host with administrator privileges.
+2. Open `https://localhost:47990` on the PC. No account or Web UI login is required; keep the
+   page ready for the **Enter PIN** pairing card.
+3. [Build and install](#build-from-source) the current arm64 Moonlight 3D APK, or install a
+   packaged build when one is available, on Galaxy XR.
+4. Put the PC and headset on the same network for initial discovery.
+5. Open Moonlight 3D and select the discovered PC, or add its IP address or hostname manually.
+6. Select **Pair**. Moonlight 3D displays a four-digit PIN.
+7. Enter that PIN in Sunshine 3D’s
+   **Enter PIN** card.
+8. Open the application library and launch **Virtual Display** for the complete resolution and
+   Raw SBS workflow, or launch another configured application.
+9. Start in **2D**, then select Client 3D, Raw SBS, or Host 3D from the in-headset dock.
+
+A compatible upstream Sunshine host can provide an ordinary mono stream for both 2D and Client 3D.
+Sunshine 3D is required for the integrated Virtual Display, Raw SBS, Host 3D, live host quality
+controls, and clipboard workflow.
+
+## Scene-aware adaptive pop and zero plane
+
+The PC and headset AI modes use the same scene-level strategy, with implementation details
+calibrated for their respective GPU pipelines:
+
+- **Scene-aware adaptive pop** waits for a new scene’s depth to settle, measures
+  gradient-magnitude-weighted depth-edge risk, then chooses a parallax multiplier between `1.20×`
+  and `2.00×`. Lower-risk depth fields can use more relief; edge-dense fields move toward the
+  gentler end. The choice stays fixed for the shot instead of pumping every frame.
+- **Shot-stable zero plane** places the display surface—the depth rendered at zero disparity—at
+  the scene’s median inferred depth. It is resolved immediately on an accepted scene cut,
+  corrected once after depth settles, and then latched. Between accepted cuts it does not
+  continuously follow per-frame motion or depth noise; the committed synthetic exposure-flash
+  tests also verify that supported brightness flashes do not relatch it.
+
+```mermaid
+flowchart TD
+    CUT["Accepted scene cut<br/>set the median zero plane immediately"]
+    CUT --> SETTLE["After depth settles<br/>correct the plane once · measure depth-edge risk"]
+    SETTLE -->|"Lower risk"| MORE["Stronger relief<br/>pop multiplier toward 2.00×"]
+    SETTLE -->|"Higher risk"| LESS["Gentler relief<br/>pop multiplier toward 1.20×"]
+    MORE --> HOLD["Hold pop and zero plane<br/>until the next accepted cut"]
+    LESS --> HOLD
+```
+
+The controller favors stronger stereo relief in lower-risk depth fields and backs off in edge-dense
+fields. The shot-latched screen plane reduces convergence breathing from per-frame tracking. These
+controls reduce pumping and warp risk; they do not guarantee perfect depth, artifact-free
+reprojection, or flawless cut detection.
+
+## Why this pair stands out
+
+Its distinguishing scope is one coordinated workflow spanning flat streaming, authored SBS,
+host-side AI conversion, headset-side AI conversion, remote Android XR interaction, and direct
+local AR-glasses presentation.
+
+| Workflow category | Scope | Main tradeoff |
+|---|---|---|
+| **Sunshine 3D + Moonlight 3D** | Capturable Windows content can use AI depth on the PC or Galaxy XR; authored SBS is preserved for remote Android XR, while Sunshine 3D can present host-generated 3D directly to local glasses | Validated around Windows 11, NVIDIA, and Galaxy XR; inferred geometry is scene-dependent |
+| **Native stereo only** | The application or media supplies authored eye views to a compatible local or streaming stack | Preserves authored binocular geometry and avoids monocular estimation when well authored, but only where the source explicitly supplies stereo |
+| **Media-only conversion** | A player or preprocessing tool converts video for file- or player-oriented output | Well-scoped for video, but not a general interactive desktop/game workflow |
+| **Local glasses-only conversion** | A PC converter presents supported content directly to attached glasses | No network round trip, but no remote Android XR experience |
+| **Conventional flat streaming** | Games, video, and desktop stay mono across a remote video, audio, and input loop | No stereo depth; avoids AI-depth processing cost |
+
+Individual products vary; this compares workflow scope rather than claiming every implementation
+in a category behaves identically. Native stereo remains preferable when accurate authored eye
+views are available.
+
+## Main features
+
+| Feature | What it provides |
+|---|---|
+| **In-headset stream dock** | Switches among 2D, Client 3D, Raw SBS, and Host 3D, reconnecting automatically when transport geometry changes; also provides Cinema, Library, Stats, Dump 3D, and Disconnect actions |
+| **Per-mode quality** | Independent resolution, frame-rate ceiling, and bitrate choices for every viewing mode, with shared codec, HDR, range, pacing, and audio settings |
+| **Explicit landscape and portrait modes** | 1080p, 1440p, 4K, ultrawide 1080p/1440p, and 5K2K rows, each with a real swapped-dimension portrait counterpart |
+| **Adaptive refresh behavior** | Selectable 30, 60, 72, 90, and 120 FPS ceilings; the live stream can follow a lower headset display rate and recover without changing the selected ceiling |
+| **Client GPU depth** | Depth Anything V2 Small or MiDaS 2.1 aspect buckets using a native LiteRT/OpenCL/GLES path—no NPU or CPU fallback |
+| **Scene-aware 3D stability** | Selects one depth-edge-aware pop multiplier after a shot settles and holds a median-depth screen plane to reduce pumping and convergence drift |
+| **Sunshine 3D integration** | Session-scoped Virtual Display launches, negotiated resolution/FPS/HDR, Host 3D, Raw SBS transport, application library, session resume/end controls, and clipboard sync |
+| **Moonlight input and audio** | Gamepad, mouse, keyboard, touchpad, rumble, stereo/5.1/7.1 audio, and host-audio controls |
+| **Live diagnostics** | Stream, decoder, network, CPU/GPU load, and Client 3D depth-health telemetry with trend charts |
+| **Connection tools** | Automatic host discovery, manual IP/hostname entry, secure PIN pairing, Wake-on-LAN, and network testing |
+
+Codec choices include Auto, AV1, HEVC, and H.264. Available geometry, frame rate, HDR, and codec
+combinations still depend on the host encoder, network, and Galaxy XR decoder limits.
+
+## Requirements
+
+- An Android XR device with the spatial API; Samsung Galaxy XR is the validated target.
+- The arm64-v8a APK for physical hardware. The x86_64 variant is emulator-only.
+- A reachable GameStream-compatible host. Use Sunshine 3D for the complete paired feature set.
+- A shared local network for automatic discovery, or a manually entered IP/hostname for any
+  securely reachable host.
+
+Client 3D runs on the Galaxy XR GPU. It has no NPU or CPU inference fallback; if GPU depth is
+unavailable, presentation remains usable as flat output.
+
+## Install on Galaxy XR
+
+Packaged builds appear on
+[Moonlight 3D releases](https://github.com/dcatcher9/moonlight-android/releases) when available.
+Choose the `nonRoot_game` arm64-v8a artifact for Galaxy XR. If that page has no suitable build for
+the revision you need, use the source-build steps below.
+
+## Build from source
+
+Moonlight 3D uses the Gradle wrapper, Android Gradle Plugin 9.2, JDK 17–25 (JDK 25 is the
+development standard), and Android NDK `27.0.12077973`.
+
+Before installing to Galaxy XR, enable Developer options and Wireless debugging on the headset,
+connect it through Android SDK Platform Tools, and confirm that it appears in `adb devices`.
+
+```powershell
+git clone --recurse-submodules https://github.com/dcatcher9/moonlight-android.git
+Set-Location moonlight-android
+
+# Create local.properties with sdk.dir=<your Android SDK path>.
+.\gradlew.bat :app:assembleNonRoot_gameDebug
+
+# Update-install to the connected physical headset.
+.\gradlew.bat :app:installNonRoot_gameDebug
+```
+
+Gradle writes the physical-headset APK under `app/build/outputs/apk/`.
+The install task uses an update-install. Pairings and preferences are preserved only when updating
+the same application ID with a compatible signing key; this does not migrate data from an older
+name/package or a differently signed build. Do not run
+`connectedNonRoot_gameDebugAndroidTest` against a personal headset: Android’s connected-test
+workflow uninstalls the target package and erases preferences, certificates, pairings, and
+profiles. Use a disposable emulator, or follow the data-preserving procedure in
+[Client SBS evaluation](./docs/client-sbs-evaluation.md).
+
+## Documentation
+
+| Topic | Guide |
+|---|---|
+| XR presentation and mode contracts | [Android XR SBS architecture](./docs/android-xr-sbs.md) |
+| Host/client 3D behavior | [Client–host SBS parity](./docs/client-host-sbs-parity.md) |
+| Client 3D measurement workflow | [Client SBS evaluation](./docs/client-sbs-evaluation.md) |
+| Depth-model provenance | [Model sources](./tools/model-sources/README.md) |
+
+## Project lineage and credits
+
+Moonlight 3D was previously named Artemis and Moonlight Noir. It is an Android XR-focused fork of
+[Moonlight for Android](https://github.com/moonlight-stream/moonlight-android), designed to pair
+with Sunshine 3D while retaining the Moonlight protocol and historical `com.limelight` package
+lineage.
+
+Original Moonlight Android authors include
+[Cameron Gutman](https://github.com/cgutman),
+[Diego Waxemberg](https://github.com/dwaxemberg),
+[Aaron Neyer](https://github.com/Aaronneyer), and
+[Andrew Hennessy](https://github.com/yetanothername).
+
+## License
+
+Moonlight 3D is licensed under GPLv3. See [LICENSE.txt](./LICENSE.txt). Bundled depth models retain
+their own notices and licenses in the
+[model notice directory](./app/src/nonRoot_game/assets/third_party/client_sbs_models/).

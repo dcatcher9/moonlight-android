@@ -83,7 +83,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/xr_space_sm"
             android:maxLines="2"
-            android:textColor="#FFB7C9DA"
+            android:textColor="@color/xr_text_secondary"
             android:textSize="@dimen/xr_text_body" />
 
         <Button
@@ -119,7 +119,7 @@
             android:layout_height="wrap_content"
             android:letterSpacing="0.1"
             android:text="@string/xr_home_host_details"
-            android:textColor="#FF829AB1"
+            android:textColor="@color/xr_text_secondary"
             android:textSize="@dimen/xr_text_caption"
             android:textStyle="bold" />
 
@@ -130,7 +130,7 @@
             android:layout_marginTop="@dimen/xr_space_md"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#FFE7EDF4"
+            android:textColor="@color/xr_text_primary"
             android:textSize="@dimen/xr_text_body" />
 
         <LinearLayout
@@ -145,7 +145,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/xr_home_headset_wifi"
-                android:textColor="#FF829AB1"
+                android:textColor="@color/xr_text_secondary"
                 android:textSize="@dimen/xr_text_caption"
                 android:textStyle="bold" />
 
@@ -164,7 +164,7 @@
                     android:layout_weight="1"
                     android:ellipsize="end"
                     android:maxLines="1"
-                    android:textColor="#FFB7C9DA"
+                    android:textColor="@color/xr_text_secondary"
                     android:textSize="@dimen/xr_text_emphasis" />
 
                 <TextView
@@ -176,7 +176,7 @@
                     android:ellipsize="end"
                     android:gravity="end"
                     android:maxLines="1"
-                    android:textColor="#FFB7C9DA"
+                    android:textColor="@color/xr_text_secondary"
                     android:textSize="@dimen/xr_text_emphasis" />
             </LinearLayout>
         </LinearLayout>
@@ -187,7 +187,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/xr_space_sm"
             android:maxLines="2"
-            android:textColor="#FFE7EDF4"
+            android:textColor="@color/xr_text_primary"
             android:textSize="@dimen/xr_text_body" />
 
         <TextView
@@ -196,7 +196,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/xr_space_sm"
             android:maxLines="2"
-            android:textColor="#FFE7EDF4"
+            android:textColor="@color/xr_text_primary"
             android:textSize="@dimen/xr_text_body" />
     </LinearLayout>
 

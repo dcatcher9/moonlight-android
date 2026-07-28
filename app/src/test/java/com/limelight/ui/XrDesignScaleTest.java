@@ -22,8 +22,8 @@ import java.util.regex.Pattern;
 /**
  * Guards the XR design scales against drift.
  *
- * <p>The XR surfaces share five type steps, three corner radii, five spacing steps and three
- * control heights, all declared in {@code dimens.xml} as {@code xr_*} tokens. Nothing at runtime
+ * <p>The XR surfaces share five type steps, three corner radii, five spacing steps and four
+ * control-height roles, all declared in {@code dimens.xml} as {@code xr_*} tokens. Nothing at runtime
  * enforces that — a new layout can hardcode {@code 17sp} and look almost right, and "almost right"
  * repeated a dozen times is exactly the unevenness the scales were introduced to remove. So this
  * reads the layouts as source and fails on raw literals where a token exists.</p>
@@ -33,10 +33,18 @@ import java.util.regex.Pattern;
  */
 @RunWith(RobolectricTestRunner.class)
 public class XrDesignScaleTest {
-    /** Layouts held to the scale: every {@code xr_*} file plus the reworked home cards. */
+    /**
+     * Layouts held to the scale. Names alone are not enough: the XR-only Home and connection
+     * screens predate the {@code xr_*} prefix, so keep every active spatial surface explicit.
+     */
     private static boolean isXrLayout(String fileName) {
         return fileName.contains("xr")
+                || fileName.equals("activity_pc_view.xml")
+                || fileName.equals("activity_add_computer_manually.xml")
+                || fileName.equals("pc_grid_view.xml")
+                || fileName.equals("pc_grid_item.xml")
                 || fileName.equals("app_grid_item.xml")
+                || fileName.equals("app_grid_view.xml")
                 || fileName.equals("activity_app_view.xml")
                 || fileName.equals("pc_grid_item_hero.xml")
                 || fileName.equals("activity_stream_settings.xml");
@@ -55,7 +63,7 @@ public class XrDesignScaleTest {
     }
 
     @Test
-    public void xrLayoutsDeclareTextSizesThroughTheTypeScale() throws IOException {
+    public void xrLayoutsAndStylesDeclareTextSizesThroughTheTypeScale() throws IOException {
         List<String> offenders = new ArrayList<>();
         File[] files = layoutDir().listFiles();
         if (files == null) {
@@ -72,8 +80,65 @@ public class XrDesignScaleTest {
                 offenders.add(file.getName() + ": " + matcher.group(0));
             }
         }
+        File styles = new File("src/main/res/values/styles.xml");
+        assertTrue("style source not found", styles.isFile());
+        String styleSource =
+                new String(Files.readAllBytes(styles.toPath()), StandardCharsets.UTF_8);
+        Matcher styleMatcher = Pattern.compile(
+                "name=\"android:textSize\">([0-9.]+)sp<").matcher(styleSource);
+        while (styleMatcher.find()) {
+            offenders.add("styles.xml: " + styleMatcher.group(0));
+        }
         if (!offenders.isEmpty()) {
-            fail("XR layouts must use @dimen/xr_text_* rather than raw sp values:\n  "
+            fail("XR layouts/styles must use @dimen/xr_text_* rather than raw sp values:\n  "
+                    + String.join("\n  ", offenders));
+        }
+    }
+
+    @Test
+    public void xrLayoutsAndStylesDeclareSmallSpacingThroughTheSpacingScale()
+            throws IOException {
+        List<String> offenders = new ArrayList<>();
+        Pattern layoutSpacing = Pattern.compile(
+                "android:(?:padding(?:Start|Top|End|Bottom)?"
+                        + "|layout_margin(?:Start|Top|End|Bottom)?"
+                        + "|drawablePadding|horizontalSpacing|verticalSpacing)"
+                        + "=\"([0-9.]+)dp\"");
+        for (File file : xrLayoutFiles()) {
+            collectSmallRawDimensions(file, layoutSpacing, offenders);
+        }
+
+        File styles = new File("src/main/res/values/styles.xml");
+        assertTrue("style source not found", styles.isFile());
+        Pattern styleSpacing = Pattern.compile(
+                "name=\"android:(?:padding(?:Start|Top|End|Bottom)?"
+                        + "|layout_margin(?:Start|Top|End|Bottom)?"
+                        + "|drawablePadding)\">([0-9.]+)dp<");
+        collectSmallRawDimensions(styles, styleSpacing, offenders);
+
+        if (!offenders.isEmpty()) {
+            fail("XR spacing at 24dp or below must use @dimen/xr_space_* rather than a raw"
+                    + " value:\n  " + String.join("\n  ", offenders));
+        }
+    }
+
+    @Test
+    public void xrLayoutsAndStylesUseControlHeightTokens() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        Pattern layoutHeight = Pattern.compile(
+                "android:(?:layout_height|minHeight)=\"(40|56|64|80)dp\"");
+        for (File file : xrLayoutFiles()) {
+            collectMatches(file, layoutHeight, offenders);
+        }
+
+        File styles = new File("src/main/res/values/styles.xml");
+        assertTrue("style source not found", styles.isFile());
+        Pattern styleHeight = Pattern.compile(
+                "name=\"android:minHeight\">(40|56|64|80)dp<");
+        collectMatches(styles, styleHeight, offenders);
+
+        if (!offenders.isEmpty()) {
+            fail("XR controls must use @dimen/xr_control_* for standard heights:\n  "
                     + String.join("\n  ", offenders));
         }
     }
@@ -188,5 +253,51 @@ public class XrDesignScaleTest {
         float compact = RuntimeEnvironment.getApplication()
                 .getResources().getDimension(R.dimen.xr_control_compact);
         assertTrue("compact control height must stay >= 40dp", compact >= 40 * density);
+        float standard = RuntimeEnvironment.getApplication()
+                .getResources().getDimension(R.dimen.xr_control_standard);
+        float primary = RuntimeEnvironment.getApplication()
+                .getResources().getDimension(R.dimen.xr_control_primary);
+        float choice = RuntimeEnvironment.getApplication()
+                .getResources().getDimension(R.dimen.xr_control_choice);
+        assertTrue("control-height roles must increase", compact < standard
+                && standard < primary && primary < choice);
+        assertTrue("wrapped connected choices must stay >= 80dp", choice >= 80 * density);
+    }
+
+    private List<File> xrLayoutFiles() {
+        List<File> result = new ArrayList<>();
+        File[] files = layoutDir().listFiles();
+        if (files == null) {
+            fail("layout directory could not be listed");
+            return result;
+        }
+        for (File file : files) {
+            if (isXrLayout(file.getName())) {
+                result.add(file);
+            }
+        }
+        return result;
+    }
+
+    private static void collectSmallRawDimensions(File file, Pattern pattern,
+                                                  List<String> offenders)
+            throws IOException {
+        String source = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        Matcher matcher = pattern.matcher(source);
+        while (matcher.find()) {
+            float value = Float.parseFloat(matcher.group(1));
+            if (value > 0f && value <= 24f) {
+                offenders.add(file.getName() + ": " + matcher.group(0));
+            }
+        }
+    }
+
+    private static void collectMatches(File file, Pattern pattern, List<String> offenders)
+            throws IOException {
+        String source = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        Matcher matcher = pattern.matcher(source);
+        while (matcher.find()) {
+            offenders.add(file.getName() + ": " + matcher.group(0));
+        }
     }
 }

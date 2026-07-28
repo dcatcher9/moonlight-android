@@ -2,21 +2,21 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <shape>
-            <solid android:color="#334C79B8" />
+            <solid android:color="@color/xr_accent_pressed_overlay" />
             <corners android:radius="@dimen/xr_radius_card" />
             <stroke android:width="3dp" android:color="@color/xr_accent" />
         </shape>
     </item>
     <item android:state_focused="true">
         <shape>
-            <solid android:color="#263C5A80" />
+            <solid android:color="@color/xr_accent_focus_overlay" />
             <corners android:radius="@dimen/xr_radius_card" />
             <stroke android:width="3dp" android:color="@color/xr_accent" />
         </shape>
     </item>
     <item android:state_hovered="true">
         <shape>
-            <solid android:color="#263C5A80" />
+            <solid android:color="@color/xr_accent_focus_overlay" />
             <corners android:radius="@dimen/xr_radius_card" />
             <stroke android:width="3dp" android:color="@color/xr_accent" />
         </shape>

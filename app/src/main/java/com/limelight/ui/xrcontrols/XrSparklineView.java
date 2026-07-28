@@ -28,6 +28,8 @@ public final class XrSparklineView extends View {
     private final Path path = new Path();
     private float[] values = new float[0];
     private int length;
+    /** Number of horizontal sample slots represented by the complete plot width. */
+    private int slotCapacity = 2;
     /** Fixed vertical range; NaN means scale to the data. */
     private float fixedMin = Float.NaN;
     private float fixedMax = Float.NaN;
@@ -62,18 +64,48 @@ public final class XrSparklineView extends View {
         invalidate();
     }
 
-    public void setValues(float[] samples, int count) {
+    /**
+     * Supplies oldest-first samples while preserving fixed horizontal sample spacing.
+     *
+     * <p>Until the history is full, samples occupy the newest slots at the right edge instead of
+     * stretching a short initial history across the entire chart. Once full, this is identical to
+     * the conventional oldest-left/newest-right layout and each new sample scrolls the oldest
+     * point off the left edge.</p>
+     *
+     * @param capacity maximum number of samples represented by the complete chart width
+     */
+    public void setValues(float[] samples, int count, int capacity) {
         if (samples == null || count <= 0) {
             length = 0;
+            slotCapacity = Math.max(2, capacity);
             invalidate();
             return;
         }
-        if (values.length < count) {
-            values = new float[count];
+        int copied = Math.min(count, samples.length);
+        if (values.length < copied) {
+            values = new float[copied];
         }
-        System.arraycopy(samples, 0, values, 0, count);
-        length = count;
+        System.arraycopy(samples, 0, values, 0, copied);
+        length = copied;
+        slotCapacity = Math.max(2, Math.max(copied, capacity));
         invalidate();
+    }
+
+    /**
+     * Returns the fixed-sample-spacing X coordinate for one oldest-first sample.
+     *
+     * <p>Package visibility keeps the draw policy testable without allocating geometry objects in
+     * {@link #onDraw(Canvas)}.</p>
+     */
+    static float sampleX(float width, float inset, int sampleIndex,
+                         int sampleCount, int capacity) {
+        int safeCount = Math.max(1, sampleCount);
+        int safeCapacity = Math.max(2, Math.max(safeCount, capacity));
+        int safeIndex = Math.max(0, Math.min(sampleIndex, safeCount - 1));
+        float usableWidth = Math.max(0.0f, width - inset * 2.0f);
+        float step = usableWidth / (safeCapacity - 1);
+        int firstSlot = safeCapacity - safeCount;
+        return inset + (firstSlot + safeIndex) * step;
     }
 
     /** Produces a compact text equivalent for the values actually drawn by the sparkline. */
@@ -241,15 +273,19 @@ public final class XrSparklineView extends View {
         // dividing by zero and painting noise that looks like signal.
         float span = max - min;
         if (span <= 0.000001f) {
-            canvas.drawLine(0, h - inset, w, h - inset, linePaint);
+            canvas.drawLine(
+                    sampleX(w, inset, 0, length, slotCapacity),
+                    h - inset,
+                    sampleX(w, inset, length - 1, length, slotCapacity),
+                    h - inset,
+                    linePaint);
             return;
         }
 
         path.rewind();
-        float stepX = length > 1 ? (w - inset * 2.0f) / (length - 1) : 0.0f;
         for (int i = 0; i < length; i++) {
             float normalized = (values[i] - min) / span;
-            float x = inset + i * stepX;
+            float x = sampleX(w, inset, i, length, slotCapacity);
             float y = h - inset - normalized * (h - inset * 2.0f);
             if (i == 0) {
                 path.moveTo(x, y);

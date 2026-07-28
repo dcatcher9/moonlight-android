@@ -3,7 +3,6 @@ package com.limelight.ui.xrcontrols;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
@@ -18,8 +17,11 @@ import android.view.ViewGroup;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.widget.AppCompatButton;
+import androidx.core.content.ContextCompat;
+import androidx.core.graphics.ColorUtils;
 import androidx.core.view.ViewCompat;
 
+import com.limelight.R;
 import com.limelight.preferences.XrResolutionOptions;
 
 import java.util.ArrayList;
@@ -95,8 +97,8 @@ public final class XrResolutionSelector extends ViewGroup {
     public XrResolutionSelector(@NonNull Context context, @Nullable AttributeSet attrs,
                                 int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        horizontalSpacing = dp(8);
-        verticalSpacing = dp(8);
+        horizontalSpacing = getResources().getDimensionPixelSize(R.dimen.xr_space_sm);
+        verticalSpacing = getResources().getDimensionPixelSize(R.dimen.xr_space_sm);
         setClipChildren(false);
         setClipToPadding(false);
         setFocusable(false);
@@ -505,16 +507,22 @@ public final class XrResolutionSelector extends ViewGroup {
             setAllCaps(false);
             setText(option.custom ? option.label + "\n" + option.detail() : cardText(option));
             setTag(option.id);
-            setTextSize(22f);
-            setTextColor(cardTextColors());
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    context.getResources().getDimension(R.dimen.xr_text_title));
+            setTextColor(cardTextColors(context));
             setMaxLines(2);
             setIncludeFontPadding(false);
             setMinWidth(dp(context, 112));
             setMinimumWidth(dp(context, 112));
             setMinHeight(dp(context, 104));
             setMinimumHeight(dp(context, 104));
-            setPadding(dp(context, 14), dp(context, 10), dp(context, 14), dp(context, 10));
-            setCompoundDrawablePadding(dp(context, 6));
+            int horizontalPadding =
+                    context.getResources().getDimensionPixelSize(R.dimen.xr_space_md);
+            int verticalPadding =
+                    context.getResources().getDimensionPixelSize(R.dimen.xr_space_sm);
+            setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding);
+            setCompoundDrawablePadding(
+                    context.getResources().getDimensionPixelSize(R.dimen.xr_space_sm));
             setCompoundDrawablesWithIntrinsicBounds(null, glyph, null, null);
             setFocusable(true);
             // Gaze highlighting is driven by hover. Enabling touch-mode focus makes Android
@@ -559,7 +567,7 @@ public final class XrResolutionSelector extends ViewGroup {
             }
         }
 
-        private static ColorStateList cardTextColors() {
+        private static ColorStateList cardTextColors(Context context) {
             return new ColorStateList(new int[][] {
                     new int[] {-android.R.attr.state_enabled},
                     new int[] {android.R.attr.state_activated},
@@ -567,11 +575,11 @@ public final class XrResolutionSelector extends ViewGroup {
                     new int[] {android.R.attr.state_hovered},
                     new int[0],
             }, new int[] {
-                    Color.rgb(154, 160, 166),
-                    Color.WHITE,
-                    Color.WHITE,
-                    Color.WHITE,
-                    Color.rgb(232, 234, 237),
+                    color(context, R.color.xr_text_disabled),
+                    color(context, R.color.xr_text_primary),
+                    color(context, R.color.xr_text_primary),
+                    color(context, R.color.xr_text_primary),
+                    color(context, R.color.xr_text_primary),
             });
         }
     }
@@ -586,6 +594,9 @@ public final class XrResolutionSelector extends ViewGroup {
         private final float strokeWidth;
         private final float cornerRadius;
         private final float standHeight;
+        private final int disabledColor;
+        private final int activeColor;
+        private final int defaultColor;
         private final RectF cachedScreenBounds = new RectF();
         private final float[] cachedDensityDotCenters;
         private int alpha = 255;
@@ -599,6 +610,9 @@ public final class XrResolutionSelector extends ViewGroup {
             strokeWidth = dp(context, 2);
             cornerRadius = dp(context, 2);
             standHeight = dp(context, 7);
+            disabledColor = color(context, R.color.xr_text_disabled);
+            activeColor = color(context, R.color.xr_accent_bright);
+            defaultColor = color(context, R.color.xr_accent);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
@@ -750,17 +764,17 @@ public final class XrResolutionSelector extends ViewGroup {
             return intrinsicHeight;
         }
 
-        private static int glyphColorForState(int[] state) {
+        private int glyphColorForState(int[] state) {
             if (!hasState(state, android.R.attr.state_enabled)) {
-                return Color.rgb(154, 160, 166);
+                return disabledColor;
             }
             if (hasState(state, android.R.attr.state_activated)
                     || hasState(state, android.R.attr.state_focused)
                     || hasState(state, android.R.attr.state_hovered)
                     || hasState(state, android.R.attr.state_pressed)) {
-                return Color.rgb(215, 229, 255);
+                return activeColor;
             }
-            return Color.rgb(232, 234, 237);
+            return defaultColor;
         }
     }
 
@@ -771,11 +785,34 @@ public final class XrResolutionSelector extends ViewGroup {
         private final RectF insetBounds = new RectF();
         private final float radius;
         private final float oneDp;
+        private final int disabledFill;
+        private final int disabledStroke;
+        private final int activeFill;
+        private final int activeFocusFill;
+        private final int hoverFill;
+        private final int pressedFill;
+        private final int activeFocusStroke;
+        private final int activeStroke;
+        private final int defaultFill;
+        private final int defaultStroke;
         private int alpha = 255;
 
         CardBackgroundDrawable(Context context) {
-            radius = dp(context, 12);
+            radius = context.getResources().getDimension(R.dimen.xr_radius_card);
             oneDp = dp(context, 1);
+            disabledFill = color(context, R.color.xr_segment_disabled);
+            disabledStroke = color(context, R.color.xr_border);
+            activeFill = color(context, R.color.xr_accent_deep);
+            activeFocusFill = ColorUtils.compositeColors(
+                    color(context, R.color.xr_accent_focus_overlay), activeFill);
+            activeFocusStroke = color(context, R.color.xr_accent_bright);
+            activeStroke = color(context, R.color.xr_accent);
+            defaultFill = color(context, R.color.xr_surface_raised);
+            hoverFill = ColorUtils.compositeColors(
+                    color(context, R.color.xr_accent_focus_overlay), defaultFill);
+            pressedFill = ColorUtils.compositeColors(
+                    color(context, R.color.xr_accent_pressed_overlay), activeFill);
+            defaultStroke = color(context, R.color.xr_border);
         }
 
         @Override
@@ -797,33 +834,33 @@ public final class XrResolutionSelector extends ViewGroup {
             int stroke;
             float strokeWidth;
             if (!enabled) {
-                fill = Color.rgb(34, 38, 43);
-                stroke = Color.rgb(60, 64, 67);
+                fill = disabledFill;
+                stroke = disabledStroke;
                 strokeWidth = oneDp;
             }
             else if (pressed) {
-                fill = Color.rgb(84, 125, 184);
-                stroke = Color.rgb(215, 229, 255);
+                fill = pressedFill;
+                stroke = activeFocusStroke;
                 strokeWidth = oneDp * 2f;
             }
             else if (activated && (focused || hovered)) {
-                fill = Color.rgb(54, 88, 127);
-                stroke = Color.rgb(215, 229, 255);
+                fill = activeFocusFill;
+                stroke = activeFocusStroke;
                 strokeWidth = oneDp * 3f;
             }
             else if (focused || hovered) {
-                fill = Color.rgb(69, 106, 152);
-                stroke = Color.rgb(138, 180, 248);
+                fill = hoverFill;
+                stroke = activeStroke;
                 strokeWidth = oneDp * 3f;
             }
             else if (activated) {
-                fill = Color.rgb(54, 88, 127);
-                stroke = Color.rgb(138, 180, 248);
+                fill = activeFill;
+                stroke = activeStroke;
                 strokeWidth = oneDp * 2f;
             }
             else {
-                fill = Color.rgb(48, 52, 58);
-                stroke = Color.rgb(95, 99, 104);
+                fill = defaultFill;
+                stroke = defaultStroke;
                 strokeWidth = oneDp;
             }
 
@@ -881,5 +918,9 @@ public final class XrResolutionSelector extends ViewGroup {
 
     private static int dp(Context context, int value) {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private static int color(Context context, int resourceId) {
+        return ContextCompat.getColor(context, resourceId);
     }
 }

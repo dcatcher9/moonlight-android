@@ -82,10 +82,12 @@ public final class XrChoiceGroupSegmentedTest {
         measureAndLayout(group, dp(420));
 
         assertFalse(group.isStackedForTests());
+        int minimumHeight = context.getResources()
+                .getDimensionPixelSize(XrSegmentButton.MIN_HEIGHT_DIMEN);
         for (int i = 0; i < group.getChildCount(); i++) {
             AppCompatButton button = group.getButtonAt(i);
-            assertTrue(button.getMinimumHeight() >= dp(XrSegmentButton.MIN_HEIGHT_DP));
-            assertTrue(button.getMeasuredHeight() >= dp(XrSegmentButton.MIN_HEIGHT_DP));
+            assertTrue(button.getMinimumHeight() >= minimumHeight);
+            assertTrue(button.getMeasuredHeight() >= minimumHeight);
         }
         assertEquals(group.getButtonAt(0).getMeasuredHeight(),
                 group.getButtonAt(1).getMeasuredHeight());

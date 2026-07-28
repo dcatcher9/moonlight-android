@@ -42,6 +42,7 @@ import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrSessionSettingsController;
 import com.limelight.preferences.session.SessionSettingsStore;
+import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
@@ -4665,6 +4666,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     && streamContainer.getXrPresenter() != null) {
                 streamContainer.getXrPresenter().onVideoModeAck(requestId, status, appliedWidth,
                         appliedHeight, appliedFramerateX100, appliedBitrateKbps);
+            }
+        });
+    }
+
+    @Override
+    public void hostSbsTelemetryState(byte[] payload) {
+        final HostSbsTelemetrySnapshot telemetry;
+        try {
+            telemetry = HostSbsTelemetrySnapshot.parse(payload);
+        } catch (IllegalArgumentException error) {
+            LimeLog.warning("Dropping malformed host SBS telemetry: " + error.getMessage());
+            return;
+        }
+        final long receivedAtMs = android.os.SystemClock.uptimeMillis();
+        runOnUiThread(() -> {
+            if (isConnectionUiActive() && streamContainer != null
+                    && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onHostSbsTelemetryState(
+                        telemetry, receivedAtMs);
             }
         });
     }

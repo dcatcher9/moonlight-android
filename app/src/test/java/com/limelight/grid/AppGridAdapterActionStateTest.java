@@ -13,6 +13,7 @@ import android.widget.ImageView;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.limelight.R;
@@ -43,7 +44,8 @@ public final class AppGridAdapterActionStateTest {
         assertEquals(View.VISIBLE, status.getVisibility());
         assertEquals(card.getResources().getString(R.string.xr_home_status_running),
                 status.getText().toString());
-        assertEquals(0x00000000, ((ColorDrawable) mask.getBackground()).getColor());
+        assertEquals(ContextCompat.getColor(card.getContext(), R.color.xr_scrim_clear),
+                ((ColorDrawable) mask.getBackground()).getColor());
     }
 
     @Test

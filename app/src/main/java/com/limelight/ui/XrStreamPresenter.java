@@ -3,7 +3,6 @@ package com.limelight.ui;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
-import android.graphics.Color;
 import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -59,8 +58,10 @@ import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
-import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsMetricHistory;
+import com.limelight.sbs.HostSbsTelemetrySnapshot;
+import com.limelight.sbs.HostSbsTelemetryTracker;
+import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 import com.limelight.ui.xrcontrols.XrBitrateControl;
 import com.limelight.ui.xrcontrols.XrSparklineView;
 import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
@@ -436,6 +437,31 @@ public class XrStreamPresenter {
     private boolean appliedStatsRequested;
     private final DevicePerformanceSampler devicePerformanceSampler =
             new DevicePerformanceSampler();
+    private static final int HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS = 500;
+    private static final int HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS = 100;
+    static final long HOST_SBS_TELEMETRY_RETRY_DELAY_MS = 500L;
+    static final int HOST_SBS_TELEMETRY_MAX_RETRIES = 3;
+    private final HostSbsTelemetryTracker hostSbsTelemetryTracker =
+            new HostSbsTelemetryTracker();
+    private final android.os.Handler hostSbsTelemetryRetryHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private int hostSbsTelemetryRequestCounter;
+    private boolean hostSbsTelemetryRequested;
+    private boolean hostSbsTelemetryFocused;
+    private int hostSbsTelemetryRetryAttempts;
+    private boolean hostSbsTelemetryRetryPending;
+    private final Runnable hostSbsTelemetryRetryRunnable =
+            this::retryHostSbsTelemetrySubscription;
+
+    private void retryHostSbsTelemetrySubscription() {
+        hostSbsTelemetryRetryPending = false;
+        if (!hostSbsTelemetryRequested || !streamPresentationReady
+                || currentPresenterMode != PresenterMode.HOST_SBS_AI) {
+            return;
+        }
+        hostSbsTelemetryRetryAttempts++;
+        sendHostSbsTelemetrySubscriptionAttempt();
+    }
 
     /** Small centered overlay shown in front of the video while the host prepares its engine or
      *  initializes the stream-specific 3D pipeline
@@ -454,11 +480,11 @@ public class XrStreamPresenter {
             new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable hideTransientMessageRunnable = this::hideTransientMessage;
 
-    static final float STATS_TEXT_SP = 30f;
-    static final float SESSION_SUMMARY_TEXT_SP = 25f;
-    static final float SESSION_GROUP_TEXT_SP = 26f;
-    static final float SESSION_ROW_TITLE_TEXT_SP = 29f;
-    static final float SESSION_META_TEXT_SP = 22f;
+    static final int STATS_TEXT_DIMEN = R.dimen.xr_text_display;
+    static final int SESSION_SUMMARY_TEXT_DIMEN = R.dimen.xr_text_title;
+    static final int SESSION_GROUP_TEXT_DIMEN = R.dimen.xr_text_title;
+    static final int SESSION_ROW_TITLE_TEXT_DIMEN = R.dimen.xr_text_display;
+    static final int SESSION_META_TEXT_DIMEN = R.dimen.xr_text_title;
     /** Comfortable cinema-preset quad height in meters; mode switches keep this height and vary
      *  width. Shared by the initial placement and Cinema View so both land at the same size. Tune
      *  by feel on the headset (at the ~2 m default distance, 2.0 m ≈ a large cinema screen). */
@@ -1547,7 +1573,7 @@ public class XrStreamPresenter {
             View tile = buildBarItemView(item);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.MATCH_PARENT, item.widthUnits);
-            int m = dp(4);
+            int m = dimen(R.dimen.xr_space_xs);
             lp.setMargins(m, m, m, m);
             bar.addView(tile, lp);
             item.root = tile;
@@ -1569,7 +1595,7 @@ public class XrStreamPresenter {
         Button revealButton = new Button(activity);
         styleControlButton(revealButton);
         revealButton.setText("\u25B4");
-        revealButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f);
+        setTextSize(revealButton, R.dimen.xr_text_emphasis);
         revealButton.setAllCaps(false);
         revealButton.setMinWidth(0);
         revealButton.setMinHeight(0);
@@ -1583,7 +1609,9 @@ public class XrStreamPresenter {
         // SceneCore-hosted Views do not have a normal window token. Samsung's tooltip popup logs
         // an error when it tries to resolve this anchor, while contentDescription remains valid
         // for accessibility and gaze narration.
-        dockRevealPill.setPadding(dp(18), dp(8), dp(18), dp(8));
+        dockRevealPill.setPadding(dimen(R.dimen.xr_space_lg),
+                dimen(R.dimen.xr_space_sm), dimen(R.dimen.xr_space_lg),
+                dimen(R.dimen.xr_space_sm));
         dockRevealPill.setVisibility(View.GONE);
         // Some XR input paths focus a hosted TextView/Button on the first pinch and do not deliver
         // its click until the second. Reveal on the first press event as well; the click handler
@@ -1640,16 +1668,15 @@ public class XrStreamPresenter {
         root.setOrientation(LinearLayout.VERTICAL);
         // Fully opaque content avoids blending a second large translucent surface over video.
         root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken));
-        int p = statsDp(18);
+        int p = statsDimen(R.dimen.xr_space_lg);
         root.setPadding(p, p, p, p);
 
         statsTitle = new TextView(activity);
         statsTitle.setText(R.string.xr_stats_title);
         statsTitle.setTextColor(paletteColor(R.color.xr_accent));
-        statsTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP,
-                (STATS_TEXT_SP + 4f) * STATS_CONTENT_SCALE);
+        setScaledTextSize(statsTitle, R.dimen.xr_text_display, STATS_CONTENT_SCALE);
         statsTitle.setTypeface(statsTitle.getTypeface(), android.graphics.Typeface.BOLD);
-        statsTitle.setPadding(0, 0, 0, statsDp(6));
+        statsTitle.setPadding(0, 0, 0, statsDimen(R.dimen.xr_space_sm));
         root.addView(statsTitle);
 
         statsTable = createStatsTable();
@@ -1690,9 +1717,10 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER_VERTICAL);
-        root.setPadding(dp(12), dp(4), dp(12), dp(4));
+        root.setPadding(dimen(R.dimen.xr_space_md), dimen(R.dimen.xr_space_xs),
+                dimen(R.dimen.xr_space_md), dimen(R.dimen.xr_space_xs));
         root.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_sunken, 0xE6),
+                paletteColor(R.color.xr_scrim_strong),
                 paletteColor(R.color.xr_border), 1));
         root.setClickable(false);
         root.setFocusable(false);
@@ -1719,7 +1747,7 @@ public class XrStreamPresenter {
     }
 
     private TextView glanceText(int color) {
-        TextView view = controlText("", 21f, color);
+        TextView view = controlText("", R.dimen.xr_text_emphasis, color);
         view.setSingleLine(true);
         view.setEllipsize(android.text.TextUtils.TruncateAt.END);
         view.setGravity(Gravity.CENTER_VERTICAL);
@@ -1791,11 +1819,6 @@ public class XrStreamPresenter {
 
     private int paletteColor(int colorRes) {
         return ContextCompat.getColor(activity, colorRes);
-    }
-
-    /** Palette colour at a given alpha, for scrims that must let video through. */
-    private int paletteColor(int colorRes, int alpha) {
-        return (paletteColor(colorRes) & 0x00FFFFFF) | (alpha << 24);
     }
 
     /**
@@ -2179,6 +2202,9 @@ public class XrStreamPresenter {
         if (statsChanged && notifyStatsListener && statsVisibilityListener != null) {
             statsVisibilityListener.onStatsVisibilityChanged(showStats);
         }
+        if (statsChanged) {
+            reconcileHostSbsTelemetrySubscription();
+        }
 
         boolean showModeOptions = visible == XrControlUiState.Surface.MODE_OPTIONS;
         modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
@@ -2254,13 +2280,15 @@ public class XrStreamPresenter {
         renderedModeOptionsMode = mode;
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
-        int padding = dp(18);
-        root.setPadding(padding, dp(12), padding, dp(12));
+        int padding = dimen(R.dimen.xr_space_lg);
+        root.setPadding(padding, dimen(R.dimen.xr_space_md),
+                padding, dimen(R.dimen.xr_space_md));
 
         LinearLayout header = new LinearLayout(activity);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(18), dp(12), dp(18), dp(12));
+        header.setPadding(dimen(R.dimen.xr_space_lg), dimen(R.dimen.xr_space_md),
+                dimen(R.dimen.xr_space_lg), dimen(R.dimen.xr_space_md));
         header.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         addModeOptionsHeading(header, mode);
@@ -2286,12 +2314,13 @@ public class XrStreamPresenter {
 
         TextView qualityHeading = controlText(
                 activity.getString(R.string.xr_mode_quality_heading),
-                20f, paletteColor(R.color.xr_accent));
+                R.dimen.xr_text_emphasis, paletteColor(R.color.xr_accent));
         qualityHeading.setAllCaps(true);
         qualityHeading.setLetterSpacing(0.08f);
         qualityHeading.setTypeface(qualityHeading.getTypeface(),
                 android.graphics.Typeface.BOLD);
-        qualityHeading.setPadding(dp(4), dp(12), 0, dp(8));
+        qualityHeading.setPadding(dimen(R.dimen.xr_space_xs),
+                dimen(R.dimen.xr_space_md), 0, dimen(R.dimen.xr_space_sm));
         root.addView(qualityHeading);
 
         addModeQualityControls(root, mode);
@@ -2302,14 +2331,15 @@ public class XrStreamPresenter {
             LinearLayout clientRow = new LinearLayout(activity);
             clientRow.setOrientation(LinearLayout.HORIZONTAL);
             clientRow.setGravity(Gravity.CENTER_VERTICAL);
-            clientRow.setPadding(dp(12), dp(12), dp(12), dp(12));
+            int rowPadding = dimen(R.dimen.xr_space_md);
+            clientRow.setPadding(rowPadding, rowPadding, rowPadding, rowPadding);
             clientRow.setBackground(controlSurfaceBackground(
                     paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
             addClientSbsModeOptions(clientRow);
             LinearLayout.LayoutParams clientParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
-            clientParams.topMargin = dp(12);
+            clientParams.topMargin = dimen(R.dimen.xr_space_md);
             root.addView(clientRow, clientParams);
         }
         addModeOptionsFooter(root, mode);
@@ -2339,11 +2369,13 @@ public class XrStreamPresenter {
 
         LinearLayout resolutionColumn = new LinearLayout(activity);
         resolutionColumn.setOrientation(LinearLayout.VERTICAL);
-        resolutionColumn.setPadding(dp(12), dp(12), dp(12), dp(12));
+        int cardPadding = dimen(R.dimen.xr_space_md);
+        resolutionColumn.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
         resolutionColumn.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         TextView resolutionTitle = controlText(
-                activity.getString(R.string.title_resolution_list), 24f, Color.WHITE);
+                activity.getString(R.string.title_resolution_list),
+                R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
         resolutionTitle.setTypeface(resolutionTitle.getTypeface(),
                 android.graphics.Typeface.BOLD);
         applyTitleIcon(resolutionTitle, R.drawable.ic_xr_resolution);
@@ -2360,7 +2392,7 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams resolutionParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.55f);
-        resolutionParams.rightMargin = dp(8);
+        resolutionParams.rightMargin = dimen(R.dimen.xr_space_sm);
         qualityRow.addView(resolutionColumn, resolutionParams);
 
         LinearLayout tuningColumn = new LinearLayout(activity);
@@ -2369,14 +2401,14 @@ public class XrStreamPresenter {
         SessionSettingsModel.Value fps = model.get(SessionSettingsModel.Key.FRAME_RATE);
         LinearLayout fpsCard = new LinearLayout(activity);
         fpsCard.setOrientation(LinearLayout.VERTICAL);
-        fpsCard.setPadding(dp(12), dp(12), dp(12), dp(12));
+        fpsCard.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
         fpsCard.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         LinearLayout fpsHeading = new LinearLayout(activity);
         fpsHeading.setOrientation(LinearLayout.HORIZONTAL);
         fpsHeading.setGravity(Gravity.CENTER_VERTICAL);
         TextView fpsTitle = controlText(activity.getString(R.string.title_fps_ceiling),
-                24f, Color.WHITE);
+                R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
         applyTitleIcon(fpsTitle, R.drawable.ic_xr_frame_rate);
         fpsHeading.addView(fpsTitle);
         fpsCard.addView(fpsHeading);
@@ -2391,11 +2423,12 @@ public class XrStreamPresenter {
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
         LinearLayout bitrateCard = new LinearLayout(activity);
         bitrateCard.setOrientation(LinearLayout.VERTICAL);
-        bitrateCard.setPadding(dp(12), dp(12), dp(12), dp(12));
+        bitrateCard.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
         bitrateCard.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
         TextView bitrateTitle = controlText(
-                activity.getString(R.string.title_bitrate_ceiling), 24f, Color.WHITE);
+                activity.getString(R.string.title_bitrate_ceiling),
+                R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
         bitrateTitle.setTypeface(bitrateTitle.getTypeface(),
                 android.graphics.Typeface.BOLD);
         applyTitleIcon(bitrateTitle, R.drawable.ic_xr_bitrate);
@@ -2416,26 +2449,28 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams bitrateParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        bitrateParams.topMargin = dp(8);
+        bitrateParams.topMargin = dimen(R.dimen.xr_space_sm);
         tuningColumn.addView(bitrateCard, bitrateParams);
         LinearLayout.LayoutParams tuningParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.35f);
-        tuningParams.leftMargin = dp(8);
+        tuningParams.leftMargin = dimen(R.dimen.xr_space_sm);
         qualityRow.addView(tuningColumn, tuningParams);
 
         root.addView(qualityRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        modeQualityCueView = controlText(modeQualityCue(model), 22f,
+        modeQualityCueView = controlText(modeQualityCue(model), R.dimen.xr_text_title,
                 model.requiresReconnect() ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_text_secondary));
-        modeQualityCueView.setPadding(dp(12), dp(8), dp(12), dp(8));
+        modeQualityCueView.setPadding(dimen(R.dimen.xr_space_md),
+                dimen(R.dimen.xr_space_sm), dimen(R.dimen.xr_space_md),
+                dimen(R.dimen.xr_space_sm));
         modeQualityCueView.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface), paletteColor(R.color.xr_border_panel), 1));
         LinearLayout.LayoutParams cueParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        cueParams.topMargin = dp(8);
+        cueParams.topMargin = dimen(R.dimen.xr_space_sm);
         root.addView(modeQualityCueView, cueParams);
     }
 
@@ -2443,7 +2478,7 @@ public class XrStreamPresenter {
         LinearLayout footer = new LinearLayout(activity);
         footer.setOrientation(LinearLayout.HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        footer.setPadding(0, dp(12), 0, 0);
+        footer.setPadding(0, dimen(R.dimen.xr_space_md), 0, 0);
 
         modeDefaultsButton = compactButton(
                 activity.getString(R.string.xr_session_use_session));
@@ -2460,7 +2495,7 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        applyParams.leftMargin = dp(12);
+        applyParams.leftMargin = dimen(R.dimen.xr_space_md);
         footer.addView(modeApplyButton, applyParams);
         root.addView(footer);
     }
@@ -2520,15 +2555,18 @@ public class XrStreamPresenter {
     private void addModeOptionsHeading(LinearLayout row, PresenterMode mode) {
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.VERTICAL);
-        heading.setPadding(0, 0, dp(18), 0);
+        heading.setPadding(0, 0, dimen(R.dimen.xr_space_lg), 0);
 
-        TextView title = controlText(modeLabel(mode), 30f, Color.WHITE);
+        TextView title = controlText(modeLabel(mode), R.dimen.xr_text_display,
+                paletteColor(R.color.xr_text_primary));
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         heading.addView(title);
 
         TextView active = controlText(activity.getString(mode == currentPresenterMode
                         ? R.string.xr_mode_active : R.string.xr_mode_options_title),
-                22f, mode == currentPresenterMode ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_text_secondary));
+                R.dimen.xr_text_title, mode == currentPresenterMode
+                        ? paletteColor(R.color.xr_status_ok)
+                        : paletteColor(R.color.xr_text_secondary));
         heading.addView(active);
         row.addView(heading, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1.25f));
@@ -2537,7 +2575,8 @@ public class XrStreamPresenter {
     private void addModeStatus(LinearLayout row, String label, String value) {
         LinearLayout status = labeledValue(label, value,
                 value.toLowerCase(Locale.US).contains("unavailable")
-                        ? paletteColor(R.color.xr_danger) : Color.WHITE);
+                        ? paletteColor(R.color.xr_danger)
+                        : paletteColor(R.color.xr_text_primary));
         row.addView(status, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 2.0f));
     }
@@ -2547,13 +2586,13 @@ public class XrStreamPresenter {
         LinearLayout modelColumn = new LinearLayout(activity);
         modelColumn.setOrientation(LinearLayout.VERTICAL);
         modelColumn.setGravity(Gravity.CENTER_VERTICAL);
-        modelColumn.setPadding(0, 0, dp(12), 0);
+        modelColumn.setPadding(0, 0, dimen(R.dimen.xr_space_md), 0);
         String source = model.source == SessionSettingsModel.Source.GLOBAL
                 ? activity.getString(R.string.xr_setting_source_global)
                 : activity.getString(R.string.xr_setting_source_session);
         clientModelSourceView = controlText(
                 activity.getString(R.string.xr_client_model) + " \u00b7 " + source,
-                22f, paletteColor(R.color.xr_text_secondary));
+                R.dimen.xr_text_title, paletteColor(R.color.xr_text_secondary));
         modelColumn.addView(clientModelSourceView);
 
         clientModelChoiceGroup = buildChoiceGroup(model.choices, model.selectedChoiceId,
@@ -2565,11 +2604,12 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dp(4);
+        choiceParams.topMargin = dimen(R.dimen.xr_space_xs);
         modelColumn.addView(clientModelChoiceGroup, choiceParams);
 
-        clientModelPendingView = controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
-        clientModelPendingView.setPadding(0, dp(4), 0, 0);
+        clientModelPendingView = controlText("", SESSION_META_TEXT_DIMEN,
+                paletteColor(R.color.xr_text_secondary));
+        clientModelPendingView.setPadding(0, dimen(R.dimen.xr_space_xs), 0, 0);
         modelColumn.addView(clientModelPendingView);
         updateClientModelPendingView(model);
         row.addView(modelColumn, new LinearLayout.LayoutParams(0,
@@ -2577,7 +2617,7 @@ public class XrStreamPresenter {
 
         LinearLayout aspect = labeledValue(
                 activity.getString(R.string.xr_client_aspect_bucket),
-                model.bucket, Color.WHITE);
+                model.bucket, paletteColor(R.color.xr_text_primary));
         clientAspectBucketView = (TextView) aspect.getChildAt(1);
         row.addView(aspect,
                 new LinearLayout.LayoutParams(0,
@@ -2596,7 +2636,8 @@ public class XrStreamPresenter {
         RawSbsModeSettingsModel model = rawSbsModeSettingsModel;
         LinearLayout card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        int cardPadding = dimen(R.dimen.xr_space_md);
+        card.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
         card.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
 
@@ -2605,12 +2646,13 @@ public class XrStreamPresenter {
         heading.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = controlText(
                 activity.getString(R.string.xr_raw_per_eye_resolution),
-                24f, Color.WHITE);
+                R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         heading.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
         rawSbsPerEyeResolutionSourceView = controlText(
-                rawSbsSourceText(model), SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
+                rawSbsSourceText(model), SESSION_META_TEXT_DIMEN,
+                paletteColor(R.color.xr_text_secondary));
         heading.addView(rawSbsPerEyeResolutionSourceView);
         card.addView(heading);
 
@@ -2622,24 +2664,27 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dp(8);
+        choiceParams.topMargin = dimen(R.dimen.xr_space_sm);
         card.addView(rawSbsPerEyeResolutionChoiceGroup, choiceParams);
 
         rawSbsGeometryView = controlText(
-                rawSbsGeometryText(model), 20f, paletteColor(R.color.xr_text_secondary));
-        rawSbsGeometryView.setPadding(0, dp(8), 0, 0);
+                rawSbsGeometryText(model), R.dimen.xr_text_emphasis,
+                paletteColor(R.color.xr_text_secondary));
+        rawSbsGeometryView.setPadding(0, dimen(R.dimen.xr_space_sm), 0, 0);
         card.addView(rawSbsGeometryView);
 
         rawSbsPerEyeResolutionPendingView =
-                controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_status_warn));
-        rawSbsPerEyeResolutionPendingView.setPadding(0, dp(4), 0, 0);
+                controlText("", SESSION_META_TEXT_DIMEN,
+                        paletteColor(R.color.xr_status_warn));
+        rawSbsPerEyeResolutionPendingView.setPadding(
+                0, dimen(R.dimen.xr_space_xs), 0, 0);
         card.addView(rawSbsPerEyeResolutionPendingView);
         updateRawSbsPendingView(model);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(12);
+        params.topMargin = dimen(R.dimen.xr_space_md);
         root.addView(card, params);
     }
 
@@ -2822,7 +2867,8 @@ public class XrStreamPresenter {
 
     private int clientRuntimeStatusColor(String status) {
         return status.toLowerCase(Locale.US).contains("unavailable")
-                ? paletteColor(R.color.xr_danger) : Color.WHITE;
+                ? paletteColor(R.color.xr_danger)
+                : paletteColor(R.color.xr_text_primary);
     }
 
     private boolean isClientOptionsOpen() {
@@ -2878,7 +2924,7 @@ public class XrStreamPresenter {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = controlText(activity.getString(R.string.xr_session_settings_title),
-                32f, paletteColor(R.color.xr_accent));
+                R.dimen.xr_text_display, paletteColor(R.color.xr_accent));
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         header.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
@@ -2892,13 +2938,15 @@ public class XrStreamPresenter {
             if (appName != null && !appName.isEmpty()) {
                 identity += " \u00b7 " + appName;
             }
-            root.addView(controlText(identity, 24f, Color.WHITE));
+            root.addView(controlText(identity, R.dimen.xr_text_title,
+                    paletteColor(R.color.xr_text_primary)));
         }
 
         TextView summary = controlText(
                 activity.getString(R.string.xr_session_settings_summary),
-                SESSION_SUMMARY_TEXT_SP, paletteColor(R.color.xr_text_secondary));
-        summary.setPadding(0, dp(8), 0, dp(12));
+                SESSION_SUMMARY_TEXT_DIMEN, paletteColor(R.color.xr_text_secondary));
+        summary.setPadding(0, dimen(R.dimen.xr_space_sm), 0,
+                dimen(R.dimen.xr_space_md));
         root.addView(summary);
 
         LinearLayout rows = new LinearLayout(activity);
@@ -2920,11 +2968,11 @@ public class XrStreamPresenter {
         }
         LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        videoParams.rightMargin = dp(8);
+        videoParams.rightMargin = dimen(R.dimen.xr_space_sm);
         rows.addView(videoColumn, videoParams);
         LinearLayout.LayoutParams deliveryParams = new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        deliveryParams.leftMargin = dp(8);
+        deliveryParams.leftMargin = dimen(R.dimen.xr_space_sm);
         rows.addView(deliveryColumn, deliveryParams);
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
@@ -2940,7 +2988,7 @@ public class XrStreamPresenter {
         LinearLayout footer = new LinearLayout(activity);
         footer.setOrientation(LinearLayout.HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        footer.setPadding(0, dp(12), 0, 0);
+        footer.setPadding(0, dimen(R.dimen.xr_space_md), 0, 0);
 
         sessionDefaultsButton = compactButton(
                 activity.getString(R.string.xr_session_use_global));
@@ -2957,7 +3005,7 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        applyParams.leftMargin = dp(12);
+        applyParams.leftMargin = dimen(R.dimen.xr_space_md);
         footer.addView(sessionApplyButton, applyParams);
         root.addView(footer);
         return root;
@@ -2966,10 +3014,11 @@ public class XrStreamPresenter {
     private LinearLayout sessionSettingsColumn(String label) {
         LinearLayout column = new LinearLayout(activity);
         column.setOrientation(LinearLayout.VERTICAL);
-        TextView heading = controlText(label, SESSION_GROUP_TEXT_SP,
+        TextView heading = controlText(label, SESSION_GROUP_TEXT_DIMEN,
                 paletteColor(R.color.xr_accent));
         heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
-        heading.setPadding(dp(4), 0, 0, dp(8));
+        heading.setPadding(dimen(R.dimen.xr_space_xs), 0, 0,
+                dimen(R.dimen.xr_space_sm));
         column.addView(heading);
         return column;
     }
@@ -2999,7 +3048,8 @@ public class XrStreamPresenter {
         }
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(18), dp(18), dp(18), dp(18));
+        int rowPadding = dimen(R.dimen.xr_space_lg);
+        row.setPadding(rowPadding, rowPadding, rowPadding, rowPadding);
         row.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
 
@@ -3007,7 +3057,7 @@ public class XrStreamPresenter {
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = controlText(sessionSettingLabel(key),
-                SESSION_ROW_TITLE_TEXT_SP, Color.WHITE);
+                SESSION_ROW_TITLE_TEXT_DIMEN, paletteColor(R.color.xr_text_primary));
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         applyTitleIcon(title, sessionSettingIconRes(key));
         heading.addView(title, new LinearLayout.LayoutParams(
@@ -3015,7 +3065,8 @@ public class XrStreamPresenter {
         String source = value.source == SessionSettingsModel.Source.GLOBAL
                 ? activity.getString(R.string.xr_setting_source_global)
                 : activity.getString(R.string.xr_setting_source_session);
-        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
+        TextView sourceView = controlText(source, SESSION_META_TEXT_DIMEN,
+                paletteColor(R.color.xr_text_secondary));
         sessionSourceViews.put(key, sourceView);
         heading.addView(sourceView);
         row.addView(heading);
@@ -3028,17 +3079,18 @@ public class XrStreamPresenter {
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dp(8);
+        choiceParams.topMargin = dimen(R.dimen.xr_space_sm);
         row.addView(choices, choiceParams);
 
-        TextView pending = controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
-        pending.setPadding(0, dp(4), 0, 0);
+        TextView pending = controlText("", SESSION_META_TEXT_DIMEN,
+                paletteColor(R.color.xr_text_secondary));
+        pending.setPadding(0, dimen(R.dimen.xr_space_xs), 0, 0);
         sessionPendingViews.put(key, pending);
         row.addView(pending);
         updateSessionPendingView(pending, value);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(12);
+        lp.bottomMargin = dimen(R.dimen.xr_space_md);
         row.setLayoutParams(lp);
         return row;
     }
@@ -3047,7 +3099,8 @@ public class XrStreamPresenter {
                                                SessionSettingsModel.Value value) {
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(18), dp(18), dp(18), dp(18));
+        int rowPadding = dimen(R.dimen.xr_space_lg);
+        row.setPadding(rowPadding, rowPadding, rowPadding, rowPadding);
         row.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
 
@@ -3055,7 +3108,7 @@ public class XrStreamPresenter {
         heading.setOrientation(LinearLayout.HORIZONTAL);
         heading.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = controlText(sessionSettingLabel(key),
-                SESSION_ROW_TITLE_TEXT_SP, Color.WHITE);
+                SESSION_ROW_TITLE_TEXT_DIMEN, paletteColor(R.color.xr_text_primary));
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
         applyTitleIcon(title, sessionSettingIconRes(key));
         heading.addView(title, new LinearLayout.LayoutParams(
@@ -3063,7 +3116,8 @@ public class XrStreamPresenter {
         String source = value.source == SessionSettingsModel.Source.GLOBAL
                 ? activity.getString(R.string.xr_setting_source_global)
                 : activity.getString(R.string.xr_setting_source_session);
-        TextView sourceView = controlText(source, SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
+        TextView sourceView = controlText(source, SESSION_META_TEXT_DIMEN,
+                paletteColor(R.color.xr_text_secondary));
         sessionSourceViews.put(key, sourceView);
         heading.addView(sourceView);
         row.addView(heading);
@@ -3071,8 +3125,9 @@ public class XrStreamPresenter {
         // Unlike the other rows in this pane, bitrate is stored per presentation mode.
         TextView scopeNote = controlText(
                 activity.getString(R.string.xr_session_bitrate_scope),
-                SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
-        scopeNote.setPadding(0, dp(4), 0, dp(4));
+                SESSION_META_TEXT_DIMEN, paletteColor(R.color.xr_text_secondary));
+        int compactSpacing = dimen(R.dimen.xr_space_xs);
+        scopeNote.setPadding(0, compactSpacing, 0, compactSpacing);
         row.addView(scopeNote);
 
         XrBitrateControl bitrateControl = new XrBitrateControl(activity);
@@ -3086,14 +3141,15 @@ public class XrStreamPresenter {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        TextView pending = controlText("", SESSION_META_TEXT_SP, paletteColor(R.color.xr_text_secondary));
-        pending.setPadding(0, dp(4), 0, 0);
+        TextView pending = controlText("", SESSION_META_TEXT_DIMEN,
+                paletteColor(R.color.xr_text_secondary));
+        pending.setPadding(0, compactSpacing, 0, 0);
         sessionPendingViews.put(key, pending);
         row.addView(pending);
         updateSessionPendingView(pending, value);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(12);
+        lp.bottomMargin = dimen(R.dimen.xr_space_md);
         row.setLayoutParams(lp);
         return row;
     }
@@ -3217,7 +3273,7 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken));
-        int padding = dp(24);
+        int padding = dimen(R.dimen.xr_space_xl);
         root.setPadding(padding, padding, padding, padding);
         return root;
     }
@@ -3225,17 +3281,18 @@ public class XrStreamPresenter {
     private LinearLayout labeledValue(String label, String value, int valueColor) {
         LinearLayout column = new LinearLayout(activity);
         column.setOrientation(LinearLayout.VERTICAL);
-        TextView labelView = controlText(label, 21f, paletteColor(R.color.xr_text_secondary));
-        TextView valueView = controlText(value, 26f, valueColor);
+        TextView labelView = controlText(label, R.dimen.xr_text_emphasis,
+                paletteColor(R.color.xr_text_secondary));
+        TextView valueView = controlText(value, R.dimen.xr_text_title, valueColor);
         column.addView(labelView);
         column.addView(valueView);
         return column;
     }
 
-    private TextView controlText(CharSequence text, float sp, int color) {
+    private TextView controlText(CharSequence text, int textSizeResource, int color) {
         TextView view = new TextView(activity);
         view.setText(text);
-        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        setTextSize(view, textSizeResource);
         view.setTextColor(color);
         return view;
     }
@@ -3244,7 +3301,7 @@ public class XrStreamPresenter {
         Button button = new Button(activity);
         styleControlButton(button);
         button.setText(text);
-        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
+        setTextSize(button, R.dimen.xr_text_title);
         button.setAllCaps(false);
         button.setMinHeight(activity.getResources()
                 .getDimensionPixelSize(R.dimen.xr_control_primary));
@@ -3255,7 +3312,7 @@ public class XrStreamPresenter {
     private void styleControlButton(Button button) {
         button.setBackgroundResource(R.drawable.xr_home_action_background);
         button.setBackgroundTintList(null);
-        button.setTextColor(Color.WHITE);
+        button.setTextColor(paletteColor(R.color.xr_text_primary));
         button.setFocusable(true);
     }
 
@@ -3361,7 +3418,7 @@ public class XrStreamPresenter {
         int size = activity.getResources().getDimensionPixelSize(R.dimen.xr_icon_inline);
         icon.setBounds(0, 0, size, size);
         title.setCompoundDrawablesRelative(icon, null, null, null);
-        title.setCompoundDrawablePadding(dp(8));
+        title.setCompoundDrawablePadding(dimen(R.dimen.xr_space_sm));
     }
 
     /** Icon shown beside a settings row title, or 0 where the row has no icon of its own. */
@@ -3436,19 +3493,19 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken, 0xE6));
-        int p = dp(12);
+        root.setBackgroundColor(paletteColor(R.color.xr_scrim_strong));
+        int p = dimen(R.dimen.xr_space_md);
         root.setPadding(p, p, p, p);
 
         ProgressBar spinner = new ProgressBar(activity);
         spinner.setIndeterminate(true);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(dp(28), dp(28));
-        sp.setMargins(0, 0, dp(12), 0);
+        sp.setMargins(0, 0, dimen(R.dimen.xr_space_md), 0);
         root.addView(spinner, sp);
 
         depthStatusText = new TextView(activity);
-        depthStatusText.setTextColor(Color.WHITE);
-        depthStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
+        depthStatusText.setTextColor(paletteColor(R.color.xr_text_primary));
+        setTextSize(depthStatusText, R.dimen.xr_text_title);
         root.addView(depthStatusText);
 
         depthStatusPanel = PanelEntity.create(
@@ -3466,13 +3523,13 @@ public class XrStreamPresenter {
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setGravity(Gravity.CENTER);
-        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken, 0xE6));
-        int padding = dp(12);
+        root.setBackgroundColor(paletteColor(R.color.xr_scrim_strong));
+        int padding = dimen(R.dimen.xr_space_md);
         root.setPadding(padding, padding, padding, padding);
 
         transientMessageText = new TextView(activity);
-        transientMessageText.setTextColor(Color.WHITE);
-        transientMessageText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
+        transientMessageText.setTextColor(paletteColor(R.color.xr_text_primary));
+        setTextSize(transientMessageText, R.dimen.xr_text_title);
         transientMessageText.setGravity(Gravity.CENTER);
         transientMessageText.setMaxLines(3);
         root.addView(transientMessageText, new LinearLayout.LayoutParams(
@@ -3559,6 +3616,113 @@ public class XrStreamPresenter {
         revealDockTemporarily();
     }
 
+    /** Main-thread delivery of an already-parsed immutable host telemetry body. */
+    public void onHostSbsTelemetryState(
+            HostSbsTelemetrySnapshot snapshot, long receivedAtMs) {
+        if (!hostSbsTelemetryTracker.accept(snapshot, receivedAtMs)) {
+            LimeLog.info("XR: dropping stale or unowned host SBS telemetry"
+                    + (snapshot != null ? " request=" + snapshot.requestId
+                    + " generation=" + snapshot.generation
+                    + " sequence=" + snapshot.sequence : ""));
+        }
+    }
+
+    private int nextHostSbsTelemetryRequestId() {
+        hostSbsTelemetryRequestCounter =
+                (hostSbsTelemetryRequestCounter % 0xFFFF) + 1;
+        return hostSbsTelemetryRequestCounter;
+    }
+
+    /**
+     * Owns the host subscription strictly while Host SBS AI is the active, proven stream mode.
+     * Opening Stats changes the host publication cadence. Each distinct publication advances chart
+     * history on delivery; the slower stats refresh only repaints the accumulated history.
+     */
+    private void reconcileHostSbsTelemetrySubscription() {
+        boolean enable = streamPresentationReady
+                && currentPresenterMode == PresenterMode.HOST_SBS_AI;
+        boolean focused = enable && statsVisible;
+        if (enable == hostSbsTelemetryRequested
+                && (!enable || focused == hostSbsTelemetryFocused)) {
+            return;
+        }
+
+        cancelHostSbsTelemetryRetry(true);
+        if (!enable) {
+            if (hostSbsTelemetryRequested) {
+                MoonBridge.sendHostSbsTelemetrySubscription(
+                        false, false, nextHostSbsTelemetryRequestId(),
+                        HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS);
+            }
+            hostSbsTelemetryRequested = false;
+            hostSbsTelemetryFocused = false;
+            hostSbsTelemetryTracker.deactivate();
+            return;
+        }
+
+        hostSbsTelemetryRequested = true;
+        hostSbsTelemetryFocused = focused;
+        sendHostSbsTelemetrySubscriptionAttempt();
+    }
+
+    private void sendHostSbsTelemetrySubscriptionAttempt() {
+        int requestId = nextHostSbsTelemetryRequestId();
+        hostSbsTelemetryTracker.activateRequest(requestId);
+        int intervalMs = hostSbsTelemetryFocused
+                ? HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS
+                : HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS;
+        int result = MoonBridge.sendHostSbsTelemetrySubscription(
+                true, hostSbsTelemetryFocused, requestId, intervalMs);
+        if (result < 0) {
+            cancelHostSbsTelemetryRetry(false);
+            hostSbsTelemetryTracker.markSubscriptionUnavailable(
+                    requestId, SbsDepthTelemetrySnapshot.Availability.UNSUPPORTED);
+            LimeLog.info("XR: host SBS telemetry is unsupported by this host");
+        } else if (result == 0) {
+            hostSbsTelemetryTracker.markSubscriptionUnavailable(
+                    requestId, SbsDepthTelemetrySnapshot.Availability.FAILED);
+            LimeLog.warning("XR: host SBS telemetry subscription could not be queued");
+            scheduleHostSbsTelemetryRetry();
+        } else {
+            cancelHostSbsTelemetryRetry(true);
+            LimeLog.info("XR: host SBS telemetry subscribed at " + intervalMs
+                    + " ms (request " + requestId + ")");
+        }
+    }
+
+    private void scheduleHostSbsTelemetryRetry() {
+        if (hostSbsTelemetryRetryPending
+                || hostSbsTelemetryRetryAttempts >= HOST_SBS_TELEMETRY_MAX_RETRIES) {
+            if (hostSbsTelemetryRetryAttempts >= HOST_SBS_TELEMETRY_MAX_RETRIES) {
+                LimeLog.warning("XR: host SBS telemetry subscription retry limit reached");
+            }
+            return;
+        }
+        hostSbsTelemetryRetryPending = true;
+        hostSbsTelemetryRetryHandler.postDelayed(
+                hostSbsTelemetryRetryRunnable, HOST_SBS_TELEMETRY_RETRY_DELAY_MS);
+    }
+
+    private void cancelHostSbsTelemetryRetry(boolean resetAttempts) {
+        hostSbsTelemetryRetryHandler.removeCallbacks(hostSbsTelemetryRetryRunnable);
+        hostSbsTelemetryRetryPending = false;
+        if (resetAttempts) {
+            hostSbsTelemetryRetryAttempts = 0;
+        }
+    }
+
+    private void stopHostSbsTelemetrySubscription() {
+        cancelHostSbsTelemetryRetry(true);
+        if (hostSbsTelemetryRequested) {
+            MoonBridge.sendHostSbsTelemetrySubscription(
+                    false, false, nextHostSbsTelemetryRequestId(),
+                    HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS);
+        }
+        hostSbsTelemetryRequested = false;
+        hostSbsTelemetryFocused = false;
+        hostSbsTelemetryTracker.deactivate();
+    }
+
     public boolean isStatsVisible() {
         return statsVisible;
     }
@@ -3581,6 +3745,18 @@ public class XrStreamPresenter {
         final boolean panelVisible = statsVisible && statsTable != null;
         final boolean clientSbsStatsActive = currentPresenterMode == PresenterMode.CLIENT_SBS_AI
                 && clientSbs != null && clientSbs.active;
+        final SbsDepthTelemetrySnapshot depthTelemetry;
+        if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI && clientSbsStatsActive) {
+            // Client SBS remains authoritative from its local GPU readback.
+            depthTelemetry = clientSbs.depthTelemetry;
+        } else if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
+            // Host histories already include every distinct accepted publication. This slower
+            // stats tick only takes a coherent view for table/layout work.
+            depthTelemetry = hostSbsTelemetryTracker.sampleAtStatsTick(
+                    android.os.SystemClock.uptimeMillis());
+        } else {
+            depthTelemetry = null;
+        }
         final boolean clientSbsLoggingActive = prefConfig.enablePerfLogging
                 && clientSbsStatsActive && clientSbs.backend.startsWith("LITERT_");
         if (!panelVisible && !prefConfig.enablePerfLogging) {
@@ -3835,25 +4011,19 @@ public class XrStreamPresenter {
                                 clientSbs.maxDepthResultAgeMs),
                         paletteColor(R.color.xr_text_primary));
 
-                if (clientSbs.gpuTimersAvailable) {
-                    addStatsRow("Model input GL GPU",
-                            formatGpuStage(clientSbs.averageGpuModelInputMs,
-                                    clientSbs.gpuModelInputSamples,
-                                    "resize + pack + color cut"),
-                            gpuStageColor(clientSbs.gpuModelInputSamples));
-                    addStatsRow("Matched color GL GPU",
-                            formatGpuStage(clientSbs.averageGpuMatchedColorMs,
-                                    clientSbs.gpuMatchedColorSamples, "full-size capture"),
-                            gpuStageColor(clientSbs.gpuMatchedColorSamples));
-                    addStatsRow("Stereo render GL GPU",
-                            formatGpuStage(clientSbs.averageGpuSbsComposeMs,
-                                    clientSbs.gpuSbsComposeSamples,
-                                    "prefilter + warp + draw"),
-                            gpuStageColor(clientSbs.gpuSbsComposeSamples));
-                } else {
-                    addStatsRow("Client GL GPU stages", "Timer queries unavailable",
-                            paletteColor(R.color.xr_text_disabled));
-                }
+                addClientGpuStageRows(clientSbs.gpuTimersAvailable,
+                        new float[] {
+                                clientSbs.averageGpuModelInputMs,
+                                clientSbs.averageGpuMatchedColorMs,
+                                clientSbs.averageGpuDepthProfileMs,
+                                clientSbs.averageGpuSbsComposeMs
+                        },
+                        new long[] {
+                                clientSbs.gpuModelInputSamples,
+                                clientSbs.gpuMatchedColorSamples,
+                                clientSbs.gpuDepthProfileSamples,
+                                clientSbs.gpuSbsComposeSamples
+                        });
 
                 long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs;
                 if (faults > 0L) {
@@ -3864,80 +4034,209 @@ public class XrStreamPresenter {
                             paletteColor(R.color.xr_status_warn));
                 }
 
-                if (clientSbs.depthHealthAvailable) {
-                    addTrendStatsRow("Pop strength",
-                            String.format(Locale.US,
-                                    "valid %.1f%% | range %.4f | pop %s"
-                                            + " | subject %.3f | collapsed %s",
-                                    clientSbs.validDepthFraction * 100.0f,
-                                    clientSbs.effectiveDepthRangeWidth,
-                                    // Without this a pop of 1.20 reads as a decision when it may
-                                    // simply be the value before any profile exists.
-                                    clientSbs.stereoProfileInitialized
-                                            ? String.format(Locale.US, "%.3f",
-                                                    clientSbs.stereoPopStrength)
-                                            : "no profile",
-                                    clientSbs.depthSubjectDepth,
-                                    clientSbs.rawDepthRangeCollapsed ? "yes" : "no"),
-                            clientSbs.rawDepthRangeCollapsed
-                                    ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_status_ok),
-                            // Fixed to the configured band: an autoscaled pop plot turns 1.20 into
-                            // a dramatic trough when it is simply the floor.
-                            clientSbs.popTrend, false,
-                            ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR,
-                            ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING);
-                    addTrendStatsRow("Edge fraction",
-                            clientSbs.adaptivePopClassified
-                                    ? String.format(Locale.US, "%.4f",
-                                            clientSbs.depthEdgeFraction)
-                                    : "unsettled",
-                            clientSbs.adaptivePopClassified
-                                    ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled),
-                            clientSbs.edgeTrend, false, Float.NaN, Float.NaN);
-                    addTrendStatsRow("Changed-depth fraction",
-                            String.format(Locale.US, "%.4f",
-                                    clientSbs.depthChangeFraction),
-                            paletteColor(R.color.xr_text_primary),
-                            clientSbs.changeTrend, false, 0.0f, 1.0f);
-                    // Keep the cut and zero-plane rows adjacent. A rising cut count during
-                    // ordinary motion is retriggering; a simultaneous anchor jump proves that the
-                    // convergence plane was relatched rather than merely reclassified.
-                    addTrendStatsRow("Scene cuts",
-                            formatSceneCutStatus(
-                                    clientSbs.depthHardCutCount,
-                                    clientSbs.depthSceneAge,
-                                    clientSbs.depthCutArmed,
-                                    clientSbs.depthExternalCutRequests),
-                            paletteColor(R.color.xr_text_secondary),
-                            // Deltas: one cut is one spike whenever it happened.
-                            clientSbs.cutTrend, true, Float.NaN, Float.NaN);
-                    if (clientSbs.depthEmptyRawFrames > 0L
-                            || clientSbs.depthCollapsedRawFrames > 0L) {
-                        // Only rendered once non-zero: a permanent "0 | 0" row is noise, while a
-                        // climbing count is an estimator failing in a way no live value shows.
-                        addStatsRow("Depth faults",
-                                String.format(Locale.US, "empty %d | collapsed %d",
-                                        clientSbs.depthEmptyRawFrames,
-                                        clientSbs.depthCollapsedRawFrames),
-                                paletteColor(R.color.xr_status_warn));
-                    }
-                    addTrendStatsRow("Zero-plane anchor shift",
-                            String.format(Locale.US, "%.1f px",
-                                    clientSbs.depthZeroAnchorShift),
-                            paletteColor(R.color.xr_text_secondary),
-                            clientSbs.anchorTrend, false, Float.NaN, Float.NaN);
-                } else {
-                    addStatsRow("Depth health",
-                            formatDepthHealthUnavailable(
-                                    clientSbs.depthHealthReadbackFailed),
-                            clientSbs.depthHealthReadbackFailed
-                                    ? paletteColor(R.color.xr_status_warn)
-                                    : paletteColor(R.color.xr_text_disabled));
-                }
+                addDepthTelemetryRows(depthTelemetry, false);
+            }
+        }
+
+        if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
+            addStatsSection("HOST SBS");
+            addStatsRow("Depth telemetry",
+                    formatHostSbsTelemetryStatus(depthTelemetry),
+                    depthTelemetry != null && depthTelemetry.isAvailable()
+                            ? paletteColor(R.color.xr_status_ok)
+                            : telemetryUnavailableColor(depthTelemetry));
+            if (depthTelemetry != null && depthTelemetry.isAvailable()) {
+                addDepthTelemetryRows(depthTelemetry, true);
             }
         }
 
         finishStatsRows();
+    }
+
+    private static final String[] CLIENT_GPU_STAGE_LABELS = {
+            "Model input GL GPU",
+            "Matched color GL GPU",
+            "Depth profile GL GPU",
+            "Stereo render GL GPU"
+    };
+    private static final String[] CLIENT_GPU_STAGE_DETAILS = {
+            "resize + pack + color cut",
+            "full-size capture",
+            "filter + adaptive profile",
+            "prefilter + warp + draw"
+    };
+
+    /**
+     * Render all GPU stages from parallel, fixed-order arrays. Keeping this boundary independently
+     * testable prevents a newly instrumented stage from being logged but omitted from the panel.
+     */
+    private void addClientGpuStageRows(boolean timersAvailable,
+                                       float[] averageMs, long[] samples) {
+        if (!timersAvailable) {
+            addStatsRow("Client GL GPU stages", "Timer queries unavailable",
+                    paletteColor(R.color.xr_text_disabled));
+            return;
+        }
+        if (averageMs == null || samples == null
+                || averageMs.length != CLIENT_GPU_STAGE_LABELS.length
+                || samples.length != CLIENT_GPU_STAGE_LABELS.length) {
+            throw new IllegalArgumentException("Client GPU stage telemetry is incomplete");
+        }
+        for (int i = 0; i < CLIENT_GPU_STAGE_LABELS.length; i++) {
+            addStatsRow(CLIENT_GPU_STAGE_LABELS[i],
+                    formatGpuStage(averageMs[i], samples[i], CLIENT_GPU_STAGE_DETAILS[i]),
+                    gpuStageColor(samples[i]));
+        }
+    }
+
+    private void addDepthTelemetryRows(
+            SbsDepthTelemetrySnapshot telemetry, boolean hostSource) {
+        if (telemetry == null || !telemetry.isAvailable()) {
+            String status;
+            if (telemetry == null
+                    || telemetry.availability == SbsDepthTelemetrySnapshot.Availability.WAITING) {
+                status = formatDepthHealthUnavailable(false);
+            } else if (telemetry.availability
+                    == SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED) {
+                status = formatDepthHealthUnavailable(true);
+            } else {
+                status = telemetry.availability.description;
+            }
+            addStatsRow("Depth health", status, telemetryUnavailableColor(telemetry));
+            return;
+        }
+
+        String valid = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION)
+                ? String.format(Locale.US, "%.1f%%", telemetry.validDepthFraction * 100.0f)
+                : "n/a";
+        String range = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_RANGE)
+                ? String.format(Locale.US, "%.4f", telemetry.effectiveRangeWidth)
+                : "n/a";
+        String pop;
+        if (!telemetry.isInitialized()) {
+            pop = "no profile";
+        } else if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_EFFECTIVE)
+                && Float.isFinite(telemetry.effectivePop)) {
+            // effectivePop is absolute for both sources. Host values must not be normalized again.
+            pop = String.format(Locale.US, "%.3f", telemetry.effectivePop);
+        } else {
+            pop = "n/a";
+        }
+        String subject = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_SUBJECT)
+                ? String.format(Locale.US, "%.3f", telemetry.subjectDepth)
+                : "n/a";
+        float popFloor = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)
+                && Float.isFinite(telemetry.popFloor) ? telemetry.popFloor : Float.NaN;
+        float popCeiling = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)
+                && Float.isFinite(telemetry.popCeiling) ? telemetry.popCeiling : Float.NaN;
+        addTrendStatsRow("Pop strength",
+                "valid " + valid + " | range " + range + " | pop " + pop
+                        + " | subject " + subject + " | collapsed "
+                        + (telemetry.isRangeCollapsed() ? "yes" : "no"),
+                telemetry.isRangeCollapsed()
+                        ? paletteColor(R.color.xr_status_warn)
+                        : paletteColor(R.color.xr_status_ok),
+                telemetry.popTrend, false, popFloor, popCeiling);
+
+        boolean classified = telemetry.isAdaptivePopClassified();
+        addTrendStatsRow("Edge fraction",
+                classified
+                        ? String.format(Locale.US, "%.4f",
+                                telemetry.classifiedEdgeFraction)
+                        : "unsettled",
+                classified
+                        ? paletteColor(R.color.xr_text_primary)
+                        : paletteColor(R.color.xr_text_disabled),
+                telemetry.edgeTrend, false, Float.NaN, Float.NaN);
+
+        addTrendStatsRow("Changed-depth fraction",
+                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)
+                        ? String.format(Locale.US, "%.4f", telemetry.changeFraction)
+                        : "n/a",
+                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)
+                        ? paletteColor(R.color.xr_text_primary)
+                        : paletteColor(R.color.xr_text_disabled),
+                telemetry.changeTrend, false, 0.0f, 1.0f);
+
+        String cutStatus = "n/a";
+        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CUTS)
+                && telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_SCENE)) {
+            int sceneAge = (int)Math.min(Integer.MAX_VALUE, telemetry.sceneAge);
+            cutStatus = hostSource
+                    ? formatHostSceneCutStatus(
+                            telemetry.hardCutCount, sceneAge,
+                            telemetry.isGeometryArmed(), telemetry.isAppearanceArmed(),
+                            telemetry.externalCutRequests)
+                    : formatSceneCutStatus(
+                            telemetry.hardCutCount, sceneAge,
+                            // Client currently reports one local geometry-armed bit explicitly.
+                            telemetry.isGeometryArmed(),
+                            telemetry.externalCutRequests);
+        }
+        addTrendStatsRow("Scene cuts", cutStatus,
+                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CUTS)
+                        ? paletteColor(R.color.xr_text_secondary)
+                        : paletteColor(R.color.xr_text_disabled),
+                telemetry.cutTrend, true, Float.NaN, Float.NaN);
+
+        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_FAULTS)
+                && (telemetry.emptyDepthFrames > 0L
+                || telemetry.collapsedDepthFrames > 0L)) {
+            addStatsRow("Depth faults",
+                    String.format(Locale.US, "empty %d | collapsed %d",
+                            telemetry.emptyDepthFrames,
+                            telemetry.collapsedDepthFrames),
+                    paletteColor(R.color.xr_status_warn));
+        }
+
+        addTrendStatsRow("Zero-plane anchor shift",
+                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_ANCHOR)
+                        ? String.format(Locale.US, "%.1f px",
+                                telemetry.zeroAnchorShiftPx)
+                        : "n/a",
+                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_ANCHOR)
+                        ? paletteColor(R.color.xr_text_secondary)
+                        : paletteColor(R.color.xr_text_disabled),
+                telemetry.anchorTrend, false, Float.NaN, Float.NaN);
+    }
+
+    static String formatHostSbsTelemetryStatus(SbsDepthTelemetrySnapshot telemetry) {
+        if (telemetry == null) {
+            return "Inactive";
+        }
+        if (!telemetry.isAvailable()) {
+            return telemetry.availability.description;
+        }
+        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)) {
+            return String.format(Locale.US, "Live | %dx%d | %s zero plane",
+                    telemetry.depthWidth, telemetry.depthHeight,
+                    zeroPlaneModeName(telemetry.zeroPlaneMode));
+        }
+        return "Live | configuration unavailable";
+    }
+
+    static String zeroPlaneModeName(int mode) {
+        switch (mode) {
+            case 1:
+                return "subject";
+            case 2:
+                return "median";
+            case 3:
+                return "background";
+            default:
+                return "unknown";
+        }
+    }
+
+    private int telemetryUnavailableColor(SbsDepthTelemetrySnapshot telemetry) {
+        if (telemetry != null
+                && (telemetry.availability == SbsDepthTelemetrySnapshot.Availability.FAILED
+                || telemetry.availability == SbsDepthTelemetrySnapshot.Availability.STALE
+                || telemetry.availability
+                        == SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED)) {
+            return paletteColor(R.color.xr_status_warn);
+        }
+        return paletteColor(R.color.xr_text_disabled);
     }
 
     private static String presenterModeName(PresenterMode mode) {
@@ -3959,6 +4258,19 @@ public class XrStreamPresenter {
         return String.format(Locale.US,
                 "%d total | scene age %d frames | geometry %s | external requests %d",
                 totalCuts, sceneAgeFrames, cutArmed ? "armed" : "disarmed",
+                externalCutRequests);
+    }
+
+    static String formatHostSceneCutStatus(
+            long totalCuts, int sceneAgeFrames,
+            boolean geometryArmed, boolean appearanceArmed,
+            long externalCutRequests) {
+        return String.format(Locale.US,
+                "%d total | scene age %d frames | geometry %s | appearance %s"
+                        + " | external requests %d",
+                totalCuts, sceneAgeFrames,
+                geometryArmed ? "armed" : "disarmed",
+                appearanceArmed ? "armed" : "disarmed",
                 externalCutRequests);
     }
 
@@ -4185,8 +4497,7 @@ public class XrStreamPresenter {
         if (section) {
             TextView heading = new TextView(activity);
             heading.setTextColor(paletteColor(R.color.xr_accent));
-            heading.setTextSize(TypedValue.COMPLEX_UNIT_SP,
-                    (STATS_TEXT_SP + 1f) * STATS_CONTENT_SCALE);
+            setScaledTextSize(heading, STATS_TEXT_DIMEN, STATS_CONTENT_SCALE);
             heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
             heading.setPadding(0, statsDp(10), 0, statsDp(4));
             TableRow.LayoutParams params = new TableRow.LayoutParams();
@@ -4198,12 +4509,12 @@ public class XrStreamPresenter {
 
         TextView label = new TextView(activity);
         label.setTextColor(paletteColor(R.color.xr_text_secondary));
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP * STATS_CONTENT_SCALE);
+        setScaledTextSize(label, STATS_TEXT_DIMEN, STATS_CONTENT_SCALE);
         label.setLineSpacing(0f, 1.08f);
         label.setPadding(0, statsDp(3), statsDp(18), statsDp(3));
 
         TextView value = new TextView(activity);
-        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, STATS_TEXT_SP * STATS_CONTENT_SCALE);
+        setScaledTextSize(value, STATS_TEXT_DIMEN, STATS_CONTENT_SCALE);
         value.setLineSpacing(0f, 1.08f);
         value.setPadding(0, statsDp(3), 0, statsDp(3));
 
@@ -4319,7 +4630,10 @@ public class XrStreamPresenter {
         spark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         spark.setColors(valueColor, paletteColor(R.color.xr_border_panel));
         spark.setRange(rangeMin, rangeMax);
-        spark.setValues(plotted, count);
+        spark.setValues(plotted, count,
+                asDeltas
+                        ? ClientSbsMetricHistory.CAPACITY - 1
+                        : ClientSbsMetricHistory.CAPACITY);
     }
 
     private void addStatsRow(String label, String value, int valueColor) {
@@ -4336,13 +4650,13 @@ public class XrStreamPresenter {
         View d = new View(activity);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 dp(2), LinearLayout.LayoutParams.MATCH_PARENT);
-        int vm = dp(12);
+        int vm = dimen(R.dimen.xr_space_md);
         lp.topMargin = vm;
         lp.bottomMargin = vm;
-        lp.leftMargin = dp(4);
-        lp.rightMargin = dp(4);
+        lp.leftMargin = dimen(R.dimen.xr_space_xs);
+        lp.rightMargin = dimen(R.dimen.xr_space_xs);
         d.setLayoutParams(lp);
-        d.setBackgroundColor(paletteColor(R.color.xr_text_primary, 0x55));
+        d.setBackgroundColor(paletteColor(R.color.xr_border));
         return d;
     }
 
@@ -4451,7 +4765,8 @@ public class XrStreamPresenter {
         modeOptionsContentRoot.measure(
                 View.MeasureSpec.makeMeasureSpec(hostWidth, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int contentHeightPx = modeOptionsContentRoot.getMeasuredHeight() + dp(4);
+        int contentHeightPx = modeOptionsContentRoot.getMeasuredHeight()
+                + dimen(R.dimen.xr_space_xs);
         float targetHeightMeters = calculateModeOptionsHeightMeters(
                 modeOptionsHeightMeters, hostHeight, contentHeightPx,
                 MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
@@ -4661,6 +4976,7 @@ public class XrStreamPresenter {
         }
 
         streamPresentationReady = true;
+        reconcileHostSbsTelemetrySubscription();
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
                 item.setEnabled(true);
@@ -5872,6 +6188,7 @@ public class XrStreamPresenter {
         }
 
         currentPresenterMode = nextMode;
+        reconcileHostSbsTelemetrySubscription();
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         applyContentColorMetadata();
         LimeLog.info("XR: stereo mode -> " + item.label);
@@ -6420,8 +6737,9 @@ public class XrStreamPresenter {
         col.setFocusable(true);
         col.setFocusableInTouchMode(false);
         col.setContentDescription(item.label);
-        int pad = dp(4);
-        col.setPadding(pad, pad, pad, item.selectsMode != null ? dp(24) : pad);
+        int pad = dimen(R.dimen.xr_space_xs);
+        col.setPadding(pad, pad, pad,
+                item.selectsMode != null ? dimen(R.dimen.xr_space_xl) : pad);
         col.setOnClickListener(v -> {
             revealDockTemporarily();
             if (item.onTap != null) {
@@ -6440,9 +6758,9 @@ public class XrStreamPresenter {
         if (item.selectsMode != null) {
             XrModeChevronView chevron = new XrModeChevronView(activity);
             FrameLayout.LayoutParams chevronParams = new FrameLayout.LayoutParams(
-                    dp(40), dp(18),
+                    dimen(R.dimen.xr_control_compact), dimen(R.dimen.xr_space_lg),
                     Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            chevronParams.bottomMargin = dp(4);
+            chevronParams.bottomMargin = dimen(R.dimen.xr_space_xs);
             root.addView(chevron, chevronParams);
             item.optionsIndicator = chevron;
         }
@@ -6473,13 +6791,13 @@ public class XrStreamPresenter {
 
         TextView text = new TextView(activity);
         text.setText(item.label);
-        text.setTextColor(Color.WHITE);
-        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f);
+        text.setTextColor(paletteColor(R.color.xr_text_primary));
+        setTextSize(text, R.dimen.xr_text_title);
         text.setGravity(Gravity.CENTER);
         text.setSingleLine(true);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        tp.topMargin = dp(4);
+        tp.topMargin = dimen(R.dimen.xr_space_xs);
         text.setLayoutParams(tp);
         col.addView(text);
 
@@ -6489,8 +6807,27 @@ public class XrStreamPresenter {
         return Math.round(v * activity.getResources().getDisplayMetrics().density);
     }
 
+    private int dimen(int resourceId) {
+        return activity.getResources().getDimensionPixelSize(resourceId);
+    }
+
     private int statsDp(float v) {
         return dp(v * STATS_CONTENT_SCALE);
+    }
+
+    private int statsDimen(int resourceId) {
+        return Math.round(activity.getResources().getDimension(resourceId)
+                * STATS_CONTENT_SCALE);
+    }
+
+    private void setTextSize(TextView view, int textSizeResource) {
+        view.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                activity.getResources().getDimension(textSizeResource));
+    }
+
+    private void setScaledTextSize(TextView view, int textSizeResource, float scale) {
+        view.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                activity.getResources().getDimension(textSizeResource) * scale);
     }
 
     private android.graphics.drawable.GradientDrawable controlSurfaceBackground(
@@ -6499,7 +6836,8 @@ public class XrStreamPresenter {
                 new android.graphics.drawable.GradientDrawable();
         background.setColor(fillColor);
         background.setStroke(dp(strokeWidthDp), strokeColor);
-        background.setCornerRadius(dp(14));
+        background.setCornerRadius(
+                activity.getResources().getDimension(R.dimen.xr_radius_card));
         return background;
     }
 
@@ -6804,6 +7142,7 @@ public class XrStreamPresenter {
      * {@code StreamContainer.onDestroy()} ordering.
      */
     public void onDestroy() {
+        stopHostSbsTelemetrySubscription();
         modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
         dockVisibilityHandler.removeCallbacks(collapseDockRunnable);
         cancelLiveQualityAckTimeout();

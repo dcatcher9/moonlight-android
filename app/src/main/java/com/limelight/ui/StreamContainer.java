@@ -156,6 +156,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private int mClientSbsPostAckResizeGeneration;
     private int mClientSbsPostAckResizeWidth;
     private int mClientSbsPostAckResizeHeight;
+    /** Uptime boundary for the one bounded cold-backend exception to the packed-swap watchdog. */
+    private long mClientSbsPostAckResizeStartedMs;
+    private boolean mClientSbsColdBackendWaitLogged;
     private ClientSbsResizePolicy.Stage mClientSbsResizeStage =
             ClientSbsResizePolicy.Stage.IDLE;
     private SurfaceSwitchCallback mPendingClientSbsHdrSwitch;
@@ -954,9 +957,19 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             return;
         }
 
+        boolean newPostAckBoundary =
+                matchedGeneration != mClientSbsPostAckResizeGeneration
+                        || !ClientSbsResizePolicy.sameGeometry(
+                                width, height,
+                                mClientSbsPostAckResizeWidth,
+                                mClientSbsPostAckResizeHeight);
         mClientSbsPostAckResizeGeneration = matchedGeneration;
         mClientSbsPostAckResizeWidth = width;
         mClientSbsPostAckResizeHeight = height;
+        if (newPostAckBoundary) {
+            mClientSbsPostAckResizeStartedMs = android.os.SystemClock.uptimeMillis();
+            mClientSbsColdBackendWaitLogged = false;
+        }
         if (ClientSbsResizePolicy.shouldRequestPostAckProofDraw(
                 mClientSbsResizeStage, matchedGeneration,
                 mPendingClientSbsResizeGeneration)) {
@@ -983,6 +996,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mClientSbsPostAckResizeGeneration = 0;
         mClientSbsPostAckResizeWidth = 0;
         mClientSbsPostAckResizeHeight = 0;
+        mClientSbsPostAckResizeStartedMs = 0L;
+        mClientSbsColdBackendWaitLogged = false;
     }
 
     private void armClientSbsResizeTimeoutForActiveStage() {
@@ -997,6 +1012,18 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         boolean postAckDecoderOutputReady = hasClientSbsPostAckBoundaryForActiveResize();
         long timeoutMillis = ClientSbsResizePolicy.timeoutMillis(
                 stage, postAckDecoderOutputReady);
+        if (postAckDecoderOutputReady && mStereoRenderer != null
+                && mStereoRenderer.isClientSbsBackendInitializing()) {
+            long elapsedMillis = Math.max(0L,
+                    android.os.SystemClock.uptimeMillis()
+                            - mClientSbsPostAckResizeStartedMs);
+            long coldPollMillis =
+                    ClientSbsResizePolicy.boundedColdBackendPollMillis(elapsedMillis);
+            // At the deadline, post an immediate final check rather than falling back to another
+            // full proof quantum. A duplicate decoder notification therefore cannot extend the
+            // absolute cold-start ceiling.
+            timeoutMillis = Math.max(1L, coldPollMillis);
+        }
         if (timeoutMillis <= 0L) {
             return;
         }
@@ -1007,11 +1034,35 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             if (generation == mPendingClientSbsResizeGeneration
                     && mPendingClientSbsResize != null
                     && stage == mClientSbsResizeStage) {
+                boolean backendInitializing = mStereoRenderer != null
+                        && mStereoRenderer.isClientSbsBackendInitializing();
+                long postAckElapsedMillis = mClientSbsPostAckResizeStartedMs > 0L
+                        ? Math.max(0L, android.os.SystemClock.uptimeMillis()
+                                - mClientSbsPostAckResizeStartedMs)
+                        : -1L;
+                if (ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                        stage, postAckDecoderOutputReady,
+                        backendInitializing, postAckElapsedMillis)) {
+                    if (!mClientSbsColdBackendWaitLogged) {
+                        mClientSbsColdBackendWaitLogged = true;
+                        LimeLog.info("Client SBS host/decoder geometry is confirmed at "
+                                + width + "x" + height
+                                + "; extending packed-presentation proof while the cold AI "
+                                + "backend initializes (bounded to "
+                                + ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS + " ms)");
+                    }
+                    // Re-arming increments the token, so teardown, superseding geometry, or a
+                    // completed proof invalidates this callback before it can fire again.
+                    armClientSbsResizeTimeoutForActiveStage();
+                    return;
+                }
                 String boundary;
                 if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
                     boundary = "EGL detachment";
                 } else if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH) {
                     boundary = "exact EGL attachment";
+                } else if (postAckDecoderOutputReady && backendInitializing) {
+                    boundary = "bounded cold AI initialization and post-ack packed presentation";
                 } else if (postAckDecoderOutputReady) {
                     boundary = "post-ack packed presentation";
                 } else {

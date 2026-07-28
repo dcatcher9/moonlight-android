@@ -63,15 +63,15 @@
         <androidx.appcompat.widget.AppCompatButton
             android:id="@+id/xr_seekbar_decrease"
             style="@style/XrStepButton"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="@dimen/xr_control_standard"
+            android:layout_height="@dimen/xr_control_standard"
             android:contentDescription="@string/xr_setting_decrease"
             android:text="@string/xr_setting_minus" />
 
         <SeekBar
             android:id="@+id/xr_seekbar"
             android:layout_width="0dp"
-            android:layout_height="56dp"
+            android:layout_height="@dimen/xr_control_standard"
             android:layout_marginStart="@dimen/xr_space_md"
             android:layout_marginEnd="@dimen/xr_space_md"
             android:layout_weight="1"
@@ -84,8 +84,8 @@
         <androidx.appcompat.widget.AppCompatButton
             android:id="@+id/xr_seekbar_increase"
             style="@style/XrStepButton"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="@dimen/xr_control_standard"
+            android:layout_height="@dimen/xr_control_standard"
             android:contentDescription="@string/xr_setting_increase"
             android:text="@string/xr_setting_plus" />
     </LinearLayout>

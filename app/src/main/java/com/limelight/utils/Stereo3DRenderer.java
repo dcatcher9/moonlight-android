@@ -20,7 +20,8 @@ import com.limelight.sbs.ClientSbsFrameSlots;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
 import com.limelight.sbs.ClientSbsGpuTimer;
-import com.limelight.sbs.ClientSbsMetricHistory;
+import com.limelight.sbs.SbsDepthTelemetryHistory;
+import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -258,11 +259,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
      * the panel because the ring must already be full when someone opens the panel to ask what
      * just happened; the readback runs whether or not anything is watching.
      */
-    private final ClientSbsMetricHistory popHistory = new ClientSbsMetricHistory();
-    private final ClientSbsMetricHistory edgeHistory = new ClientSbsMetricHistory();
-    private final ClientSbsMetricHistory changeHistory = new ClientSbsMetricHistory();
-    private final ClientSbsMetricHistory cutHistory = new ClientSbsMetricHistory();
-    private final ClientSbsMetricHistory anchorHistory = new ClientSbsMetricHistory();
+    private final SbsDepthTelemetryHistory depthTelemetryHistory =
+            new SbsDepthTelemetryHistory();
     private volatile DepthHealthState depthHealthState = DepthHealthState.EMPTY;
     private final AtomicReference<GpuInferenceResult> latestGpuInferenceResult =
             new AtomicReference<>(null);
@@ -328,6 +326,65 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private volatile int outputWidthOverride;
     private volatile int outputHeightOverride;
     private final Object liveStreamResizeLock = new Object();
+
+    static int depthTelemetryValidFields(
+            boolean profileInitialized, boolean popClassified) {
+        int validFields = SbsDepthTelemetrySnapshot.VALID_CONFIG
+                | SbsDepthTelemetrySnapshot.VALID_EFFECTIVE
+                | SbsDepthTelemetrySnapshot.VALID_CHANGE
+                | SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION
+                | SbsDepthTelemetrySnapshot.VALID_RANGE
+                | SbsDepthTelemetrySnapshot.VALID_CUTS
+                | SbsDepthTelemetrySnapshot.VALID_FAULTS;
+        if (popClassified) {
+            validFields |= SbsDepthTelemetrySnapshot.VALID_EDGE;
+        }
+        if (profileInitialized) {
+            // These values describe the shot-latched profile. Before initialization, their
+            // zero-valued storage defaults are not measurements and must not enter shared charts.
+            validFields |= SbsDepthTelemetrySnapshot.VALID_ANCHOR
+                    | SbsDepthTelemetrySnapshot.VALID_SUBJECT
+                    | SbsDepthTelemetrySnapshot.VALID_SCENE;
+        }
+        return validFields;
+    }
+
+    private SbsDepthTelemetrySnapshot toDepthTelemetry(DepthHealthState health) {
+        if (!health.available) {
+            return SbsDepthTelemetrySnapshot.unavailable(
+                    health.readbackFailed
+                            ? SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED
+                            : SbsDepthTelemetrySnapshot.Availability.WAITING);
+        }
+        int runtimeFlags = SbsDepthTelemetrySnapshot.RUNTIME_ADAPTIVE
+                | SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY;
+        if (health.profileInitialized) {
+            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED
+                    | SbsDepthTelemetrySnapshot.RUNTIME_ANCHOR_VALID;
+        }
+        if (health.popClassified) {
+            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_CLASSIFIED;
+        }
+        if (health.cutArmed) {
+            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_GEOMETRY_ARMED;
+        }
+        if (health.rangeCollapsed) {
+            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_RANGE_COLLAPSED;
+        }
+        return SbsDepthTelemetrySnapshot.available(
+                depthTelemetryValidFields(
+                        health.profileInitialized, health.popClassified),
+                runtimeFlags,
+                depthMapWidth, depthMapHeight, 2,
+                ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR,
+                ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING,
+                health.popStrength, health.edgeFraction, health.changeFraction,
+                health.zeroAnchorShift, health.subjectDepth, health.validFraction,
+                health.effectiveRangeWidth, health.sceneAge, health.hardCutCount,
+                health.externalCutRequests, health.emptyRawFrames,
+                health.collapsedRawFrames, 0L);
+    }
+
     /**
      * A UI-thread resize request consumed only after EGL has attached the replacement packed
      * output. Keeping this immutable request separate from the shared preferences prevents an
@@ -648,6 +705,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public final long depthExternalCutRequests;
         public final long depthEmptyRawFrames;
         public final long depthCollapsedRawFrames;
+        /** Source-neutral depth telemetry. Client SBS remains backed by local GPU readback. */
+        public final SbsDepthTelemetrySnapshot depthTelemetry;
         /** Oldest-first history copies, taken under lock so a wrap cannot splice two eras. */
         public final float[] popTrend;
         public final float[] edgeTrend;
@@ -705,40 +764,33 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.averageGpuSbsComposeMs = averageGpuMs(composeGpu);
 
             DepthHealthState health = owner.depthHealthState;
-            this.depthHealthAvailable = health.available;
-            this.depthHealthReadbackFailed = health.readbackFailed;
-            this.validDepthFraction = health.validFraction;
-            this.effectiveDepthRangeWidth = health.effectiveRangeWidth;
-            this.rawDepthRangeCollapsed = health.rangeCollapsed;
-            this.stereoPopStrength = health.popStrength;
-            this.adaptivePopClassified = health.popClassified;
-            this.depthEdgeFraction = health.edgeFraction;
-            this.depthChangeFraction = health.changeFraction;
-            this.depthSceneAge = health.sceneAge;
-            this.depthHardCutCount = health.hardCutCount;
-            this.depthZeroAnchorShift = health.zeroAnchorShift;
-            this.depthSubjectDepth = health.subjectDepth;
-            this.stereoProfileInitialized = health.profileInitialized;
-            this.depthCutArmed = health.cutArmed;
-            this.depthExternalCutRequests = health.externalCutRequests;
-            this.depthEmptyRawFrames = health.emptyRawFrames;
-            this.depthCollapsedRawFrames = health.collapsedRawFrames;
-            this.popTrend = copyTrend(owner.popHistory);
-            this.edgeTrend = copyTrend(owner.edgeHistory);
-            this.changeTrend = copyTrend(owner.changeHistory);
-            this.cutTrend = copyTrend(owner.cutHistory);
-            this.anchorTrend = copyTrend(owner.anchorHistory);
-        }
-
-        private static float[] copyTrend(ClientSbsMetricHistory history) {
-            float[] buffer = new float[ClientSbsMetricHistory.CAPACITY];
-            int written = history.copyInto(buffer);
-            if (written == buffer.length) {
-                return buffer;
-            }
-            float[] trimmed = new float[written];
-            System.arraycopy(buffer, 0, trimmed, 0, written);
-            return trimmed;
+            this.depthTelemetry = owner.depthTelemetryHistory.attach(
+                    owner.toDepthTelemetry(health));
+            this.depthHealthAvailable = depthTelemetry.isAvailable();
+            this.depthHealthReadbackFailed =
+                    depthTelemetry.availability
+                            == SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED;
+            this.validDepthFraction = depthTelemetry.validDepthFraction;
+            this.effectiveDepthRangeWidth = depthTelemetry.effectiveRangeWidth;
+            this.rawDepthRangeCollapsed = depthTelemetry.isRangeCollapsed();
+            this.stereoPopStrength = depthTelemetry.effectivePop;
+            this.adaptivePopClassified = depthTelemetry.isAdaptivePopClassified();
+            this.depthEdgeFraction = depthTelemetry.classifiedEdgeFraction;
+            this.depthChangeFraction = depthTelemetry.changeFraction;
+            this.depthSceneAge = (int)Math.min(Integer.MAX_VALUE, depthTelemetry.sceneAge);
+            this.depthHardCutCount = depthTelemetry.hardCutCount;
+            this.depthZeroAnchorShift = depthTelemetry.zeroAnchorShiftPx;
+            this.depthSubjectDepth = depthTelemetry.subjectDepth;
+            this.stereoProfileInitialized = depthTelemetry.isInitialized();
+            this.depthCutArmed = depthTelemetry.isCutArmed();
+            this.depthExternalCutRequests = depthTelemetry.externalCutRequests;
+            this.depthEmptyRawFrames = depthTelemetry.emptyDepthFrames;
+            this.depthCollapsedRawFrames = depthTelemetry.collapsedDepthFrames;
+            this.popTrend = depthTelemetry.popTrend;
+            this.edgeTrend = depthTelemetry.edgeTrend;
+            this.changeTrend = depthTelemetry.changeTrend;
+            this.cutTrend = depthTelemetry.cutTrend;
+            this.anchorTrend = depthTelemetry.anchorTrend;
         }
 
         private static float rate(long count, long elapsedNs) {
@@ -816,11 +868,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             performanceSamplingEpoch.incrementAndGet();
             resetPerformanceCountersLocked(System.nanoTime());
         }
-        depthHealthState = DepthHealthState.EMPTY;
         drainCompletedGpuTimerSamples();
+        resetDepthTelemetryEra();
         if (performanceSamplingEnabled) {
             performanceGlStateResetRequested.set(true);
         }
+    }
+
+    private void resetDepthTelemetryEra() {
+        depthHealthState = DepthHealthState.EMPTY;
+        // A mode/profile, GL-context, HDR, or resize generation boundary starts a new telemetry
+        // era. Keeping the old ring bridges unrelated pipelines, while retaining a previous
+        // readback backoff can suppress every early sample from the replacement processor.
+        depthTelemetryHistory.clear();
+        depthHealthRetryPollsRemaining = 0;
+        depthHealthConsecutiveFailures = 0;
     }
 
     private void resetPerformanceCountersLocked(long startedNs) {
@@ -954,17 +1016,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 // A completed, mapped sample is the recovery boundary. A nonthrowing null poll
                 // means only that no fence is ready, so it must not erase the visible failure state.
                 depthHealthConsecutiveFailures = 0;
-                popHistory.add(health.getPopStrength());
-                if (shouldAppendEdgeHistory(
-                        health.hasAdaptivePopClassification(), health.getEdgeFraction())) {
-                    edgeHistory.add(health.getEdgeFraction());
-                }
-                changeHistory.add(health.getChangeFraction());
-                // Stored raw; the panel differences it. A counter plotted directly is a staircase
-                // that flattens as the session lengthens, hiding the bursts being looked for.
-                cutHistory.add(health.getHardCutCount());
-                anchorHistory.add(health.getZeroAnchorShift());
-                depthHealthState = new DepthHealthState(health);
+                DepthHealthState updated = new DepthHealthState(health);
+                depthTelemetryHistory.add(toDepthTelemetry(updated));
+                depthHealthState = updated;
             }
         } catch (Throwable error) {
             // Health data is diagnostic only. A driver that rejects asynchronous staging must not
@@ -994,11 +1048,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void clearDepthHealthMetricHistory() {
-        popHistory.clear();
-        edgeHistory.clear();
-        changeHistory.clear();
-        cutHistory.clear();
-        anchorHistory.clear();
+        depthTelemetryHistory.clear();
     }
 
     static boolean shouldPollHealthTelemetry(int pollCounter) {
@@ -1150,9 +1200,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (abandonedTimer != null) {
             abandonedTimer.abandonAfterContextLoss();
         }
-        depthHealthState = DepthHealthState.EMPTY;
-        depthHealthRetryPollsRemaining = 0;
-        depthHealthConsecutiveFailures = 0;
+        resetDepthTelemetryEra();
         gpuDepthTextureId = 0;
         gpuProfileTextureId = 0;
         gpuDepthActive = false;
@@ -1372,6 +1420,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     /** Lightweight live status for the Client SBS options pane; reads one volatile string. */
     public String getClientSbsBackendStatus() {
         return shuttingDown.get() ? "Unavailable" : activeInferenceBackend;
+    }
+
+    /**
+     * Transition policy needs to distinguish a legitimate first-use model/delegate startup from a
+     * renderer that was already ready (or has failed). This is diagnostic state only: it never
+     * gates inference scheduling or changes the flat-output fallback.
+     */
+    public boolean isClientSbsBackendInitializing() {
+        return clientSbs && !shuttingDown.get()
+                && "Initializing".equals(activeInferenceBackend);
     }
 
     public void setHdrInput(boolean enabled) {
@@ -2050,9 +2108,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         // Query objects are created lazily on the first draw with visible XR Stats.
         gpuTimer = null;
         performanceGlStateResetRequested.set(true);
-        depthHealthState = DepthHealthState.EMPTY;
-        depthHealthRetryPollsRemaining = 0;
-        depthHealthConsecutiveFailures = 0;
+        resetDepthTelemetryEra();
 
         simple3dProgram = createProgram(
                 ShaderUtils.SIMPLE_VERTEX_SHADER, ClientSbsShaders.FLAT_FRAGMENT);
@@ -3302,9 +3358,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 gpuSceneCutDetector = null;
             }
         }
-        depthHealthState = DepthHealthState.EMPTY;
-        depthHealthRetryPollsRemaining = 0;
-        depthHealthConsecutiveFailures = 0;
+        resetDepthTelemetryEra();
         hasFrameForActiveGeneration = false;
         lastCapturedFrameSequence = latchedFrameSequence;
     }

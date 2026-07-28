@@ -2,6 +2,10 @@ package com.limelight.shadows;
 
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
+import org.robolectric.annotation.Resetter;
+
+import java.util.ArrayList;
+import java.util.List;
 
 @Implements(value = com.limelight.nvstream.jni.MoonBridge.class, isInAndroidSdk = false)
 public class ShadowMoonBridge {
@@ -32,6 +36,53 @@ public class ShadowMoonBridge {
     public static int CAPABILITY_SLICES_PER_FRAME(byte s) { return 0; }
 
     public static int getPendingAudioDuration() { return 0; }
+
+    private static final List<Integer> hostSbsTelemetryResults = new ArrayList<>();
+    private static final List<Boolean> hostSbsTelemetryEnabledCalls = new ArrayList<>();
+
+    public static void setHostSbsTelemetryResults(int... results) {
+        hostSbsTelemetryResults.clear();
+        if (results != null) {
+            for (int result : results) {
+                hostSbsTelemetryResults.add(result);
+            }
+        }
+        hostSbsTelemetryEnabledCalls.clear();
+    }
+
+    public static int getHostSbsTelemetryEnabledCallCount() {
+        int count = 0;
+        for (boolean enabled : hostSbsTelemetryEnabledCalls) {
+            if (enabled) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public static int getHostSbsTelemetryDisableCallCount() {
+        return hostSbsTelemetryEnabledCalls.size()
+                - getHostSbsTelemetryEnabledCallCount();
+    }
+
+    @Implementation
+    public static int sendHostSbsTelemetrySubscription(boolean enabled, boolean focused,
+                                                        int requestId, int intervalMs) {
+        hostSbsTelemetryEnabledCalls.add(enabled);
+        if (hostSbsTelemetryResults.isEmpty()) {
+            return 1;
+        }
+        if (hostSbsTelemetryResults.size() == 1) {
+            return hostSbsTelemetryResults.get(0);
+        }
+        return hostSbsTelemetryResults.remove(0);
+    }
+
+    @Resetter
+    public static void reset() {
+        hostSbsTelemetryResults.clear();
+        hostSbsTelemetryEnabledCalls.clear();
+    }
 
     // stubbed methods used by code but not relevant to unit tests
     public static void cleanupBridge() {}

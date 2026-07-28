@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-**Artemis Android** (formerly Moonlight Noir) is an Android game-streaming client
-for [Apollo](https://github.com/ClassicOldSong/Apollo) / [Sunshine](https://github.com/LizardByte/Sunshine).
+**Moonlight 3D** (formerly Artemis and Moonlight Noir) is an Android XR streaming client
+for [Sunshine 3D](https://github.com/dcatcher9/Apollo-3D) / [Sunshine](https://github.com/LizardByte/Sunshine).
 It is a fork of [moonlight-android](https://github.com/moonlight-stream/moonlight-android)
 with many extra features. The Java package is `com.limelight` (historical name).
 
-The active branch is `moonlight-noir`. Application IDs: release `com.limelight.noir`,
-debug `com.limelight.noirdebug` (release flavor app name "Artemis", debug "Diana").
+The active branch is `moonlight-noir`. Application IDs remain release `com.limelight.noir`
+and debug `com.limelight.noirdebug`; both flavors use the visible name "Moonlight 3D".
 
 ### Current focus: Android XR (Galaxy XR) SBS support — XR-ONLY build
 
@@ -20,7 +20,7 @@ Android XR devices (Samsung Galaxy XR)**, not phones/tablets/TV. The manifest de
 which restricts Play Store distribution/install to XR devices. `minSdk = 24` (the Jetpack XR
 floor per Google's guidance — do NOT raise to 34).
 
-The goal: present either a **side-by-side (SBS) stereo stream produced on the PC** or Artemis'
+The goal: present either a **side-by-side (SBS) stereo stream produced on the PC** or Moonlight 3D's
 on-device Client SBS AI output stereoscopically on the headset. See
 [docs/android-xr-sbs.md](docs/android-xr-sbs.md) for the design history and current contracts.
 Read that document before touching any rendering / surface / stereo code —

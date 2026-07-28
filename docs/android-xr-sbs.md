@@ -599,7 +599,11 @@ transition are outstanding. A matching post-ACK decoder output then re-arms a fr
 and explicitly nudges the renderer for the same-generation, same-attachment two-draw presentation
 proof; time spent waiting for the host ACK can never consume that proof budget. After draw one arms
 the candidate, its second render request is queued behind the current EGL-swap iteration so an
-in-draw dirty request cannot be coalesced before the first swap returns.
+in-draw dirty request cannot be coalesced before the first swap returns. When that authoritative
+host/decoder boundary arrives during first-use model verification or delegate compilation, the
+short proof watchdog polls while the backend remains explicitly `Initializing`, up to one
+30-second cold-start ceiling. Ready, unavailable, and ordinary warm paths retain the short
+watchdog, so the exception cannot hide a broken EGL/presentation transition.
 Fast user changes, automatic panel-follow changes, and resolution changes therefore all fail closed
 to reconnect. The client clears local transition ownership but neither claims success nor restores
 an unacknowledged previous tuple. Fast paths and a resolution path with matching decoder output may
@@ -774,6 +778,16 @@ SceneCore exposes no compositor timing. The only exceptional counters are occupi
 renders separately labelled recent trends for pop strength, edge fraction, changed-depth fraction,
 scene-cut events, and zero-plane anchor shift. The cut and anchor rows stay adjacent so repeated
 relatching can be distinguished from harmless classification changes.
+Trend plots use fixed oldest-left/newest-right sample-slot spacing. While a history is still short,
+its samples occupy only the newest slots at the right instead of stretching across the entire
+width; once full, each new sample scrolls the oldest point off the left edge. This is not a fixed
+wall-clock scale because the producer cadence varies. The 120 retained Host SBS points represent
+about 12 seconds while Stats requests focused 100 ms publications and about 60 seconds at the
+background 500 ms cadence; after opening Stats, the ring temporarily contains both cadences until
+the older background points age out. Every distinct accepted host publication enters the history
+at delivery even though the stats table repaints more slowly. Repeated heartbeat publications
+refresh liveness without adding duplicate chart points. Client SBS sample spacing likewise follows
+its visible five-depth-frame and background 30-depth-frame health-copy cadences.
 
 The depth policy row must say `Uncapped | one in flight | newest frame when free`; Android thermal
 status is reported separately so it is not mistaken for a hidden throttle. Do not add expected

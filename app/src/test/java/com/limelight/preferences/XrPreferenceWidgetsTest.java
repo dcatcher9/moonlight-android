@@ -61,8 +61,9 @@ public final class XrPreferenceWidgetsTest {
             assertTrue(group.getChildAt(i) instanceof AppCompatButton);
             AppCompatButton button = group.getButtonAt(i);
             assertTrue(button.getMinimumWidth() >= dp(76));
-            assertTrue(button.getMinimumHeight() >= dp(XrSegmentButton.MIN_HEIGHT_DP));
-            assertEquals(23f * context.getResources().getDisplayMetrics().scaledDensity,
+            assertTrue(button.getMinimumHeight() >= context.getResources()
+                    .getDimensionPixelSize(XrSegmentButton.MIN_HEIGHT_DIMEN));
+            assertEquals(context.getResources().getDimension(R.dimen.xr_text_title),
                     button.getTextSize(), 0.5f);
             group.getChildAt(i).getLayoutParams().width = buttonWidth;
         }

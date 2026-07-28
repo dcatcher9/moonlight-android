@@ -31,6 +31,15 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetVideoMode(JNIEnv *env, jclass 
                               (uint32_t) bitrateKbps);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_sendHostSbsTelemetrySubscription(
+        JNIEnv *env, jclass clazz, jboolean enabled, jboolean focused,
+        jint requestId, jint intervalMs) {
+    return LiSendHostSbsTelemetrySubscription(
+            enabled == JNI_TRUE, focused == JNI_TRUE,
+            (uint16_t)requestId, (uint16_t)intervalMs);
+}
+
 JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_requestIdrFrame(JNIEnv *env, jclass clazz) {
     LiRequestIdrFrame();

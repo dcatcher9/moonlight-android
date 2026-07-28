@@ -9,7 +9,10 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.widget.AppCompatButton;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
+
+import com.limelight.R;
 
 /**
  * Ordinary Android button used inside {@link XrChoiceGroup}'s connected segmented surface.
@@ -17,7 +20,7 @@ import androidx.core.view.ViewCompat;
  */
 public final class XrSegmentButton extends AppCompatButton {
     /** XR gaze targets need more vertical breathing room than the compact base button style. */
-    static final int MIN_HEIGHT_DP = 80;
+    static final int MIN_HEIGHT_DIMEN = R.dimen.xr_control_choice;
 
     public XrSegmentButton(@NonNull Context context) {
         this(context, null);
@@ -34,8 +37,9 @@ public final class XrSegmentButton extends AppCompatButton {
         ViewCompat.setBackgroundTintList(this, null);
         setStateListAnimator(null);
         setElevation(0f);
-        setTextColor(segmentTextColors());
-        setMinimumHeight(Math.max(getMinimumHeight(), dp(MIN_HEIGHT_DP)));
+        setTextColor(segmentTextColors(context));
+        setMinimumHeight(Math.max(getMinimumHeight(),
+                getResources().getDimensionPixelSize(MIN_HEIGHT_DIMEN)));
     }
 
     @Override
@@ -58,7 +62,7 @@ public final class XrSegmentButton extends AppCompatButton {
         }
     }
 
-    private static ColorStateList segmentTextColors() {
+    private static ColorStateList segmentTextColors(Context context) {
         return new ColorStateList(new int[][] {
                 new int[] {-android.R.attr.state_enabled},
                 new int[] {android.R.attr.state_activated},
@@ -66,15 +70,11 @@ public final class XrSegmentButton extends AppCompatButton {
                 new int[] {android.R.attr.state_hovered},
                 new int[0],
         }, new int[] {
-                Color.rgb(128, 134, 139),
-                Color.WHITE,
-                Color.WHITE,
-                Color.WHITE,
-                Color.rgb(214, 229, 245),
+                ContextCompat.getColor(context, R.color.xr_text_disabled),
+                ContextCompat.getColor(context, R.color.xr_text_primary),
+                ContextCompat.getColor(context, R.color.xr_text_primary),
+                ContextCompat.getColor(context, R.color.xr_text_primary),
+                ContextCompat.getColor(context, R.color.xr_accent_bright),
         });
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

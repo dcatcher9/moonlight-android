@@ -4,9 +4,9 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FF0D1117"
+    android:background="@color/xr_surface_sunken"
     android:orientation="vertical"
-    android:padding="24dp"
+    android:padding="@dimen/xr_space_xl"
     tools:context=".PcView">
 
     <LinearLayout
@@ -14,7 +14,7 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingBottom="18dp">
+        android:paddingBottom="@dimen/xr_space_lg">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -26,83 +26,83 @@
                 android:id="@+id/homeTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="#FFFFFFFF"
-                android:textSize="36sp"
+                android:textColor="@color/xr_text_primary"
+                android:textSize="@dimen/xr_text_display"
                 android:textStyle="bold"
-                tools:text="Artemis" />
+                tools:text="Moonlight 3D" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
+                android:layout_marginTop="@dimen/xr_space_xs"
                 android:text="@string/xr_home_subtitle"
-                android:textColor="#FF9FB3C8"
-                android:textSize="19sp" />
+                android:textColor="@color/xr_text_secondary"
+                android:textSize="@dimen/xr_text_emphasis" />
         </LinearLayout>
 
         <Button
             android:id="@+id/settingsButton"
             android:layout_width="wrap_content"
-            android:layout_height="64dp"
-            android:layout_marginStart="12dp"
+            android:layout_height="@dimen/xr_control_primary"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_action_background"
             app:backgroundTint="@null"
             android:minWidth="144dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/xr_home_settings"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
-            android:textSize="18sp" />
+            android:textColor="@color/xr_text_primary"
+            android:textSize="@dimen/xr_text_emphasis" />
 
         <Button
             android:id="@+id/helpButton"
             android:layout_width="wrap_content"
-            android:layout_height="64dp"
-            android:layout_marginStart="12dp"
+            android:layout_height="@dimen/xr_control_primary"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_action_background"
             app:backgroundTint="@null"
             android:minWidth="112dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/help"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
-            android:textSize="18sp" />
+            android:textColor="@color/xr_text_primary"
+            android:textSize="@dimen/xr_text_emphasis" />
 
         <Button
             android:id="@+id/manuallyAddPc"
             android:layout_width="wrap_content"
-            android:layout_height="64dp"
-            android:layout_marginStart="12dp"
+            android:layout_height="@dimen/xr_control_primary"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_primary_action_background"
             app:backgroundTint="@null"
             android:minWidth="172dp"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/xr_home_add_computer"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
-            android:textSize="18sp" />
+            android:textColor="@color/xr_text_primary"
+            android:textSize="@dimen/xr_text_emphasis" />
     </LinearLayout>
 
     <LinearLayout
         android:id="@+id/homeConnectionStage"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="@dimen/xr_space_lg"
         android:background="@drawable/xr_home_card_background"
         android:gravity="center_vertical"
         android:minHeight="104dp"
         android:orientation="horizontal"
-        android:padding="18dp"
+        android:padding="@dimen/xr_space_lg"
         android:visibility="gone">
 
         <ProgressBar
             android:id="@+id/homeConnectionStageProgress"
             android:layout_width="42dp"
             android:layout_height="42dp"
-            android:layout_marginEnd="18dp" />
+            android:layout_marginEnd="@dimen/xr_space_lg" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -114,31 +114,32 @@
                 android:id="@+id/homeConnectionStageTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textColor="#FFFFFFFF"
-                android:textSize="19sp"
+                android:textColor="@color/xr_text_primary"
+                android:textSize="@dimen/xr_text_emphasis"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/homeConnectionStageDetail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="5dp"
-                android:textColor="#FFBDC1C6"
-                android:textSize="16sp" />
+                android:layout_marginTop="@dimen/xr_space_xs"
+                android:textColor="@color/xr_text_secondary"
+                android:textSize="@dimen/xr_text_body" />
         </LinearLayout>
 
         <Button
             android:id="@+id/homeConnectionStageDismiss"
             android:layout_width="wrap_content"
-            android:layout_height="56dp"
-            android:layout_marginStart="14dp"
+            android:layout_height="@dimen/xr_control_standard"
+            android:layout_marginStart="@dimen/xr_space_md"
             android:background="@drawable/xr_home_action_background"
             app:backgroundTint="@null"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
             android:text="@string/dismiss"
             android:textAllCaps="false"
-            android:textColor="#FFFFFFFF"
+            android:textColor="@color/xr_text_primary"
+            android:textSize="@dimen/xr_text_body"
             android:visibility="gone" />
     </LinearLayout>
 
@@ -146,10 +147,10 @@
         android:id="@+id/machineSectionTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingBottom="12dp"
+        android:paddingBottom="@dimen/xr_space_md"
         android:text="@string/xr_bar_machines"
-        android:textColor="#FF9AC7FF"
-        android:textSize="24sp"
+        android:textColor="@color/xr_accent"
+        android:textSize="@dimen/xr_text_title"
         android:textStyle="bold" />
 
     <FrameLayout
@@ -158,7 +159,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:background="@drawable/xr_home_panel_background"
-        android:padding="14dp">
+        android:padding="@dimen/xr_space_md">
 
         <LinearLayout
             android:id="@+id/no_pc_found_layout"
@@ -167,23 +168,23 @@
             android:layout_gravity="center"
             android:gravity="center"
             android:orientation="vertical"
-            android:padding="24dp">
+            android:padding="@dimen/xr_space_xl">
 
             <ProgressBar
                 android:id="@+id/pcs_loading"
-                android:layout_width="64dp"
-                android:layout_height="64dp"
+                android:layout_width="@dimen/xr_control_primary"
+                android:layout_height="@dimen/xr_control_primary"
                 android:indeterminate="true" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="@dimen/xr_space_lg"
                 android:gravity="center"
                 android:maxWidth="520dp"
                 android:text="@string/searching_pc"
-                android:textColor="#FFDADCE0"
-                android:textSize="18sp" />
+                android:textColor="@color/xr_text_secondary"
+                android:textSize="@dimen/xr_text_emphasis" />
         </LinearLayout>
     </FrameLayout>
 </LinearLayout>

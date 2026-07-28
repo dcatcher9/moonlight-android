@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="52 52 920 920" role="img" aria-labelledby="moonlight3d-title moonlight3d-description">
+  <title id="moonlight3d-title">Moonlight 3D</title>
+  <desc id="moonlight3d-description">A crescent moon above two curved depth planes.</desc>
+  <defs>
+    <mask id="moonlight3d-crescent" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#000000"/>
+      <circle cx="512" cy="396" r="212" fill="#FFFFFF"/>
+      <circle cx="599" cy="302" r="194" fill="#000000"/>
+    </mask>
+  </defs>
+  <rect width="1024" height="1024" fill="#D7E5FF" mask="url(#moonlight3d-crescent)"/>
+  <path d="M188 704C342 582 682 582 836 704" fill="none" stroke="#D7E5FF" stroke-width="104" stroke-linecap="round"/>
+  <path d="M164 810C338 650 686 650 860 810" fill="none" stroke="#8AB4F8" stroke-width="112" stroke-linecap="round"/>
+</svg>

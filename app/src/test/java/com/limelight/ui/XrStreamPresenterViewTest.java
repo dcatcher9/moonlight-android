@@ -23,8 +23,10 @@ import androidx.appcompat.widget.AppCompatButton;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrChoiceGroup;
+import com.limelight.sbs.ClientSbsMetricHistory;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
+import com.limelight.ui.xrcontrols.XrSparklineView;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -200,11 +202,15 @@ public final class XrStreamPresenterViewTest {
         activity.setTheme(R.style.AppTheme);
         controller.setup();
 
-        assertTrue(XrStreamPresenter.STATS_TEXT_SP >= 30f);
-        assertTrue(XrStreamPresenter.SESSION_SUMMARY_TEXT_SP >= 25f);
-        assertTrue(XrStreamPresenter.SESSION_GROUP_TEXT_SP >= 26f);
-        assertTrue(XrStreamPresenter.SESSION_ROW_TITLE_TEXT_SP >= 29f);
-        assertTrue(XrStreamPresenter.SESSION_META_TEXT_SP >= 22f);
+        assertEquals(R.dimen.xr_text_display, XrStreamPresenter.STATS_TEXT_DIMEN);
+        assertEquals(R.dimen.xr_text_title,
+                XrStreamPresenter.SESSION_SUMMARY_TEXT_DIMEN);
+        assertEquals(R.dimen.xr_text_title,
+                XrStreamPresenter.SESSION_GROUP_TEXT_DIMEN);
+        assertEquals(R.dimen.xr_text_display,
+                XrStreamPresenter.SESSION_ROW_TITLE_TEXT_DIMEN);
+        assertEquals(R.dimen.xr_text_title,
+                XrStreamPresenter.SESSION_META_TEXT_DIMEN);
         assertEquals("Raw SBS", activity.getString(R.string.xr_bar_host_sbs_raw));
         assertEquals("Cinema", activity.getString(R.string.xr_bar_cinema_view));
         controller.destroy();
@@ -272,6 +278,42 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
+    public void clientGpuStageRowsIncludeDepthProfileTimer() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, PreferenceConfiguration.readPreferences(activity),
+                surface -> { }, visible -> { });
+        TableLayout table = new TableLayout(activity);
+        setField(presenter, "statsTable", table);
+
+        Method begin = XrStreamPresenter.class.getDeclaredMethod("beginStatsRows");
+        Method finish = XrStreamPresenter.class.getDeclaredMethod("finishStatsRows");
+        Method addGpuStages = XrStreamPresenter.class.getDeclaredMethod(
+                "addClientGpuStageRows", boolean.class, float[].class, long[].class);
+        begin.setAccessible(true);
+        finish.setAccessible(true);
+        addGpuStages.setAccessible(true);
+
+        begin.invoke(presenter);
+        addGpuStages.invoke(presenter, true,
+                new float[] {0.11f, 0.22f, 0.33f, 0.44f},
+                new long[] {11L, 22L, 33L, 44L});
+        finish.invoke(presenter);
+
+        assertEquals(4, table.getChildCount());
+        TableRow depthProfile = (TableRow) table.getChildAt(2);
+        assertEquals("Depth profile GL GPU",
+                ((TextView) depthProfile.getChildAt(0)).getText().toString());
+        assertEquals("0.33 ms | filter + adaptive profile",
+                ((TextView) depthProfile.getChildAt(1)).getText().toString());
+        controller.destroy();
+    }
+
+    @Test
     public void healthTrendRowsRenderEveryHistoryAndReuseTheirSparklines() throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
@@ -311,6 +353,8 @@ public final class XrStreamPresenterViewTest {
         assertEquals(labels.length, table.getChildCount());
         TableRow[] firstRows = new TableRow[labels.length];
         View[] firstSparklines = new View[labels.length];
+        Field slotCapacity = XrSparklineView.class.getDeclaredField("slotCapacity");
+        slotCapacity.setAccessible(true);
         for (int i = 0; i < labels.length; i++) {
             firstRows[i] = (TableRow) table.getChildAt(i);
             assertEquals(2, firstRows[i].getChildCount());
@@ -319,6 +363,10 @@ public final class XrStreamPresenterViewTest {
             LinearLayout trendContent = (LinearLayout) firstRows[i].getChildAt(1);
             assertEquals(2, trendContent.getChildCount());
             firstSparklines[i] = trendContent.getChildAt(1);
+            assertEquals("Scene cuts".equals(labels[i])
+                            ? ClientSbsMetricHistory.CAPACITY - 1
+                            : ClientSbsMetricHistory.CAPACITY,
+                    slotCapacity.getInt(firstSparklines[i]));
             int plottedSamples = "Scene cuts".equals(labels[i]) ? 2 : 3;
             String summary = "Scene cuts".equals(labels[i])
                     ? "steady, recent range 0.5 to 0.5, latest 0.5"

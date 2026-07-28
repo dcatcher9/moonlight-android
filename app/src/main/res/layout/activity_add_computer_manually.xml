@@ -4,9 +4,9 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FF121316"
+    android:background="@color/xr_surface_sunken"
     android:orientation="vertical"
-    android:padding="24dp"
+    android:padding="@dimen/xr_space_xl"
     tools:context=".preferences.AddComputerManually">
 
     <LinearLayout
@@ -17,20 +17,20 @@
 
         <Button
             android:id="@+id/addPcBackButton"
-            android:layout_width="64dp"
+            android:layout_width="@dimen/xr_control_primary"
             android:layout_height="wrap_content"
             android:background="@drawable/xr_home_action_background"
             app:backgroundTint="@null"
             android:contentDescription="@string/action_back"
             android:drawableStart="@drawable/ic_arrow_back"
-            android:paddingStart="18dp"
-            android:paddingEnd="18dp"
-            android:minHeight="56dp" />
+            android:paddingStart="@dimen/xr_space_lg"
+            android:paddingEnd="@dimen/xr_space_lg"
+            android:minHeight="@dimen/xr_control_standard" />
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="18dp"
+            android:layout_marginStart="@dimen/xr_space_lg"
             android:layout_weight="1"
             android:orientation="vertical">
 
@@ -39,17 +39,17 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/xr_connection_title"
-                android:textColor="#FFFFFFFF"
-                android:textSize="30sp"
+                android:textColor="@color/xr_text_primary"
+                android:textSize="@dimen/xr_text_display"
                 android:textStyle="bold" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="@dimen/xr_space_xs"
                 android:text="@string/xr_connection_subtitle"
-                android:textColor="#FFBDC1C6"
-                android:textSize="16sp" />
+                android:textColor="@color/xr_text_secondary"
+                android:textSize="@dimen/xr_text_body" />
         </LinearLayout>
     </LinearLayout>
 
@@ -62,20 +62,20 @@
         android:layout_marginEnd="48dp"
         android:background="@drawable/xr_home_panel_background"
         android:orientation="vertical"
-        android:padding="28dp">
+        android:padding="@dimen/xr_space_xl">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/xr_connection_address"
-            android:textColor="#FFFFFFFF"
-            android:textSize="19sp"
+            android:textColor="@color/xr_text_primary"
+            android:textSize="@dimen/xr_text_emphasis"
             android:textStyle="bold" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/xr_space_md"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -87,13 +87,13 @@
                 android:background="@drawable/xr_home_action_background"
                 android:hint="@string/ip_hint"
                 android:inputType="textNoSuggestions"
-                android:paddingStart="18dp"
-                android:paddingEnd="18dp"
-                android:minHeight="64dp"
+                android:paddingStart="@dimen/xr_space_lg"
+                android:paddingEnd="@dimen/xr_space_lg"
+                android:minHeight="@dimen/xr_control_primary"
                 android:singleLine="true"
-                android:textColor="#FFFFFFFF"
-                android:textColorHint="#FF9AA0A6"
-                android:textSize="18sp">
+                android:textColor="@color/xr_text_primary"
+                android:textColorHint="@color/xr_text_disabled"
+                android:textSize="@dimen/xr_text_emphasis">
 
                 <requestFocus />
             </EditText>
@@ -102,31 +102,31 @@
                 android:id="@+id/addPcButton"
                 android:layout_width="160dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="@dimen/xr_space_md"
                 android:background="@drawable/xr_home_primary_action_background"
                 app:backgroundTint="@null"
                 android:text="@string/xr_connection_connect"
                 android:textAllCaps="false"
-                android:textColor="#FFFFFFFF"
-                android:textSize="17sp"
-                android:minHeight="64dp" />
+                android:textColor="@color/xr_text_primary"
+                android:textSize="@dimen/xr_text_body"
+                android:minHeight="@dimen/xr_control_primary" />
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="@dimen/xr_space_xl"
             android:background="@drawable/xr_home_card_background"
             android:gravity="center_vertical"
             android:minHeight="104dp"
             android:orientation="horizontal"
-            android:padding="18dp">
+            android:padding="@dimen/xr_space_lg">
 
             <ProgressBar
                 android:id="@+id/connectionProgress"
                 android:layout_width="42dp"
                 android:layout_height="42dp"
-                android:layout_marginEnd="18dp"
+                android:layout_marginEnd="@dimen/xr_space_lg"
                 android:visibility="invisible" />
 
             <LinearLayout
@@ -139,8 +139,8 @@
                     android:id="@+id/connectionStageTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:textColor="#FFFFFFFF"
-                    android:textSize="18sp"
+                    android:textColor="@color/xr_text_primary"
+                    android:textSize="@dimen/xr_text_emphasis"
                     android:textStyle="bold"
                     tools:text="Ready" />
 
@@ -148,10 +148,10 @@
                     android:id="@+id/connectionStageDetail"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="5dp"
-                    android:textColor="#FFBDC1C6"
-                    android:textSize="16sp"
-                    tools:text="Enter the address shown by Apollo or Sunshine." />
+                    android:layout_marginTop="@dimen/xr_space_xs"
+                    android:textColor="@color/xr_text_secondary"
+                    android:textSize="@dimen/xr_text_body"
+                    tools:text="Enter the address shown by Sunshine 3D or Sunshine." />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

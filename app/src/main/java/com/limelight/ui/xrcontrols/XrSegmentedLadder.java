@@ -1,7 +1,6 @@
 package com.limelight.ui.xrcontrols;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.util.AttributeSet;
 import android.util.TypedValue;
@@ -52,11 +51,6 @@ public final class XrSegmentedLadder extends LinearLayout {
     /** Each segment is this much wider than the one before it. */
     private static final float WIDTH_RAMP = 1.18f;
 
-    /** Star marking the recommended segment, in dp. */
-    private static final int MARKER_SIZE_DP = 20;
-    /** How far the star is inset from the segment's top-right corner. */
-    private static final int MARKER_INSET_DP = 4;
-
     private final LinearLayout row;
     private final FrameLayout rowHost;
     private final ImageView marker;
@@ -90,21 +84,23 @@ public final class XrSegmentedLadder extends LinearLayout {
         marker = new ImageView(context);
         marker.setImageResource(R.drawable.ic_xr_recommended);
         marker.setVisibility(GONE);
-        rowHost.addView(marker, new FrameLayout.LayoutParams(dp(MARKER_SIZE_DP),
-                dp(MARKER_SIZE_DP), Gravity.TOP | Gravity.START));
+        int markerSize = dimen(R.dimen.xr_icon_inline);
+        rowHost.addView(marker, new FrameLayout.LayoutParams(
+                markerSize, markerSize, Gravity.TOP | Gravity.START));
 
         LayoutParams rowParams = new LayoutParams(LayoutParams.MATCH_PARENT,
                 LayoutParams.WRAP_CONTENT);
-        rowParams.topMargin = dp(4);
+        rowParams.topMargin = dimen(R.dimen.xr_space_xs);
         addView(rowHost, rowParams);
 
         caption = new TextView(context);
         caption.setTextColor(color(R.color.xr_accent));
-        caption.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f);
+        caption.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.xr_text_emphasis));
         caption.setTypeface(caption.getTypeface(), android.graphics.Typeface.BOLD);
         LayoutParams captionParams = new LayoutParams(
                 LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
-        captionParams.topMargin = dp(8);
+        captionParams.topMargin = dimen(R.dimen.xr_space_sm);
         addView(caption, captionParams);
     }
 
@@ -194,7 +190,8 @@ public final class XrSegmentedLadder extends LinearLayout {
             AppCompatButton segment = new AppCompatButton(getContext());
             segment.setAllCaps(false);
             segment.setText(choice.label);
-            segment.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f);
+            segment.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                    getResources().getDimension(R.dimen.xr_text_emphasis));
             segment.setGravity(Gravity.CENTER);
             segment.setPadding(0, 0, 0, 0);
             segment.setStateListAnimator(null);
@@ -208,7 +205,7 @@ public final class XrSegmentedLadder extends LinearLayout {
 
             LayoutParams params = new LayoutParams(0, LayoutParams.MATCH_PARENT, weights[i]);
             if (i > 0) {
-                params.leftMargin = dp(8);
+                params.leftMargin = dimen(R.dimen.xr_space_sm);
             }
             row.addView(segment, params);
             segments.add(segment);
@@ -279,8 +276,9 @@ public final class XrSegmentedLadder extends LinearLayout {
             target.post(this::updateHintPosition);
             return;
         }
-        int inset = dp(MARKER_INSET_DP);
-        marker.setTranslationX(target.getRight() - dp(MARKER_SIZE_DP) - inset);
+        int inset = dimen(R.dimen.xr_space_xs);
+        marker.setTranslationX(target.getRight()
+                - dimen(R.dimen.xr_icon_inline) - inset);
         marker.setTranslationY(inset);
     }
 
@@ -306,7 +304,7 @@ public final class XrSegmentedLadder extends LinearLayout {
         return ContextCompat.getColor(getContext(), resourceId);
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+    private int dimen(int resourceId) {
+        return getResources().getDimensionPixelSize(resourceId);
     }
 }

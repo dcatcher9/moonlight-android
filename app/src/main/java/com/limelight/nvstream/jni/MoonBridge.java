@@ -397,6 +397,14 @@ public class MoonBridge {
         }
     }
 
+    /** Host SBS telemetry v1 state (Apollo extension 0x300A), preserved as its exact wire body. */
+    public static void bridgeClHostSbsTelemetryState(byte[] payload) {
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.hostSbsTelemetryState(payload);
+        }
+    }
+
     public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         bridgeSession = new BridgeSession(videoRenderer, audioRenderer, connectionListener);
     }
@@ -447,6 +455,15 @@ public class MoonBridge {
     /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
     public static native int sendSetVideoMode(int width, int height, int framerateX100,
                                               int requestId, int bitrateKbps);
+
+    /**
+     * Enables, changes cadence, or disables Apollo host SBS telemetry v1.
+     *
+     * @return positive when queued, zero on send failure, or negative when the host did not
+     * advertise LI_FF_HOST_SBS_TELEMETRY_V1
+     */
+    public static native int sendHostSbsTelemetrySubscription(
+            boolean enabled, boolean focused, int requestId, int intervalMs);
 
     /** Request a fresh video IDR after a client-side decoder/surface transition. */
     public static native void requestIdrFrame();

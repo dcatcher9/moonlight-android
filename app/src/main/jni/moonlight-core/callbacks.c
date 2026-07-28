@@ -38,6 +38,7 @@ static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
 static jmethodID BridgeClDepthStatusMethod;
 static jmethodID BridgeClVideoModeAckMethod;
+static jmethodID BridgeClHostSbsTelemetryStateMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
 
@@ -104,6 +105,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
     BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(I)V");
     BridgeClVideoModeAckMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClVideoModeAck", "(IIIIII)V");
+    BridgeClHostSbsTelemetryStateMethod = (*env)->GetStaticMethodID(
+            env, clazz, "bridgeClHostSbsTelemetryState", "([B)V");
 }
 
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
@@ -392,6 +395,25 @@ void BridgeClVideoModeAck(uint16_t requestId, uint16_t status,
     }
 }
 
+void BridgeClHostSbsTelemetryState(
+        const uint8_t payload[HOST_SBS_TELEMETRY_STATE_SIZE]) {
+    JNIEnv* env = GetThreadEnv();
+    jbyteArray payloadArray = (*env)->NewByteArray(env, HOST_SBS_TELEMETRY_STATE_SIZE);
+    if (payloadArray == NULL) {
+        return;
+    }
+
+    (*env)->SetByteArrayRegion(env, payloadArray, 0, HOST_SBS_TELEMETRY_STATE_SIZE,
+                              (const jbyte*)payload);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass,
+                                 BridgeClHostSbsTelemetryStateMethod, payloadArray);
+    (*env)->DeleteLocalRef(env, payloadArray);
+    if ((*env)->ExceptionCheck(env)) {
+        // We will crash here
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
 void BridgeClRumbleTriggers(unsigned short controllerNumber, unsigned short leftTrigger, unsigned short rightTrigger) {
     JNIEnv* env = GetThreadEnv();
 
@@ -465,6 +487,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .setControllerLED = BridgeClSetControllerLED,
         .depthStatus = BridgeClDepthStatus,
         .videoModeAck = BridgeClVideoModeAck,
+        .hostSbsTelemetryState = BridgeClHostSbsTelemetryState,
 };
 
 JNIEXPORT jint JNICALL

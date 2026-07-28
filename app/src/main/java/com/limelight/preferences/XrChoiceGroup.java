@@ -15,6 +15,8 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.widget.AppCompatButton;
+import androidx.core.content.ContextCompat;
+import androidx.core.graphics.ColorUtils;
 import androidx.core.view.ViewCompat;
 
 import com.limelight.R;
@@ -37,16 +39,6 @@ public final class XrChoiceGroup extends ViewGroup {
     static final int CORNER_RIGHT = 1 << 2;
     static final int CORNER_BOTTOM = 1 << 3;
 
-    private static final int BASE_COLOR = Color.rgb(48, 52, 58);
-    private static final int DISABLED_COLOR = Color.rgb(34, 38, 43);
-    private static final int SELECTED_COLOR = Color.rgb(54, 104, 166);
-    private static final int SELECTED_FOCUS_COLOR = Color.rgb(65, 121, 190);
-    private static final int HOVER_COLOR = Color.rgb(69, 106, 152);
-    private static final int PRESSED_COLOR = Color.rgb(84, 125, 184);
-    private static final int BORDER_COLOR = Color.rgb(95, 99, 104);
-    private static final int DIVIDER_COLOR = Color.rgb(79, 86, 96);
-    private static final int FOCUS_COLOR = Color.rgb(215, 229, 255);
-
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path segmentPath = new Path();
     private final RectF groupBounds = new RectF();
@@ -56,6 +48,16 @@ public final class XrChoiceGroup extends ViewGroup {
     private final float cornerRadius;
     private final float borderWidth;
     private final float focusWidth;
+    private final int baseColor;
+    private final int disabledColor;
+    private final int disabledSelectedColor;
+    private final int selectedColor;
+    private final int selectedFocusColor;
+    private final int hoverColor;
+    private final int pressedColor;
+    private final int borderColor;
+    private final int dividerColor;
+    private final int focusColor;
     private String selectedValue;
     private OnChoiceSelectedListener listener;
     private boolean stacked;
@@ -71,9 +73,24 @@ public final class XrChoiceGroup extends ViewGroup {
     public XrChoiceGroup(@NonNull Context context, @Nullable AttributeSet attrs,
                          int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        cornerRadius = dp(14);
+        cornerRadius = getResources().getDimension(R.dimen.xr_radius_card);
         borderWidth = dp(1);
         focusWidth = dp(3);
+        baseColor = color(R.color.xr_surface_raised);
+        disabledColor = color(R.color.xr_segment_disabled);
+        disabledSelectedColor = color(R.color.xr_border_panel);
+        selectedColor = color(R.color.xr_accent_deep);
+        // Resolve the translucent interaction roles once. Drawing stays allocation-free, while
+        // hover, press and selected-focus remain visibly distinct without inventing new colours.
+        selectedFocusColor = ColorUtils.compositeColors(
+                color(R.color.xr_accent_focus_overlay), selectedColor);
+        hoverColor = ColorUtils.compositeColors(
+                color(R.color.xr_accent_focus_overlay), baseColor);
+        pressedColor = ColorUtils.compositeColors(
+                color(R.color.xr_accent_pressed_overlay), selectedColor);
+        borderColor = color(R.color.xr_border);
+        dividerColor = color(R.color.xr_border);
+        focusColor = color(R.color.xr_accent_bright);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
         setWillNotDraw(false);
@@ -348,7 +365,7 @@ public final class XrChoiceGroup extends ViewGroup {
         }
 
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(isEnabled() ? BASE_COLOR : DISABLED_COLOR);
+        paint.setColor(isEnabled() ? baseColor : disabledColor);
         canvas.drawRoundRect(groupBounds, cornerRadius, cornerRadius, paint);
 
         for (int i = 0; i < getChildCount(); i++) {
@@ -378,7 +395,7 @@ public final class XrChoiceGroup extends ViewGroup {
             buildSegmentPath(segmentBounds, segmentCornerMask(i), focusWidth / 2f);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(focusWidth);
-            paint.setColor(FOCUS_COLOR);
+            paint.setColor(focusColor);
             canvas.drawPath(segmentPath, paint);
         }
 
@@ -386,7 +403,7 @@ public final class XrChoiceGroup extends ViewGroup {
         outlineBounds.inset(borderWidth / 2f, borderWidth / 2f);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(borderWidth);
-        paint.setColor(BORDER_COLOR);
+        paint.setColor(borderColor);
         canvas.drawRoundRect(outlineBounds, cornerRadius, cornerRadius, paint);
     }
 
@@ -423,19 +440,19 @@ public final class XrChoiceGroup extends ViewGroup {
 
     private int segmentFillColor(View child) {
         if (!child.isEnabled()) {
-            return child.isActivated() ? Color.rgb(45, 58, 72) : Color.TRANSPARENT;
+            return child.isActivated() ? disabledSelectedColor : Color.TRANSPARENT;
         }
         if (child.isPressed()) {
-            return PRESSED_COLOR;
+            return pressedColor;
         }
         if (child.isActivated() && (child.isFocused() || child.isHovered())) {
-            return SELECTED_FOCUS_COLOR;
+            return selectedFocusColor;
         }
         if (child.isActivated()) {
-            return SELECTED_COLOR;
+            return selectedColor;
         }
         if (child.isFocused() || child.isHovered()) {
-            return HOVER_COLOR;
+            return hoverColor;
         }
         return Color.TRANSPARENT;
     }
@@ -443,7 +460,7 @@ public final class XrChoiceGroup extends ViewGroup {
     private void drawDividers(Canvas canvas) {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(borderWidth);
-        paint.setColor(DIVIDER_COLOR);
+        paint.setColor(dividerColor);
         float inset = cornerRadius * 0.48f;
         for (int i = 0; i < getChildCount(); i++) {
             View child = getChildAt(i);
@@ -554,6 +571,10 @@ public final class XrChoiceGroup extends ViewGroup {
 
     private float dp(float value) {
         return value * getResources().getDisplayMetrics().density;
+    }
+
+    private int color(int resourceId) {
+        return ContextCompat.getColor(getContext(), resourceId);
     }
 
     @Override

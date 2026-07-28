@@ -8,6 +8,8 @@ import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
+
 import com.limelight.AppView;
 import com.limelight.LimeLog;
 import com.limelight.R;
@@ -170,17 +172,20 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         // covering the app artwork with a large, redundant play icon.
         overlayView.setVisibility(View.GONE);
         if (!hostOnline) {
-            gridMask.setBackgroundColor(0x77000000);
+            gridMask.setBackgroundColor(ContextCompat.getColor(
+                    gridMask.getContext(), R.color.xr_scrim_medium));
             statusView.setText(R.string.pcview_menu_header_offline);
             statusView.setVisibility(View.VISIBLE);
         }
         else if (running) {
-            gridMask.setBackgroundColor(0x00000000);
+            gridMask.setBackgroundColor(ContextCompat.getColor(
+                    gridMask.getContext(), R.color.xr_scrim_clear));
             statusView.setText(R.string.xr_home_status_running);
             statusView.setVisibility(View.VISIBLE);
         }
         else {
-            gridMask.setBackgroundColor(0x00000000);
+            gridMask.setBackgroundColor(ContextCompat.getColor(
+                    gridMask.getContext(), R.color.xr_scrim_clear));
             statusView.setVisibility(View.GONE);
         }
     }

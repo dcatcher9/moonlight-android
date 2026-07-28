@@ -2,7 +2,6 @@ package com.limelight.ui.xrcontrols;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.util.AttributeSet;
@@ -10,7 +9,10 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
+
+import com.limelight.R;
 
 /**
  * Passive expand/collapse cue centered along the bottom edge of an XR mode tile.
@@ -20,14 +22,13 @@ import androidx.core.view.ViewCompat;
  * allocation.</p>
  */
 public final class XrModeChevronView extends View {
-    private static final int COLLAPSED_COLOR = Color.rgb(214, 229, 245);
-    private static final int EXPANDED_COLOR = Color.WHITE;
-
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private final int preferredWidth;
     private final int preferredHeight;
     private final float strokeWidth;
+    private final int collapsedColor;
+    private final int expandedColor;
 
     private boolean expanded;
     private final float[] geometry = new float[6];
@@ -43,15 +44,17 @@ public final class XrModeChevronView extends View {
     public XrModeChevronView(@NonNull Context context, @Nullable AttributeSet attrs,
                              int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        preferredWidth = dp(40);
-        preferredHeight = dp(18);
+        preferredWidth = getResources().getDimensionPixelSize(R.dimen.xr_control_compact);
+        preferredHeight = getResources().getDimensionPixelSize(R.dimen.xr_space_lg);
         strokeWidth = dp(3);
+        collapsedColor = ContextCompat.getColor(context, R.color.xr_accent_bright);
+        expandedColor = ContextCompat.getColor(context, R.color.xr_text_primary);
 
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(strokeWidth);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
-        paint.setColor(COLLAPSED_COLOR);
+        paint.setColor(collapsedColor);
 
         setMinimumWidth(preferredWidth);
         setMinimumHeight(preferredHeight);
@@ -70,7 +73,7 @@ public final class XrModeChevronView extends View {
             return;
         }
         this.expanded = expanded;
-        paint.setColor(expanded ? EXPANDED_COLOR : COLLAPSED_COLOR);
+        paint.setColor(expanded ? expandedColor : collapsedColor);
         rebuildPath(getWidth(), getHeight());
         invalidate();
     }

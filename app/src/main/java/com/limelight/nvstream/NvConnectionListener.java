@@ -36,6 +36,9 @@ public interface NvConnectionListener {
     void videoModeAck(int requestId, int status, int appliedWidth, int appliedHeight,
                       int appliedFramerateX100, int appliedBitrateKbps);
 
+    /** Exact 88-byte Apollo host-SBS telemetry v1 state body. */
+    void hostSbsTelemetryState(byte[] payload);
+
     /** Called after Apollo has accepted launch/resume and returned the bound session token. */
     void hostSessionEstablished(String hostSessionId, boolean resumed);
 }

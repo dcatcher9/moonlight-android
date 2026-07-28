@@ -53,4 +53,23 @@ public final class XrSparklineViewTest {
                 XrSparklineView.describeTrend(
                         new float[] {Float.NaN, 2.0f}, 2));
     }
+
+    @Test
+    public void shortHistoryUsesFixedNewestAlignedSlots() {
+        // Five slots span x=2..102. Three samples occupy only slots 2, 3, and 4.
+        assertEquals(52.0f,
+                XrSparklineView.sampleX(104.0f, 2.0f, 0, 3, 5), 0.0001f);
+        assertEquals(77.0f,
+                XrSparklineView.sampleX(104.0f, 2.0f, 1, 3, 5), 0.0001f);
+        assertEquals(102.0f,
+                XrSparklineView.sampleX(104.0f, 2.0f, 2, 3, 5), 0.0001f);
+    }
+
+    @Test
+    public void fullHistoryRetainsOldestLeftNewestRightLayout() {
+        assertEquals(2.0f,
+                XrSparklineView.sampleX(104.0f, 2.0f, 0, 5, 5), 0.0001f);
+        assertEquals(102.0f,
+                XrSparklineView.sampleX(104.0f, 2.0f, 4, 5, 5), 0.0001f);
+    }
 }

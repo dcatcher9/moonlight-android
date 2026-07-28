@@ -57,6 +57,7 @@ import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -840,15 +841,15 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         switch (details.state) {
             case ONLINE:
                 status.setText(R.string.pcview_menu_header_online);
-                status.setTextColor(0xFF81C995);
+                status.setTextColor(ContextCompat.getColor(this, R.color.xr_status_ok));
                 break;
             case OFFLINE:
                 status.setText(R.string.pcview_menu_header_offline);
-                status.setTextColor(0xFFFFB4AB);
+                status.setTextColor(ContextCompat.getColor(this, R.color.xr_danger));
                 break;
             default:
                 status.setText(R.string.xr_home_refreshing);
-                status.setTextColor(0xFFBDC1C6);
+                status.setTextColor(ContextCompat.getColor(this, R.color.xr_text_secondary));
                 break;
         }
     }

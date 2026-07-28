@@ -67,6 +67,7 @@ import android.widget.Toast;
 import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.preference.PreferenceManager;
 
 import org.xmlpull.v1.XmlPullParserException;
@@ -650,7 +651,8 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                 return;
             }
             titleView.setText(title);
-            titleView.setTextColor(error ? 0xFFFF8A80 : 0xFFFFFFFF);
+            titleView.setTextColor(ContextCompat.getColor(this,
+                    error ? R.color.xr_danger : R.color.xr_text_primary));
             detailView.setText(detail);
             progress.setVisibility(busy ? View.VISIBLE : View.INVISIBLE);
             dismiss.setVisibility(error ? View.VISIBLE : View.GONE);
@@ -667,7 +669,10 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
         LinearLayout layout = new LinearLayout(context);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 40, 50, 40);
+        int horizontalPadding = getResources().getDimensionPixelSize(R.dimen.xr_space_xl);
+        int verticalPadding = getResources().getDimensionPixelSize(R.dimen.xr_space_lg);
+        layout.setPadding(horizontalPadding, verticalPadding,
+                horizontalPadding, verticalPadding);
 
         final EditText otpInput = new EditText(context);
         otpInput.setHint("PIN");

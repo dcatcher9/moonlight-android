@@ -10,6 +10,8 @@ import android.widget.ProgressBar;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
+
 import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
@@ -128,7 +130,7 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
         if (obj.details.state == ComputerDetails.State.UNKNOWN) {
             prgView.setVisibility(View.VISIBLE);
             statusView.setText(R.string.xr_home_refreshing);
-            statusView.setTextColor(0xFFBDC1C6);
+            statusView.setTextColor(color(R.color.xr_text_secondary));
             setOptionalText(hintView, R.string.xr_home_refreshing_hint, true);
         }
         else {
@@ -145,7 +147,7 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
 
         if (obj.details.state == ComputerDetails.State.OFFLINE) {
             statusView.setText(R.string.pcview_menu_header_offline);
-            statusView.setTextColor(0xFFFFB4AB);
+            statusView.setTextColor(color(R.color.xr_danger));
             setOptionalText(hintView, R.string.xr_home_wake_hint, true);
             primaryAction.setText(R.string.xr_home_wake);
             primaryAction.setVisibility(View.VISIBLE);
@@ -160,7 +162,7 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
         else if (obj.details.state == ComputerDetails.State.ONLINE &&
                 obj.details.pairState != PairingManager.PairState.PAIRED) {
             statusView.setText(R.string.scut_not_paired);
-            statusView.setTextColor(0xFFFFDDB0);
+            statusView.setTextColor(color(R.color.xr_status_warn));
             setOptionalText(hintView, R.string.xr_home_pair_hint, true);
             primaryAction.setText(R.string.xr_home_pair);
             primaryAction.setVisibility(View.VISIBLE);
@@ -174,11 +176,11 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
             if (obj.details.state == ComputerDetails.State.ONLINE) {
                 if (obj.details.runningGameId != 0) {
                     statusView.setText(R.string.xr_home_status_running);
-                    statusView.setTextColor(0xFF8AB4F8);
+                    statusView.setTextColor(color(R.color.xr_accent));
                 }
                 else {
                     statusView.setText(R.string.pcview_menu_header_online);
-                    statusView.setTextColor(0xFF81C995);
+                    statusView.setTextColor(color(R.color.xr_status_ok));
                 }
                 setOptionalText(hintView, R.string.xr_home_open_library_hint, true);
             }
@@ -269,14 +271,15 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
                 ? R.string.xr_home_virtual_display_ready
                 : R.string.xr_home_virtual_display_unavailable);
         displayFactView.setTextColor(details.vDisplaySupported && details.vDisplayDriverReady
-                ? 0xFF81C995 : 0xFFFFB4AB);
+                ? color(R.color.xr_status_ok) : color(R.color.xr_danger));
         displayFactView.setVisibility(View.VISIBLE);
 
         boolean sessionActive = details.runningGameId != 0
                 || (details.hostSessionId != null && !details.hostSessionId.trim().isEmpty());
         sessionFactView.setText(sessionActive
                 ? R.string.xr_home_session_active : R.string.xr_home_session_ready);
-        sessionFactView.setTextColor(sessionActive ? 0xFF9AC7FF : 0xFFE7EDF4);
+        sessionFactView.setTextColor(sessionActive
+                ? color(R.color.xr_accent_bright) : color(R.color.xr_text_primary));
         sessionFactView.setVisibility(View.VISIBLE);
     }
 
@@ -289,6 +292,10 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
             return context.getString(R.string.xr_home_speed_gbps, speedMbps / 1000.0f);
         }
         return context.getString(R.string.xr_home_speed_mbps, speedMbps);
+    }
+
+    private int color(int resourceId) {
+        return ContextCompat.getColor(context, resourceId);
     }
 
     private String formatLinkSpeedOrUnavailable(int speedMbps) {

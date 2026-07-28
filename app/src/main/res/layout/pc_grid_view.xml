@@ -4,12 +4,12 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:clipToPadding="false"
-    android:columnWidth="390dp"
+    android:columnWidth="@dimen/xr_pc_grid_card_width"
     android:focusable="true"
     android:focusableInTouchMode="true"
     android:gravity="center"
-    android:horizontalSpacing="16dp"
+    android:horizontalSpacing="@dimen/xr_space_lg"
     android:numColumns="auto_fit"
-    android:padding="10dp"
+    android:padding="@dimen/xr_space_md"
     android:stretchMode="columnWidth"
-    android:verticalSpacing="16dp" />
+    android:verticalSpacing="@dimen/xr_space_lg" />

@@ -12,6 +12,7 @@
     <dimen name="xr_pc_hero_card_height">250dp</dimen>
     <dimen name="xr_pc_hero_grid_height">278dp</dimen>
     <dimen name="xr_pc_grid_card_width">390dp</dimen>
+    <dimen name="xr_pc_grid_card_height">148dp</dimen>
 
 
     <!--
@@ -42,7 +43,8 @@
     <dimen name="xr_space_lg">18dp</dimen>
     <dimen name="xr_space_xl">24dp</dimen>
 
-    <!-- Gaze targets: compact rows, standard controls, primary actions. -->
+    <!-- Gaze targets: compact rows, standard controls, primary actions, and connected choices
+         whose localized labels may wrap to two lines. -->
     <!-- Icon sizes. Two steps only: inline sits beside text, tile stands alone on a control.
          Both are larger than a handheld UI would use. These panes are read at XR focal distance,
          where an icon sized to the text beside it stops being identifiable. -->
@@ -52,4 +54,5 @@
     <dimen name="xr_control_compact">40dp</dimen>
     <dimen name="xr_control_standard">56dp</dimen>
     <dimen name="xr_control_primary">64dp</dimen>
+    <dimen name="xr_control_choice">80dp</dimen>
 </resources>

@@ -5,6 +5,12 @@ final class ClientSbsResizePolicy {
     static final long EGL_STAGE_TIMEOUT_MS = 2_000L;
     static final long SWAP_FALLBACK_TIMEOUT_MS = 8_000L;
     static final long POST_ACK_SWAP_TIMEOUT_MS = 2_000L;
+    /**
+     * A first-use model extraction/verification plus delegate compilation can legitimately exceed
+     * the ordinary packed-swap proof window. Keep that exception bounded so a genuinely stuck
+     * renderer still fails closed.
+     */
+    static final long COLD_BACKEND_MAX_WAIT_MS = 30_000L;
 
     enum Stage {
         IDLE,
@@ -56,6 +62,27 @@ final class ClientSbsResizePolicy {
             default:
                 return 0L;
         }
+    }
+
+    /**
+     * Once the host ACK and matching decoder output have established authoritative geometry, an
+     * initializing AI backend is not a surface-transition failure. Poll it using the ordinary
+     * proof quantum, but never extend the transaction beyond the cold-start ceiling.
+     */
+    static boolean shouldContinueWaitingForColdBackend(
+            Stage stage, boolean postAckDecoderOutputReady,
+            boolean backendInitializing, long postAckElapsedMillis) {
+        return stage == Stage.WAITING_FOR_SWAP
+                && postAckDecoderOutputReady
+                && backendInitializing
+                && postAckElapsedMillis >= 0L
+                && postAckElapsedMillis < COLD_BACKEND_MAX_WAIT_MS;
+    }
+
+    static long boundedColdBackendPollMillis(long postAckElapsedMillis) {
+        long remaining = COLD_BACKEND_MAX_WAIT_MS
+                - Math.max(0L, postAckElapsedMillis);
+        return Math.max(0L, Math.min(POST_ACK_SWAP_TIMEOUT_MS, remaining));
     }
 
     static boolean sameGeometry(int firstWidth, int firstHeight,

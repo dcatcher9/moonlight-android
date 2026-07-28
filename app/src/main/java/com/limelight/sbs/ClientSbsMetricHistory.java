@@ -1,7 +1,7 @@
 package com.limelight.sbs;
 
 /**
- * Fixed-capacity ring of recent samples for one Client-SBS metric.
+ * Fixed-capacity ring of recent samples for one SBS depth metric.
  *
  * <p>Several of these numbers say nothing as a single reading. A pop of 1.20 is either a scene the
  * controller judged risky or a scene it re-classified a moment ago; a cut count of 7 is either
@@ -17,9 +17,10 @@ package com.limelight.sbs;
  */
 public final class ClientSbsMetricHistory {
     /**
-     * Roughly two minutes at a per-frame-ish sample rate, and small enough that the whole set of
-     * tracked metrics is a few kilobytes. Sized for the questions being asked -- "did pop just
-     * reset", "are cuts climbing while I scroll" -- not for long-term trends, which the log holds.
+     * 120 sample slots, with a wall-clock span determined by the producer cadence, and small enough
+     * that the whole set of tracked metrics is a few kilobytes. Sized for the questions being
+     * asked -- "did pop just reset", "are cuts climbing while I scroll" -- not for long-term
+     * trends, which the log holds.
      */
     public static final int CAPACITY = 120;
 

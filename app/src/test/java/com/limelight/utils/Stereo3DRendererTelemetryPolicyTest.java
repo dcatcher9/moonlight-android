@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import com.limelight.sbs.SbsDepthTelemetrySnapshot;
+
 import org.junit.Test;
 
 public class Stereo3DRendererTelemetryPolicyTest {
@@ -36,5 +38,22 @@ public class Stereo3DRendererTelemetryPolicyTest {
         assertEquals(240, Stereo3DRenderer.healthTelemetryRetryPolls(5));
         assertEquals(240, Stereo3DRenderer.healthTelemetryRetryPolls(100));
         assertEquals(240, Stereo3DRenderer.healthTelemetryRetryPolls(Integer.MAX_VALUE));
+    }
+
+    @Test
+    public void localDepthValidityExcludesUninitializedProfileDefaults() {
+        int waiting = Stereo3DRenderer.depthTelemetryValidFields(false, false);
+        assertTrue((waiting & SbsDepthTelemetrySnapshot.VALID_EFFECTIVE) != 0);
+        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
+        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
+        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SUBJECT) != 0);
+        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
+
+        int classified = Stereo3DRenderer.depthTelemetryValidFields(false, true);
+        assertTrue((classified & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
+        assertFalse((classified & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
+
+        int ready = Stereo3DRenderer.depthTelemetryValidFields(true, true);
+        assertEquals(SbsDepthTelemetrySnapshot.VALID_ALL, ready);
     }
 }
