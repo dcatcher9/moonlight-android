@@ -26,7 +26,7 @@ JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-25.0.3.9-hotspot" \
 - Other useful tasks (same flavor prefix):
   - `:app:assembleNonRoot_gameDebug` — build the APK without installing.
   - `:app:compileNonRoot_gameDebugJavaWithJavac` — fast compile-only sanity check.
-- Installed application id: **`com.limelight.noirdebug`**
+- Installed application id: **`com.limelight.moonlight3ddebug`**
 - Launcher activity: **`com.limelight.PcView`**
 
 `installNonRoot_gameDebug` performs an update install of that existing debug application and
@@ -36,8 +36,8 @@ creates APKs; it does not deploy anything. Do not substitute `assembleNonRoot`, 
 complete variant name nor an install task.
 
 > **Physical-headset data safety:** never run `connectedNonRoot_gameDebugAndroidTest`, an
-> `uninstall*` task, `adb uninstall com.limelight.noirdebug`, or
-> `pm clear com.limelight.noirdebug` on the user's Galaxy XR. The connected Android-test workflow
+> `uninstall*` task, `adb uninstall com.limelight.moonlight3ddebug`, or
+> `pm clear com.limelight.moonlight3ddebug` on the user's Galaxy XR. The connected Android-test workflow
 > can uninstall the target package and erase all Artemis data. If update-install reports a signing
 > or downgrade conflict, stop instead of uninstalling the existing app. See
 > [client-sbs-evaluation.md](client-sbs-evaluation.md) for the data-preserving manual
@@ -96,7 +96,7 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
 
 - **Launch the app:**
   ```bash
-  "$ADB" shell am start -n com.limelight.noirdebug/com.limelight.PcView
+  "$ADB" shell am start -n com.limelight.moonlight3ddebug/com.limelight.PcView
   ```
 - **Presentation mode** is chosen from the XR control bar inside an active stream (2D,
   Raw SBS, Host 3D, or Client 3D). A fresh host connection starts in Normal; only a

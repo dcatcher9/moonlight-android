@@ -302,6 +302,7 @@ public class XrStreamPresenter {
     private BarItem settingsItem;
     private BarItem cinemaItem;
     private BarItem statsItem;
+    private BarItem dumpItem;
     private BarItem expansionItem;
     private boolean secondaryActionsExpanded;
 
@@ -600,6 +601,16 @@ public class XrStreamPresenter {
         return mode == PresenterMode.CLIENT_SBS_AI
                 && streamReady
                 && (!modeSwitchInProgress || hdrTransitionInProgress);
+    }
+
+    static boolean resetsHostDepthStatusAtTransitionStart(
+            PresenterMode previousMode, PresenterMode nextMode) {
+        return previousMode != nextMode && nextMode == PresenterMode.HOST_SBS_AI;
+    }
+
+    static boolean resetsHostDepthStatusAtTransitionCommit(
+            PresenterMode previousMode, PresenterMode nextMode) {
+        return previousMode != nextMode && previousMode == PresenterMode.HOST_SBS_AI;
     }
 
     /**
@@ -1531,12 +1542,13 @@ public class XrStreamPresenter {
         cinemaView.onTap = this::onCinemaTileTapped;
         library.onTap = this::openLibrary;
         stats.onTap = this::onStatsTileTapped;
-        dump.onTap = XrStreamPresenter::requestHostDebugDump;
+        dump.onTap = this::requestHostDebugDump;
         endSession.onTap = this::requestEndSession;
         expansion.onTap = this::toggleSecondaryActions;
         settingsItem = settings;
         cinemaItem = cinemaView;
         statsItem = stats;
+        dumpItem = dump;
         expansionItem = expansion;
 
         barItems.clear();
@@ -1798,6 +1810,7 @@ public class XrStreamPresenter {
     }
 
     private void updateGlancePanel() {
+        updateHostDebugDumpAvailability();
         if (glancePanel == null || glancePanel.isDisposed() || glanceIdentityView == null) {
             return;
         }
@@ -2129,6 +2142,22 @@ public class XrStreamPresenter {
 
     static int expansionIconResource(boolean expanded) {
         return expanded ? R.drawable.ic_remove_base : R.drawable.ic_add_base;
+    }
+
+    /**
+     * Apollo can produce a 3D diagnostic dump only while its own depth pipeline owns the stream.
+     * Raw SBS is already-packed application content, while Normal and Client SBS have no host
+     * depth result to capture. Transitions are excluded so one tap cannot be attributed to two
+     * different stream geometries or pipeline generations.
+     */
+    static boolean isHostDebugDumpAvailable(
+            PresenterMode mode, boolean streamReady, boolean controlsEnabled,
+            boolean transitionInProgress, boolean depthReady) {
+        return mode == PresenterMode.HOST_SBS_AI
+                && streamReady
+                && controlsEnabled
+                && !transitionInProgress
+                && depthReady;
     }
 
     static float controlBarTileUnits(boolean expanded) {
@@ -3614,6 +3643,16 @@ public class XrStreamPresenter {
         return depthStatusPhase == 1 || depthStatusPhase == 3;
     }
 
+    private void resetHostDepthStatus() {
+        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
+        depthStatusPendingPhase = 0;
+        depthStatusPhase = 0;
+        if (depthStatusPanel != null && !depthStatusPanel.isDisposed()) {
+            depthStatusPanel.setEnabled(false);
+        }
+        updateHostDebugDumpAvailability();
+    }
+
     private static int depthStatusMessage(int phase) {
         return phase == 3 ? R.string.xr_depth_initializing : R.string.xr_depth_loading;
     }
@@ -3626,10 +3665,12 @@ public class XrStreamPresenter {
      * every switch) doesn't flash the panel; only genuinely slow first-use loads surface it.
      */
     public void onDepthStatus(int phase) {
+        // Preserve an early ready/failure push even if the panel hierarchy has not been created
+        // yet. Dump 3D requires an affirmative phase-2 ownership signal, not merely "not busy".
+        depthStatusPhase = phase;
         if (depthStatusPanel == null) {
             return;
         }
-        depthStatusPhase = phase;
         depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
         if (phase == 1 || phase == 3) {
             depthStatusPendingPhase = phase;
@@ -5084,6 +5125,13 @@ public class XrStreamPresenter {
         revealDockTemporarily();
         PresenterMode previousMode = currentPresenterMode;
         PresenterMode nextMode = item.selectsMode;
+        // A ready push belongs to one host-depth generation. Clear it before asking Apollo to
+        // enter Host SBS AI so an old session cannot briefly authorize Dump 3D while the
+        // replacement pipeline is still loading. A new phase-2 push may then arrive at any point
+        // during the transition without being erased again at commit.
+        if (resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
+            resetHostDepthStatus();
+        }
         boolean wasClientSbs = (previousMode == PresenterMode.CLIENT_SBS_AI);
         boolean isClientSbs = (nextMode == PresenterMode.CLIENT_SBS_AI);
 
@@ -6218,6 +6266,9 @@ public class XrStreamPresenter {
             return;
         }
 
+        if (resetsHostDepthStatusAtTransitionCommit(previousMode, nextMode)) {
+            resetHostDepthStatus();
+        }
         currentPresenterMode = nextMode;
         reconcileHostSbsTelemetrySubscription();
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
@@ -6557,10 +6608,32 @@ public class XrStreamPresenter {
                 XrViewStateStore.Mode.valueOf(currentPresenterMode.name()));
     }
 
-    /** Client "Dump 3D" button: ask the host to dump one SBS debug frame (2D source / depth /
-     *  SBS result) to its configured debug dir, for offline diagnosis of the reprojection.
-     *  Only produces files when a host depth-SBS mode is active on the host. */
-    private static void requestHostDebugDump() {
+    private boolean hostDebugDumpAvailable() {
+        boolean transitionInProgress = modeSwitchInProgress
+                || pendingDecoderTransitionMode != null
+                || liveQualityTransactionBusy();
+        return isHostDebugDumpAvailable(
+                currentPresenterMode, streamPresentationReady, sessionControlsEnabled,
+                transitionInProgress, depthStatusPhase == 2);
+    }
+
+    private void updateHostDebugDumpAvailability() {
+        if (dumpItem != null) {
+            dumpItem.setEnabled(hostDebugDumpAvailable());
+        }
+    }
+
+    /** Client "Dump 3D" button: ask the host to dump one SBS debug frame (2D source / raw depth /
+     *  processed depth / SBS result) to its configured debug dir, for offline diagnosis of the
+     *  host reprojection. */
+    private void requestHostDebugDump() {
+        // Keep the protocol boundary guarded even if a stale accessibility or controller event
+        // reaches this listener after the tile was disabled during a mode transition.
+        if (!hostDebugDumpAvailable()) {
+            LimeLog.warning("XR: ignoring host SBS debug dump outside stable Host SBS AI");
+            updateHostDebugDumpAvailability();
+            return;
+        }
         LimeLog.info("XR: requesting host SBS debug frame dump");
         MoonBridge.sendSbsDebugDump();
     }
@@ -7257,6 +7330,7 @@ public class XrStreamPresenter {
         settingsItem = null;
         cinemaItem = null;
         statsItem = null;
+        dumpItem = null;
         expansionItem = null;
         secondaryBarItems.clear();
         secondaryActionsExpanded = false;

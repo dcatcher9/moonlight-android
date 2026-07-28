@@ -877,7 +877,7 @@ On the user's physical Galaxy XR, never run Gradle's connected Android test task
 target application afterward and erases global defaults, current-session settings, certificates,
 and pairings. Install
 the main and test APKs with `adb install -r`, invoke instrumentation manually, and uninstall only
-`com.limelight.noirdebug.test`.
+`com.limelight.moonlight3ddebug.test`.
 
 For every mode/surface change, test:
 

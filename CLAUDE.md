@@ -9,8 +9,9 @@ for [Sunshine 3D](https://github.com/dcatcher9/Apollo-3D) / [Sunshine](https://g
 It is a fork of [moonlight-android](https://github.com/moonlight-stream/moonlight-android)
 with many extra features. The Java package is `com.limelight` (historical name).
 
-The active branch is `moonlight-noir`. Application IDs remain release `com.limelight.noir`
-and debug `com.limelight.noirdebug`; both flavors use the visible name "Moonlight 3D".
+The active branch is `moonlight-noir`. Application IDs are release
+`com.limelight.moonlight3d` and debug `com.limelight.moonlight3ddebug`; both flavors use
+the visible name "Moonlight 3D".
 
 ### Current focus: Android XR (Galaxy XR) SBS support — XR-ONLY build
 
@@ -47,11 +48,12 @@ selected depth/reprojection pipeline on the headset before SceneCore splits the 
   The Bash tool here runs Git Bash; the `gradlew` shell script works from it.
 - Install/run on a connected device: `./gradlew :app:installNonRoot_gameDebug`. The launcher
   activity is `com.limelight.PcView`. This is an update-install of
-  `com.limelight.noirdebug` and preserves its preferences, certificates, pairings, and profiles.
+  `com.limelight.moonlight3ddebug` and preserves its preferences, certificates, pairings, and
+  profiles.
   (The XR control bar only appears inside an active stream.)
 - **Physical-headset data safety:** never run `connectedNonRoot_gameDebugAndroidTest`,
-  `uninstallNonRoot_gameDebug`, `adb uninstall com.limelight.noirdebug`, or
-  `pm clear com.limelight.noirdebug` on the user's Galaxy XR.
+  `uninstallNonRoot_gameDebug`, `adb uninstall com.limelight.moonlight3ddebug`, or
+  `pm clear com.limelight.moonlight3ddebug` on the user's Galaxy XR.
   Gradle's connected-test task uninstalls the target package after testing and erases all app
   data. Follow the update-install/manual-instrumentation procedure in
   [docs/client-sbs-evaluation.md](docs/client-sbs-evaluation.md), then uninstall only the

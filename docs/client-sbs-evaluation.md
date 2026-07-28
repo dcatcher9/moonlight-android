@@ -404,12 +404,13 @@ through the same packed-GL native path.
 On the physical headset:
 
 - Use only update-install (`:app:installNonRoot_gameDebug` or `adb install -r`) for
-  `com.limelight.noirdebug`.
-- Never run `adb uninstall com.limelight.noirdebug`, `pm clear com.limelight.noirdebug`,
+  `com.limelight.moonlight3ddebug`.
+- Never run `adb uninstall com.limelight.moonlight3ddebug`,
+  `pm clear com.limelight.moonlight3ddebug`,
   `uninstallAll`, or a Gradle uninstall task.
 - If update-install reports a signature or downgrade conflict, stop. Do not solve it by
   uninstalling the target app.
-- After instrumentation, uninstall only `com.limelight.noirdebug.test`.
+- After instrumentation, uninstall only `com.limelight.moonlight3ddebug.test`.
 
 The connected-test task is acceptable only on a disposable emulator whose data may be erased.
 
@@ -436,12 +437,12 @@ if ($LASTEXITCODE -ne 0) { throw "Main APK update-install failed; do not uninsta
 if ($LASTEXITCODE -ne 0) { throw "Test APK update-install failed" }
 
 $TestOutput = @(& $Adb -s $env:ANDROID_SERIAL shell am instrument -w -e class $Class `
-    com.limelight.noirdebug.test/androidx.test.runner.AndroidJUnitRunner 2>&1)
+    com.limelight.moonlight3ddebug.test/androidx.test.runner.AndroidJUnitRunner 2>&1)
 $TestExit = $LASTEXITCODE
 $TestOutput | ForEach-Object { Write-Host $_ }
 $TestPassed = $TestExit -eq 0 -and [bool]($TestOutput -match '^OK \(')
 
-& $Adb -s $env:ANDROID_SERIAL uninstall com.limelight.noirdebug.test
+& $Adb -s $env:ANDROID_SERIAL uninstall com.limelight.moonlight3ddebug.test
 if (-not $TestPassed) { throw "Client SBS GPU smoke test failed" }
 ```
 
@@ -528,7 +529,7 @@ remain attributable:
 $Benchmark = "com.limelight.utils.ClientSbsMidasGpuBenchmarkInstrumentedTest"
 & $Adb -s $env:ANDROID_SERIAL shell am instrument -w `
     -e class "$Benchmark#productionMidas352x192" `
-    com.limelight.noirdebug.test/androidx.test.runner.AndroidJUnitRunner
+    com.limelight.moonlight3ddebug.test/androidx.test.runner.AndroidJUnitRunner
 
 & $Adb -s $env:ANDROID_SERIAL logcat -d -s ClientSbsGpuBench:I ClientSbsGpu:I tflite:I '*:S'
 ```
@@ -666,7 +667,7 @@ final compositor-present timestamp.
 Capture a clean log window around one stream:
 
 ```powershell
-$Package = "com.limelight.noirdebug"
+$Package = "com.limelight.moonlight3ddebug"
 & $Adb -s $env:ANDROID_SERIAL logcat -c
 & $Adb -s $env:ANDROID_SERIAL shell am force-stop $Package
 & $Adb -s $env:ANDROID_SERIAL shell am start -n "$Package/com.limelight.PcView"
@@ -707,7 +708,8 @@ the entire capture. Collect at least 15 minutes after warm-up and record:
 - App CPU core-equivalent load, GPU busy/clock, and Android thermal status.
 - HDR path and selected presentation target format for the run.
 - Visible depth quality, judder, black/flat frames, thermal warnings, and discomfort.
-- `adb shell dumpsys meminfo com.limelight.noirdebug` and `adb shell dumpsys thermalservice` at
+- `adb shell dumpsys meminfo com.limelight.moonlight3ddebug` and
+  `adb shell dumpsys thermalservice` at
   consistent points.
 
 Optimize the stage with sustained latency or an exceptional fault, not an isolated maximum. Current
