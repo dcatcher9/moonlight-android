@@ -1,9 +1,12 @@
 package com.limelight.ui;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Activity;
+import android.text.TextUtils;
 import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.LinearLayout;
 import android.widget.TableLayout;
 import android.widget.TableRow;
@@ -84,8 +87,9 @@ public final class XrStatsTableLayoutTest {
         for (int i = 0; i < samples.length; i++) {
             samples[i] = i % 7;
         }
-        addTrend.invoke(presenter, "Pop strength",
-                "valid 100.0% | range 2.8467 | pop 2.000 | subject 0.884 | collapsed no",
+        String trendValue =
+                "valid 100.0% | range 2.8467 | pop 2.000 | subject 0.884 | collapsed no";
+        addTrend.invoke(presenter, "Pop strength", trendValue,
                 0xFFFFFFFF, samples, false, 0f, 1f);
 
         int raster = intConstant("STATS_RASTER_WIDTH");
@@ -110,6 +114,16 @@ public final class XrStatsTableLayoutTest {
         LinearLayout trendContent = (LinearLayout) row.getChildAt(1);
         assertTrue("bounded trend cell should contain the value and sparkline",
                 trendContent.getChildCount() == 2);
+        TextView value = (TextView) trendContent.getChildAt(0);
+        assertEquals("trend telemetry must remain one row high", 1, value.getMaxLines());
+        assertEquals("long trend telemetry must truncate instead of wrapping",
+                TextUtils.TruncateAt.END, value.getEllipsize());
+        assertEquals("ellipsis policy must not discard the accessible full value",
+                trendValue, value.getText().toString());
+        AccessibilityNodeInfo accessibility = value.createAccessibilityNodeInfo();
+        assertEquals("accessibility must expose the untruncated telemetry value",
+                trendValue, accessibility.getText().toString());
+        accessibility.recycle();
         assertTrue("trend cell should carry a sparkline after its value",
                 trendContent.getChildAt(1) instanceof XrSparklineView);
         View spark = trendContent.getChildAt(1);

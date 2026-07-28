@@ -10,6 +10,7 @@ import android.view.View;
 import android.widget.LinearLayout;
 
 import androidx.appcompat.view.ContextThemeWrapper;
+import androidx.core.content.ContextCompat;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.limelight.R;
@@ -160,5 +161,22 @@ public class XrBitrateControlTest {
         assertEquals("50000", noHint.getSelectedChoiceId());
         XrSegmentedLadder unmarked = (XrSegmentedLadder) noHint.getChildAt(0);
         assertEquals(View.GONE, unmarked.recommendationMarker().getVisibility());
+    }
+
+    @Test
+    public void recommendationMarkerContrastsWithTheSelectedRung() {
+        Context context = themedContext();
+        XrBitrateControl control = new XrBitrateControl(context);
+        control.setChoices(ladder(), "100000", 100000, "recommended", value -> true);
+        XrSegmentedLadder ladder = (XrSegmentedLadder) control.getChildAt(0);
+
+        assertEquals(
+                ContextCompat.getColor(context, R.color.xr_on_accent),
+                ladder.recommendationMarker().getImageTintList().getDefaultColor());
+
+        assertTrue(control.setSelectedChoiceId("50000"));
+        assertEquals(
+                ContextCompat.getColor(context, R.color.xr_accent),
+                ladder.recommendationMarker().getImageTintList().getDefaultColor());
     }
 }

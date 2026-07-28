@@ -2389,7 +2389,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+            streamContainer.getXrPresenter().onHostActivityStarted();
+        }
+    }
+
+    @Override
     protected void onStop() {
+        if (streamContainer != null && streamContainer.getXrPresenter() != null) {
+            streamContainer.getXrPresenter().onHostActivityStopped();
+        }
         super.onStop();
 
         SpinnerDialog.closeDialogs(this);

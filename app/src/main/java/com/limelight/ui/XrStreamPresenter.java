@@ -403,14 +403,17 @@ public class XrStreamPresenter {
     private static final long GLANCE_LOAD_INTERVAL_MS = 1000L;
     private final android.os.Handler glanceLoadHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean hostActivityStarted;
     private final Runnable glanceLoadRunnable = new Runnable() {
         @Override
         public void run() {
-            if (glanceLoadView == null) {
+            if (!hostActivityStarted || glanceLoadView == null) {
                 return;
             }
             updateGlanceLoad(devicePerformanceSampler.sample());
-            glanceLoadHandler.postDelayed(this, GLANCE_LOAD_INTERVAL_MS);
+            if (hostActivityStarted && glanceLoadView != null) {
+                glanceLoadHandler.postDelayed(this, GLANCE_LOAD_INTERVAL_MS);
+            }
         }
     };
 
@@ -1742,8 +1745,34 @@ public class XrStreamPresenter {
                 new FloatSize2d(GLANCE_WIDTH_METERS, GLANCE_HEIGHT_METERS),
                 "xr-stream-glance", glancePose(videoHeightMeters), surfaceEntity);
         glancePanel.setEnabled(true);
+        reconcileGlanceLoadTicker();
+    }
+
+    /**
+     * Match passive device-load sampling to the host Activity's visible lifecycle. START/STOP is
+     * intentional: a translucent dialog may pause the Activity while its glance panel is visible.
+     */
+    public void onHostActivityStarted() {
+        if (hostActivityStarted) {
+            return;
+        }
+        hostActivityStarted = true;
+        devicePerformanceSampler.resetCpuBaseline();
+        reconcileGlanceLoadTicker();
+    }
+
+    /** Stop all passive load sampling while the streaming Activity is backgrounded. */
+    public void onHostActivityStopped() {
+        hostActivityStarted = false;
         glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
-        glanceLoadHandler.post(glanceLoadRunnable);
+        devicePerformanceSampler.resetCpuBaseline();
+    }
+
+    private void reconcileGlanceLoadTicker() {
+        glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
+        if (hostActivityStarted && glanceLoadView != null) {
+            glanceLoadHandler.post(glanceLoadRunnable);
+        }
     }
 
     private TextView glanceText(int color) {
@@ -4519,6 +4548,8 @@ public class XrStreamPresenter {
         value.setPadding(0, statsDp(3), 0, statsDp(3));
 
         if (STATS_ROW_TREND.equals(tag)) {
+            value.setSingleLine(true);
+            value.setEllipsize(android.text.TextUtils.TruncateAt.END);
             // Keep the value and its plot inside one bounded table cell. The previous third
             // global TableLayout column depended on runtime font measurement to remain inside
             // SceneCore's clipped panel raster. Sharing the remaining width makes the plot's
@@ -7142,6 +7173,7 @@ public class XrStreamPresenter {
      * {@code StreamContainer.onDestroy()} ordering.
      */
     public void onDestroy() {
+        onHostActivityStopped();
         stopHostSbsTelemetrySubscription();
         modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
         dockVisibilityHandler.removeCallbacks(collapseDockRunnable);
@@ -7213,7 +7245,6 @@ public class XrStreamPresenter {
         glanceIdentityView = null;
         glanceModeView = null;
         glanceStreamView = null;
-        glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
         glanceLoadView = null;
         glanceStatusView = null;
         controlBarRow = null;

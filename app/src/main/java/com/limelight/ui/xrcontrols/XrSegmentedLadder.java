@@ -1,6 +1,7 @@
 package com.limelight.ui.xrcontrols;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
 import android.util.AttributeSet;
 import android.util.TypedValue;
@@ -247,6 +248,13 @@ public final class XrSegmentedLadder extends LinearLayout {
             segment.setTextColor(color(i == selectedIndex && enabled
                     ? R.color.xr_on_accent : R.color.xr_text_secondary));
         }
+        // The common Host SBS case selects the same rung that is recommended. Both the selected
+        // segment and the normal recommendation mark use xr_accent, so an accent-on-accent star
+        // disappears even though the marker remains VISIBLE. Match selected-label contrast while
+        // the marker overlaps the filled rung, and restore the standard accent everywhere else.
+        marker.setImageTintList(ColorStateList.valueOf(color(
+                enabled && recommendedIndex == selectedIndex
+                        ? R.color.xr_on_accent : R.color.xr_accent)));
         if (selectedIndex >= 0 && selectedIndex < choices.size()) {
             SessionSettingsModel.Choice choice = choices.get(selectedIndex);
             // No provider means no caption: the highlighted segment already shows the value, and
