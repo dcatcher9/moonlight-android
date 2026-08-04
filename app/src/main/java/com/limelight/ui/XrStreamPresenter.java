@@ -454,12 +454,20 @@ public class XrStreamPresenter {
     private boolean hostSbsTelemetryFocused;
     private int hostSbsTelemetryRetryAttempts;
     private boolean hostSbsTelemetryRetryPending;
+    /**
+     * Set before native connection teardown starts. Once set, this presenter must never call any
+     * control-stream API because moonlight-common destroys its transport mutexes during
+     * {@code NvConnection.stop()}.
+     */
+    private boolean controlTransportClosing;
+    private boolean presenterDestroyed;
     private final Runnable hostSbsTelemetryRetryRunnable =
             this::retryHostSbsTelemetrySubscription;
 
     private void retryHostSbsTelemetrySubscription() {
         hostSbsTelemetryRetryPending = false;
-        if (!hostSbsTelemetryRequested || !streamPresentationReady
+        if (controlTransportClosing || !hostSbsTelemetryRequested
+                || !streamPresentationReady
                 || currentPresenterMode != PresenterMode.HOST_SBS_AI) {
             return;
         }
@@ -3703,13 +3711,49 @@ public class XrStreamPresenter {
         return hostSbsTelemetryRequestCounter;
     }
 
+    private boolean controlTransportOpen() {
+        return !controlTransportClosing && !presenterDestroyed;
+    }
+
+    /** All ordinary control sends pass through these guards. The sole exception is the final
+     * telemetry unsubscribe inside {@link #onConnectionStopping()}, while Game still owns a live
+     * native connection. Package visibility keeps the transport boundary directly testable. */
+    int sendHostSbsModeControl(int mode) {
+        return controlTransportOpen() ? MoonBridge.sendSetSbsMode(mode) : 0;
+    }
+
+    int sendHostVideoModeControl(int width, int height, int framerateX100,
+                                 int requestId, int bitrateKbps) {
+        return controlTransportOpen()
+                ? MoonBridge.sendSetVideoMode(
+                        width, height, framerateX100, requestId, bitrateKbps)
+                : 0;
+    }
+
+    int sendHostTelemetryControl(boolean enabled, boolean focused,
+                                 int requestId, int intervalMs) {
+        return controlTransportOpen()
+                ? MoonBridge.sendHostSbsTelemetrySubscription(
+                        enabled, focused, requestId, intervalMs)
+                : 0;
+    }
+
+    boolean sendHostDebugDumpControl() {
+        if (!controlTransportOpen()) {
+            return false;
+        }
+        MoonBridge.sendSbsDebugDump();
+        return true;
+    }
+
     /**
      * Owns the host subscription strictly while Host SBS AI is the active, proven stream mode.
      * Opening Stats changes the host publication cadence. Each distinct publication advances chart
      * history on delivery; the slower stats refresh only repaints the accumulated history.
      */
     private void reconcileHostSbsTelemetrySubscription() {
-        boolean enable = streamPresentationReady
+        boolean enable = controlTransportOpen()
+                && streamPresentationReady
                 && currentPresenterMode == PresenterMode.HOST_SBS_AI;
         boolean focused = enable && statsVisible;
         if (enable == hostSbsTelemetryRequested
@@ -3720,7 +3764,7 @@ public class XrStreamPresenter {
         cancelHostSbsTelemetryRetry(true);
         if (!enable) {
             if (hostSbsTelemetryRequested) {
-                MoonBridge.sendHostSbsTelemetrySubscription(
+                sendHostTelemetryControl(
                         false, false, nextHostSbsTelemetryRequestId(),
                         HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS);
             }
@@ -3736,12 +3780,15 @@ public class XrStreamPresenter {
     }
 
     private void sendHostSbsTelemetrySubscriptionAttempt() {
+        if (!controlTransportOpen()) {
+            return;
+        }
         int requestId = nextHostSbsTelemetryRequestId();
         hostSbsTelemetryTracker.activateRequest(requestId);
         int intervalMs = hostSbsTelemetryFocused
                 ? HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS
                 : HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS;
-        int result = MoonBridge.sendHostSbsTelemetrySubscription(
+        int result = sendHostTelemetryControl(
                 true, hostSbsTelemetryFocused, requestId, intervalMs);
         if (result < 0) {
             cancelHostSbsTelemetryRetry(false);
@@ -3781,16 +3828,54 @@ public class XrStreamPresenter {
         }
     }
 
-    private void stopHostSbsTelemetrySubscription() {
+    private boolean clearHostSbsTelemetrySubscriptionState() {
         cancelHostSbsTelemetryRetry(true);
-        if (hostSbsTelemetryRequested) {
+        boolean wasRequested = hostSbsTelemetryRequested;
+        hostSbsTelemetryRequested = false;
+        hostSbsTelemetryFocused = false;
+        hostSbsTelemetryTracker.deactivate();
+        return wasRequested;
+    }
+
+    /**
+     * Ends the host telemetry subscription while moonlight-common's control transport is still
+     * alive. {@link Game} calls this synchronously before {@code NvConnection.stop()} starts.
+     * Repeated calls are local no-ops and delayed UI/retry work cannot reopen the subscription.
+     */
+    public void onConnectionStopping() {
+        if (controlTransportClosing || presenterDestroyed) {
+            return;
+        }
+        // Fence every queued and user-origin control path before the native stop thread can begin.
+        controlTransportClosing = true;
+        sessionControlsEnabled = false;
+        streamPresentationReady = false;
+        liveQualityHandler.removeCallbacks(liveQualityAckTimeoutRunnable);
+        liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
+        panelRateReconcilePosted = false;
+        liveQualityChangeInProgress = false;
+        liveQualityConfirmations.clear();
+        pendingVideoModeRequestId = -1;
+        pendingLiveQuality = null;
+        previousLiveQuality = null;
+        acknowledgedLiveQuality = null;
+        pendingLiveQualityMode = null;
+        pendingLiveQualityOrigin = null;
+        pendingDurableUserQuality = null;
+        pendingDecoderTransitionMode = null;
+        clientSbsHdrTransitionInProgress = false;
+        modeSwitchInProgress = false;
+        decoderTransitionGenerations.clear();
+        updateHostDebugDumpAvailability();
+
+        boolean wasTelemetryRequested = clearHostSbsTelemetrySubscriptionState();
+        if (wasTelemetryRequested) {
+            // This is deliberately the only send allowed after the fence closes. Game invokes the
+            // hook synchronously before it starts NvConnection.stop(), so the mutex is still live.
             MoonBridge.sendHostSbsTelemetrySubscription(
                     false, false, nextHostSbsTelemetryRequestId(),
                     HOST_SBS_TELEMETRY_BACKGROUND_INTERVAL_MS);
         }
-        hostSbsTelemetryRequested = false;
-        hostSbsTelemetryFocused = false;
-        hostSbsTelemetryTracker.deactivate();
     }
 
     public boolean isStatsVisible() {
@@ -5107,7 +5192,8 @@ public class XrStreamPresenter {
      * the width changes (when the aspect changes), so the screen keeps its vertical size.
      */
     private void selectMode(BarItem item) {
-        if (!streamPresentationReady || item.selectsMode == null || surfaceEntity == null
+        if (!controlTransportOpen() || !streamPresentationReady || item.selectsMode == null
+                || surfaceEntity == null
                 || surfaceEntity.isDisposed()
                 || item.selectsMode == currentPresenterMode || modeSwitchInProgress
                 || liveQualityTransactionBusy()) {
@@ -5157,7 +5243,7 @@ public class XrStreamPresenter {
         int previousWireMode = wireModeFor(previousMode);
         int nextWireMode = wireModeFor(nextMode);
         if (prefConfig.isHostDoubledWidthMode() && nextWireMode != previousWireMode
-                && MoonBridge.sendSetSbsMode(nextWireMode) <= 0) {
+                && sendHostSbsModeControl(nextWireMode) <= 0) {
             // No surface changed, so the existing target is immediately safe for the replacement
             // IDR that completes the decoder flush.
             if (decoderTransitionRequired) {
@@ -5266,6 +5352,11 @@ public class XrStreamPresenter {
     }
 
     private void schedulePanelRateReconcile(long delayMs) {
+        if (!controlTransportOpen()) {
+            panelRateReconcilePosted = false;
+            liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
+            return;
+        }
         if (panelRateReconcilePosted) {
             liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
         }
@@ -5282,6 +5373,9 @@ public class XrStreamPresenter {
      * pending; its completion schedules this method again.
      */
     private void reconcilePanelRefreshRate() {
+        if (!controlTransportOpen()) {
+            return;
+        }
         boolean blocked = !streamPresentationReady || surfaceEntity == null
                 || surfaceEntity.isDisposed() || modeSwitchInProgress
                 || liveQualityTransactionBusy() || pendingDecoderTransitionMode != null
@@ -5310,7 +5404,8 @@ public class XrStreamPresenter {
     private boolean applyLiveStreamQuality(StreamQualityTuple target,
                                            LiveQualityRequestOrigin origin,
                                            StreamQualityTuple durableUserTarget) {
-        if (target == null || !streamPresentationReady || surfaceEntity == null
+        if (!controlTransportOpen() || target == null || !streamPresentationReady
+                || surfaceEntity == null
                 || surfaceEntity.isDisposed() || modeSwitchInProgress
                 || liveQualityTransactionBusy() || pendingDecoderTransitionMode != null
                 || clientSbsHdrTransitionInProgress) {
@@ -5350,7 +5445,7 @@ public class XrStreamPresenter {
         if (!resolutionChanged) {
             // Fast path: nothing client-side is sized by bitrate or frame rate, so apply
             // optimistically and let the ack resynchronize to whatever the host actually ran.
-            if (MoonBridge.sendSetVideoMode(prefConfig.width, prefConfig.height,
+            if (sendHostVideoModeControl(prefConfig.width, prefConfig.height,
                     fpsX100, requestId, target.bitrateKbps) <= 0) {
                 reportLiveQualityStartFailure(
                         origin, "host request could not be queued");
@@ -5396,7 +5491,7 @@ public class XrStreamPresenter {
 
         // Honor the native send result before touching any client geometry, exactly as the SBS
         // mode switch does. A failed reliable send leaves the stream untouched.
-        int sendResult = MoonBridge.sendSetVideoMode(
+        int sendResult = sendHostVideoModeControl(
                 size[0], size[1], fpsX100, requestId, target.bitrateKbps);
         if (sendResult <= 0) {
             // No surface changed, so the existing target is immediately safe for the replacement
@@ -6232,6 +6327,9 @@ public class XrStreamPresenter {
                                   int previousWireMode, int nextWireMode, boolean wasClientSbs,
                                   boolean isClientSbs, StreamContainer streamContainer,
                                   boolean surfaceSwitchSucceeded) {
+        if (!controlTransportOpen()) {
+            return;
+        }
         if (surfaceSwitchSucceeded && !isClientSbs && !wasClientSbs
                 && prefConfig.isHostDoubledWidthMode()
                 && requiresHostSurfaceResize(previousMode, nextMode)) {
@@ -6253,7 +6351,7 @@ public class XrStreamPresenter {
                 streamContainer.setClientSbsActive(wasClientSbs);
             }
             if (prefConfig.isHostDoubledWidthMode() && nextWireMode != previousWireMode
-                    && MoonBridge.sendSetSbsMode(previousWireMode) <= 0) {
+                    && sendHostSbsModeControl(previousWireMode) <= 0) {
                 LimeLog.severe("XR mode rollback could not restore the host SBS mode");
             }
             lastModeSwitchMs = 0;
@@ -6419,7 +6517,7 @@ public class XrStreamPresenter {
     }
 
     private void finishClientSbsHdrTransition(boolean success) {
-        if (!clientSbsHdrTransitionInProgress) {
+        if (!controlTransportOpen() || !clientSbsHdrTransitionInProgress) {
             return;
         }
         decoderTransitionGenerations.clearHdr();
@@ -6612,7 +6710,7 @@ public class XrStreamPresenter {
         boolean transitionInProgress = modeSwitchInProgress
                 || pendingDecoderTransitionMode != null
                 || liveQualityTransactionBusy();
-        return isHostDebugDumpAvailable(
+        return controlTransportOpen() && isHostDebugDumpAvailable(
                 currentPresenterMode, streamPresentationReady, sessionControlsEnabled,
                 transitionInProgress, depthStatusPhase == 2);
     }
@@ -6635,7 +6733,7 @@ public class XrStreamPresenter {
             return;
         }
         LimeLog.info("XR: requesting host SBS debug frame dump");
-        MoonBridge.sendSbsDebugDump();
+        sendHostDebugDumpControl();
     }
 
     /** Current pose of a render viewpoint (eye), or null if unavailable. */
@@ -6698,7 +6796,7 @@ public class XrStreamPresenter {
     private boolean isColorMetadataExplicit = false;
 
     public boolean canBeginClientSbsHdrTransition() {
-        return surfaceEntity != null && !surfaceEntity.isDisposed()
+        return controlTransportOpen() && surfaceEntity != null && !surfaceEntity.isDisposed()
                 && canSynchronizeClientSbsHdrTransition(
                 currentPresenterMode,
                 streamPresentationReady,
@@ -7246,8 +7344,15 @@ public class XrStreamPresenter {
      * {@code StreamContainer.onDestroy()} ordering.
      */
     public void onDestroy() {
+        if (presenterDestroyed) {
+            return;
+        }
+        presenterDestroyed = true;
         onHostActivityStopped();
-        stopHostSbsTelemetrySubscription();
+        // Native connection cleanup has already completed by StreamContainer teardown time. Only
+        // clear local state here; the synchronous pre-stop hook owns the final transport write.
+        controlTransportClosing = true;
+        clearHostSbsTelemetrySubscriptionState();
         modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
         dockVisibilityHandler.removeCallbacks(collapseDockRunnable);
         cancelLiveQualityAckTimeout();

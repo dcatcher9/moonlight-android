@@ -4142,6 +4142,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 return;
             }
 
+            // Unsubscribe while moonlight-common's control transport is still alive. Its mutexes
+            // are destroyed by conn.stop(), so deferred StreamContainer.onDestroy() cleanup must
+            // remain local-only.
+            XrStreamPresenter presenter = streamContainer != null
+                    ? streamContainer.getXrPresenter() : null;
+            if (presenter != null) {
+                presenter.onConnectionStopping();
+            }
+
             connecting = connected = false;
             updatePipAutoEnter();
 

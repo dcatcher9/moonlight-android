@@ -12,12 +12,31 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, shadows = {
         com.limelight.shadows.ShadowMoonBridge.class,
         com.limelight.shadows.ShadowGameManager.class,
 })
 public final class GameReconnectLifecycleTest {
+    @Test
+    public void stopConnectionClosesHostTelemetryBeforeNativeTeardown() throws Exception {
+        File file = new File("src/main/java/com/limelight/Game.java");
+        String source = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        int methodStart = source.indexOf("private void stopConnection()");
+        int methodEnd = source.indexOf("public void runAfterConnectionStop", methodStart);
+        assertTrue("stopConnection source contract is missing", methodStart >= 0 && methodEnd > 0);
+
+        String method = source.substring(methodStart, methodEnd);
+        int preStopHook = method.indexOf("presenter.onConnectionStopping()");
+        int nativeStop = method.indexOf("conn.stop(heldSessionTransaction -> {");
+        assertTrue("Host telemetry must close before NvConnection destroys native transport",
+                preStopHook >= 0 && nativeStop > preStopHook);
+    }
+
     @Test
     public void ordinaryStopFinalizesStreamingActivity() {
         assertTrue(Game.shouldFinalizeStreamOnStop(false));

@@ -54,7 +54,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
                 TimeUnit.MILLISECONDS);
         assertEquals(3, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
-        invoke(presenter, "stopHostSbsTelemetrySubscription");
+        presenter.onConnectionStopping();
         controller.destroy();
     }
 
@@ -72,7 +72,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
                 TimeUnit.MILLISECONDS);
         assertEquals(1 + XrStreamPresenter.HOST_SBS_TELEMETRY_MAX_RETRIES,
                 ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
-        invoke(bounded, "stopHostSbsTelemetrySubscription");
+        bounded.onConnectionStopping();
         boundedController.destroy();
 
         ActivityController<Activity> cancelledController = createActivity();
@@ -80,7 +80,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
                 createReadyHostSbsPresenter(cancelledController.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(0);
         invoke(cancelled, "reconcileHostSbsTelemetrySubscription");
-        invoke(cancelled, "stopHostSbsTelemetrySubscription");
+        cancelled.onConnectionStopping();
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
 
@@ -104,7 +104,58 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
                 TimeUnit.MILLISECONDS);
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
-        invoke(presenter, "stopHostSbsTelemetrySubscription");
+        presenter.onConnectionStopping();
+        controller.destroy();
+    }
+
+    @Test
+    public void connectionStopUnsubscribesOnceAndDestroyNeverTouchesNativeTransport()
+            throws Exception {
+        ActivityController<Activity> controller = createActivity();
+        XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
+        ShadowMoonBridge.setHostSbsTelemetryResults(1);
+
+        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
+
+        presenter.onConnectionStopping();
+        assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
+
+        // Neither repeated lifecycle delivery nor delayed UI reconciliation may touch the native
+        // control transport after the pre-stop hook has closed ownership.
+        presenter.onConnectionStopping();
+        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        presenter.onDestroy();
+        presenter.onDestroy();
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(
+                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                TimeUnit.MILLISECONDS);
+
+        assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
+        assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
+        controller.destroy();
+    }
+
+    @Test
+    public void destroyWithoutPreStopOnlyClearsLocalStateAndCancelsRetry()
+            throws Exception {
+        ActivityController<Activity> controller = createActivity();
+        XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
+        ShadowMoonBridge.setHostSbsTelemetryResults(0);
+
+        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
+
+        // This models defensive final cleanup after native teardown. It must not try to send the
+        // unsubscribe packet through an already-destroyed moonlight-common mutex.
+        presenter.onDestroy();
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(
+                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                TimeUnit.MILLISECONDS);
+        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+
+        assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
+        assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
         controller.destroy();
     }
 

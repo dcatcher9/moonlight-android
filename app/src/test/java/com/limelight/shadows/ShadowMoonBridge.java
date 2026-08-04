@@ -39,6 +39,9 @@ public class ShadowMoonBridge {
 
     private static final List<Integer> hostSbsTelemetryResults = new ArrayList<>();
     private static final List<Boolean> hostSbsTelemetryEnabledCalls = new ArrayList<>();
+    private static int setSbsModeCallCount;
+    private static int setVideoModeCallCount;
+    private static int sbsDebugDumpCallCount;
 
     public static void setHostSbsTelemetryResults(int... results) {
         hostSbsTelemetryResults.clear();
@@ -65,6 +68,18 @@ public class ShadowMoonBridge {
                 - getHostSbsTelemetryEnabledCallCount();
     }
 
+    public static int getSetSbsModeCallCount() {
+        return setSbsModeCallCount;
+    }
+
+    public static int getSetVideoModeCallCount() {
+        return setVideoModeCallCount;
+    }
+
+    public static int getSbsDebugDumpCallCount() {
+        return sbsDebugDumpCallCount;
+    }
+
     @Implementation
     public static int sendHostSbsTelemetrySubscription(boolean enabled, boolean focused,
                                                         int requestId, int intervalMs) {
@@ -78,10 +93,31 @@ public class ShadowMoonBridge {
         return hostSbsTelemetryResults.remove(0);
     }
 
+    @Implementation
+    public static int sendSetSbsMode(int mode) {
+        setSbsModeCallCount++;
+        return 1;
+    }
+
+    @Implementation
+    public static int sendSetVideoMode(int width, int height, int framerateX100,
+                                       int requestId, int bitrateKbps) {
+        setVideoModeCallCount++;
+        return 1;
+    }
+
+    @Implementation
+    public static void sendSbsDebugDump() {
+        sbsDebugDumpCallCount++;
+    }
+
     @Resetter
     public static void reset() {
         hostSbsTelemetryResults.clear();
         hostSbsTelemetryEnabledCalls.clear();
+        setSbsModeCallCount = 0;
+        setVideoModeCallCount = 0;
+        sbsDebugDumpCallCount = 0;
     }
 
     // stubbed methods used by code but not relevant to unit tests
