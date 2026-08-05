@@ -1,6 +1,7 @@
 # androidx.xr.scenecore: SurfaceEntity ignores MediaCodec buffer crop rect (visible decoder padding)
 
-Draft issue for https://issuetracker.google.com/issues/new?component=1479586 (Jetpack XR).
+Draft issue for https://issuetracker.google.com/issues/new?component=1689664&template=2070825
+(the official XR SceneCore feedback component from the androidx release page).
 Status: reproduced on 1.0.0-alpha16 and 1.0.0-beta01 (latest as of 2026-08-04).
 
 ## Summary
