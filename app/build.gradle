@@ -244,11 +244,11 @@ dependencies {
     // (arcore-openxr/runtime-openxr are pinned explicitly so the arcore.openxr native lib
     // and its Kotlin classes stay on the same alpha16 build — a mismatch there crashes the
     // JNI ViewCameraState construction.)
-    implementation 'androidx.xr.scenecore:scenecore:1.0.0-alpha16'
-    implementation 'androidx.xr.runtime:runtime:1.0.0-alpha16'
-    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-alpha16'
-    implementation 'androidx.xr.arcore:arcore:1.0.0-alpha16'
-    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-alpha16'
+    implementation 'androidx.xr.scenecore:scenecore:1.0.0-beta01'
+    implementation 'androidx.xr.runtime:runtime:1.0.0-beta01'
+    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-beta01'
+    implementation 'androidx.xr.arcore:arcore:1.0.0-beta01'
+    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-beta01'
 
     // Unit test dependencies
     testImplementation 'junit:junit:4.13.2'
