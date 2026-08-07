@@ -385,7 +385,8 @@ public class MoonBridge {
     // Host answer to a sendSetVideoMode() request (Apollo extension 0x3008). requestId is echoed
     // verbatim and is the only correlation key. The applied* values report what the host is
     // actually running, which may legitimately differ from the request (a clamped apply is still
-    // a success); appliedWidth/appliedHeight are base per-eye values before any SBS doubling and
+    // a success). Geometry is expressed in the 0x3007 wire coordinate system: ordinary and Host
+    // AI requests use the base size, while Raw Full already carries its packed 2W x H desktop.
     // appliedBitrateKbps is the host's post-budget encoder value.
     public static void bridgeClVideoModeAck(int requestId, int status, int appliedWidth,
                                             int appliedHeight, int appliedFramerateX100,

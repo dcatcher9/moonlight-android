@@ -519,6 +519,12 @@ not duplicate Apollo's disconnect grace period with a client timer.
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
 
+Live-quality state remains logical `W x H` in the client. At the `0x3007`/`0x3008` boundary only,
+Raw Full maps that tuple to and from its already-packed `2W x H` desktop. Raw Half and Host SBS AI
+keep base `W x H` control geometry (Host SBS AI performs its doubling inside Apollo). MediaCodec
+recovery state instead retains the actual encoded dimensions: packed Raw Full and packed/capped
+Host SBS AI geometry, but ordinary `W x H` for Raw Half, Normal, and Client SBS.
+
 Artemis stores exactly one current-session record per PC. A new host app replaces that record;
 resuming the same host app preserves it. The record contains shared stream overrides, per-mode
 overrides, the last proven presentation mode, and a local generation ID that rejects stale panel

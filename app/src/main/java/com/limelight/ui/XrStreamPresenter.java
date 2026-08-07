@@ -544,6 +544,62 @@ public class XrStreamPresenter {
     }
 
     /**
+     * Maps the logical quality tuple used by the UI/session store onto the 0x3007 wire geometry.
+     * Raw Full is the only mode whose requested desktop is already packed before Apollo sees it.
+     */
+    static int[] liveVideoModeWireDimensions(
+            PresenterMode mode, int logicalWidth, int logicalHeight,
+            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution) {
+        if (mode == PresenterMode.HOST_SBS_RAW) {
+            if (rawPerEyeResolution == null) {
+                return null;
+            }
+            try {
+                int[] packed = PreferenceConfiguration.rawSbsPackedDimensions(
+                        logicalWidth, logicalHeight, rawPerEyeResolution);
+                return isUsableLiveVideoModeWireDimensions(packed[0], packed[1])
+                        ? packed : null;
+            } catch (IllegalArgumentException invalidGeometry) {
+                return null;
+            }
+        }
+        return isUsableLiveVideoModeWireDimensions(logicalWidth, logicalHeight)
+                ? new int[] {logicalWidth, logicalHeight} : null;
+    }
+
+    /**
+     * Converts the authoritative 0x3008 wire geometry back into the logical quality tuple.
+     * Every ACK status carries the mode that actually remains on the wire, so malformed geometry
+     * must fail closed even for a refusal rather than being mistaken for a logical per-eye size.
+     */
+    static int[] liveVideoModeLogicalDimensions(
+            PresenterMode mode, int wireWidth, int wireHeight,
+            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution) {
+        if (!isUsableLiveVideoModeWireDimensions(wireWidth, wireHeight)) {
+            return null;
+        }
+        if (mode == PresenterMode.HOST_SBS_RAW) {
+            if (rawPerEyeResolution == null) {
+                return null;
+            }
+            if (rawPerEyeResolution == PreferenceConfiguration.RawSbsPerEyeResolution.FULL) {
+                // wireWidth is even by validation, so the SBS split is exact.
+                int logicalWidth = wireWidth / 2;
+                return logicalWidth >= 2
+                        ? new int[] {logicalWidth, wireHeight} : null;
+            }
+        }
+        return new int[] {wireWidth, wireHeight};
+    }
+
+    private static boolean isUsableLiveVideoModeWireDimensions(int width, int height) {
+        int cap = PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
+        return width >= 2 && height >= 2
+                && width <= cap && height <= cap
+                && (width & 1) == 0 && (height & 1) == 0;
+    }
+
+    /**
      * True when bitrate must be costed against a {@code 2W x H} encoded frame.
      *
      * <p>Host SBS AI is always double-width. Raw is double-width only at Full per-eye resolution;
@@ -841,6 +897,16 @@ public class XrStreamPresenter {
 
     static boolean shouldCommitStagedSettingsForResync(LiveQualityRequestOrigin origin) {
         return origin == LiveQualityRequestOrigin.USER;
+    }
+
+    static boolean shouldCommitStagedSettingsForMalformedAckResync(
+            VideoModeAckOutcome outcome, LiveQualityRequestOrigin origin) {
+        // These two statuses prove that the requested tuple was not installed. Reconnecting is
+        // still required when their authoritative rollback geometry is malformed, but persisting
+        // that rejected tuple would turn recovery into an unintended retry.
+        return outcome != VideoModeAckOutcome.REJECTED_NO_RETRY
+                && outcome != VideoModeAckOutcome.FAILED_RETRYABLE
+                && shouldCommitStagedSettingsForResync(origin);
     }
 
     /**
@@ -3722,12 +3788,22 @@ public class XrStreamPresenter {
         return controlTransportOpen() ? MoonBridge.sendSetSbsMode(mode) : 0;
     }
 
-    int sendHostVideoModeControl(int width, int height, int framerateX100,
+    int sendHostVideoModeControl(int logicalWidth, int logicalHeight, int framerateX100,
                                  int requestId, int bitrateKbps) {
-        return controlTransportOpen()
-                ? MoonBridge.sendSetVideoMode(
-                        width, height, framerateX100, requestId, bitrateKbps)
-                : 0;
+        if (!controlTransportOpen()) {
+            return 0;
+        }
+        int[] wireDimensions = liveVideoModeWireDimensions(
+                currentPresenterMode, logicalWidth, logicalHeight,
+                prefConfig.rawSbsPerEyeResolution);
+        if (wireDimensions == null) {
+            LimeLog.severe("XR: refusing invalid live video-mode geometry "
+                    + logicalWidth + "x" + logicalHeight + " for " + currentPresenterMode);
+            return 0;
+        }
+        return MoonBridge.sendSetVideoMode(
+                wireDimensions[0], wireDimensions[1], framerateX100,
+                requestId, bitrateKbps);
     }
 
     int sendHostTelemetryControl(boolean enabled, boolean focused,
@@ -5461,7 +5537,8 @@ public class XrStreamPresenter {
             liveQualityConfirmations.begin(false);
             prefConfig.fps = fps;
             prefConfig.bitrate = target.bitrateKbps;
-            game.updateDecoderStreamGeometry(
+            updateDecoderStreamGeometry(
+                    game, currentPresenterMode,
                     prefConfig.width, prefConfig.height, Math.round(fps));
             armLiveQualityAckTimeout();
             updateGlancePanel();
@@ -5576,7 +5653,7 @@ public class XrStreamPresenter {
     static boolean videoModeAckRequiresMandatoryResync(
             VideoModeAckOutcome outcome, AcknowledgedVideoMode acknowledged) {
         return outcome == VideoModeAckOutcome.AMBIGUOUS_RESYNC
-                || (outcome == VideoModeAckOutcome.ADOPT_APPLIED && acknowledged == null);
+                || (outcome != VideoModeAckOutcome.IGNORE_STALE && acknowledged == null);
     }
 
     static boolean acknowledgedGeometryAdoptionSucceeded(
@@ -5624,21 +5701,29 @@ public class XrStreamPresenter {
         cancelLiveQualityAckTimeout();
         pendingVideoModeRequestId = -1;
 
-        StreamQualityTuple requestedWireQuality = outcome == VideoModeAckOutcome.ADOPT_APPLIED
+        PresenterMode requestMode = liveQualityRequestMode();
+        StreamQualityTuple requestedLogicalQuality = outcome == VideoModeAckOutcome.ADOPT_APPLIED
                 ? pendingLiveQuality : previousLiveQuality;
-        AcknowledgedVideoMode acknowledged = acknowledgedVideoMode(requestedWireQuality,
+        AcknowledgedVideoMode acknowledged = acknowledgedVideoMode(
+                requestedLogicalQuality, requestMode, prefConfig.rawSbsPerEyeResolution,
                 appliedWidth, appliedHeight, appliedFramerateX100, appliedBitrateKbps);
         StreamQualityTuple appliedTuple = acknowledged != null
-                ? acknowledged.requestedWireQuality : null;
+                ? acknowledged.logicalQuality : null;
         if (videoModeAckRequiresMandatoryResync(outcome, acknowledged)) {
             if (outcome == VideoModeAckOutcome.ADOPT_APPLIED) {
                 LimeLog.severe("XR: host returned APPLIED without a usable authoritative "
                         + "video mode for request " + requestId);
-            } else {
+            } else if (outcome == VideoModeAckOutcome.AMBIGUOUS_RESYNC) {
                 LimeLog.severe("XR: host returned unknown video-mode status " + status
                         + " for request " + requestId + "; host state is ambiguous");
+            } else {
+                LimeLog.severe("XR: host returned video-mode status " + status
+                        + " without usable authoritative wire geometry for request "
+                        + requestId + "; host state is ambiguous");
             }
-            requireMandatoryLiveQualityResync();
+            requireMandatoryLiveQualityResync(
+                    shouldCommitStagedSettingsForMalformedAckResync(
+                            outcome, pendingLiveQualityOrigin));
             return;
         }
         if (acknowledged != null) {
@@ -5736,7 +5821,8 @@ public class XrStreamPresenter {
         }
         prefConfig.fps = fps;
         prefConfig.bitrate = applied.bitrateKbps;
-        game.updateDecoderStreamGeometry(size[0], size[1], Math.round(fps));
+        updateDecoderStreamGeometry(
+                game, liveQualityRequestMode(), size[0], size[1], Math.round(fps));
         return acknowledgedGeometryAdoptionSucceeded(false, false);
     }
 
@@ -5848,18 +5934,32 @@ public class XrStreamPresenter {
     }
 
     /**
-     * The host's raw applied mode as a stream-quality tuple. {@code width}/{@code height} are base
-     * per-eye values before any SBS doubling, and {@code bitrateKbps} is the host's post-budget
-     * encoder value rather than the requested wire budget. Fractional frame rates retain the
-     * hundredths-of-a-Hz precision carried by the ACK. Null when the host reported nothing usable.
+     * The host's applied wire mode converted to a logical stream-quality tuple. Raw Full ACKs
+     * carry the already-packed {@code 2W x H} desktop; every other mode carries its logical/base
+     * dimensions. {@code bitrateKbps} is the host's post-budget encoder value rather than the
+     * requested wire budget. Fractional frame rates retain the hundredths-of-a-Hz precision
+     * carried by the ACK. Null when the host reported nothing usable.
      */
-    static StreamQualityTuple appliedTuple(int width, int height, int framerateX100,
-                                           int bitrateKbps) {
-        if (width <= 0 || height <= 0 || framerateX100 <= 0 || bitrateKbps <= 0) {
+    static StreamQualityTuple appliedTuple(
+            PresenterMode mode,
+            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution,
+            int wireWidth, int wireHeight, int framerateX100, int bitrateKbps) {
+        int[] logicalDimensions = liveVideoModeLogicalDimensions(
+                mode, wireWidth, wireHeight, rawPerEyeResolution);
+        if (logicalDimensions == null || framerateX100 <= 0 || bitrateKbps <= 0) {
             return null;
         }
-        return new StreamQualityTuple(width + "x" + height,
+        return new StreamQualityTuple(
+                logicalDimensions[0] + "x" + logicalDimensions[1],
                 formatFrameRateX100(framerateX100), bitrateKbps);
+    }
+
+    /** Identity-mode convenience retained for deterministic tuple-formatting tests. */
+    static StreamQualityTuple appliedTuple(int width, int height, int framerateX100,
+                                           int bitrateKbps) {
+        return appliedTuple(PresenterMode.NORMAL,
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                width, height, framerateX100, bitrateKbps);
     }
 
     /**
@@ -5867,25 +5967,37 @@ public class XrStreamPresenter {
      * budget sent in the request.
      */
     static AcknowledgedVideoMode acknowledgedVideoMode(
-            StreamQualityTuple requestedWireQuality, int width, int height,
+            StreamQualityTuple requestedLogicalQuality, int width, int height,
             int framerateX100, int effectiveEncoderBitrateKbps) {
-        StreamQualityTuple effective = appliedTuple(
+        return acknowledgedVideoMode(requestedLogicalQuality, PresenterMode.NORMAL,
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
                 width, height, framerateX100, effectiveEncoderBitrateKbps);
-        if (requestedWireQuality == null || effective == null) {
+    }
+
+    static AcknowledgedVideoMode acknowledgedVideoMode(
+            StreamQualityTuple requestedLogicalQuality, PresenterMode mode,
+            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution,
+            int wireWidth, int wireHeight, int framerateX100,
+            int effectiveEncoderBitrateKbps) {
+        StreamQualityTuple effective = appliedTuple(
+                mode, rawPerEyeResolution, wireWidth, wireHeight,
+                framerateX100, effectiveEncoderBitrateKbps);
+        if (requestedLogicalQuality == null || effective == null) {
             return null;
         }
         return new AcknowledgedVideoMode(new StreamQualityTuple(
-                effective.resolution, effective.frameRate, requestedWireQuality.bitrateKbps),
+                effective.resolution, effective.frameRate,
+                requestedLogicalQuality.bitrateKbps),
                 effectiveEncoderBitrateKbps);
     }
 
     static final class AcknowledgedVideoMode {
-        final StreamQualityTuple requestedWireQuality;
+        final StreamQualityTuple logicalQuality;
         final int effectiveEncoderBitrateKbps;
 
-        private AcknowledgedVideoMode(StreamQualityTuple requestedWireQuality,
+        private AcknowledgedVideoMode(StreamQualityTuple logicalQuality,
                                      int effectiveEncoderBitrateKbps) {
-            this.requestedWireQuality = requestedWireQuality;
+            this.logicalQuality = logicalQuality;
             this.effectiveEncoderBitrateKbps = effectiveEncoderBitrateKbps;
         }
     }
@@ -5938,7 +6050,8 @@ public class XrStreamPresenter {
         prefConfig.bitrate = bitrateKbps;
         // The only cached dimension-derived field in this class.
         fullAspect = (float) width / height;
-        game.updateDecoderStreamGeometry(width, height, Math.round(fps));
+        updateDecoderStreamGeometry(
+                game, currentPresenterMode, width, height, Math.round(fps));
 
         float aspect = aspectFor(currentPresenterMode);
         SurfaceEntity.Shape shape = surfaceEntity.getShape();
@@ -7302,6 +7415,27 @@ public class XrStreamPresenter {
                     logicalWidth, logicalHeight, hostAiVideoFormat);
         }
         return new int[] {logicalWidth, logicalHeight};
+    }
+
+    /** Actual encoded/presentation geometry retained by MediaCodec recovery. */
+    static int[] decoderStreamDimensions(PresenterMode mode,
+                                         int logicalWidth,
+                                         int logicalHeight,
+                                         int hostAiVideoFormat,
+                                         PreferenceConfiguration.RawSbsPerEyeResolution
+                                                 rawPerEyeResolution) {
+        return initialSurfacePixelDimensions(mode, logicalWidth, logicalHeight,
+                hostAiVideoFormat, rawPerEyeResolution);
+    }
+
+    private void updateDecoderStreamGeometry(
+            com.limelight.Game game, PresenterMode mode,
+            int logicalWidth, int logicalHeight, int fps) {
+        int[] encodedDimensions = decoderStreamDimensions(
+                mode, logicalWidth, logicalHeight, hostSbsVideoFormat,
+                prefConfig.rawSbsPerEyeResolution);
+        game.updateDecoderStreamGeometry(
+                encodedDimensions[0], encodedDimensions[1], fps);
     }
 
     static int[] initialSurfacePixelDimensions(PresenterMode mode,

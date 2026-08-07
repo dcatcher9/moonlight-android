@@ -1,11 +1,13 @@
 package com.limelight.ui;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
 import org.junit.Test;
@@ -315,7 +317,7 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
-    public void malformedAppliedAndUnknownStatusNeverClaimARollbackTuple() {
+    public void malformedOrUnknownAckRequiresResynchronization() {
         XrStreamPresenter.AcknowledgedVideoMode valid =
                 XrStreamPresenter.acknowledgedVideoMode(
                         new StreamQualityTuple("1920x1080", "90", 100000),
@@ -327,7 +329,7 @@ public class XrStreamPresenterVideoModeAckTest {
                 XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, null));
         assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
                 XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC, valid));
-        assertFalse(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
                 XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, null));
     }
 
@@ -376,21 +378,135 @@ public class XrStreamPresenterVideoModeAckTest {
                         firstRequest, 1920, 1080, 2997, 118000);
 
         assertEquals(new StreamQualityTuple("1920x1080", "29.97", 130000),
-                firstAck.requestedWireQuality);
+                firstAck.logicalQuality);
         assertEquals(118000, firstAck.effectiveEncoderBitrateKbps);
 
         // A later FPS/resolution change starts from the reconciled requested tuple. Apollo may
         // deduct audio/FEC again, but that effective value must never become the next wire budget.
         StreamQualityTuple secondRequest = new StreamQualityTuple(
-                "3840x2160", "23.976", firstAck.requestedWireQuality.bitrateKbps);
+                "3840x2160", "23.976", firstAck.logicalQuality.bitrateKbps);
         XrStreamPresenter.AcknowledgedVideoMode secondAck =
                 XrStreamPresenter.acknowledgedVideoMode(
                         secondRequest, 3840, 2160, 2398, 105000);
 
-        assertEquals("3840x2160", secondAck.requestedWireQuality.resolution);
-        assertEquals("23.98", secondAck.requestedWireQuality.frameRate);
-        assertEquals(130000, secondAck.requestedWireQuality.bitrateKbps);
+        assertEquals("3840x2160", secondAck.logicalQuality.resolution);
+        assertEquals("23.98", secondAck.logicalQuality.frameRate);
+        assertEquals(130000, secondAck.logicalQuality.bitrateKbps);
         assertEquals(105000, secondAck.effectiveEncoderBitrateKbps);
+    }
+
+    @Test
+    public void rawFullPanelFollowUsesPackedWireGeometryAndRefusalRestoresLogicalGeometry() {
+        assertArrayEquals(new int[] {7680, 2160},
+                XrStreamPresenter.liveVideoModeWireDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
+
+        StreamQualityTuple previousLogical =
+                new StreamQualityTuple("3840x2160", "90", 200000);
+        XrStreamPresenter.AcknowledgedVideoMode refusal =
+                XrStreamPresenter.acknowledgedVideoMode(
+                        previousLogical,
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
+                        7680, 2160, 9000, 180000);
+
+        assertEquals("3840x2160", refusal.logicalQuality.resolution);
+        assertEquals("90", refusal.logicalQuality.frameRate);
+        assertEquals(200000, refusal.logicalQuality.bitrateKbps);
+    }
+
+    @Test
+    public void rawHalfAndHostAiKeepBaseGeometryOnTheVideoModeWire() {
+        assertArrayEquals(new int[] {3840, 2160},
+                XrStreamPresenter.liveVideoModeWireDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
+        assertArrayEquals(new int[] {3840, 2160},
+                XrStreamPresenter.liveVideoModeLogicalDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
+        assertArrayEquals(new int[] {3840, 2160},
+                XrStreamPresenter.liveVideoModeWireDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        3840, 2160,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
+        assertArrayEquals(new int[] {3840, 2160},
+                XrStreamPresenter.liveVideoModeLogicalDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        3840, 2160,
+                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
+    }
+
+    @Test
+    public void malformedAckGeometryFailsClosedForAppliedAndRefusedStatuses() {
+        StreamQualityTuple request =
+                new StreamQualityTuple("3840x2160", "72", 200000);
+        PreferenceConfiguration.RawSbsPerEyeResolution full =
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
+
+        assertNull(XrStreamPresenter.acknowledgedVideoMode(
+                request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
+                7679, 2160, 7200, 180000));
+        assertNull(XrStreamPresenter.acknowledgedVideoMode(
+                request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
+                7680, 0, 7200, 180000));
+        assertNull(XrStreamPresenter.acknowledgedVideoMode(
+                request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
+                8194, 2160, 7200, 180000));
+        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, null));
+        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.REJECTED_NO_RETRY, null));
+        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
+                XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, null));
+    }
+
+    @Test
+    public void malformedKnownRefusalReconnectDoesNotPersistRejectedUserTarget() {
+        XrStreamPresenter.LiveQualityRequestOrigin user =
+                XrStreamPresenter.LiveQualityRequestOrigin.USER;
+        XrStreamPresenter.LiveQualityRequestOrigin panel =
+                XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW;
+
+        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
+                XrStreamPresenter.VideoModeAckOutcome.REJECTED_NO_RETRY, user));
+        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
+                XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, user));
+        assertTrue(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
+                XrStreamPresenter.VideoModeAckOutcome.NEEDS_RECONNECT, user));
+        assertTrue(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
+                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, user));
+        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
+                XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC, panel));
+    }
+
+    @Test
+    public void decoderRecoveryRetainsActualEncodedGeometryForEverySbsTransport() {
+        PreferenceConfiguration.RawSbsPerEyeResolution full =
+                PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
+        PreferenceConfiguration.RawSbsPerEyeResolution half =
+                PreferenceConfiguration.RawSbsPerEyeResolution.HALF;
+
+        assertArrayEquals(new int[] {7680, 2160},
+                XrStreamPresenter.decoderStreamDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H265, full));
+        assertArrayEquals(new int[] {3840, 2160},
+                XrStreamPresenter.decoderStreamDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H265, half));
+        assertArrayEquals(new int[] {7680, 2160},
+                XrStreamPresenter.decoderStreamDimensions(
+                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H265, full));
+        assertArrayEquals(new int[] {3840, 2160},
+                XrStreamPresenter.decoderStreamDimensions(
+                        XrStreamPresenter.PresenterMode.NORMAL,
+                        3840, 2160, MoonBridge.VIDEO_FORMAT_H265, full));
     }
 
     @Test
