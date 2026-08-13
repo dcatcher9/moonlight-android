@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Keep legacy-density fallback pixels while giving the installed launcher icon a new
+         top-level resource ID. This invalidates framework caches keyed by package + resource ID. -->
+    <item name="ic_launcher_v2" type="mipmap">@mipmap/ic_launcher</item>
+</resources>

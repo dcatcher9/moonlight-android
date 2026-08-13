@@ -9,7 +9,7 @@
       <circle cx="599" cy="302" r="194" fill="#000000"/>
     </mask>
   </defs>
-  <rect width="1024" height="1024" fill="#D7E5FF" mask="url(#moonlight3d-crescent)"/>
+  <rect width="1024" height="1024" fill="#2563EB" mask="url(#moonlight3d-crescent)"/>
   <path d="M188 704C342 582 682 582 836 704" fill="none" stroke="#D7E5FF" stroke-width="104" stroke-linecap="round"/>
   <path d="M164 810C338 650 686 650 860 810" fill="none" stroke="#8AB4F8" stroke-width="112" stroke-linecap="round"/>
 </svg>

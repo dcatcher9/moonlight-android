@@ -78,7 +78,7 @@ public class XrBrandingTest {
     }
 
     @Test
-    public void launcherUsesTransparentMoonlightIconFamily() throws IOException {
+    public void launcherUsesAdaptiveMoonlightIconWithLegacyFallback() throws IOException {
         String english = read(new File("src/main/res/values/strings.xml"));
 
         assertTrue(english.contains(
@@ -89,8 +89,25 @@ public class XrBrandingTest {
                 english.contains("Moonlight Internet Hosting Tool"));
         assertFalse("Do not invent a renamed third-party hosting tool",
                 english.contains("Moonlight 3D Internet Hosting Tool"));
-        assertFalse("An adaptive-icon override can flatten transparent backgrounds to black",
-                new File("src/main/res/mipmap-anydpi-v26/ic_launcher.xml").exists());
+        String manifest = read(new File("src/main/AndroidManifest.xml"));
+        assertTrue("The launcher icon must use its cache-busting resource identity",
+                manifest.contains("android:icon=\"@mipmap/ic_launcher_v2\""));
+        assertTrue("Launchers that request round icons must use the same icon family",
+                manifest.contains("android:roundIcon=\"@mipmap/ic_launcher_v2\""));
+
+        String adaptiveIcon = read(
+                new File("src/main/res/mipmap-anydpi-v26/ic_launcher_v2.xml"));
+        assertTrue(adaptiveIcon.contains(
+                "<background android:drawable=\"@color/ic_launcher_background\""));
+        assertTrue(adaptiveIcon.contains(
+                "<foreground android:drawable=\"@mipmap/ic_launcher_foreground\""));
+        assertTrue(adaptiveIcon.contains(
+                "<monochrome android:drawable=\"@drawable/ic_launcher_monochrome\""));
+
+        String adaptiveBackground = read(
+                new File("src/main/res/values/ic_launcher_background.xml"));
+        assertFalse("Adaptive launcher backgrounds must not be transparent",
+                adaptiveBackground.contains("#00000000"));
 
         for (String density : new String[] {
                 "mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"

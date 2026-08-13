@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <color name="ic_launcher_background">#00000000</color>
+  <!-- Adaptive icon backgrounds must be opaque. This dark brand surface keeps the
+       blue Moonlight 3D mark legible under every launcher mask, including XR Home. -->
+  <color name="ic_launcher_background">#0B1020</color>
 </resources>
