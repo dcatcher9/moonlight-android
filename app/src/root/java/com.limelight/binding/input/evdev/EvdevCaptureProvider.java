@@ -29,6 +29,8 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
     private Socket evdevSock;
     private Activity activity;
     private boolean started = false;
+    private volatile boolean focusActive = true;
+    private volatile EvdevReportDispatcher reportDispatcher;
 
     private static final byte UNGRAB_REQUEST = 1;
     private static final byte REGRAB_REQUEST = 2;
@@ -36,11 +38,6 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
     private final Thread handlerThread = new Thread() {
         @Override
         public void run() {
-            int deltaX = 0;
-            int deltaY = 0;
-            byte deltaVScroll = 0;
-            byte deltaHScroll = 0;
-
             // Bind a local listening socket for evdevreader to connect to
             try {
                 servSock = new ServerSocket(0, 1);
@@ -98,6 +95,19 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
                 return;
             }
             LimeLog.info("EvdevReader connected from port "+evdevSock.getPort());
+            reportDispatcher = new EvdevReportDispatcher(listener);
+            if (!focusActive || !isCapturing || isCursorVisible) {
+                reportDispatcher.setAccepting(false);
+                // evdev_reader starts in grab mode. If focus/capture state changed
+                // while its socket was connecting, immediately bring the helper
+                // into the same disabled state as the Java dispatcher.
+                try {
+                    evdevOut.write(UNGRAB_REQUEST);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    return;
+                }
+            }
 
             while (!isInterrupted() && !shutdown) {
                 EvdevEvent event;
@@ -113,87 +123,7 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
                 // Note: The EvdevReader process already filters input events when grabbing
                 // is not enabled, so we don't need to that here.
 
-                switch (event.type) {
-                    case EvdevEvent.EV_SYN:
-                        if (deltaX != 0 || deltaY != 0) {
-                            listener.mouseMove(deltaX, deltaY);
-                            deltaX = deltaY = 0;
-                        }
-                        if (deltaVScroll != 0) {
-                            listener.mouseVScroll(deltaVScroll);
-                            deltaVScroll = 0;
-                        }
-                        if (deltaHScroll != 0) {
-                            listener.mouseHScroll(deltaHScroll);
-                            deltaHScroll = 0;
-                        }
-                        break;
-
-                    case EvdevEvent.EV_REL:
-                        switch (event.code) {
-                            case EvdevEvent.REL_X:
-                                deltaX = event.value;
-                                break;
-                            case EvdevEvent.REL_Y:
-                                deltaY = event.value;
-                                break;
-                            case EvdevEvent.REL_HWHEEL:
-                                deltaHScroll = (byte) event.value;
-                                break;
-                            case EvdevEvent.REL_WHEEL:
-                                deltaVScroll = (byte) event.value;
-                                break;
-                        }
-                        break;
-
-                    case EvdevEvent.EV_KEY:
-                        switch (event.code) {
-                            case EvdevEvent.BTN_LEFT:
-                                listener.mouseButtonEvent(EvdevListener.BUTTON_LEFT,
-                                        event.value != 0);
-                                break;
-                            case EvdevEvent.BTN_MIDDLE:
-                                listener.mouseButtonEvent(EvdevListener.BUTTON_MIDDLE,
-                                        event.value != 0);
-                                break;
-                            case EvdevEvent.BTN_RIGHT:
-                                listener.mouseButtonEvent(EvdevListener.BUTTON_RIGHT,
-                                        event.value != 0);
-                                break;
-
-                            case EvdevEvent.BTN_SIDE:
-                                listener.mouseButtonEvent(EvdevListener.BUTTON_X1,
-                                        event.value != 0);
-                                break;
-
-                            case EvdevEvent.BTN_EXTRA:
-                                listener.mouseButtonEvent(EvdevListener.BUTTON_X2,
-                                        event.value != 0);
-                                break;
-
-                            case EvdevEvent.BTN_FORWARD:
-                            case EvdevEvent.BTN_BACK:
-                            case EvdevEvent.BTN_TASK:
-                                // Other unhandled mouse buttons
-                                break;
-
-                            default:
-                                // We got some unrecognized button. This means
-                                // someone is trying to use the other device in this
-                                // "combination" input device. We'll try to handle
-                                // it via keyboard, but we're not going to disconnect
-                                // if we can't
-                                short keyCode = EvdevTranslator.translateEvdevKeyCode(event.code);
-                                if (keyCode != 0) {
-                                    listener.keyboardEvent(event.value != 0, keyCode);
-                                }
-                                break;
-                        }
-                        break;
-
-                    case EvdevEvent.EV_MSC:
-                        break;
-                }
+                reportDispatcher.accept(event);
             }
         }
     };
@@ -232,10 +162,12 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
             runnable.run();
         }
     }
-
     @Override
     public void showCursor() {
         super.showCursor();
+        if (reportDispatcher != null) {
+            reportDispatcher.setAccepting(false);
+        }
         // This may be called on the main thread
         runInNetworkSafeContextSynchronously(new Runnable() {
             @Override
@@ -254,12 +186,15 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
     @Override
     public void hideCursor() {
         super.hideCursor();
+        if (reportDispatcher != null && focusActive) {
+            reportDispatcher.setAccepting(true);
+        }
         // This may be called on the main thread
         runInNetworkSafeContextSynchronously(new Runnable() {
             @Override
             public void run() {
                 // Send a request to regrab if we're already capturing
-                if (started && !shutdown && evdevOut != null) {
+                if (focusActive && started && !shutdown && evdevOut != null) {
                     try {
                         evdevOut.write(REGRAB_REQUEST);
                     } catch (IOException e) {
@@ -271,17 +206,50 @@ public class EvdevCaptureProvider extends InputCaptureProvider {
     }
 
     @Override
+    public void onWindowFocusChanged(boolean focusActive) {
+        this.focusActive = focusActive;
+        if (reportDispatcher != null) {
+            reportDispatcher.setAccepting(focusActive && isCapturing && !isCursorVisible);
+        }
+
+        runInNetworkSafeContextSynchronously(new Runnable() {
+            @Override
+            public void run() {
+                if (started && !shutdown && evdevOut != null) {
+                    try {
+                        if (focusActive) {
+                            if (isCapturing && !isCursorVisible) {
+                                evdevOut.write(REGRAB_REQUEST);
+                            }
+                        }
+                        else {
+                            evdevOut.write(UNGRAB_REQUEST);
+                        }
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        });
+    }
+
+    @Override
     public void enableCapture() {
+        // Publish the desired capture/cursor state before starting the worker.
+        // Thread.start() then provides the happens-before edge needed by the
+        // worker's initial state check after evdev_reader connects.
+        super.enableCapture();
+
         if (!started) {
             // Start the handler thread if it's our first time
             // capturing
-            handlerThread.start();
             started = true;
+            startHandlerThread();
         }
+    }
 
-        // Call the superclass only after we've started the handler thread.
-        // It will invoke hideCursor() when we call it.
-        super.enableCapture();
+    protected void startHandlerThread() {
+        handlerThread.start();
     }
 
     @Override

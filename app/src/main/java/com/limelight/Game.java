@@ -157,8 +157,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         ExternalControllerView.InputCallbacks,
         PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
     public static Game instance;
+    private static final int EVDEV_MOUSE_DEVICE_ID = Integer.MIN_VALUE;
 
-    private int lastButtonState = 0;
+    private final Object physicalMouseInputLock = new Object();
+    private final PhysicalMouseButtonState physicalMouseButtonState =
+            new PhysicalMouseButtonState();
+    private boolean physicalMouseInputAccepting = true;
 
     // Only 2 touches are supported
     private final TouchContext[] touchContextMap = new TouchContext[2];
@@ -2046,13 +2050,29 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
 
+        if (!hasFocus) {
+            // Close the Game-side gate before asking the capture source to stop.
+            // A callback already queued on another thread is then rejected under
+            // the same lock which protects state updates and wire sends.
+            releaseHeldPhysicalMouseButtons();
+        }
+
+        // Android pointer capture uses this hook to request capture again after
+        // focus returns. Root evdev also updates its helper grab state here.
+        if (inputCaptureProvider != null) {
+            inputCaptureProvider.onWindowFocusChanged(hasFocus);
+        }
+
+        if (hasFocus) {
+            synchronized (physicalMouseInputLock) {
+                physicalMouseInputAccepting = grabbedInput && !cursorVisible;
+            }
+        }
+
         // We can't guarantee the state of modifiers keys which may have
         // lifted while focus was not on us. Clear the modifier state.
         this.modifierFlags = 0;
 
-        // With Android native pointer capture, capture is lost when focus is lost,
-        // so it must be requested again when focus is regained.
-        inputCaptureProvider.onWindowFocusChanged(hasFocus);
     }
 
     private boolean isRefreshRateEqualMatch(float refreshRate) {
@@ -2514,6 +2534,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private void setInputGrabState(boolean grab) {
         if (inputCaptureProvider == null) {
+            if (!grab) {
+                releaseHeldPhysicalMouseButtons();
+            }
+            else {
+                synchronized (physicalMouseInputLock) {
+                    physicalMouseInputAccepting = true;
+                }
+            }
             grabbedInput = grab;
             return;
         }
@@ -2524,10 +2552,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // Enabling capture may hide the cursor again, so
             // we will need to show it again.
             if (cursorVisible) {
+                releaseHeldPhysicalMouseButtons();
                 inputCaptureProvider.showCursor();
+            }
+            else {
+                synchronized (physicalMouseInputLock) {
+                    physicalMouseInputAccepting = true;
+                }
             }
         }
         else {
+            // Close the callback gate before disabling the source. This rejects
+            // an evdev callback which was already queued before UNGRAB.
+            releaseHeldPhysicalMouseButtons();
             inputCaptureProvider.disableCapture();
         }
 
@@ -2610,9 +2647,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         }
                         cursorVisible = !cursorVisible;
                         if (cursorVisible) {
+                            releaseHeldPhysicalMouseButtons();
                             inputCaptureProvider.showCursor();
                         } else {
                             inputCaptureProvider.hideCursor();
+                            synchronized (physicalMouseInputLock) {
+                                physicalMouseInputAccepting = true;
+                            }
                         }
                         break;
 
@@ -3446,7 +3487,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                     eventSource == 12290) // 12290 = Samsung DeX mode desktop mouse
             ) {
                 int buttonState = event.getButtonState();
-                int changedButtons = buttonState ^ lastButtonState;
+                int previousDeviceButtonState;
+                synchronized (physicalMouseInputLock) {
+                    previousDeviceButtonState =
+                            physicalMouseButtonState.getDeviceState(deviceId);
+                }
 
                 // Two finger click
                 if ((eventSource & InputDevice.SOURCE_CLASS_POSITION) != 0 &&
@@ -3461,9 +3506,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     // We may not pressing the primary button down from a previous event,
                     // so be sure to clear that bit out the button state.
                     buttonState &= ~MotionEvent.BUTTON_PRIMARY;
-                    buttonState |= (lastButtonState & MotionEvent.BUTTON_PRIMARY);
-
-                    changedButtons = buttonState ^ lastButtonState;
+                    buttonState |= (previousDeviceButtonState & MotionEvent.BUTTON_PRIMARY);
                 }
 
                 // Ignore mouse input if we're not capturing from our input source
@@ -3478,18 +3521,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // significantly different than before.
                 if (inputCaptureProvider.eventHasRelativeMouseAxes(event)) {
                     // Send the deltas straight from the motion event
-                    short deltaX = (short)inputCaptureProvider.getRelativeAxisX(event);
-                    short deltaY = (short)inputCaptureProvider.getRelativeAxisY(event);
+                    long deltaX = (long) inputCaptureProvider.getRelativeAxisX(event);
+                    long deltaY = (long) inputCaptureProvider.getRelativeAxisY(event);
 
                     if (deltaX != 0 || deltaY != 0) {
-                        if (prefConfig.absoluteMouseMode) {
-                            // NB: view may be null, but we can unconditionally use streamView because we don't need to adjust
-                            // relative axis deltas for the position of the streamView within the parent's coordinate system.
-                            conn.sendMouseMoveAsMousePosition(deltaX, deltaY, (short) streamContainer.getWidth(), (short) streamContainer.getHeight());
-                        }
-                        else {
-                            conn.sendMouseMove(deltaX, deltaY);
-                        }
+                        sendCapturedMouseMove(deltaX, deltaY);
                     }
                 }
                 else if ((eventSource & InputDevice.SOURCE_CLASS_POSITION) != 0) {
@@ -3626,51 +3662,35 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     conn.sendMouseHighResHScroll((short)(event.getAxisValue(MotionEvent.AXIS_HSCROLL) * 120));
                 }
 
-                if ((changedButtons & MotionEvent.BUTTON_PRIMARY) != 0) {
-                    if ((buttonState & MotionEvent.BUTTON_PRIMARY) != 0) {
-                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
-                    }
-                    else {
-                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
-                    }
-                }
-
-                // Mouse secondary or stylus primary is right click (stylus down is left click)
-                if ((changedButtons & (MotionEvent.BUTTON_SECONDARY | MotionEvent.BUTTON_STYLUS_PRIMARY)) != 0) {
-                    if ((buttonState & (MotionEvent.BUTTON_SECONDARY | MotionEvent.BUTTON_STYLUS_PRIMARY)) != 0) {
-                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
-                    }
-                    else {
-                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
-                    }
-                }
-
-                // Mouse tertiary or stylus secondary is middle click
-                if ((changedButtons & (MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0) {
-                    if ((buttonState & (MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0) {
-                        conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_MIDDLE);
-                    }
-                    else {
-                        conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_MIDDLE);
-                    }
-                }
-
-                if (prefConfig.mouseNavButtons) {
-                    if ((changedButtons & MotionEvent.BUTTON_BACK) != 0) {
-                        if ((buttonState & MotionEvent.BUTTON_BACK) != 0) {
-                            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_X1);
+                synchronized (physicalMouseInputLock) {
+                    if (physicalMouseInputAccepting) {
+                        int previousButtonState = physicalMouseButtonState.getAggregateState();
+                        if (!prefConfig.mouseNavButtons) {
+                            // Do not track navigation buttons which are intentionally not
+                            // forwarded, so focus loss cannot synthesize an unmatched up.
+                            buttonState &= ~(MotionEvent.BUTTON_BACK | MotionEvent.BUTTON_FORWARD);
                         }
-                        else {
-                            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_X1);
-                        }
-                    }
+                        physicalMouseButtonState.updateDeviceState(deviceId, buttonState);
+                        buttonState = physicalMouseButtonState.getAggregateState();
 
-                    if ((changedButtons & MotionEvent.BUTTON_FORWARD) != 0) {
-                        if ((buttonState & MotionEvent.BUTTON_FORWARD) != 0) {
-                            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_X2);
-                        }
-                        else {
-                            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_X2);
+                        sendPhysicalMouseButtonChange(previousButtonState, buttonState,
+                                MotionEvent.BUTTON_PRIMARY, MouseButtonPacket.BUTTON_LEFT);
+
+                        // Mouse secondary or stylus primary is right click (stylus down is left click)
+                        sendPhysicalMouseButtonChange(previousButtonState, buttonState,
+                                MotionEvent.BUTTON_SECONDARY | MotionEvent.BUTTON_STYLUS_PRIMARY,
+                                MouseButtonPacket.BUTTON_RIGHT);
+
+                        // Mouse tertiary or stylus secondary is middle click
+                        sendPhysicalMouseButtonChange(previousButtonState, buttonState,
+                                MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_STYLUS_SECONDARY,
+                                MouseButtonPacket.BUTTON_MIDDLE);
+
+                        if (prefConfig.mouseNavButtons) {
+                            sendPhysicalMouseButtonChange(previousButtonState, buttonState,
+                                    MotionEvent.BUTTON_BACK, MouseButtonPacket.BUTTON_X1);
+                            sendPhysicalMouseButtonChange(previousButtonState, buttonState,
+                                    MotionEvent.BUTTON_FORWARD, MouseButtonPacket.BUTTON_X2);
                         }
                     }
                 }
@@ -3713,7 +3733,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     }
                 }
 
-                lastButtonState = buttonState;
             }
             // This case is for fingers
             else {
@@ -4973,42 +4992,107 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
+    private void sendCapturedMouseMove(long deltaX, long deltaY) {
+        // The Moonlight wire API carries signed 16-bit deltas. Android pointer
+        // history and legacy evdev reports can exceed that range, so split only
+        // here, immediately before the wire call, rather than narrowing early.
+        while (deltaX != 0 || deltaY != 0) {
+            short xChunk = (short) Math.max(Short.MIN_VALUE,
+                    Math.min(Short.MAX_VALUE, deltaX));
+            short yChunk = (short) Math.max(Short.MIN_VALUE,
+                    Math.min(Short.MAX_VALUE, deltaY));
+
+            if (prefConfig.absoluteMouseMode) {
+                // Relative capture sources (including legacy root evdev) must honor
+                // the same absolute-mouse preference as Android pointer capture.
+                conn.sendMouseMoveAsMousePosition(xChunk, yChunk,
+                        (short) streamContainer.getWidth(),
+                        (short) streamContainer.getHeight());
+            }
+            else {
+                conn.sendMouseMove(xChunk, yChunk);
+            }
+
+            deltaX -= xChunk;
+            deltaY -= yChunk;
+        }
+    }
+
+    private void sendPhysicalMouseButtonChange(int previousState, int currentState,
+            int androidButtonMask, byte moonlightButton) {
+        boolean wasDown = (previousState & androidButtonMask) != 0;
+        boolean isDown = (currentState & androidButtonMask) != 0;
+        if (wasDown == isDown) {
+            return;
+        }
+
+        if (isDown) {
+            conn.sendMouseButtonDown(moonlightButton);
+        }
+        else {
+            conn.sendMouseButtonUp(moonlightButton);
+        }
+    }
+
+    void releaseHeldPhysicalMouseButtons() {
+        synchronized (physicalMouseInputLock) {
+            physicalMouseInputAccepting = false;
+            boolean canSendRelease = connected && conn != null;
+            physicalMouseButtonState.releaseAll(button -> {
+                if (canSendRelease) {
+                    conn.sendMouseButtonUp(button);
+                }
+            });
+        }
+    }
+
     @Override
     public void mouseMove(int deltaX, int deltaY) {
-        conn.sendMouseMove((short) deltaX, (short) deltaY);
+        sendCapturedMouseMove(deltaX, deltaY);
     }
 
     @Override
     public void mouseButtonEvent(int buttonId, boolean down) {
         byte buttonIndex;
+        int androidButtonMask;
 
         switch (buttonId)
         {
             case EvdevListener.BUTTON_LEFT:
                 buttonIndex = MouseButtonPacket.BUTTON_LEFT;
+                androidButtonMask = MotionEvent.BUTTON_PRIMARY;
                 break;
             case EvdevListener.BUTTON_MIDDLE:
                 buttonIndex = MouseButtonPacket.BUTTON_MIDDLE;
+                androidButtonMask = MotionEvent.BUTTON_TERTIARY;
                 break;
             case EvdevListener.BUTTON_RIGHT:
                 buttonIndex = MouseButtonPacket.BUTTON_RIGHT;
+                androidButtonMask = MotionEvent.BUTTON_SECONDARY;
                 break;
             case EvdevListener.BUTTON_X1:
                 buttonIndex = MouseButtonPacket.BUTTON_X1;
+                androidButtonMask = MotionEvent.BUTTON_BACK;
                 break;
             case EvdevListener.BUTTON_X2:
                 buttonIndex = MouseButtonPacket.BUTTON_X2;
+                androidButtonMask = MotionEvent.BUTTON_FORWARD;
                 break;
             default:
                 LimeLog.warning("Unhandled button: "+buttonId);
                 return;
         }
 
-        if (down) {
-            conn.sendMouseButtonDown(buttonIndex);
-        }
-        else {
-            conn.sendMouseButtonUp(buttonIndex);
+        synchronized (physicalMouseInputLock) {
+            if (!physicalMouseInputAccepting) {
+                return;
+            }
+            int previousState = physicalMouseButtonState.getAggregateState();
+            int evdevState = physicalMouseButtonState.getDeviceState(EVDEV_MOUSE_DEVICE_ID);
+            evdevState = down ? evdevState | androidButtonMask : evdevState & ~androidButtonMask;
+            physicalMouseButtonState.updateDeviceState(EVDEV_MOUSE_DEVICE_ID, evdevState);
+            sendPhysicalMouseButtonChange(previousState,
+                    physicalMouseButtonState.getAggregateState(), androidButtonMask, buttonIndex);
         }
     }
 
@@ -5301,9 +5385,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         cursorVisible = !cursorVisible;
         if (cursorVisible) {
+            releaseHeldPhysicalMouseButtons();
             inputCaptureProvider.showCursor();
         } else {
             inputCaptureProvider.hideCursor();
+            synchronized (physicalMouseInputLock) {
+                physicalMouseInputAccepting = true;
+            }
         }
     }
 

@@ -3,8 +3,10 @@ package com.limelight.binding.input.capture;
 import android.view.MotionEvent;
 
 public abstract class InputCaptureProvider {
-    protected boolean isCapturing;
-    protected boolean isCursorVisible;
+    // Capture implementations may publish state from the UI thread and consume
+    // it on a helper thread which is still connecting (legacy root evdev).
+    protected volatile boolean isCapturing;
+    protected volatile boolean isCursorVisible;
 
     public void enableCapture() {
         isCapturing = true;

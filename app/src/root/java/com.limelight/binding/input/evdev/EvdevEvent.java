@@ -10,6 +10,10 @@ public class EvdevEvent {
     public static final short EV_REL = 0x02;
     public static final short EV_MSC = 0x04;
 
+    /* Synchronization events */
+    public static final short SYN_REPORT = 0x00;
+    public static final short SYN_DROPPED = 0x03;
+
     /* Relative axes */
     public static final short REL_X = 0x00;
     public static final short REL_Y = 0x01;
