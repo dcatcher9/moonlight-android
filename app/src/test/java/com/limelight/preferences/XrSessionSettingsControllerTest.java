@@ -188,19 +188,19 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void normalAndBothHostSbsModesDefaultToThe90FpsCeiling() {
+    public void normalAndBothHostSbsModesDefaultToThe60FpsCeiling() {
         assertTrue(globals.edit()
                 .remove(PreferenceConfiguration.FPS_PREF_STRING)
                 .commit());
         XrSessionSettingsController controller = controller();
 
-        assertEquals("90", controller.getModeStreamQualityModel(
+        assertEquals("60", controller.getModeStreamQualityModel(
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
-        assertEquals("90", controller.getModeStreamQualityModel(
+        assertEquals("60", controller.getModeStreamQualityModel(
                 SessionSettingsStore.PresenterMode.HOST_SBS_AI)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
-        assertEquals("90", controller.getModeStreamQualityModel(
+        assertEquals("60", controller.getModeStreamQualityModel(
                 SessionSettingsStore.PresenterMode.NORMAL)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
     }

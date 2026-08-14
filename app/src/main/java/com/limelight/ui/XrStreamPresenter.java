@@ -46,6 +46,7 @@ import androidx.xr.scenecore.Space;
 import androidx.xr.scenecore.SpatialCapability;
 import androidx.xr.scenecore.SurfaceEntity;
 
+import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.Game;
@@ -1574,15 +1575,15 @@ public class XrStreamPresenter {
         BarItem normal = new BarItem(
                 activity.getString(R.string.xr_bar_normal),
                 R.drawable.ic_xr_mode_normal, PresenterMode.NORMAL);
-        BarItem clientSbsAi = new BarItem(
-                activity.getString(R.string.xr_bar_client_sbs_ai),
-                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS_AI);
-        BarItem hostSbsRaw = new BarItem(
-                activity.getString(R.string.xr_bar_host_sbs_raw),
-                R.drawable.ic_xr_mode_host_sbs_raw, PresenterMode.HOST_SBS_RAW);
         BarItem hostSbsAi = new BarItem(
                 activity.getString(R.string.xr_bar_host_sbs_ai),
                 R.drawable.ic_xr_mode_host_sbs, PresenterMode.HOST_SBS_AI);
+        BarItem hostSbsRaw = new BarItem(
+                activity.getString(R.string.xr_bar_host_sbs_raw),
+                R.drawable.ic_xr_mode_host_sbs_raw, PresenterMode.HOST_SBS_RAW);
+        BarItem clientSbsAi = new BarItem(
+                activity.getString(R.string.xr_bar_client_sbs_ai),
+                R.drawable.ic_xr_mode_client_sbs, PresenterMode.CLIENT_SBS_AI);
         BarItem settings = new BarItem(
                 activity.getString(R.string.xr_home_settings),
                 R.drawable.ic_settings, /* selectsMode= */ null);
@@ -1595,10 +1596,12 @@ public class XrStreamPresenter {
         BarItem library = new BarItem(
                 activity.getString(R.string.xr_bar_library),
                 R.drawable.ic_xr_library, /* selectsMode= */ null);
-        BarItem dump = new BarItem(
-                activity.getString(R.string.xr_bar_dump),
-                R.drawable.ic_xr_dump, /* selectsMode= */ null);
-        dump.secondary = true;
+        BarItem dump = null;
+        if (BuildConfig.DEBUG) {
+            dump = new BarItem(
+                    activity.getString(R.string.xr_bar_dump),
+                    R.drawable.ic_xr_dump, /* selectsMode= */ null);
+        }
         BarItem endSession = new BarItem(
                 activity.getString(R.string.xr_home_end_session),
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
@@ -1616,7 +1619,9 @@ public class XrStreamPresenter {
         cinemaView.onTap = this::onCinemaTileTapped;
         library.onTap = this::openLibrary;
         stats.onTap = this::onStatsTileTapped;
-        dump.onTap = this::requestHostDebugDump;
+        if (dump != null) {
+            dump.onTap = this::requestHostDebugDump;
+        }
         endSession.onTap = this::requestEndSession;
         expansion.onTap = this::toggleSecondaryActions;
         settingsItem = settings;
@@ -1628,17 +1633,18 @@ public class XrStreamPresenter {
         barItems.clear();
         secondaryBarItems.clear();
         barItems.add(normal);
-        barItems.add(hostSbsRaw);
         barItems.add(hostSbsAi);
+        barItems.add(hostSbsRaw);
         barItems.add(clientSbsAi);
         barItems.add(settings);
         barItems.add(cinemaView);
         barItems.add(library);
         barItems.add(stats);
-        barItems.add(dump);
+        if (dump != null) {
+            barItems.add(dump);
+        }
         barItems.add(endSession);
         barItems.add(expansion);
-        secondaryBarItems.add(dump);
         secondaryBarItems.add(endSession);
 
         // One panel hosting a horizontal row of clickable tiles — like a normal toolbar. This is what

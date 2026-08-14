@@ -28,7 +28,7 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.InlineListPreference
-            android:defaultValue="90"
+            android:defaultValue="60"
             android:entries="@array/xr_fps_names"
             android:entryValues="@array/xr_fps_values"
             android:key="list_fps"

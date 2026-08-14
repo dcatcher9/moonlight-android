@@ -167,7 +167,7 @@ public class PreferenceConfiguration {
     private static final String CHECKBOX_ENABLE_COMMIT_TEXT = "checkbox_enable_commit_text";
 
     static final String DEFAULT_RESOLUTION = "3840x2160";
-    static final String DEFAULT_FPS = "90";
+    static final String DEFAULT_FPS = "60";
     static final int DEFAULT_BITRATE_KBPS = 200000;
     private static final boolean DEFAULT_ENABLE_ULTRA_LOW_LATENCY = false;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
