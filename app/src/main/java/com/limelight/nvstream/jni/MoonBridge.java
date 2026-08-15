@@ -288,11 +288,10 @@ public class MoonBridge {
         }
     }
 
-    //静音 todo
-    public static void bridgeArPlaySample(short[] pcmData) {
+    public static void bridgeArPlaySample(short[] pcmData, int validShortCount) {
         BridgeSession session = bridgeSession;
         if (session != null) {
-            session.audioRenderer.playDecodedAudio(pcmData);
+            session.audioRenderer.playDecodedAudio(pcmData, validShortCount);
         }
     }
 

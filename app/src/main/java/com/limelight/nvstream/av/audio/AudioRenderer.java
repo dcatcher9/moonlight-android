@@ -9,7 +9,7 @@ public interface AudioRenderer {
 
     void stop();
     
-    void playDecodedAudio(short[] audioData);
+    void playDecodedAudio(short[] audioData, int validShortCount);
     
     void cleanup();
 }

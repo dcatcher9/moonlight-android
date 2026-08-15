@@ -53,10 +53,40 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertSame(MoonBridge.AUDIO_CONFIGURATION_STEREO,
                 configuration.audioConfiguration);
         assertFalse(configuration.playHostAudio);
+        assertEquals(3, configuration.audioBoostDb);
         assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 configuration.clientSbsDepthModelId);
         assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
                 configuration.rawSbsPerEyeResolution);
+    }
+
+    @Test
+    public void clientAudioBoostSupportsSafeChoicesAndMigratesExistingUsersToThreeDb() {
+        SharedPreferences preferences =
+                PreferenceManager.getDefaultSharedPreferences(context);
+
+        assertFalse(preferences.contains(PreferenceConfiguration.AUDIO_BOOST_PREF_STRING));
+        assertEquals(3, PreferenceConfiguration.readPreferences(context).audioBoostDb);
+
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.AUDIO_BOOST_PREF_STRING, "0")
+                .commit());
+        assertEquals(0, PreferenceConfiguration.readPreferences(context).audioBoostDb);
+
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.AUDIO_BOOST_PREF_STRING, "6")
+                .commit());
+        assertEquals(6, PreferenceConfiguration.readPreferences(context).audioBoostDb);
+
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.AUDIO_BOOST_PREF_STRING, "100")
+                .commit());
+        assertEquals(3, PreferenceConfiguration.readPreferences(context).audioBoostDb);
+
+        assertTrue(preferences.edit()
+                .putInt(PreferenceConfiguration.AUDIO_BOOST_PREF_STRING, 6)
+                .commit());
+        assertEquals(3, PreferenceConfiguration.readPreferences(context).audioBoostDb);
     }
 
     @Test

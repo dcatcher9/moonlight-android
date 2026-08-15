@@ -84,6 +84,7 @@ public class PreferenceConfiguration {
     private static final String LANGUAGE_PREF_STRING = "list_languages";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     public static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
+    public static final String AUDIO_BOOST_PREF_STRING = "list_audio_boost_db";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     public static final String VIDEO_FORMAT_PREF_STRING = "video_format";
     public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
@@ -215,6 +216,17 @@ public class PreferenceConfiguration {
         }
         return DEFAULT_CLIENT_SBS_DEPTH_MODEL;
     }
+
+    public static int normalizeAudioBoostDb(String storedValue) {
+        if ("0".equals(storedValue)) {
+            return 0;
+        }
+        if ("6".equals(storedValue)) {
+            return 6;
+        }
+        return DEFAULT_AUDIO_BOOST_DB;
+    }
+
     public static final String DEFAULT_RAW_SBS_PER_EYE_RESOLUTION =
             RawSbsPerEyeResolution.FULL.preferenceValue;
 
@@ -239,6 +251,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
     private static final boolean DEFAULT_TOUCHSCREEN_TRACKPAD = true;
     static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
+    static final int DEFAULT_AUDIO_BOOST_DB = 3;
     private static final boolean DEFAULT_LATENCY_TOAST = false;
     static final String DEFAULT_FRAME_PACING = "latency";
     private static final boolean DEFAULT_ABSOLUTE_MOUSE_MODE = false;
@@ -507,6 +520,7 @@ public class PreferenceConfiguration {
     public int vibrateFallbackToDeviceStrength;
     public boolean touchscreenTrackpad;
     public MoonBridge.AudioConfiguration audioConfiguration;
+    public int audioBoostDb;
     public int framePacing;
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
@@ -921,6 +935,16 @@ public class PreferenceConfiguration {
         else /* if (audioConfig.equals("2")) */ {
             config.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_STEREO;
         }
+
+        String storedAudioBoostDb = null;
+        try {
+            storedAudioBoostDb = prefs.getString(AUDIO_BOOST_PREF_STRING,
+                    Integer.toString(DEFAULT_AUDIO_BOOST_DB));
+        }
+        catch (ClassCastException ignored) {
+            // Treat values written with the wrong SharedPreferences type as corrupt.
+        }
+        config.audioBoostDb = normalizeAudioBoostDb(storedAudioBoostDb);
 
         config.videoScaleMode = getVideoScaleMode(prefs);
 

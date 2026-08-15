@@ -230,6 +230,8 @@
     <string name="category_audio_settings">Audio Settings</string>
     <string name="title_audio_config_list">Audio</string>
     <string name="summary_audio_config_list">Enable 5.1 or 7.1 surround sound for home-theater systems</string>
+    <string name="title_audio_boost">Client loudness boost</string>
+    <string name="summary_audio_boost">Raises quiet streams on this device. A soft limiter prevents clipping; higher boost can reduce dynamics.</string>
     <string name="title_checkbox_enable_audiofx">Enable system equalizer support</string>
     <string name="summary_checkbox_enable_audiofx">Allows audio effects to function while streaming, but may increase audio latency</string>
 
@@ -825,6 +827,9 @@
     <string name="xr_audio_stereo">Stereo</string>
     <string name="xr_audio_51" translatable="false">5.1</string>
     <string name="xr_audio_71" translatable="false">7.1</string>
+    <string name="xr_audio_boost_off">Off</string>
+    <string name="xr_audio_boost_3db" translatable="false">+3 dB</string>
+    <string name="xr_audio_boost_6db" translatable="false">+6 dB</string>
     <string name="xr_connection_title">Connect a PC</string>
     <string name="xr_connection_subtitle">Moonlight 3D discovers nearby PCs automatically. Use an address when discovery cannot find yours.</string>
     <string name="xr_connection_address">PC address</string>
