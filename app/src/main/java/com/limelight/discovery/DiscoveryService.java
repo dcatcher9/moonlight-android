@@ -3,7 +3,6 @@ package com.limelight.discovery;
 import java.util.List;
 
 import com.limelight.nvstream.mdns.MdnsComputer;
-import com.limelight.nvstream.mdns.JmDNSDiscoveryAgent;
 import com.limelight.nvstream.mdns.MdnsDiscoveryAgent;
 import com.limelight.nvstream.mdns.MdnsDiscoveryListener;
 import com.limelight.nvstream.mdns.NsdManagerDiscoveryAgent;
@@ -11,7 +10,6 @@ import com.limelight.nvstream.mdns.NsdManagerDiscoveryAgent;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Binder;
-import android.os.Build;
 import android.os.IBinder;
 
 public class DiscoveryService extends Service {
@@ -55,20 +53,9 @@ public class DiscoveryService extends Service {
             }
         };
 
-        // Prior to Android 14, NsdManager doesn't provide all the capabilities needed for parity
-        // with jmDNS (specifically handling multiple addresses for a single service). There are
-        // also documented reliability bugs early in the Android 4.x series shortly after it was
-        // introduced. The benefit of using NsdManager over jmDNS is that it works correctly in
-        // environments where mDNS proxying is required, like ChromeOS, WSA, and the emulator.
-        //
-        // As such, we use the jmDNS-based MdnsDiscoveryAgent prior to Android 14 and NsdManager
-        // on Android 14 and above.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            discoveryAgent = new JmDNSDiscoveryAgent(getApplicationContext(), listener);
-        }
-        else {
-            discoveryAgent = new NsdManagerDiscoveryAgent(getApplicationContext(), listener);
-        }
+        // Android XR devices run Android 14 or newer, where NsdManager supports the complete
+        // discovery contract and works correctly with environments that require mDNS proxying.
+        discoveryAgent = new NsdManagerDiscoveryAgent(getApplicationContext(), listener);
     }
 
     private final DiscoveryBinder binder = new DiscoveryBinder();

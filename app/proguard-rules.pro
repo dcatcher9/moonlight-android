@@ -31,13 +31,6 @@
 -keep class org.bouncycastle.jce.** {*;}
 -dontwarn javax.naming.**
 
-# jMDNS
--dontwarn javax.jmdns.impl.DNSCache
--dontwarn org.slf4j.**
-
-# MPAndroidChart
--keep class com.github.mikephil.charting.** { *; }
--dontwarn com.github.mikephil.charting.**
 # Android XR (Jetpack XR / SceneCore)
 # The com.android.extensions.xr.* classes are part of the Android XR platform
 # extensions, provided by the device's XR system image at runtime, so they are
