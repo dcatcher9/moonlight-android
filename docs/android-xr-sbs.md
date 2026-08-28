@@ -866,9 +866,9 @@ These rules are verified on Galaxy XR with SceneCore alpha16:
 
 ## Jetpack XR dependencies and minification
 
-The working DP4 matrix pins SceneCore, runtime, runtime-openxr, ARCore, and arcore-openxr to
-`1.0.0-alpha16`. Keep the five artifacts aligned; mixed Java and native OpenXR versions can crash
-`ViewCameraState` construction.
+SceneCore, runtime, runtime-openxr, ARCore, and arcore-openxr are pinned together to
+`1.0.0-beta02` (2026-08-12; the alpha16 DP4 matrix and beta01 preceded it). Keep the five artifacts
+aligned; mixed Java and native OpenXR versions can crash `ViewCameraState` construction.
 
 Debug minification remains disabled. R8 keep rules avoid several reflection/JNI failures, but
 hardware still reproduces an `AbstractMethodError` in the device-provided XR `Consumer` interface
