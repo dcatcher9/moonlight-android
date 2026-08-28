@@ -203,8 +203,8 @@ the revision you need, use the source-build steps below.
 
 ## Build from source
 
-Moonlight 3D uses the Gradle wrapper, Android Gradle Plugin 9.2, JDK 17–25 (JDK 25 is the
-development standard), and Android NDK `27.0.12077973`.
+Moonlight 3D uses the Gradle wrapper, Android Gradle Plugin 9.3.2, Android SDK 37.0,
+JDK 17–25 (JDK 25 is the development standard), and Android NDK `27.3.13750724`.
 
 Before installing to Galaxy XR, enable Developer options and Wireless debugging on the headset,
 connect it through Android SDK Platform Tools, and confirm that it appears in `adb devices`.

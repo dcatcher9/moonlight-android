@@ -198,6 +198,10 @@ LiteRtStatus LrtSetGpuAcceleratorCompilationOptionsDisableShaderOptimization(
 // The pointer must point to a litert::ml_drift::SharedTensorMaps struct.
 // The caller is responsible for maintaining the lifetime of the struct
 // until the model is destroyed.
+//
+// WARNING: This API is not ABI-stable and only for internal usage. It works
+// only when the client is built together with the LiteRT and ML Drift delegate.
+// Unless you know what you are doing, do not use this API.
 LiteRtStatus LrtSetGpuAcceleratorCompilationOptionsSharedTensorMaps(
     LrtGpuOptions* gpu_options, void* shared_tensor_maps);
 
@@ -209,6 +213,11 @@ LrtSetGpuAcceleratorRuntimeOptionsNumStepsOfCommandBufferPreparations(
 // Sets whether to use Metal argument buffers.
 LiteRtStatus LrtSetGpuOptionsUseMetalArgumentBuffers(
     LrtGpuOptions* gpu_options, bool use_metal_argument_buffers);
+
+// Sets whether to use MTLResidencySet to prevent memory swapping on Metal
+// backend. Requires macOS 15.0+ or iOS 18.0+.
+LiteRtStatus LrtSetGpuOptionsMetalResidencySet(LrtGpuOptions* gpu_options,
+                                               bool enable);
 
 // Sets the wait type.
 LiteRtStatus LrtSetGpuAcceleratorRuntimeOptionsWaitType(
@@ -341,6 +350,9 @@ LrtGetGpuAcceleratorRuntimeOptionsNumStepsOfCommandBufferPreparations(
 
 LiteRtStatus LrtGetGpuOptionsUseMetalArgumentBuffers(
     const LrtGpuOptions* options, bool* use_metal_argument_buffers);
+
+LiteRtStatus LrtGetGpuOptionsMetalResidencySet(const LrtGpuOptions* options,
+                                               bool* enabled);
 
 LiteRtStatus LrtGetGpuAcceleratorRuntimeOptionsWaitType(
     LiteRtGpuWaitType* wait_type, const LrtGpuOptions* options);

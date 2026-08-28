@@ -35,11 +35,11 @@ resize contracts and FP16 storage for selected weights. The source model card
 also attributes its EfficientNet-Lite3 encoder under Apache-2.0; the bundled
 LICENSE-APACHE-2.0.txt supplies that license text as well.
 
-LiteRT 2.1.6 native runtime and accelerator
+LiteRT 2.2.0 native runtime and accelerator
 -------------------------------------------
 Upstream project: https://github.com/google-ai-edge/LiteRT
-Upstream release: https://github.com/google-ai-edge/LiteRT/releases/tag/v2.1.6
-The non-root APK ships the official LiteRT 2.1.6 Android libLiteRt.so runtime
+Upstream release: https://github.com/google-ai-edge/LiteRT/releases/tag/v2.2.0
+The non-root APK ships the official LiteRT 2.2.0 Android libLiteRt.so runtime
 and libLiteRtClGlAccelerator.so OpenCL/OpenGL accelerator for its packaged ABI.
 The source distribution records the official download URLs and SHA-256 values
 for both supported ABIs. These binaries are redistributed under Apache-2.0;

@@ -21,7 +21,7 @@ JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-25.0.3.9-hotspot" \
   ./gradlew :app:installNonRoot_gameDebug
 ```
 
-- Build with **JDK 25** (the standard build JDK here). Gradle 9.6 accepts JDK 17–25 but **rejects
+- Build with **JDK 25** (the standard build JDK here). Gradle 9.7 accepts JDK 17–25 but **rejects
   JDK 26** — point `JAVA_HOME` at JDK 25.
 - Other useful tasks (same flavor prefix):
   - `:app:assembleNonRoot_gameDebug` — build the APK without installing.
@@ -53,9 +53,10 @@ C:\Users\DCatc\AppData\Local\Android\Sdk\platform-tools\adb.exe
 
 ## 3. Connect / reconnect to the headset (wireless adb drops frequently)
 
-The headset is at **IP `192.168.68.95`**, but the **adb port is ephemeral** — it changes after a
-reconnect / sleep / Wireless-debugging toggle. Pairing already persists on this machine, so you only
-need to re-`connect` (no re-`pair`).
+Both the headset's DHCP address and its **adb port are ephemeral** — they can change after a
+reconnect, sleep, or Wireless-debugging toggle. Pairing persists on this machine, so normally you
+only need to re-`connect` (no re-`pair`). Always copy the complete current `ip:port` endpoint from
+`adb mdns services`; do not reuse an endpoint from an earlier session.
 
 **Reconnect procedure** — run whenever `adb devices` is empty or shows the device as `offline`:
 
@@ -64,19 +65,19 @@ ADB="C:/Users/DCatc/AppData/Local/Android/Sdk/platform-tools/adb.exe"
 
 # 1. Discover the CURRENT TLS-connect port (it changes!):
 "$ADB" mdns services | grep tls-connect
-#   -> adb-R3GYB050PKL-yTw0ip   _adb-tls-connect._tcp   192.168.68.95:42073
+#   -> adb-R3GYB050PKL-yTw0ip   _adb-tls-connect._tcp   192.168.68.90:36235
 
 # 2. Connect to that ip:port from step 1:
-"$ADB" connect 192.168.68.95:42073
+"$ADB" connect 192.168.68.90:36235
 
 # 3. Verify:
 "$ADB" devices -l
-#   -> 192.168.68.95:42073   device  product:xrvst2ue model:SM_I610 device:xrvst2
+#   -> 192.168.68.90:36235   device  product:xrvst2ue model:SM_I610 device:xrvst2
 ```
 
 - The headset must be **awake and on the Wi-Fi** (`Deco_6GHz`) for mDNS discovery to work.
-- Example serial (current): **`192.168.68.95:42073`**. Use whatever port `mdns services` reports if
-  this exact port no longer connects.
+- Example serial from a successful deployment: **`192.168.68.90:36235`**. Use the complete endpoint
+  currently reported by `mdns services` if either the address or port differs.
 
 ## 4. Target the right device (an offline emulator is present)
 
@@ -84,10 +85,10 @@ An `emulator-5566` often shows up as `offline`. Pin every adb/Gradle command to 
 it doesn't accidentally target the emulator:
 
 ```bash
-export ANDROID_SERIAL=192.168.68.95:42073    # bash / Git Bash
+export ANDROID_SERIAL=192.168.68.90:36235    # bash / Git Bash; use the current mDNS endpoint
 ```
 ```powershell
-$env:ANDROID_SERIAL = "192.168.68.95:42073"  # PowerShell
+$env:ANDROID_SERIAL = "192.168.68.90:36235"  # PowerShell; use the current mDNS endpoint
 ```
 
 Gradle `install*` tasks also honor `ANDROID_SERIAL`.

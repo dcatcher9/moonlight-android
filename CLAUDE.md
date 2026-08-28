@@ -36,11 +36,11 @@ selected depth/reprojection pipeline on the headset before SceneCore splits the 
 
 ## Build & test
 
-- **Toolchain:** Gradle `9.6.0` (wrapper) + AGP `9.2.0`, run on **JDK 25** (the current
-  build JDK). Gradle 9.6 accepts JDK 17–25, so an older 17/21 JDK also works if needed, but
+- **Toolchain:** Gradle `9.7.1` (wrapper) + AGP `9.3.2`, run on **JDK 25** (the current
+  build JDK). Gradle 9.7 accepts JDK 17–25, so an older 17/21 JDK also works if needed, but
   JDK 25 is the standard here. JDK 26 is too new for Gradle and will be rejected — point
   `JAVA_HOME` at JDK 25.
-- Android NDK `27.0.12077973` (declared in `app/build.gradle`); AGP auto-provisions it if
+- Android NDK `27.3.13750724` (declared in `app/build.gradle`); AGP auto-provisions it if
   `cmdline-tools`/`sdkmanager` is available, otherwise install via Android Studio's SDK Manager.
 - First checkout: `git submodule update --init --recursive` (pulls `moonlight-common-c`).
 - Create `local.properties` with `sdk.dir=<path>` (and `ndk.dir=` if the NDK isn't auto-found).
@@ -65,7 +65,7 @@ selected depth/reprojection pipeline on the headset before SceneCore splits the 
   JVM throws `UnsatisfiedLinkError` — `ShadowMoonBridge` stubs the `System.loadLibrary("moonbr")`
   init and `ShadowGameManager` avoids a `ServiceManager` lookup; add more shadows the same way.
   See [android_test_setup.md](android_test_setup.md) for the full Robolectric/shadow/mock recipe.
-- `compileSdk = 36`, `targetSdk = 34`, `minSdk = 24` (raised from 21 to satisfy the Jetpack
+- `compileSdk = 37.0`, `targetSdk = 34`, `minSdk = 24` (raised from 21 to satisfy the Jetpack
   XR libraries' minSdk without a manifest override). Java 11 source/target.
 - Product flavors: `root` (maxSdk 25) and `nonRoot_game`. ABI splits enabled.
 - **AGP 9 notes:** uses `proguard-android-optimize.txt` (the non-optimize default was removed),

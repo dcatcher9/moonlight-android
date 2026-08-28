@@ -60,7 +60,7 @@ public class ClientSbsPackagedModelArchiveTest {
     public void packagedModelNoticesAreCompleteAndUnchanged() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String[][] expectedAssets = {
-                {"NOTICE.txt", "2eae713081184675b75adcb2c1560b44a3b5430f2b4b97caa7e715b49bc6f791"},
+                {"NOTICE.txt", "b944624a6829f97a8461cd9d657b7909a6c1f3cf4a52a50ac22a3aa84bdb2cbd"},
                 {"LICENSE-APACHE-2.0.txt", "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
                 {"LICENSE-MIDAS-MIT.txt", "99ec0b9f9bcc9234b649787b8f03b07dbece95764b7879e1e72fb76cb0f96876"},
         };
@@ -81,7 +81,7 @@ public class ClientSbsPackagedModelArchiveTest {
                 StandardCharsets.UTF_8);
         assertTrue(notice.contains("Depth Anything V2 Small"));
         assertTrue(notice.contains("MiDaS v2.1 Small"));
-        assertTrue(notice.contains("LiteRT 2.1.6 native runtime and accelerator"));
+        assertTrue(notice.contains("LiteRT 2.2.0 native runtime and accelerator"));
         assertTrue(notice.contains("modified TFLite conversions"));
         assertTrue(notice.contains("does not claim a complete"));
         assertTrue(notice.contains("LICENSE-APACHE-2.0.txt"));

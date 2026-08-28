@@ -5,7 +5,7 @@ buildscript {
         google()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:9.2.0'
+        classpath 'com.android.tools.build:gradle:9.3.2'
     }
 }
 
@@ -39,7 +39,7 @@ subprojects { subProj ->
         // Verbose console output for test status
         testLogging {
             events "passed", "failed", "skipped"
-            exceptionFormat "full"
+            exceptionFormat = "full"
             showStandardStreams = true
         }
     }
