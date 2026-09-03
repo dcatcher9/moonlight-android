@@ -155,6 +155,8 @@ public final class XrSessionSettingsController {
      */
     private int liveResolutionMaxWidth;
     private int liveResolutionMaxHeight;
+    /** Whether the connected host implements Apollo-3D's live video-mode control extension. */
+    private boolean liveVideoModeSupported = true;
     private boolean sharedInheritanceResetRequested;
     private boolean clientModelInheritanceResetRequested;
     private boolean rawSbsPerEyeResolutionInheritanceResetRequested;
@@ -348,6 +350,15 @@ public final class XrSessionSettingsController {
     public void setLiveResolutionEnvelope(int maxWidth, int maxHeight) {
         liveResolutionMaxWidth = Math.max(0, maxWidth);
         liveResolutionMaxHeight = Math.max(0, maxHeight);
+    }
+
+    /**
+     * Publishes whether this host supports live stream-quality changes. Regular Sunshine and
+     * Apollo hosts use the standard reconnect path; Apollo-3D hosts advertise the extension via
+     * the same serverinfo capability that protects their generation-scoped session tokens.
+     */
+    public void setLiveVideoModeSupported(boolean supported) {
+        liveVideoModeSupported = supported;
     }
 
     /**
@@ -867,6 +878,9 @@ public final class XrSessionSettingsController {
         StreamQualityTuple pending = qualityTuple(pendingModeQuality.get(mode));
         if (pending.equals(liveStreamQuality)) {
             return false;
+        }
+        if (!liveVideoModeSupported) {
+            return true;
         }
         if (pending.resolution.equals(liveStreamQuality.resolution)) {
             // Bitrate and/or frame rate only.

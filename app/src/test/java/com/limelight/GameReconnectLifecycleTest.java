@@ -48,6 +48,18 @@ public final class GameReconnectLifecycleTest {
     }
 
     @Test
+    public void authoritativeStandardHostDowngradeReconnectsHostAiAsNormal() {
+        assertTrue(Game.hostCapabilityRequiresNormalReconnect(false,
+                SessionSettingsStore.PresenterMode.HOST_SBS_AI));
+        assertFalse(Game.hostCapabilityRequiresNormalReconnect(false,
+                SessionSettingsStore.PresenterMode.NORMAL));
+        assertFalse(Game.hostCapabilityRequiresNormalReconnect(false,
+                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI));
+        assertFalse(Game.hostCapabilityRequiresNormalReconnect(true,
+                SessionSettingsStore.PresenterMode.HOST_SBS_AI));
+    }
+
+    @Test
     public void rawSbsNegotiatesDoubleWidthFromLogicalPerEyeQuality() {
         assertArrayEquals(new int[] {7680, 2160},
                 Game.xrTransportDimensions(3840, 2160,

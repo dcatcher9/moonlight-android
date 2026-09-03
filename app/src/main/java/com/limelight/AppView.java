@@ -73,6 +73,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private int lastRunningAppId;
     private String lastRunningAppUuid;
     private String lastHostSessionId;
+    private boolean lastHostSessionIdSupported;
     private boolean inForeground;
     private boolean showHiddenApps;
     private HashSet<Integer> hiddenAppIds = new HashSet<>();
@@ -116,6 +117,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     lastRunningAppId = computer.runningGameId;
                     lastRunningAppUuid = computer.runningGameUUID;
                     lastHostSessionId = computer.hostSessionId;
+                    lastHostSessionIdSupported = computer.hostSessionIdSupported;
+                    if (isAuthoritativelyIdle(computer)) {
+                        clearPersistedSessionAfterAuthoritativeEnd(
+                                computer.runningGameId, computer.runningGameUUID,
+                                computer.hostSessionId, computer.hostSessionIdSupported);
+                    }
                     runOnUiThread(() -> {
                         TextView label = findViewById(R.id.appListText);
                         if (label != null) {
@@ -280,7 +287,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
                     if (details.runningGameId != lastRunningAppId
                             || !Objects.equals(details.runningGameUUID, lastRunningAppUuid)
-                            || !Objects.equals(details.hostSessionId, lastHostSessionId)) {
+                            || !Objects.equals(details.hostSessionId, lastHostSessionId)
+                            || details.hostSessionIdSupported
+                            != lastHostSessionIdSupported) {
                         updateRunningSession(details);
                         updateUiWithServerinfo(details);
                     }
@@ -663,24 +672,35 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         final ComputerDetails computer;
         final NvApp app;
         final String hostSessionId;
+        final boolean hostSessionIdSupported;
         final SessionSettingsStore.PcIdentity pcIdentity;
         final String localSessionId;
 
         HostSessionSnapshot(ComputerDetails computer, NvApp app, String hostSessionId,
+                            boolean hostSessionIdSupported,
                             SessionSettingsStore.PcIdentity pcIdentity,
                             String localSessionId) {
             this.computer = computer;
             this.app = app;
             this.hostSessionId = hostSessionId;
+            this.hostSessionIdSupported = hostSessionIdSupported;
             this.pcIdentity = pcIdentity;
             this.localSessionId = localSessionId;
         }
     }
 
     private HostSessionSnapshot captureCurrentHostSession(NvApp expectedApp) {
-        if (computer == null || expectedApp == null
-                || !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+        if (computer == null || expectedApp == null) {
+            return null;
+        }
+        if (computer.hostSessionIdSupported
+                && !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
                         computer.hostSessionId)) {
+            return null;
+        }
+        if (!HomeSessionLaunchPolicy.isCurrentSessionApp(computer.runningGameId,
+                computer.runningGameUUID, expectedApp.getAppId(),
+                expectedApp.getAppUUID())) {
             return null;
         }
         NvApp app = new NvApp(expectedApp.getAppName(), expectedApp.getAppUUID(),
@@ -694,13 +714,28 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             SessionSettingsStore.SessionRecord record =
                     new SessionSettingsStore(this).getCurrentSession(pcIdentity);
             String localSessionId = null;
-            if (record != null && record.getResumeMetadata() != null
-                    && capturedComputer.hostSessionId.equals(
-                            record.getResumeMetadata().getHostSessionId())) {
-                localSessionId = record.getLocalSessionId();
+            if (record != null) {
+                if (capturedComputer.hostSessionIdSupported) {
+                    if (record.getResumeMetadata() != null
+                            && capturedComputer.hostSessionId.equals(
+                                    record.getResumeMetadata().getHostSessionId())) {
+                        localSessionId = record.getLocalSessionId();
+                    }
+                }
+                else {
+                    SessionSettingsStore.AppIdentity capturedApp =
+                            new SessionSettingsStore.AppIdentity(
+                                    app.getAppId() > 0
+                                            ? Integer.toString(app.getAppId()) : null,
+                                    app.getAppUUID(), app.getAppName());
+                    if (record.getCurrentApp().isSameApplication(capturedApp)) {
+                        localSessionId = record.getLocalSessionId();
+                    }
+                }
             }
             return new HostSessionSnapshot(capturedComputer, app,
-                    capturedComputer.hostSessionId, pcIdentity, localSessionId);
+                    capturedComputer.hostSessionId,
+                    capturedComputer.hostSessionIdSupported, pcIdentity, localSessionId);
         }
         catch (IllegalArgumentException ignored) {
             return null;
@@ -709,7 +744,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
     private boolean stillOwnsHostSession(HostSessionSnapshot expected) {
         return expected != null && inForeground && computer != null
-                && Objects.equals(expected.hostSessionId, computer.hostSessionId)
+                && expected.hostSessionIdSupported == computer.hostSessionIdSupported
+                && (!expected.hostSessionIdSupported
+                        || Objects.equals(expected.hostSessionId, computer.hostSessionId))
                 && HomeSessionLaunchPolicy.isCurrentSessionApp(computer.runningGameId,
                         computer.runningGameUUID, expected.app.getAppId(),
                         expected.app.getAppUUID());
@@ -722,9 +759,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         if (stillOwnsHostSession(expected)) {
             return true;
         }
-        return computer.runningGameId == 0
-                && (computer.runningGameUUID == null || computer.runningGameUUID.isEmpty())
-                && computer.hostSessionId == null;
+        return expected.hostSessionIdSupported == computer.hostSessionIdSupported
+                && isAuthoritativelyIdle(computer);
     }
 
     private void resumeCurrentSession() {
@@ -821,8 +857,14 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         if (expected == null || expected.localSessionId == null) {
             return;
         }
-        new SessionSettingsStore(this).clearCurrentSession(expected.pcIdentity,
-                expected.localSessionId, expected.hostSessionId);
+        SessionSettingsStore store = new SessionSettingsStore(this);
+        if (expected.hostSessionIdSupported) {
+            store.clearCurrentSession(expected.pcIdentity, expected.localSessionId,
+                    expected.hostSessionId);
+        }
+        else {
+            store.clearCurrentSession(expected.pcIdentity, expected.localSessionId);
+        }
     }
 
     private void updateComputerStatus(ComputerDetails details) {
@@ -1024,17 +1066,22 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     }
 
     private void updateRunningSession(ComputerDetails details) {
+        int previousRunningAppId = lastRunningAppId;
+        String previousRunningAppUuid = lastRunningAppUuid;
         String previousHostSessionId = lastHostSessionId;
+        boolean previousHostSessionIdSupported = lastHostSessionIdSupported;
         boolean changed = details.runningGameId != lastRunningAppId
                 || !Objects.equals(details.runningGameUUID, lastRunningAppUuid)
-                || !Objects.equals(details.hostSessionId, lastHostSessionId);
+                || !Objects.equals(details.hostSessionId, lastHostSessionId)
+                || details.hostSessionIdSupported != lastHostSessionIdSupported;
         lastRunningAppId = details.runningGameId;
         lastRunningAppUuid = details.runningGameUUID;
         lastHostSessionId = details.hostSessionId;
-        if (details.runningGameId == 0
-                && (details.runningGameUUID == null || details.runningGameUUID.isEmpty())
-                && details.hostSessionId == null) {
-            clearPersistedSessionAfterAuthoritativeEnd(previousHostSessionId);
+        lastHostSessionIdSupported = details.hostSessionIdSupported;
+        if (isAuthoritativelyIdle(details)) {
+            clearPersistedSessionAfterAuthoritativeEnd(previousRunningAppId,
+                    previousRunningAppUuid, previousHostSessionId,
+                    previousHostSessionIdSupported);
         }
         if (changed) {
             // Context-menu contents are snapshots. Close a stale Resume/Quit menu when the
@@ -1042,6 +1089,14 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             runOnUiThread(this::closeContextMenu);
         }
         updateCurrentSessionBanner();
+    }
+
+    private static boolean isAuthoritativelyIdle(ComputerDetails details) {
+        return details != null && details.state == ComputerDetails.State.ONLINE
+                && details.runningGameId == 0
+                && (details.runningGameUUID == null
+                || details.runningGameUUID.isEmpty())
+                && details.hostSessionId == null;
     }
 
     private void updateRunningSessionCleared(HostSessionSnapshot expected) {
@@ -1054,8 +1109,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         updateRunningSession(computer);
     }
 
-    private void clearPersistedSessionAfterAuthoritativeEnd(String endedHostSessionId) {
-        if (!inForeground || computer == null || endedHostSessionId == null) {
+    private void clearPersistedSessionAfterAuthoritativeEnd(int endedAppId,
+                                                             String endedAppUuid,
+                                                             String endedHostSessionId,
+                                                             boolean hostSessionIdSupported) {
+        if (!inForeground || computer == null) {
             return;
         }
         String fallbackHost = computer.activeAddress != null
@@ -1065,11 +1123,33 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             SessionSettingsStore.PcIdentity pc =
                     new SessionSettingsStore.PcIdentity(computer.uuid, fallbackHost);
             SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
-            if (record != null && record.getResumeMetadata() != null
-                    && endedHostSessionId.equals(
-                            record.getResumeMetadata().getHostSessionId())) {
-                store.clearCurrentSession(pc, record.getLocalSessionId(), endedHostSessionId);
+            if (record == null) {
+                return;
             }
+            if (hostSessionIdSupported) {
+                if (SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                        endedHostSessionId)
+                        && record.getResumeMetadata() != null
+                        && endedHostSessionId.equals(
+                                record.getResumeMetadata().getHostSessionId())) {
+                    store.clearCurrentSession(pc, record.getLocalSessionId(),
+                            endedHostSessionId);
+                }
+                return;
+            }
+
+            if (endedAppId > 0 || (endedAppUuid != null && !endedAppUuid.isEmpty())) {
+                SessionSettingsStore.AppIdentity endedApp =
+                        new SessionSettingsStore.AppIdentity(
+                                endedAppId > 0 ? Integer.toString(endedAppId) : null,
+                                endedAppUuid, null);
+                if (!record.getCurrentApp().isSameApplication(endedApp)) {
+                    return;
+                }
+            }
+            // Legacy hosts have no generation token. The local session ID prevents this
+            // authoritative idle response from clearing a concurrently replaced record.
+            store.clearCurrentSession(pc, record.getLocalSessionId());
         }
         catch (IllegalArgumentException ignored) {
             // A transient discovery record without an identity cannot own persisted settings.

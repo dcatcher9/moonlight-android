@@ -615,6 +615,7 @@
     <string name="xr_home_speed_unavailable">—</string>
     <string name="xr_home_virtual_display_ready">Virtual display ready</string>
     <string name="xr_home_virtual_display_unavailable">Virtual display unavailable</string>
+    <string name="xr_home_virtual_display_not_advertised">Virtual display not advertised</string>
     <string name="xr_home_session_active">XR session active</string>
     <string name="xr_home_session_ready">Ready for a new session</string>
     <string name="xr_bar_stats">Stats</string>

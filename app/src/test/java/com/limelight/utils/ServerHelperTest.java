@@ -50,7 +50,7 @@ public class ServerHelperTest {
     }
 
     @Test
-    public void missingHostSessionTokenCannotResume() {
+    public void tokenCapableHostCannotResumeWithoutSessionToken() {
         ComputerDetails computer = computerWithRunningApp(42, null);
         computer.hostSessionId = null;
         NvApp app = new NvApp("Desktop", null, 42, false);
@@ -58,10 +58,21 @@ public class ServerHelperTest {
         assertFalse(ServerHelper.isResumeOfSameHostApp(computer, app));
     }
 
+    @Test
+    public void legacyHostCanResumeMatchingAppWithoutSessionToken() {
+        ComputerDetails computer = computerWithRunningApp(42, null);
+        computer.hostSessionIdSupported = false;
+        computer.hostSessionId = null;
+        NvApp app = new NvApp("Desktop", null, 42, false);
+
+        assertTrue(ServerHelper.isResumeOfSameHostApp(computer, app));
+    }
+
     private static ComputerDetails computerWithRunningApp(int appId, String appUuid) {
         ComputerDetails computer = new ComputerDetails();
         computer.runningGameId = appId;
         computer.runningGameUUID = appUuid;
+        computer.hostSessionIdSupported = true;
         computer.hostSessionId = "18446744073709551615";
         return computer;
     }

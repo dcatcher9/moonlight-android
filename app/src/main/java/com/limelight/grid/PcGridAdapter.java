@@ -267,11 +267,20 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
             return;
         }
 
-        displayFactView.setText(details.vDisplaySupported && details.vDisplayDriverReady
+        boolean virtualDisplayReady = details.vDisplaySupported
+                && details.vDisplayDriverReady;
+        boolean virtualDisplayNotAdvertised = !details.vDisplaySupported
+                && !details.hostSessionIdSupported;
+        displayFactView.setText(virtualDisplayReady
                 ? R.string.xr_home_virtual_display_ready
-                : R.string.xr_home_virtual_display_unavailable);
-        displayFactView.setTextColor(details.vDisplaySupported && details.vDisplayDriverReady
-                ? color(R.color.xr_status_ok) : color(R.color.xr_danger));
+                : virtualDisplayNotAdvertised
+                        ? R.string.xr_home_virtual_display_not_advertised
+                        : R.string.xr_home_virtual_display_unavailable);
+        displayFactView.setTextColor(virtualDisplayReady
+                ? color(R.color.xr_status_ok)
+                : virtualDisplayNotAdvertised
+                        ? color(R.color.xr_text_secondary)
+                        : color(R.color.xr_danger));
         displayFactView.setVisibility(View.VISIBLE);
 
         boolean sessionActive = details.runningGameId != 0

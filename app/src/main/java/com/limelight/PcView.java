@@ -147,6 +147,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private int contextMenuRunningGameId;
     private String contextMenuRunningGameUuid;
     private String contextMenuHostSessionId;
+    private boolean contextMenuHostSessionIdSupported;
     private boolean contextMenuOpen;
 
     private void initializeViews() {
@@ -409,6 +410,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         contextMenuRunningGameId = computer.details.runningGameId;
         contextMenuRunningGameUuid = computer.details.runningGameUUID;
         contextMenuHostSessionId = computer.details.hostSessionId;
+        contextMenuHostSessionIdSupported = computer.details.hostSessionIdSupported;
         contextMenuOpen = true;
 
         // Add a header with PC status details
@@ -475,6 +477,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         contextMenuRunningGameId = computer.details.runningGameId;
         contextMenuRunningGameUuid = computer.details.runningGameUUID;
         contextMenuHostSessionId = computer.details.hostSessionId;
+        contextMenuHostSessionIdSupported = computer.details.hostSessionIdSupported;
         contextMenuOpen = true;
 
         PopupMenu popup = new PopupMenu(this, anchor);
@@ -963,15 +966,18 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         final ComputerDetails computer;
         final NvApp app;
         final String hostSessionId;
+        final boolean hostSessionIdSupported;
         final SessionSettingsStore.PcIdentity pcIdentity;
         final String localSessionId;
 
         HostSessionSnapshot(ComputerDetails computer, NvApp app, String hostSessionId,
+                            boolean hostSessionIdSupported,
                             SessionSettingsStore.PcIdentity pcIdentity,
                             String localSessionId) {
             this.computer = computer;
             this.app = app;
             this.hostSessionId = hostSessionId;
+            this.hostSessionIdSupported = hostSessionIdSupported;
             this.pcIdentity = pcIdentity;
             this.localSessionId = localSessionId;
         }
@@ -993,8 +999,17 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     }
 
     private HostSessionSnapshot captureHostSession(ComputerDetails details) {
-        if (details == null || !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
-                details.hostSessionId)) {
+        if (details == null) {
+            return null;
+        }
+        if (details.hostSessionIdSupported
+                && !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                        details.hostSessionId)) {
+            return null;
+        }
+        if (details.runningGameId == 0
+                && (details.runningGameUUID == null
+                || details.runningGameUUID.isEmpty())) {
             return null;
         }
         ComputerDetails captured = new ComputerDetails(details);
@@ -1008,13 +1023,27 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             SessionSettingsStore.SessionRecord record =
                     new SessionSettingsStore(this).getCurrentSession(pc);
             String localSessionId = null;
-            if (record != null && record.getResumeMetadata() != null
-                    && captured.hostSessionId.equals(
-                            record.getResumeMetadata().getHostSessionId())) {
-                localSessionId = record.getLocalSessionId();
+            if (record != null) {
+                if (captured.hostSessionIdSupported) {
+                    if (record.getResumeMetadata() != null
+                            && captured.hostSessionId.equals(
+                                    record.getResumeMetadata().getHostSessionId())) {
+                        localSessionId = record.getLocalSessionId();
+                    }
+                }
+                else {
+                    SessionSettingsStore.AppIdentity capturedApp =
+                            new SessionSettingsStore.AppIdentity(
+                                    app.getAppId() > 0
+                                            ? Integer.toString(app.getAppId()) : null,
+                                    app.getAppUUID(), app.getAppName());
+                    if (record.getCurrentApp().isSameApplication(capturedApp)) {
+                        localSessionId = record.getLocalSessionId();
+                    }
+                }
             }
             return new HostSessionSnapshot(captured, app, captured.hostSessionId,
-                    pc, localSessionId);
+                    captured.hostSessionIdSupported, pc, localSessionId);
         }
         catch (IllegalArgumentException ignored) {
             return null;
@@ -1027,8 +1056,11 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         }
         ComputerObject current = findComputerByUuid(expected.computer.uuid);
         return current != null
-                && Objects.equals(expected.hostSessionId,
-                        current.details.hostSessionId)
+                && expected.hostSessionIdSupported
+                == current.details.hostSessionIdSupported
+                && (!expected.hostSessionIdSupported
+                        || Objects.equals(expected.hostSessionId,
+                                current.details.hostSessionId))
                 && HomeSessionLaunchPolicy.isCurrentSessionApp(
                         current.details.runningGameId,
                         current.details.runningGameUUID,
@@ -1039,7 +1071,9 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         if (contextMenuOpen && details.uuid.equals(contextMenuComputerUuid)
                 && (details.runningGameId != contextMenuRunningGameId
                 || !Objects.equals(details.runningGameUUID, contextMenuRunningGameUuid)
-                || !Objects.equals(details.hostSessionId, contextMenuHostSessionId))) {
+                || !Objects.equals(details.hostSessionId, contextMenuHostSessionId)
+                || details.hostSessionIdSupported
+                != contextMenuHostSessionIdSupported)) {
             // Context-menu contents are snapshots. Close stale Resume/Quit actions when Apollo's
             // authoritative session state changes; the next open rebuilds the current actions.
             closeContextMenu();
@@ -1057,21 +1091,19 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         }
 
         if (existingEntry != null) {
-            String endedHostSessionId = existingEntry.details.hostSessionId;
+            ComputerDetails endedSession = existingEntry.details;
             // Replace the information in the existing entry
             existingEntry.details = details;
-            if (inForeground && details.state == ComputerDetails.State.ONLINE
-                    && details.runningGameId == 0
-                    && (details.runningGameUUID == null
-                    || details.runningGameUUID.isEmpty())
-                    && details.hostSessionId == null) {
-                clearPersistedSessionAfterAuthoritativeEnd(details,
-                        endedHostSessionId);
+            if (inForeground && isAuthoritativelyIdle(details)) {
+                clearPersistedSessionAfterAuthoritativeEnd(details, endedSession);
             }
         }
         else {
             // Add a new entry
             pcGridAdapter.addComputer(new ComputerObject(details));
+            if (inForeground && isAuthoritativelyIdle(details)) {
+                clearPersistedSessionAfterAuthoritativeEnd(details, details);
+            }
 
             // Remove the "Discovery in progress" view
             noPcFoundLayout.setVisibility(View.INVISIBLE);
@@ -1082,17 +1114,31 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         updateMachinePresentation();
     }
 
+    private static boolean isAuthoritativelyIdle(ComputerDetails details) {
+        return details != null && details.state == ComputerDetails.State.ONLINE
+                && details.runningGameId == 0
+                && (details.runningGameUUID == null
+                || details.runningGameUUID.isEmpty())
+                && details.hostSessionId == null;
+    }
+
     private void clearPersistedSession(HostSessionSnapshot expected) {
         if (expected == null || expected.localSessionId == null) {
             return;
         }
-        new SessionSettingsStore(this).clearCurrentSession(expected.pcIdentity,
-                expected.localSessionId, expected.hostSessionId);
+        SessionSettingsStore store = new SessionSettingsStore(this);
+        if (expected.hostSessionIdSupported) {
+            store.clearCurrentSession(expected.pcIdentity, expected.localSessionId,
+                    expected.hostSessionId);
+        }
+        else {
+            store.clearCurrentSession(expected.pcIdentity, expected.localSessionId);
+        }
     }
 
     private void clearPersistedSessionAfterAuthoritativeEnd(ComputerDetails details,
-                                                             String endedHostSessionId) {
-        if (details == null || endedHostSessionId == null) {
+                                                             ComputerDetails endedSession) {
+        if (details == null || endedSession == null) {
             return;
         }
         String fallbackHost = details.activeAddress != null
@@ -1102,12 +1148,36 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             SessionSettingsStore.PcIdentity pc =
                     new SessionSettingsStore.PcIdentity(details.uuid, fallbackHost);
             SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
-            if (record != null && record.getResumeMetadata() != null
-                    && endedHostSessionId.equals(
-                            record.getResumeMetadata().getHostSessionId())) {
-                store.clearCurrentSession(pc, record.getLocalSessionId(),
-                        endedHostSessionId);
+            if (record == null) {
+                return;
             }
+            if (endedSession.hostSessionIdSupported) {
+                if (SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                        endedSession.hostSessionId)
+                        && record.getResumeMetadata() != null
+                        && endedSession.hostSessionId.equals(
+                                record.getResumeMetadata().getHostSessionId())) {
+                    store.clearCurrentSession(pc, record.getLocalSessionId(),
+                            endedSession.hostSessionId);
+                }
+                return;
+            }
+
+            if (endedSession.runningGameId > 0
+                    || (endedSession.runningGameUUID != null
+                    && !endedSession.runningGameUUID.isEmpty())) {
+                SessionSettingsStore.AppIdentity endedApp =
+                        new SessionSettingsStore.AppIdentity(
+                                endedSession.runningGameId > 0
+                                        ? Integer.toString(endedSession.runningGameId) : null,
+                                endedSession.runningGameUUID, null);
+                if (!record.getCurrentApp().isSameApplication(endedApp)) {
+                    return;
+                }
+            }
+            // Legacy hosts have no generation token. Guard the removal with the local session
+            // ID captured from the record associated with this authoritative idle response.
+            store.clearCurrentSession(pc, record.getLocalSessionId());
         }
         catch (IllegalArgumentException ignored) {
             // Discovery can briefly surface an entry before either stable identity is populated.
@@ -1195,7 +1265,12 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         }
         public String guessManagementUrl() {
             if (details.activeAddress == null) return null;
-            return "https://" + details.activeAddress.address + ":" + (details.guessExternalPort() + 1);
+            String address = details.activeAddress.address;
+            if (address.indexOf(':') >= 0
+                    && !(address.startsWith("[") && address.endsWith("]"))) {
+                address = "[" + address + "]";
+            }
+            return "https://" + address + ":" + (details.guessExternalPort() + 1);
         }
     }
 }

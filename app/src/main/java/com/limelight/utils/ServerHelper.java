@@ -33,6 +33,7 @@ import java.security.cert.CertificateEncodingException;
 
 public class ServerHelper {
     public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
+    public static final String EXTRA_HOST_SESSION_ID_SUPPORTED = "HostSessionIdSupported";
 
     /**
      * Returns whether the host's latest serverinfo says this exact app is still running.
@@ -43,7 +44,8 @@ public class ServerHelper {
         if (computer == null || app == null) {
             return false;
         }
-        if (!SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+        if (computer.hostSessionIdSupported
+                && !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
                 computer.hostSessionId)) {
             return false;
         }
@@ -143,6 +145,8 @@ public class ServerHelper {
         // Gate XR presentation restoration on the host's authoritative running-app state. Any
         // Game intent constructed elsewhere omits this extra and therefore defaults to fresh.
         gameIntent.putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, resumeExistingSession);
+        gameIntent.putExtra(EXTRA_HOST_SESSION_ID_SUPPORTED,
+                computer.hostSessionIdSupported);
         if (resumeExistingSession && computer.hostSessionId != null) {
             gameIntent.putExtra(Game.EXTRA_HOST_SESSION_ID, computer.hostSessionId);
         }
@@ -237,6 +241,7 @@ public class ServerHelper {
                               final NvHTTP httpConn,
                               final String appName,
                               final String expectedHostSessionId,
+                              final boolean hostSessionIdSupported,
                               final Runnable onComplete,
                               final Runnable onFail
     ) {
@@ -247,7 +252,8 @@ public class ServerHelper {
                 String message;
                 boolean failed = false;
                 try {
-                    boolean sessionEnded = httpConn.quitApp(expectedHostSessionId);
+                    boolean sessionEnded = httpConn.quitApp(expectedHostSessionId,
+                            hostSessionIdSupported);
                     if (sessionEnded) {
                         message = parent.getResources().getString(R.string.applist_quit_success) + " " + appName;
                     } else {
@@ -293,6 +299,18 @@ public class ServerHelper {
 
     }
 
+    /** Retains the exact-token behavior for callers that do not provide host capabilities. */
+    public static void doQuit(final Activity parent,
+                              final NvHTTP httpConn,
+                              final String appName,
+                              final String expectedHostSessionId,
+                              final Runnable onComplete,
+                              final Runnable onFail
+    ) {
+        doQuit(parent, httpConn, appName, expectedHostSessionId, true,
+                onComplete, onFail);
+    }
+
     public static void doQuit(final Activity parent,
                               final ComputerDetails computer,
                               final NvApp app,
@@ -313,6 +331,7 @@ public class ServerHelper {
                     httpConn,
                     app.getAppName(),
                     expectedHostSessionId,
+                    computer.hostSessionIdSupported,
                     onComplete,
                     null
             );

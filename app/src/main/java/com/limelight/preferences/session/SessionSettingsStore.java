@@ -609,6 +609,40 @@ public final class SessionSettingsStore {
         }
     }
 
+    /**
+     * Confirms a resume reported by a legacy host that does not advertise session capabilities.
+     * The current application identity is the strongest guard available on these hosts. A
+     * different application removes the stale record; no token is invented or persisted.
+     */
+    public SessionRecord confirmLegacyHostResume(PcIdentity pc, AppIdentity hostApp,
+                                                 long hostConfirmedAtEpochMillis) {
+        Objects.requireNonNull(pc, "pc");
+        Objects.requireNonNull(hostApp, "hostApp");
+        synchronized (WRITE_LOCK) {
+            SessionRecord current = readRecord(pc);
+            if (current == null) {
+                return null;
+            }
+            if (!current.currentApp.isSameApplication(hostApp)) {
+                removeRecord(pc);
+                return null;
+            }
+
+            MutableRecord mutable = new MutableRecord(current);
+            // Preserve stronger identity fields from an earlier app-list response while
+            // refreshing any facts the latest serverinfo did provide.
+            mutable.currentApp = new AppIdentity(
+                    hostApp.appId != null ? hostApp.appId : current.currentApp.appId,
+                    hostApp.appUuid != null ? hostApp.appUuid : current.currentApp.appUuid,
+                    hostApp.displayName != null ? hostApp.displayName
+                            : current.currentApp.displayName);
+            mutable.resumeMetadata = new ResumeMetadata(true, null,
+                    hostConfirmedAtEpochMillis);
+            SessionRecord resumed = mutable.toImmutable();
+            return writeRecord(pc, resumed) ? resumed : null;
+        }
+    }
+
     /** Clears a stale record when serverinfo reports a different running application. */
     public boolean clearIfHostIncompatible(PcIdentity pc, AppIdentity hostApp) {
         Objects.requireNonNull(pc, "pc");

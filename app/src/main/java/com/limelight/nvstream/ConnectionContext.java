@@ -24,8 +24,9 @@ public class ConnectionContext {
     // This is the sessionUrl0 tag from /resume and /launch
     public String rtspSessionUrl;
 
-    // Apollo session capability. A resume request must present the locally persisted token,
-    // and a successful launch/resume publishes the token bound to this connection.
+    // Apollo-3D session capability. Token-capable hosts require the locally persisted token on
+    // resume/cancel. Standard Sunshine and Apollo hosts use the legacy tokenless contract.
+    public boolean hostSessionIdSupported;
     public String expectedHostSessionId;
     public String hostSessionId;
     public boolean resumedHostSession;

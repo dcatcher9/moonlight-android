@@ -179,6 +179,38 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
+    public void legacyHostResumePreservesSettingsUsingApplicationIdentity() {
+        assertTrue(store.startNewSession(pc, firstApp, null, 100L));
+        assertTrue(store.edit(pc, firstApp)
+                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
+                .setLastSuccessfulMode(PresenterMode.CLIENT_SBS_AI)
+                .commit());
+
+        SessionRecord resumed = store.confirmLegacyHostResume(pc,
+                new AppIdentity("42", null, "Cyberpunk 2077 Updated"), 500L);
+
+        assertNotNull(resumed);
+        assertEquals(PresenterMode.CLIENT_SBS_AI, resumed.getLastSuccessfulMode());
+        assertTrue(resumed.getResumeMetadata().isHostConfirmedResume());
+        assertNull(resumed.getResumeMetadata().getHostSessionId());
+        assertEquals(500L, resumed.getResumeMetadata().getHostConfirmedAtEpochMillis());
+        assertEquals("app-cyberpunk", resumed.getCurrentApp().getAppUuid());
+    }
+
+    @Test
+    public void legacyHostResumeWithDifferentApplicationClearsStaleRecord() {
+        assertTrue(store.startNewSession(pc, firstApp, null, 100L));
+
+        SessionRecord resumed = store.confirmLegacyHostResume(pc,
+                new AppIdentity("7", "different-app", "Portal 2"), 500L);
+
+        assertNull(resumed);
+        assertNull(store.getCurrentSession(pc));
+    }
+
+    @Test
     public void changedHostTokenRejectsAndClearsStoredGeneration() {
         assertTrue(store.startNewSession(pc, firstApp, "original", 1L));
         assertNull(store.confirmHostResume(pc, firstApp, "replacement", 2L));

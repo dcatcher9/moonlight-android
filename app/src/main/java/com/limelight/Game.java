@@ -202,6 +202,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private SessionSettingsStore.AppIdentity sessionApp;
     private String sessionLocalSessionId;
     private volatile String sessionHostSessionId;
+    private volatile boolean hostSessionIdSupported;
     private XrSessionSettingsController xrSessionSettingsController;
     private boolean streamContainerReleasedForReconnect;
     private boolean reconnectScheduled;
@@ -387,6 +388,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         String launchAppUuid = intent.getStringExtra(EXTRA_APP_UUID);
         int launchAppId = readAppId(intent);
         String publishedHostSessionId = intent.getStringExtra(EXTRA_HOST_SESSION_ID);
+        hostSessionIdSupported = intent.getBooleanExtra(
+                ServerHelper.EXTRA_HOST_SESSION_ID_SUPPORTED, false);
         intent.removeExtra(EXTRA_XR_STARTUP_MODE_OVERRIDE);
 
         try {
@@ -408,18 +411,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         boolean resume = activityRecreated
                 || intent.getBooleanExtra(EXTRA_RESUME_EXISTING_SESSION, false);
         if (resume) {
-            SessionSettingsStore.SessionRecord restored =
-                    sessionSettingsStore.confirmHostResume(sessionPc, sessionApp,
-                            publishedHostSessionId,
-                            System.currentTimeMillis());
-            if (restored == null
-                    && SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
-                            publishedHostSessionId)) {
+            SessionSettingsStore.SessionRecord restored = hostSessionIdSupported
+                    ? sessionSettingsStore.confirmHostResume(sessionPc, sessionApp,
+                            publishedHostSessionId, System.currentTimeMillis())
+                    : sessionSettingsStore.confirmLegacyHostResume(
+                            sessionPc, sessionApp, System.currentTimeMillis());
+            if (restored == null && (!hostSessionIdSupported
+                    || SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
+                            publishedHostSessionId))) {
                 // The user explicitly selected Resume from a fresh serverinfo snapshot. A new
-                // host generation may be resumed, but stale per-session overrides must not cross
-                // that generation boundary.
+                // token generation (or a standard host with no saved local record) may be
+                // resumed, but stale per-session overrides must not cross that boundary.
                 sessionSettingsStore.startNewSession(sessionPc, sessionApp,
-                        publishedHostSessionId, System.currentTimeMillis());
+                        hostSessionIdSupported ? publishedHostSessionId : null,
+                        System.currentTimeMillis());
             }
         }
         else {
@@ -444,6 +449,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         SessionSettingsStore.Snapshot snapshot =
                 sessionSettingsStore.snapshot(sessionPc, globalPreferences);
         SessionSettingsStore.PresenterMode startupModeOverride = null;
+        if (snapshot.getRecord() != null
+                && snapshot.getRecord().getLastSuccessfulMode()
+                == SessionSettingsStore.PresenterMode.HOST_SBS_AI
+                && !hostSessionIdSupported) {
+            LimeLog.warning("Host SBS AI is unavailable on a standard Sunshine/Apollo host; "
+                    + "restoring Normal");
+            boolean repaired = sessionSettingsStore.edit(
+                            sessionPc, sessionApp,
+                            snapshot.getRecord().getLocalSessionId())
+                    .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.NORMAL)
+                    .commit();
+            if (repaired) {
+                snapshot = sessionSettingsStore.snapshot(sessionPc, globalPreferences);
+            }
+            else {
+                startupModeOverride = SessionSettingsStore.PresenterMode.NORMAL;
+                intent.putExtra(EXTRA_XR_STARTUP_MODE_OVERRIDE,
+                        SessionSettingsStore.PresenterMode.NORMAL.name());
+                LimeLog.warning("Unable to persist the Host SBS AI startup repair; "
+                        + "forcing Normal for this launch");
+            }
+        }
         if (snapshot.getRecord() != null
                 && snapshot.getRecord().getLastSuccessfulMode()
                 == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
@@ -488,7 +515,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 ? snapshot.getRecord().getLocalSessionId() : null;
         SessionSettingsStore.ResumeMetadata resumeMetadata = snapshot.getRecord() != null
                 ? snapshot.getRecord().getResumeMetadata() : null;
-        sessionHostSessionId = resumeMetadata != null
+        sessionHostSessionId = hostSessionIdSupported && resumeMetadata != null
                 ? resumeMetadata.getHostSessionId() : null;
         xrSessionSettingsController = new XrSessionSettingsController(
                 sessionSettingsStore, sessionPc, sessionApp, globalPreferences, snapshot,
@@ -505,6 +532,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 LimeLog.warning("Unable to persist the Raw SBS HEVC compatibility adjustment");
             }
         }
+        xrSessionSettingsController.setLiveVideoModeSupported(hostSessionIdSupported);
 
         return xrSessionSettingsController.getStartupPreferences();
     }
@@ -533,6 +561,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return;
         }
 
+        xrSessionSettingsController.setLiveVideoModeSupported(hostSessionIdSupported);
+        presenter.setHostControlExtensionsSupported(hostSessionIdSupported);
         refreshXrSessionSettingsModels();
         presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
             @Override
@@ -4121,26 +4151,74 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void hostSessionEstablished(String hostSessionId, boolean resumed) {
-        if (!SessionSettingsStore.ResumeMetadata.isValidHostSessionId(hostSessionId)
+    public void hostSessionEstablished(String hostSessionId, boolean resumed,
+                                       boolean hostSessionIdSupported) {
+        if ((hostSessionIdSupported
+                && !SessionSettingsStore.ResumeMetadata.isValidHostSessionId(hostSessionId))
                 || sessionSettingsStore == null || sessionPc == null || sessionApp == null
                 || sessionLocalSessionId == null) {
             LimeLog.warning("Ignoring invalid or stale host session establishment callback");
             return;
         }
 
+        boolean compatibilityReconnect = hostCapabilityRequiresNormalReconnect(
+                hostSessionIdSupported,
+                xrSessionSettingsController != null
+                        ? xrSessionSettingsController.getSelectedMode() : null);
         SessionSettingsStore.ResumeMetadata metadata =
-                new SessionSettingsStore.ResumeMetadata(resumed, hostSessionId,
+                new SessionSettingsStore.ResumeMetadata(resumed,
+                        hostSessionIdSupported ? hostSessionId : null,
                         System.currentTimeMillis());
         // Keep the live cancel capability even if durable storage fails. The callback belongs to
         // this Game generation and NvConnection serializes replacement sessions behind stop().
-        sessionHostSessionId = hostSessionId;
-        getIntent().putExtra(EXTRA_HOST_SESSION_ID, hostSessionId);
-        if (!sessionSettingsStore.edit(sessionPc, sessionApp, sessionLocalSessionId)
-                .setResumeMetadata(metadata)
-                .commit()) {
+        this.hostSessionIdSupported = hostSessionIdSupported;
+        sessionHostSessionId = hostSessionIdSupported ? hostSessionId : null;
+        getIntent().putExtra(ServerHelper.EXTRA_HOST_SESSION_ID_SUPPORTED,
+                hostSessionIdSupported);
+        if (hostSessionIdSupported) {
+            getIntent().putExtra(EXTRA_HOST_SESSION_ID, hostSessionId);
+        }
+        else {
+            getIntent().removeExtra(EXTRA_HOST_SESSION_ID);
+        }
+        SessionSettingsStore.Editor sessionEditor = sessionSettingsStore.edit(
+                        sessionPc, sessionApp, sessionLocalSessionId)
+                .setResumeMetadata(metadata);
+        if (compatibilityReconnect) {
+            // Discovery can race a host restart/downgrade. Persist the safe interpretation before
+            // replacing the Activity so a mono standard-host stream can never remain stuck in a
+            // disabled Host SBS AI presentation.
+            sessionEditor.setLastSuccessfulMode(
+                    SessionSettingsStore.PresenterMode.NORMAL);
+        }
+        if (!sessionEditor.commit()) {
             LimeLog.warning("Unable to persist the established host session capability");
         }
+        runOnUiThread(() -> {
+            if (xrSessionSettingsController != null) {
+                xrSessionSettingsController.setLiveVideoModeSupported(
+                        hostSessionIdSupported);
+            }
+            XrStreamPresenter presenter = streamContainer != null
+                    ? streamContainer.getXrPresenter() : null;
+            if (presenter != null) {
+                presenter.setHostControlExtensionsSupported(hostSessionIdSupported);
+            }
+            if (compatibilityReconnect) {
+                LimeLog.warning("XR: authoritative host capabilities no longer support Host SBS "
+                        + "AI; reconnecting in Normal mode");
+                scheduleXrSessionReconnect();
+                return;
+            }
+            refreshXrSessionSettingsModels();
+        });
+    }
+
+    static boolean hostCapabilityRequiresNormalReconnect(
+            boolean hostControlExtensionsSupported,
+            SessionSettingsStore.PresenterMode selectedMode) {
+        return !hostControlExtensionsSupported
+                && selectedMode == SessionSettingsStore.PresenterMode.HOST_SBS_AI;
     }
 
     static boolean shouldSkipWideDisplayMode(int candidateWidth,
@@ -4201,7 +4279,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                     // exact session that this local generation just created.
                                     String expectedHostSessionId = sessionHostSessionId;
                                     boolean sessionEnded = httpConn.quitApp(
-                                            expectedHostSessionId);
+                                            expectedHostSessionId,
+                                            hostSessionIdSupported);
                                     if (sessionEnded && sessionSettingsStore != null
                                             && sessionPc != null) {
                                         if (sessionApp != null && expectedLocalSessionId != null) {

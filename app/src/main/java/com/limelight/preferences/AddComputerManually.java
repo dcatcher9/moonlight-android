@@ -209,7 +209,9 @@ public class AddComputerManually extends AppCompatActivity {
                         Intent intent = new Intent(AddComputerManually.this, PcView.class);
                         intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
                         intent.putExtra("hostname", uri.getHost());
-                        intent.putExtra("port", uri.getPort());
+                        int pairingPort = uri.getPort();
+                        intent.putExtra("port", pairingPort == -1
+                                ? NvHTTP.DEFAULT_HTTP_PORT : pairingPort);
                         intent.putExtra("pin", pin);
                         intent.putExtra("passphrase", passphrase);
 

@@ -327,6 +327,9 @@ public class NvConnection {
 
         ComputerDetails details = h.getComputerDetails(serverInfo);
         context.isNvidiaServerSoftware = details.nvidiaServer;
+        context.hostSessionIdSupported = details.hostSessionIdSupported;
+        context.expectedHostSessionId = null;
+        context.hostSessionId = null;
 
         // May be missing for older servers
         context.serverGfeVersion = h.getGfeVersion(serverInfo);
@@ -405,8 +408,8 @@ public class NvConnection {
             }
         }
         
-        // If there's a game running, resume it only with the exact session capability that
-        // serverinfo published and this client previously persisted.
+        // Token-capable hosts require the exact session ID previously persisted by this client.
+        // Standard Sunshine/Apollo hosts retain the legacy resume-by-application contract.
         if (details.runningGameId != 0 || hasIdentity(details.runningGameUUID)) {
             if (context.streamConfig.getRequireHostIdleForLaunch()) {
                 context.connListener.displayMessage("Another session started before the " +
@@ -416,13 +419,14 @@ public class NvConnection {
             try {
                 if (isSameApplication(details.runningGameId, details.runningGameUUID, app)) {
                     String expectedHostSessionId = context.streamConfig.getExpectedHostSessionId();
-                    if (expectedHostSessionId == null
-                            || !expectedHostSessionId.equals(details.hostSessionId)) {
+                    if (!isHostSessionResumeAllowed(details.hostSessionIdSupported,
+                            expectedHostSessionId, details.hostSessionId)) {
                         context.connListener.displayMessage("The running session has changed and " +
                                 "cannot be resumed safely. Refresh the host and try again.");
                         return false;
                     }
-                    context.expectedHostSessionId = expectedHostSessionId;
+                    context.expectedHostSessionId = details.hostSessionIdSupported
+                            ? expectedHostSessionId : null;
                     // UUID is authoritative when both sides have one. Use the ID from the same
                     // serverinfo snapshot so a refreshed app-list ID cannot contradict the UUID
                     // in Apollo's resume identity check.
@@ -436,7 +440,8 @@ public class NvConnection {
                     // When launching InputOnly, we shouldn't try terminating the current running app
                     return launchNotRunningApp(h, context);
                 } else {
-                    return quitAndLaunch(h, context, details.hostSessionId);
+                    return quitAndLaunch(h, context, details.hostSessionId,
+                            details.hostSessionIdSupported);
                 }
             } catch (HostHttpResponseException e) {
                 if (e.getErrorCode() == 470) {
@@ -499,11 +504,28 @@ public class NvConnection {
                 && runningAppId == requestedApp.getAppId();
     }
 
+    static boolean isHostSessionResumeAllowed(boolean hostSessionIdSupported,
+                                              String expectedHostSessionId,
+                                              String publishedHostSessionId) {
+        if (!hostSessionIdSupported) {
+            return true;
+        }
+        return hasIdentity(expectedHostSessionId)
+                && expectedHostSessionId.equals(publishedHostSessionId);
+    }
+
     protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context,
                                     String expectedHostSessionId) throws IOException,
             XmlPullParserException {
+        return quitAndLaunch(h, context, expectedHostSessionId, true);
+    }
+
+    protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context,
+                                    String expectedHostSessionId,
+                                    boolean hostSessionIdSupported) throws IOException,
+            XmlPullParserException {
         try {
-            if (!h.quitApp(expectedHostSessionId)) {
+            if (!h.quitApp(expectedHostSessionId, hostSessionIdSupported)) {
                 context.connListener.displayMessage("Failed to quit previous session! You must quit it manually");
                 return false;
             } 
@@ -587,7 +609,7 @@ public class NvConnection {
                         // successful HTTP launch can become impossible for Game.stopConnection()
                         // to cancel safely.
                         context.connListener.hostSessionEstablished(context.hostSessionId,
-                                context.resumedHostSession);
+                                context.resumedHostSession, context.hostSessionIdSupported);
                     }
                     if (stopRequested) return;
                     if (!appStarted) {

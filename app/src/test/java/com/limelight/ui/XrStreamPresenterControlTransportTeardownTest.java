@@ -85,6 +85,35 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         controller.destroy();
     }
 
+    @Test
+    public void standardHostCapabilityFencesApolloOnlyControls() throws Exception {
+        ActivityController<Activity> controller = createActivity();
+        XrStreamPresenter presenter = createReadyPresenter(controller.get());
+
+        presenter.setHostControlExtensionsSupported(false);
+        invoke(presenter, "schedulePanelRateReconcile");
+
+        assertFalse((boolean) getField(presenter, "panelRateReconcilePosted"));
+        assertEquals(0, presenter.sendHostSbsModeControl(1));
+        assertEquals(0, presenter.sendHostVideoModeControl(
+                1920, 1080, 6000, 1, 40_000));
+        assertEquals(0, presenter.sendHostTelemetryControl(true, false, 1, 500));
+        assertFalse(presenter.sendHostDebugDumpControl());
+        assertFalse(XrStreamPresenter.isPresentationModeSupported(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, false));
+        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, false));
+        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, false));
+        assertEquals(0, ShadowMoonBridge.getSetSbsModeCallCount());
+        assertEquals(0, ShadowMoonBridge.getSetVideoModeCallCount());
+        assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
+        assertEquals(0, ShadowMoonBridge.getSbsDebugDumpCallCount());
+
+        presenter.onDestroy();
+        controller.destroy();
+    }
+
     private static ActivityController<Activity> createActivity() {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();

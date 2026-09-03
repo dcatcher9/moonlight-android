@@ -1354,6 +1354,18 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void standardHostReconnectsForEveryQualityDelta() {
+        XrSessionSettingsController controller = withFullEnvelope(controller());
+        controller.setLiveVideoModeSupported(false);
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+                SessionSettingsModel.Key.BITRATE, "80000");
+
+        assertFalse(controller.selectedModeHasLiveApplicableChange());
+        assertTrue(controller.selectedModeRequiresReconnect());
+        assertTrue(controller.pendingChangesRequireReconnect());
+    }
+
+    @Test
     public void resolutionDeltaInsideTheEnvelopeAppliesLive() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
         controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,

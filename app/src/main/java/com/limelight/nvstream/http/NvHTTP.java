@@ -4,6 +4,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.net.Inet4Address;
@@ -51,6 +52,7 @@ import com.limelight.nvstream.http.PairingManager.PairState;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.utils.DeviceUtils;
 
+import okhttp3.Call;
 import okhttp3.ConnectionPool;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
@@ -282,6 +284,32 @@ public class NvHTTP {
         return getXmlString(new StringReader(str), tagname, throwIfMissing);
     }
 
+    static boolean hasXmlTag(Reader r, String tagname) throws XmlPullParserException, IOException {
+        XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
+        factory.setNamespaceAware(true);
+        XmlPullParser xpp = factory.newPullParser();
+
+        xpp.setInput(r);
+        int eventType = xpp.getEventType();
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            if (eventType == XmlPullParser.START_TAG) {
+                if (xpp.getName().equals("root")) {
+                    verifyResponseStatus(xpp);
+                }
+                if (xpp.getName().equals(tagname)) {
+                    return true;
+                }
+            }
+            eventType = xpp.next();
+        }
+
+        return false;
+    }
+
+    static boolean hasXmlTag(String str, String tagname) throws XmlPullParserException, IOException {
+        return hasXmlTag(new StringReader(str), tagname);
+    }
+
     static List<String> getXmlArray(Reader r, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
         XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
         factory.setNamespaceAware(true);
@@ -437,7 +465,7 @@ public class NvHTTP {
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
         details.runningGameUUID = getCurrentGameUUID(serverInfo);
-        details.hostSessionId = getHostSessionId(serverInfo);
+        populateHostSessionDetails(details, serverInfo);
 
         // The MJOLNIR codename was used by GFE but never by any third-party server
         details.nvidiaServer = getXmlString(serverInfo, "state", true).contains("MJOLNIR");
@@ -453,12 +481,33 @@ public class NvHTTP {
     }
 
     public String getHostSessionId(String xml) throws IOException, XmlPullParserException {
-        String hostSessionId = getXmlString(xml, "hostsessionid", false);
+        return normalizeHostSessionId(getXmlString(xml, "hostsessionid", false));
+    }
+
+    static void populateHostSessionDetails(ComputerDetails details, String xml)
+            throws IOException, XmlPullParserException {
+        details.hostSessionIdSupported = hasXmlTag(xml, "hostsessionid");
+        details.hostSessionId = normalizeHostSessionId(getXmlString(xml, "hostsessionid", false));
+    }
+
+    private static String normalizeHostSessionId(String hostSessionId) {
         if (hostSessionId == null) {
             return null;
         }
         hostSessionId = hostSessionId.trim();
         return hostSessionId.isEmpty() || "0".equals(hostSessionId) ? null : hostSessionId;
+    }
+
+    static String validateHostSessionResponse(String xml, boolean hostSessionIdSupported,
+                                              boolean resume, String expectedHostSessionId)
+            throws IOException, XmlPullParserException {
+        String hostSessionId = normalizeHostSessionId(
+                getXmlString(xml, "hostsessionid", false));
+        if (hostSessionIdSupported && (hostSessionId == null
+                || (resume && !hostSessionId.equals(expectedHostSessionId)))) {
+            throw new IOException("Host returned a missing or mismatched session token");
+        }
+        return hostSessionId;
     }
 
     public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
@@ -500,7 +549,7 @@ public class NvHTTP {
         if (requestBody == null) request = _builder.get().build();
         else request = _builder.post(requestBody).build();
 
-        Response response = performAndroidTlsHack(client).newCall(request).execute();
+        Response response = executeCall(performAndroidTlsHack(client).newCall(request));
 
         ResponseBody body = response.body();
         
@@ -518,6 +567,30 @@ public class NvHTTP {
         }
         else {
             throw new HostHttpResponseException(response.code(), response.message());
+        }
+    }
+
+    static Response executeCall(Call call) throws IOException {
+        try {
+            return call.execute();
+        } catch (Exception e) {
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
+            if (e instanceof InterruptedException) {
+                // OkHttp's Kotlin fast-fallback path can let InterruptedException escape even
+                // though Call.execute() declares only IOException to Java callers.
+                Thread.currentThread().interrupt();
+                InterruptedIOException interrupted =
+                        new InterruptedIOException("HTTP request interrupted");
+                interrupted.initCause(e);
+                throw interrupted;
+            }
+            if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            }
+
+            throw new IOException("Unexpected HTTP request failure", e);
         }
     }
 
@@ -881,7 +954,8 @@ public class NvHTTP {
 
         boolean resume = verb.equals("resume");
         String expectedHostSessionId = context.streamConfig.getExpectedHostSessionId();
-        if (resume && (expectedHostSessionId == null || expectedHostSessionId.isEmpty()
+        if (resume && context.hostSessionIdSupported
+                && (expectedHostSessionId == null || expectedHostSessionId.isEmpty()
                 || "0".equals(expectedHostSessionId))) {
             throw new IOException("Refusing to resume without a bound host session token");
         }
@@ -903,25 +977,27 @@ public class NvHTTP {
             appIdentityQuery +
             "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fpsInt +
             "&scaleFactor=" + context.streamConfig.getResolutionScaleFactor() +
-            "&sops=" + (enableSops ? 1 : 0) +
+            "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
-            (!enableHdr ? "" : "&hdrMode=1") +
+            (!enableHdr ? "" : "&hdrMode=1&clientHdrCapVersion=0" +
+                    "&clientHdrCapSupportedFlagsInUint32=0" +
+                    "&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1" +
+                    "&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
-            "&sbsMode=" + context.streamConfig.getInitialSbsMode() +
+            (context.hostSessionIdSupported
+                    ? "&sbsMode=" + context.streamConfig.getInitialSbsMode() : "") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
-            (resume ? "&hostSessionId=" + expectedHostSessionId : "") +
+            (resume && context.hostSessionIdSupported
+                    ? "&hostSessionId=" + expectedHostSessionId : "") +
             MoonBridge.getLaunchUrlQueryParameters());
         if ((verb.equals("launch") && !getXmlString(xmlStr, "gamesession", true).equals("0") ||
                 (verb.equals("resume") && !getXmlString(xmlStr, "resume", true).equals("0")))) {
             // sessionUrl0 will be missing for older GFE versions
             context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0", false);
-            context.hostSessionId = getHostSessionId(xmlStr);
-            if (context.hostSessionId == null
-                    || (resume && !context.hostSessionId.equals(expectedHostSessionId))) {
-                throw new IOException("Host returned a missing or mismatched session token");
-            }
+            context.hostSessionId = validateHostSessionResponse(xmlStr,
+                    context.hostSessionIdSupported, resume, expectedHostSessionId);
             return true;
         }
         else {
@@ -930,15 +1006,35 @@ public class NvHTTP {
     }
     
     public boolean quitApp(String expectedHostSessionId) throws IOException, XmlPullParserException {
-        if (expectedHostSessionId == null || expectedHostSessionId.trim().isEmpty()
-                || "0".equals(expectedHostSessionId.trim())) {
-            throw new IOException("Refusing to quit without a bound host session token");
+        return quitApp(expectedHostSessionId, true);
+    }
+
+    public boolean quitApp() throws IOException, XmlPullParserException {
+        return quitApp(null, false);
+    }
+
+    public boolean quitApp(String expectedHostSessionId, boolean hostSessionIdSupported)
+            throws IOException, XmlPullParserException {
+        String cancelQuery = null;
+        if (hostSessionIdSupported) {
+            if (expectedHostSessionId == null || expectedHostSessionId.trim().isEmpty()
+                    || "0".equals(expectedHostSessionId.trim())) {
+                throw new IOException("Refusing to quit without a bound host session token");
+            }
+            cancelQuery = "hostSessionId=" + expectedHostSessionId.trim();
         }
+
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout,
-                getHttpsUrl(true), "cancel", "hostSessionId=" + expectedHostSessionId.trim());
+                getHttpsUrl(true), "cancel", cancelQuery);
         if (getXmlString(xmlStr, "cancel", true).equals("0")) {
             return false;
         }
+
+        if (!hostSessionIdSupported && getCurrentGame(getServerInfo(true)) != 0) {
+            // Legacy hosts can report cancel success even when the caller does not own the session.
+            throw new HostHttpResponseException(599, "");
+        }
+
         return true;
     }
 

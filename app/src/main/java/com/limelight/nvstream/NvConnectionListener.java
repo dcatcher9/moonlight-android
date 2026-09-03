@@ -40,6 +40,11 @@ public interface NvConnectionListener {
     /** Exact 88-byte Apollo host-SBS telemetry v1 state body. */
     void hostSbsTelemetryState(byte[] payload);
 
-    /** Called after Apollo has accepted launch/resume and returned the bound session token. */
-    void hostSessionEstablished(String hostSessionId, boolean resumed);
+    /**
+     * Called after the host accepts launch/resume. Token-capable Apollo-3D hosts return the bound
+     * session token; standard Sunshine/Apollo hosts report {@code hostSessionIdSupported=false}
+     * and a null token.
+     */
+    void hostSessionEstablished(String hostSessionId, boolean resumed,
+                                boolean hostSessionIdSupported);
 }

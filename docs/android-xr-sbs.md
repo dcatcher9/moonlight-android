@@ -24,7 +24,8 @@ headset's codec, Adreno, OpenCL, or SceneCore performance.
   desktop would only be aspect-fitted into the encoder surface rather than rendered at the selected
   geometry. The exact packed width must remain within the 8192-pixel HEVC/AV1 transport limit.
 - **Host SBS AI** uses the same direct stereo surface path; Apollo performs depth inference and SBS
-  synthesis before encoding.
+  synthesis before encoding. This mode is enabled only when the host advertises the Apollo-3D
+  session/control extension; it is disabled on regular Sunshine and Apollo hosts.
 - **Client SBS AI** decodes into an external-OES `SurfaceTexture`, runs the native LiteRT/GLES
   pipeline on the headset, and presents its packed `2W x H` output through the SceneCore entity in
   side-by-side mode. `W x H` is the client request/output contract: Client SBS does not apply a hidden
@@ -39,6 +40,12 @@ requested `W x H` matched-color/per-eye target by upscaling that lower-resolutio
 
 Normal and both Host SBS modes are direct MediaCodec-to-SceneCore paths. Do not insert a GL bridge,
 copy, or Client SBS dependency into them.
+
+Regular Sunshine and Apollo are first-class compatibility hosts for **Normal** and **Client SBS
+AI**. **Host SBS Raw** is additionally available when that launch is explicitly backed by a
+virtual display. Apollo-3D-only controls (Host SBS AI, host depth telemetry/debug dump, and live
+video-mode changes) must be capability-gated and must never be sent speculatively to a standard
+host.
 
 Only Raw Full owns a distinct negotiated transport: its `2W x H` stream requires a reconnect when
 entering or leaving that transport, and changing Full/Half while Raw is live likewise reconnects.
@@ -501,8 +508,12 @@ On destroy or mode exit:
 
 ## Reconnect and saved-view contract
 
-Apollo's `/serverinfo` response is the authority for whether a stream session exists. Artemis does
-not duplicate Apollo's disconnect grace period with a client timer.
+The host's `/serverinfo` response is the authority for whether a stream session exists. Artemis
+does not duplicate the host's disconnect grace period with a client timer. Apollo-3D advertises a
+generation-scoped `hostsessionid` element (including value zero while idle); its presence is the
+capability bit and its nonzero value remains mandatory for exact resume/cancel protection. Regular
+Sunshine and Apollo omit that element, so they use the standard GameStream running-app identity for
+resume and the standard tokenless cancel request. Absence is not equivalent to an advertised zero.
 
 - A genuinely new host session starts in **Normal** and inherits Global Settings.
 - Resuming the same host session/app, including the in-place restart after **Apply & reconnect**,
@@ -519,11 +530,15 @@ not duplicate Apollo's disconnect grace period with a client timer.
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
 
-Live-quality state remains logical `W x H` in the client. At the `0x3007`/`0x3008` boundary only,
+Live-quality state remains logical `W x H` in the client. On an extension-capable Apollo-3D host,
+at the `0x3007`/`0x3008` boundary only,
 Raw Full maps that tuple to and from its already-packed `2W x H` desktop. Raw Half and Host SBS AI
 keep base `W x H` control geometry (Host SBS AI performs its doubling inside Apollo). MediaCodec
 recovery state instead retains the actual encoded dimensions: packed Raw Full and packed/capped
 Host SBS AI geometry, but ordinary `W x H` for Raw Half, Normal, and Client SBS.
+On a regular Sunshine or Apollo host, every stream-quality change follows the standard
+commit-and-reconnect path, and automatic headset-panel-rate following is disabled because there is
+no live video-mode control/ack contract.
 
 Artemis stores exactly one current-session record per PC. A new host app replaces that record;
 resuming the same host app preserves it. The record contains shared stream overrides, per-mode
@@ -696,6 +711,10 @@ side panel is hidden.
 Presentation modes form one single-select group. Navigation/disconnect actions remain separate
 one-shot controls. A new session highlights Normal; a resumed/restarted session highlights its
 restored mode only after that mode is actually active.
+
+The Host SBS AI tile and host debug action are disabled when `/serverinfo` does not advertise the
+Apollo-3D session/control extension. Normal and Client SBS remain available; Raw SBS keeps its
+separate virtual-display requirement.
 
 The four mode tiles live in one level toolbar `PanelEntity` and share one contextual
 `PanelEntity` directly beneath it. An inactive mode tile switches modes on its first tap; tapping
@@ -887,6 +906,10 @@ the main and test APKs with `adb install -r`, invoke instrumentation manually, a
 
 For every mode/surface change, test:
 
+- Pair, list apps, launch, disconnect-without-ending, resume, and end a session against current
+  regular Sunshine, regular Apollo, and Apollo-3D. Verify the two standard hosts never receive
+  Apollo-3D control messages, use app-identity resume/tokenless cancel, and reconnect for quality
+  changes; verify Apollo-3D retains exact generation-token checks and live controls.
 - A new session starts Normal with inherited global defaults; host-confirmed resume and the
   Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
 - Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.

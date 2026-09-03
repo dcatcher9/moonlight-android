@@ -462,12 +462,15 @@ public class XrStreamPresenter {
      */
     private boolean controlTransportClosing;
     private boolean presenterDestroyed;
+    /** Apollo-3D control messages are opt-in; regular Sunshine/Apollo must never receive them. */
+    private boolean hostControlExtensionsSupported = true;
     private final Runnable hostSbsTelemetryRetryRunnable =
             this::retryHostSbsTelemetrySubscription;
 
     private void retryHostSbsTelemetrySubscription() {
         hostSbsTelemetryRetryPending = false;
-        if (controlTransportClosing || !hostSbsTelemetryRequested
+        if (controlTransportClosing || !hostControlExtensionsSupported
+                || !hostSbsTelemetryRequested
                 || !streamPresentationReady
                 || currentPresenterMode != PresenterMode.HOST_SBS_AI) {
             return;
@@ -1165,6 +1168,42 @@ public class XrStreamPresenter {
         controlActionListener = listener != null ? listener : NO_OP_CONTROL_ACTION_LISTENER;
     }
 
+    /**
+     * Enables Apollo-3D-only SBS, telemetry, debug-dump, and live video-mode controls. A regular
+     * Sunshine or Apollo host still supports Normal, Raw SBS capture, and on-device Client SBS;
+     * stream-quality changes use the standard reconnect path instead. If an authoritative
+     * connection-time downgrade finds Host SBS AI already prepared from stale discovery state,
+     * {@link com.limelight.Game} persists Normal and replaces the connection before frame 1.
+     */
+    public void setHostControlExtensionsSupported(boolean supported) {
+        if (hostControlExtensionsSupported == supported) {
+            return;
+        }
+        hostControlExtensionsSupported = supported;
+        if (!supported) {
+            liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
+            panelRateReconcilePosted = false;
+            clearHostSbsTelemetrySubscriptionState();
+            if (deferredPresenterMode == PresenterMode.HOST_SBS_AI) {
+                deferredPresenterMode = PresenterMode.NORMAL;
+            }
+        }
+        for (BarItem item : barItems) {
+            if (item.selectsMode != null) {
+                item.setEnabled(streamPresentationReady && sessionControlsEnabled
+                        && isPresentationModeSupported(
+                                item.selectsMode, hostControlExtensionsSupported));
+            }
+        }
+        updateHostDebugDumpAvailability();
+        reconcileHostSbsTelemetrySubscription();
+    }
+
+    static boolean isPresentationModeSupported(PresenterMode mode,
+                                               boolean hostControlExtensionsSupported) {
+        return mode != PresenterMode.HOST_SBS_AI || hostControlExtensionsSupported;
+    }
+
     /** Replace the immutable applied/pending snapshot and refresh an open Settings panel. */
     public void setSessionSettingsModel(SessionSettingsModel model) {
         sessionSettingsModel = java.util.Objects.requireNonNull(model, "model");
@@ -1263,7 +1302,9 @@ public class XrStreamPresenter {
         }
         for (BarItem item : barItems) {
             if (item.selectsMode != null && item.tapTarget != null) {
-                item.tapTarget.setEnabled(enabled);
+                item.setEnabled(enabled && streamPresentationReady
+                        && isPresentationModeSupported(
+                                item.selectsMode, hostControlExtensionsSupported));
             }
         }
         updateSessionApplyButton();
@@ -1676,7 +1717,9 @@ public class XrStreamPresenter {
                 tile.setVisibility(View.GONE);
             }
             if (isMode) {
-                item.setEnabled(streamPresentationReady);
+                item.setEnabled(streamPresentationReady && sessionControlsEnabled
+                        && isPresentationModeSupported(
+                                item.selectsMode, hostControlExtensionsSupported));
             }
             prevWasMode = isMode;
             first = false;
@@ -2126,6 +2169,11 @@ public class XrStreamPresenter {
     private void onModeTileTapped(BarItem item) {
         revealDockTemporarily();
         if (!streamPresentationReady || modeSwitchInProgress || item.selectsMode == null) {
+            return;
+        }
+        if (!isPresentationModeSupported(
+                item.selectsMode, hostControlExtensionsSupported)) {
+            LimeLog.info("XR: ignoring Apollo-3D host mode on a standard host");
             return;
         }
 
@@ -3791,12 +3839,13 @@ public class XrStreamPresenter {
      * telemetry unsubscribe inside {@link #onConnectionStopping()}, while Game still owns a live
      * native connection. Package visibility keeps the transport boundary directly testable. */
     int sendHostSbsModeControl(int mode) {
-        return controlTransportOpen() ? MoonBridge.sendSetSbsMode(mode) : 0;
+        return controlTransportOpen() && hostControlExtensionsSupported
+                ? MoonBridge.sendSetSbsMode(mode) : 0;
     }
 
     int sendHostVideoModeControl(int logicalWidth, int logicalHeight, int framerateX100,
                                  int requestId, int bitrateKbps) {
-        if (!controlTransportOpen()) {
+        if (!controlTransportOpen() || !hostControlExtensionsSupported) {
             return 0;
         }
         int[] wireDimensions = liveVideoModeWireDimensions(
@@ -3814,14 +3863,14 @@ public class XrStreamPresenter {
 
     int sendHostTelemetryControl(boolean enabled, boolean focused,
                                  int requestId, int intervalMs) {
-        return controlTransportOpen()
+        return controlTransportOpen() && hostControlExtensionsSupported
                 ? MoonBridge.sendHostSbsTelemetrySubscription(
                         enabled, focused, requestId, intervalMs)
                 : 0;
     }
 
     boolean sendHostDebugDumpControl() {
-        if (!controlTransportOpen()) {
+        if (!controlTransportOpen() || !hostControlExtensionsSupported) {
             return false;
         }
         MoonBridge.sendSbsDebugDump();
@@ -3835,6 +3884,7 @@ public class XrStreamPresenter {
      */
     private void reconcileHostSbsTelemetrySubscription() {
         boolean enable = controlTransportOpen()
+                && hostControlExtensionsSupported
                 && streamPresentationReady
                 && currentPresenterMode == PresenterMode.HOST_SBS_AI;
         boolean focused = enable && statsVisible;
@@ -5218,7 +5268,8 @@ public class XrStreamPresenter {
         reconcileHostSbsTelemetrySubscription();
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
-                item.setEnabled(true);
+                item.setEnabled(sessionControlsEnabled && isPresentationModeSupported(
+                        item.selectsMode, hostControlExtensionsSupported));
             }
         }
         LimeLog.info("XR: first video frame rendered; presentation switching enabled");
@@ -5275,6 +5326,8 @@ public class XrStreamPresenter {
      */
     private void selectMode(BarItem item) {
         if (!controlTransportOpen() || !streamPresentationReady || item.selectsMode == null
+                || !isPresentationModeSupported(
+                        item.selectsMode, hostControlExtensionsSupported)
                 || surfaceEntity == null
                 || surfaceEntity.isDisposed()
                 || item.selectsMode == currentPresenterMode || modeSwitchInProgress
@@ -5384,6 +5437,11 @@ public class XrStreamPresenter {
         if (target == null) {
             return;
         }
+        if (!hostControlExtensionsSupported) {
+            LimeLog.info("XR: standard host requires reconnect for stream-quality changes");
+            controlActionListener.onLiveStreamQualityNeedsReconnect();
+            return;
+        }
         float requestedCeiling = parseFrameRate(target.frameRate, prefConfig.fps);
         int effectiveFps = panelRefreshRateState.capUserTarget(
                 Math.max(1, Math.round(requestedCeiling)));
@@ -5406,7 +5464,9 @@ public class XrStreamPresenter {
      */
     public void onClientRefreshRateChanged(float panelRefreshHz) {
         panelRefreshRateState.observe(panelRefreshHz);
-        reconcilePanelRefreshRate();
+        if (hostControlExtensionsSupported) {
+            reconcilePanelRefreshRate();
+        }
     }
 
     /**
@@ -5434,7 +5494,7 @@ public class XrStreamPresenter {
     }
 
     private void schedulePanelRateReconcile(long delayMs) {
-        if (!controlTransportOpen()) {
+        if (!controlTransportOpen() || !hostControlExtensionsSupported) {
             panelRateReconcilePosted = false;
             liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
             return;
@@ -6821,6 +6881,9 @@ public class XrStreamPresenter {
 
     /** Host mode that must be part of launch/resume so decoder frame 1 matches the XR surface. */
     public int getInitialHostSbsWireMode() {
+        if (!hostControlExtensionsSupported) {
+            return MoonBridge.SBS_MODE_OFF;
+        }
         return XrViewStateStore.desiredHostSbsWireMode(
                 XrViewStateStore.Mode.valueOf(currentPresenterMode.name()));
     }
@@ -6829,7 +6892,8 @@ public class XrStreamPresenter {
         boolean transitionInProgress = modeSwitchInProgress
                 || pendingDecoderTransitionMode != null
                 || liveQualityTransactionBusy();
-        return controlTransportOpen() && isHostDebugDumpAvailable(
+        return controlTransportOpen() && hostControlExtensionsSupported
+                && isHostDebugDumpAvailable(
                 currentPresenterMode, streamPresentationReady, sessionControlsEnabled,
                 transitionInProgress, depthStatusPhase == 2);
     }

@@ -79,6 +79,8 @@ public class ComputerDetails {
     public PairingManager.PairState pairState;
     public int runningGameId;
     public String runningGameUUID;
+    /** True when /serverinfo advertises Apollo-3D's guarded host-session token contract. */
+    public boolean hostSessionIdSupported;
     public String hostSessionId;
     public String rawAppList;
     public boolean nvidiaServer;
@@ -156,6 +158,7 @@ public class ComputerDetails {
         this.pairState = details.pairState;
         this.runningGameId = details.runningGameId;
         this.runningGameUUID = details.runningGameUUID;
+        this.hostSessionIdSupported = details.hostSessionIdSupported;
         this.hostSessionId = details.hostSessionId;
         this.nvidiaServer = details.nvidiaServer;
         this.rawAppList = details.rawAppList;

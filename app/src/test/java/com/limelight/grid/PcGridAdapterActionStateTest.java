@@ -118,6 +118,32 @@ public final class PcGridAdapterActionStateTest {
     }
 
     @Test
+    public void standardHostWithoutVirtualDisplayExtensionUsesNeutralFact() {
+        TestFixture fixture = new TestFixture();
+        ComputerDetails computer = computer(ComputerDetails.State.ONLINE,
+                PairingManager.PairState.PAIRED);
+        fixture.adapter.addComputer(new PcView.ComputerObject(computer));
+        FrameLayout parent = new FrameLayout(fixture.context);
+
+        View hero = fixture.adapter.getView(0, null, parent);
+
+        TextView displayFact = hero.findViewById(R.id.grid_display_fact);
+        assertEquals(fixture.context.getString(
+                        R.string.xr_home_virtual_display_not_advertised),
+                displayFact.getText().toString());
+        assertEquals(fixture.context.getColor(R.color.xr_text_secondary),
+                displayFact.getCurrentTextColor());
+
+        computer.hostSessionIdSupported = true;
+        hero = fixture.adapter.getView(0, hero, parent);
+        displayFact = hero.findViewById(R.id.grid_display_fact);
+        assertEquals(fixture.context.getString(R.string.xr_home_virtual_display_unavailable),
+                displayFact.getText().toString());
+        assertEquals(fixture.context.getColor(R.color.xr_danger),
+                displayFact.getCurrentTextColor());
+    }
+
+    @Test
     public void firstTouchGestureOnPairedCardOpensLibrary() {
         TestFixture fixture = new TestFixture();
         fixture.bind(computer(ComputerDetails.State.ONLINE,
@@ -234,6 +260,16 @@ public final class PcGridAdapterActionStateTest {
 
         assertEquals(View.GONE,
                 hero.findViewById(R.id.grid_connection_speed).getVisibility());
+    }
+
+    @Test
+    public void managementUrlBracketsIpv6Literal() {
+        ComputerDetails computer = computer(ComputerDetails.State.ONLINE,
+                PairingManager.PairState.PAIRED);
+        computer.activeAddress = new ComputerDetails.AddressTuple("2001:db8::20", 47989);
+
+        assertEquals("https://[2001:db8::20]:47990",
+                new PcView.ComputerObject(computer).guessManagementUrl());
     }
 
     private static void assertVisibleAction(Button action, int expectedText) {

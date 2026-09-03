@@ -113,9 +113,10 @@ source, while 2D bypasses conversion entirely.
    Raw SBS workflow, or launch another configured application.
 9. Start in **2D**, then select Client 3D, Raw SBS, or Host 3D from the in-headset dock.
 
-A compatible upstream Sunshine host can provide an ordinary mono stream for both 2D and Client 3D.
-Sunshine 3D is required for the integrated Virtual Display, Raw SBS, Host 3D, live host quality
-controls, and clipboard workflow.
+A regular Sunshine or Apollo host can provide an ordinary mono stream for both 2D and Client 3D,
+including standard pairing, launch, resume, and end-session behavior. Raw SBS is available when the
+selected launch is backed by a compatible virtual display. Sunshine 3D is required for Host 3D,
+live host quality controls, and host depth telemetry/debugging.
 
 ## Scene-aware adaptive pop and zero plane
 
