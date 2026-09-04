@@ -42,7 +42,21 @@ public final class ClientSbsPipelineContract {
                 * Math.min(1.0f, 1.0f / modelContentAspect)));
         // A padded graph sizes processor state continuously from the effective content aspect.
         aspectIdentity = directFullFrameResize ? 0 : Float.floatToIntBits(modelContentAspect);
-        reprojectionProbeSteps = ClientSbsShaders.probeStepsForAspect(sourceAspect);
+        // Preserve the Galaxy-qualified DA-V2/MiDaS probe table. New short-384 families have
+        // different nearest-aspect boundaries, so size each from its own complete selection
+        // interval; otherwise crossing a DA-V2-only boundary would rebuild an identical target.
+        float dedicatedProbeMinimum =
+                ClientSbsModelManifest.minimumLandscapeAspectForDedicatedProbeBucket(
+                        modelManifest);
+        if (Float.isFinite(dedicatedProbeMinimum) && sourceAspect >= 1.0f) {
+            reprojectionProbeSteps = ClientSbsShaders.probeStepsForDepthOutput(
+                    sourceAspect, depthOutputWidth,
+                    dedicatedProbeMinimum);
+        }
+        else {
+            reprojectionProbeSteps = ClientSbsShaders.probeStepsForDepthOutput(
+                    sourceAspect, depthOutputWidth);
+        }
     }
 
     /** Resolves the exact immutable graph/target/shader contract for one stream aspect. */
@@ -63,6 +77,16 @@ public final class ClientSbsPipelineContract {
     /** Stable selected graph identity, useful for diagnostics and boundary tests. */
     public String getModelManifestId() {
         return modelManifestId;
+    }
+
+    /** Exact static model-input width selected for this stream. */
+    public int getModelInputWidth() {
+        return modelInputWidth;
+    }
+
+    /** Exact static model-input height selected for this stream. */
+    public int getModelInputHeight() {
+        return modelInputHeight;
     }
 
     /** Probe-loop bound compiled into both reprojection shader programs. */

@@ -12,6 +12,8 @@ import androidx.preference.PreferenceManager;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.limelight.preferences.session.SessionSettingsStore;
+
 import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -32,6 +34,10 @@ public final class ClientSbsModelSelectionInstrumentedTest {
         assertTrue("Unsupported Client SBS model: " + requestedModel,
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(requestedModel)
                         || PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(
+                        requestedModel)
+                        || PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(
+                        requestedModel)
+                        || PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(
                         requestedModel));
 
         Context targetContext =
@@ -42,10 +48,16 @@ public final class ClientSbsModelSelectionInstrumentedTest {
                 preferences.edit().putString(
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
                         requestedModel).commit());
+        assertTrue("Unable to clear current-session Client SBS model overrides",
+                new SessionSettingsStore(targetContext)
+                        .clearModeValueOverridesForAllCurrentSessions(
+                                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
 
         PreferenceConfiguration effective =
                 PreferenceConfiguration.readPreferences(targetContext);
         assertEquals(requestedModel, effective.clientSbsDepthModelId);
-        Log.i(TAG, "selected=" + requestedModel + " storage=global-defaults");
+        Log.i(TAG, "selected=" + requestedModel
+                + " storage=global-defaults current-session-overrides=cleared");
     }
 }

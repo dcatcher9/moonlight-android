@@ -46,6 +46,21 @@ public final class ClientSbsMidasGpuBenchmarkInstrumentedTest {
                 ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_32_9);
     }
 
+    @Test
+    public void productionZipDepthBase672x384() throws Exception {
+        runProductionModel(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9);
+    }
+
+    @Test
+    public void productionZipDepthBase896x384() throws Exception {
+        runProductionModel(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9);
+    }
+
+    @Test
+    public void productionZipDepthBase928x384() throws Exception {
+        runProductionModel(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9);
+    }
+
     private static void runProductionModel(ClientSbsModelManifest manifest) throws Exception {
         Context targetContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assertTrue("Stale benchmark caches must be removable before the run",

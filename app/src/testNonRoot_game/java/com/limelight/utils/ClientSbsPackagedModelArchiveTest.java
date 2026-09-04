@@ -25,7 +25,7 @@ public class ClientSbsPackagedModelArchiveTest {
     private static final String MODEL_NOTICE_DIRECTORY = "third_party/client_sbs_models/";
 
     @Test
-    public void packagedFamilyArchivesMatchEveryProductionRuntimeContract() throws Exception {
+    public void packagedFamilyArchivesMatchEveryRuntimeContract() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         ClientSbsModelManifest[] manifests = {
                 ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_16_9,
@@ -34,6 +34,11 @@ public class ClientSbsPackagedModelArchiveTest {
                 ClientSbsModelManifest.MIDAS_V2_STATIC_16_9,
                 ClientSbsModelManifest.MIDAS_V2_STATIC_21_9,
                 ClientSbsModelManifest.MIDAS_V2_STATIC_32_9,
+                ClientSbsModelManifest.DEPTHART_S448_STATIC_16_9,
+                ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9,
         };
         OutputStream sink = new OutputStream() {
             @Override
@@ -60,9 +65,10 @@ public class ClientSbsPackagedModelArchiveTest {
     public void packagedModelNoticesAreCompleteAndUnchanged() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String[][] expectedAssets = {
-                {"NOTICE.txt", "b944624a6829f97a8461cd9d657b7909a6c1f3cf4a52a50ac22a3aa84bdb2cbd"},
+                {"NOTICE.txt", "53f7f0d2a09d48ae58f2f817d20c466f883ec663e2a0760cb12f32335ff28423"},
                 {"LICENSE-APACHE-2.0.txt", "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
                 {"LICENSE-MIDAS-MIT.txt", "99ec0b9f9bcc9234b649787b8f03b07dbece95764b7879e1e72fb76cb0f96876"},
+                {"LICENSE-ZIPDEPTH-MIT.txt", "0007e2ff761f1b89ad89327870b807cd4de00cb657b442b62de2f92fdc87d508"},
         };
 
         for (String[] expected : expectedAssets) {
@@ -81,11 +87,14 @@ public class ClientSbsPackagedModelArchiveTest {
                 StandardCharsets.UTF_8);
         assertTrue(notice.contains("Depth Anything V2 Small"));
         assertTrue(notice.contains("MiDaS v2.1 Small"));
+        assertTrue(notice.contains("DepthART S448 relative depth"));
+        assertTrue(notice.contains("ZipDepth original base relative depth"));
         assertTrue(notice.contains("LiteRT 2.2.0 native runtime and accelerator"));
         assertTrue(notice.contains("modified TFLite conversions"));
         assertTrue(notice.contains("does not claim a complete"));
         assertTrue(notice.contains("LICENSE-APACHE-2.0.txt"));
         assertTrue(notice.contains("LICENSE-MIDAS-MIT.txt"));
+        assertTrue(notice.contains("LICENSE-ZIPDEPTH-MIT.txt"));
     }
 
     private static byte[] readAsset(Context context, String assetName) throws Exception {

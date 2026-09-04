@@ -85,7 +85,7 @@ its current default endpoint. See the
 | Mode | Where 3D is produced | Use when |
 |---|---|---|
 | **2D** | No 3D processing | You want a direct mono SceneCore panel with the lowest processing cost |
-| **Client 3D** | Galaxy XR GPU using Depth Anything V2 Small or MiDaS 2.1 | The host sends mono video and the headset should create depth |
+| **Client 3D** | Galaxy XR GPU using Depth Anything V2 Small, MiDaS 2.1, or experimental DepthART S448 and ZipDepth Base candidates | The host sends mono video and the headset should create depth |
 | **Raw SBS** | The source creates both views; Moonlight 3D splits them | The source renders packed left/right views inside a Virtual Display-backed session, which Raw SBS requires |
 | **Host 3D** | Windows CUDA/TensorRT-capable NVIDIA GPU | Sunshine 3D should convert mono content before encoding |
 
@@ -95,6 +95,13 @@ and gives each eye half of its horizontal pixels.
 
 Host 3D and Client 3D are the real-time 2D-to-3D paths. Raw SBS preserves stereo supplied by the
 source, while 2D bypasses conversion entirely.
+
+DepthART S448 and original ZipDepth Base are currently live-test candidates, not
+sustained-stream-qualified production choices. Their fixed short-384 aspect graphs use FP16-stored
+weights while retaining Float32 GL tensors. Corrected graphs pass isolated Galaxy XR
+full-delegation, output, and latency checks; live decode/reprojection cadence and sustained thermal
+behavior still require measurement. See
+[Client SBS evaluation](./docs/client-sbs-evaluation.md) for the exact contract.
 
 ## Quick start
 
@@ -174,7 +181,7 @@ views are available.
 | **Per-mode quality** | Independent resolution, frame-rate ceiling, and bitrate choices for every viewing mode, with shared codec, HDR, range, pacing, and audio settings |
 | **Explicit landscape and portrait modes** | 1080p, 1440p, 4K, ultrawide 1080p/1440p, and 5K2K rows, each with a real swapped-dimension portrait counterpart |
 | **Adaptive refresh behavior** | Selectable 30, 60, 72, 90, and 120 FPS ceilings; the live stream can follow a lower headset display rate and recover without changing the selected ceiling |
-| **Client GPU depth** | Depth Anything V2 Small or MiDaS 2.1 aspect buckets using a native LiteRT/OpenCL/GLES path—no NPU or CPU fallback |
+| **Client GPU depth** | Depth Anything V2 Small and MiDaS 2.1 production buckets, plus experimental DepthART S448 and ZipDepth Base short-384 buckets, using a native LiteRT/OpenCL/GLES path—no NPU or CPU fallback |
 | **Scene-aware 3D stability** | Selects one depth-edge-aware pop multiplier after a shot settles and holds a median-depth screen plane to reduce pumping and convergence drift |
 | **Sunshine 3D integration** | Session-scoped Virtual Display launches, negotiated resolution/FPS/HDR, Host 3D, Raw SBS transport, application library, session resume/end controls, and clipboard sync |
 | **Moonlight input and audio** | Gamepad, mouse, keyboard, touchpad, rumble, stereo/5.1/7.1 audio, and host-audio controls |

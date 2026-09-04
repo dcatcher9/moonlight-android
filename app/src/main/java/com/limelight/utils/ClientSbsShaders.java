@@ -369,27 +369,65 @@ final class ClientSbsShaders {
      * in-shader radius and leave these probes coarser than the 1.22 target.</p>
      */
     static int probeStepsForAspect(float sourceAspect) {
+        return probeStepsForDepthOutput(sourceAspect, 1);
+    }
+
+    /**
+     * Sizes the probe budget for the source-aligned width of the selected model's depth output.
+     *
+     * <p>The aspect-only overload retains the conservative floor established for the original
+     * DA-V2/MiDaS families. Passing the resolved output width lets a larger future graph request
+     * the correspondingly finer probe lattice without adding that family to the hard-coded legacy
+     * bucket helpers below. Portrait callers must pass the cropped, source-aligned output width,
+     * not the padded landscape tensor width.</p>
+     */
+    static int probeStepsForDepthOutput(float sourceAspect, int selectedDepthWidth) {
         if (!Float.isFinite(sourceAspect) || sourceAspect <= 0.0f) {
             throw new IllegalArgumentException("Source aspect must be finite and positive");
+        }
+        if (selectedDepthWidth <= 0) {
+            throw new IllegalArgumentException("Depth output width must be positive");
         }
         ClientSbsDepthInputShape bucket = ClientSbsDepthInputShape.select(sourceAspect);
         // Portrait input is aspect-fitted into the landscape graph and the reflected side padding
         // is cropped from its depth output. Size against that narrower, source-aligned output, not
         // the padded tensor width. MiDaS has the taller graph in every bucket and therefore yields
-        // the widest cropped portrait map, which is the safe model-independent direction.
-        int depthWidth = sourceAspect < 1.0f
+        // the widest cropped portrait map among the original families. Keep that legacy floor so
+        // their shader contracts do not shrink, while allowing a selected larger graph to raise it.
+        int legacyDepthWidth = sourceAspect < 1.0f
                 ? Math.max(1, Math.round(sourceAspect
                 * Math.max(bucket.getHeight(), tallestModelHeightFor(bucket))))
                 : Math.max(bucket.getWidth(), widestModelWidthFor(bucket));
+        int depthWidth = Math.max(selectedDepthWidth, legacyDepthWidth);
         // Landscape streams size from the bucket's NARROWEST aspect, so streams in the same
         // immutable direct-resize contract produce byte-identical shader source. Portrait
         // contracts already vary with the exact aspect-fit crop, so use their exact source aspect.
         float worstAspect = sourceAspect < 1.0f
                 ? sourceAspect : narrowestAspectFor(bucket);
+        return probeStepsForDepthOutput(sourceAspect, depthWidth, worstAspect);
+    }
+
+    /**
+     * Sizes a landscape graph from its own nearest-aspect selection interval rather than the
+     * legacy DA-V2 interval. This keeps one shader identity for every aspect routed to that graph.
+     */
+    static int probeStepsForDepthOutput(float sourceAspect, int selectedDepthWidth,
+                                        float minimumLandscapeAspect) {
+        if (!Float.isFinite(sourceAspect) || sourceAspect <= 0.0f) {
+            throw new IllegalArgumentException("Source aspect must be finite and positive");
+        }
+        if (selectedDepthWidth <= 0) {
+            throw new IllegalArgumentException("Depth output width must be positive");
+        }
+        if (!Float.isFinite(minimumLandscapeAspect) || minimumLandscapeAspect <= 0.0f) {
+            throw new IllegalArgumentException(
+                    "Minimum landscape aspect must be finite and positive");
+        }
+        float worstAspect = sourceAspect < 1.0f ? sourceAspect : minimumLandscapeAspect;
         float outputScale = Math.max(0.5f, Math.min(REFERENCE_ASPECT_RATIO / worstAspect, 3.0f));
         float radius = outputScale * ADAPTIVE_POP_CEILING
                 * (0.004f + 12.51f * 0.35f / CALIBRATION_WIDTH_PX);
-        float spacing = TARGET_DEPTH_TEXELS / depthWidth;
+        float spacing = TARGET_DEPTH_TEXELS / selectedDepthWidth;
         int steps = (int) Math.ceil(2.0f * radius / spacing);
         return Math.max(8, Math.min(steps, 48));
     }

@@ -278,6 +278,9 @@ public class XrStreamPresenter {
     private FrameLayout modeOptionsHost;
     private PanelEntity modeOptionsPanel;
     private float modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
+    /** Original 0.52 m Android raster; retained so repeated fits cannot compound rounding. */
+    private int modeOptionsBaseRasterHeightPixels;
+    private int modeOptionsRasterHeightPixels;
     private View modeOptionsContentRoot;
     private boolean modeOptionsFitScheduled;
     private final Runnable modeOptionsFitRunnable = new Runnable() {
@@ -1411,12 +1414,23 @@ public class XrStreamPresenter {
         String id = prefConfig.clientSbsDepthModelId != null
                 ? prefConfig.clientSbsDepthModelId
                 : PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
-        boolean midas = PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id);
-        String name = midas ? "MiDaS 2.1 Small" : "Depth Anything V2 Small";
+        String name;
+        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id)) {
+            name = "MiDaS 2.1 Small";
+        }
+        else if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(id)) {
+            name = "DepthART S448 FP16 (Experimental)";
+        }
+        else if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(id)) {
+            name = "ZipDepth Base FP16 (Experimental · short 384)";
+        }
+        else {
+            name = "Depth Anything V2 Small";
+        }
         return new ClientSbsModeSettingsModel(id, name, id, name,
                 SessionSettingsModel.Source.GLOBAL,
                 ClientSbsModeSettingsModel.selectBucket(
-                        midas, prefConfig.width, prefConfig.height),
+                        id, prefConfig.width, prefConfig.height),
                 "GPU-only · initializes on first use");
     }
 
@@ -1782,6 +1796,8 @@ public class XrStreamPresenter {
         modeOptionsHost.setBackground(controlSurfaceBackground(
                 paletteColor(R.color.xr_surface_sunken), paletteColor(R.color.xr_border_panel), 1));
         modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
+        modeOptionsBaseRasterHeightPixels = 0;
+        modeOptionsRasterHeightPixels = 0;
         modeOptionsPanel = PanelEntity.create(
                 session, modeOptionsHost,
                 new FloatSize2d(layout.widthMeters, modeOptionsHeightMeters),
@@ -2798,8 +2814,10 @@ public class XrStreamPresenter {
         clientModelPendingView.setPadding(0, dimen(R.dimen.xr_space_xs), 0, 0);
         modelColumn.addView(clientModelPendingView);
         updateClientModelPendingView(model);
+        // The long four-model group stacks on the headset. Let this weighted column contribute
+        // that natural height instead of constraining it to the two short status columns.
         row.addView(modelColumn, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.MATCH_PARENT, 2.2f));
+                LinearLayout.LayoutParams.WRAP_CONTENT, 2.2f));
 
         LinearLayout aspect = labeledValue(
                 activity.getString(R.string.xr_client_aspect_bucket),
@@ -5027,6 +5045,24 @@ public class XrStreamPresenter {
         return Math.max(minHeight, Math.min(maxHeight, targetHeight));
     }
 
+    static int calculateModeOptionsRasterHeightPixels(int contentHeightPixels,
+                                                      int baseHeightPixels,
+                                                      float minHeightMeters,
+                                                      float maxHeightMeters) {
+        int baseHeight = Math.max(1, baseHeightPixels);
+        if (!Float.isFinite(minHeightMeters) || minHeightMeters <= 0.0f
+                || !Float.isFinite(maxHeightMeters)) {
+            return baseHeight;
+        }
+        float boundedMaxHeight = Math.max(minHeightMeters, maxHeightMeters);
+        double scaledMaximum = Math.ceil(baseHeight * (double) boundedMaxHeight
+                / (double) minHeightMeters);
+        int maxHeightPixels = scaledMaximum >= Integer.MAX_VALUE
+                ? Integer.MAX_VALUE : Math.max(baseHeight, (int) scaledMaximum);
+        return calculateStatsRasterHeightPixels(
+                contentHeightPixels, baseHeight, maxHeightPixels);
+    }
+
     private void scheduleModeOptionsPanelFit() {
         if (modeOptionsPanel == null || modeOptionsPanel.isDisposed()
                 || modeOptionsHost == null || modeOptionsContentRoot == null) {
@@ -5051,22 +5087,49 @@ public class XrStreamPresenter {
             scheduleModeOptionsPanelFit();
             return;
         }
+        if (modeOptionsBaseRasterHeightPixels <= 0) {
+            modeOptionsBaseRasterHeightPixels = hostHeight;
+            modeOptionsRasterHeightPixels = hostHeight;
+        }
         modeOptionsContentRoot.measure(
                 View.MeasureSpec.makeMeasureSpec(hostWidth, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int contentHeightPx = modeOptionsContentRoot.getMeasuredHeight()
                 + dimen(R.dimen.xr_space_xs);
-        float targetHeightMeters = calculateModeOptionsHeightMeters(
-                modeOptionsHeightMeters, hostHeight, contentHeightPx,
+        int targetHeightPixels = calculateModeOptionsRasterHeightPixels(
+                contentHeightPx, modeOptionsBaseRasterHeightPixels,
                 MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
-        if (Math.abs(targetHeightMeters - modeOptionsHeightMeters) < 0.001f) {
+        // Derive metres from the original raster/metre pair. Using the live pair here would make
+        // repeated fits compound integer rounding whenever content or modes change.
+        float targetHeightMeters = calculateModeOptionsHeightMeters(
+                MODE_OPTIONS_MIN_HEIGHT_METERS, modeOptionsBaseRasterHeightPixels,
+                targetHeightPixels,
+                MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
+        if (targetHeightPixels == modeOptionsRasterHeightPixels
+                && Math.abs(targetHeightMeters - modeOptionsHeightMeters) < 0.001f) {
             return;
         }
         XrControlPanelLayout layout = controlBarLayout(panelHeightMeters);
-        modeOptionsPanel.setSize(new FloatSize2d(layout.widthMeters, targetHeightMeters));
+        modeOptionsRasterHeightPixels = targetHeightPixels;
         modeOptionsHeightMeters = targetHeightMeters;
+        // The two dimensions are independent in SceneCore. setSize() alone stretches the
+        // physical quad but leaves the hosted View/ScrollView raster at its old height, clipping
+        // the additional model choices. Resize the Android raster first, then the physical panel.
+        modeOptionsPanel.setSizeInPixels(new IntSize2d(hostWidth, targetHeightPixels));
+        modeOptionsPanel.setSize(new FloatSize2d(layout.widthMeters, targetHeightMeters));
         modeOptionsPanel.setPose(modeOptionsPose(panelHeightMeters));
         modeOptionsHost.requestLayout();
+        int modelChoiceCount = clientModelChoiceGroup != null
+                ? clientModelChoiceGroup.getChildCount() : 0;
+        int modelGroupHeight = clientModelChoiceGroup != null
+                ? clientModelChoiceGroup.getMeasuredHeight() : 0;
+        int lastModelBottom = modelChoiceCount > 0
+                ? clientModelChoiceGroup.getChildAt(modelChoiceCount - 1).getBottom() : 0;
+        LimeLog.info(String.format(Locale.US,
+                "XR mode options fit: raster=%dx%d contentHeight=%d physicalHeight=%.3fm "
+                        + "modelChoices=%d modelGroupHeight=%d lastModelBottom=%d",
+                hostWidth, targetHeightPixels, contentHeightPx, targetHeightMeters,
+                modelChoiceCount, modelGroupHeight, lastModelBottom));
     }
 
     /** Local pose of the unchanged, level mode-button panel. */
@@ -7649,6 +7712,8 @@ public class XrStreamPresenter {
         lastCinemaTileTapMs = 0L;
         modeOptionsHost = null;
         modeOptionsContentRoot = null;
+        modeOptionsBaseRasterHeightPixels = 0;
+        modeOptionsRasterHeightPixels = 0;
         modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
         modeOptionsFitScheduled = false;
         auxiliaryContentHost = null;

@@ -5,6 +5,10 @@ import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.Context;
@@ -19,17 +23,23 @@ import android.widget.TableRow;
 import android.widget.TextView;
 
 import androidx.appcompat.widget.AppCompatButton;
+import androidx.xr.runtime.math.FloatSize2d;
+import androidx.xr.runtime.math.IntSize2d;
+import androidx.xr.scenecore.PanelEntity;
 
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrChoiceGroup;
 import com.limelight.sbs.ClientSbsMetricHistory;
+import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
+import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrSparklineView;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.InOrder;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.android.controller.ActivityController;
@@ -37,6 +47,7 @@ import org.robolectric.annotation.Config;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Arrays;
 import java.util.Locale;
 
 @RunWith(RobolectricTestRunner.class)
@@ -133,13 +144,103 @@ public final class XrStreamPresenterViewTest {
         assertTrue(host.getChildAt(0) instanceof ScrollView);
         ScrollView scroll = (ScrollView) host.getChildAt(0);
         assertTrue(scroll.isFillViewport());
-        int width = dp(activity, 1200);
+        // Force the same vertical choice layout used by the device for the four long labels.
+        int width = dp(activity, 600);
         int height = dp(activity, 260);
         host.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
         host.layout(0, 0, width, height);
 
         assertTrue(scroll.getChildAt(0).getMeasuredHeight() > scroll.getMeasuredHeight());
+        controller.destroy();
+    }
+
+    @Test
+    public void clientModePaneResizesItsRasterForEveryRealModelChoice()
+            throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+
+        PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(activity);
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, prefs, surface -> { }, visible -> { });
+        presenter.setClientSbsModeSettingsModel(new ClientSbsModeSettingsModel(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                "ZipDepth Base FP16",
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                "ZipDepth Base FP16",
+                SessionSettingsModel.Source.GLOBAL,
+                "672 x 384", "GPU-only",
+                Arrays.asList(
+                        new SessionSettingsModel.Choice(
+                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                                "Depth Anything V2"),
+                        new SessionSettingsModel.Choice(
+                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                                "MiDaS 2.1"),
+                        new SessionSettingsModel.Choice(
+                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
+                                "DepthART S448 (Experimental)"),
+                        new SessionSettingsModel.Choice(
+                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                                "ZipDepth Base (Experimental · short 384)")),
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16));
+        FrameLayout host = new FrameLayout(activity);
+        setField(presenter, "modeOptionsHost", host);
+        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
+        state.toggleModeOptions(XrStreamPresenter.PresenterMode.CLIENT_SBS_AI.name());
+
+        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+        render.invoke(presenter);
+
+        XrChoiceGroup group = (XrChoiceGroup) getField(presenter, "clientModelChoiceGroup");
+        for (int i = 0; i < group.getChildCount(); i++) {
+            // Robolectric does not provide Android's real font metrics. Explicit minima reproduce
+            // the four tall segments produced by these long labels on the Galaxy XR raster.
+            group.getButtonAt(i).setMinimumWidth(dp(activity, 400));
+            group.getButtonAt(i).setMinimumHeight(dp(activity, 80));
+        }
+        int width = dp(activity, 600);
+        int height = dp(activity, 260);
+        host.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+        host.layout(0, 0, width, height);
+
+        assertEquals(4, group.getChildCount());
+        assertTrue("The real model labels must stack at the constrained device column width: "
+                        + "group=" + group.getWidth() + "x" + group.getHeight()
+                        + " first=" + group.getButtonAt(0).getWidth() + "x"
+                        + group.getButtonAt(0).getHeight() + " secondTop="
+                        + group.getButtonAt(1).getTop(),
+                group.getButtonAt(1).getTop() > group.getButtonAt(0).getTop());
+        assertTrue(group.getButtonAt(3).getBottom() <= group.getHeight());
+        View modelColumn = (View) group.getParent();
+        assertTrue("The model column must contribute its natural height to the client row",
+                group.getBottom() <= modelColumn.getHeight());
+
+        PanelEntity panel = mock(PanelEntity.class);
+        when(panel.isDisposed()).thenReturn(false);
+        setField(presenter, "modeOptionsPanel", panel);
+        Method fit = XrStreamPresenter.class.getDeclaredMethod(
+                "fitModeOptionsPanelToContent");
+        fit.setAccessible(true);
+        fit.invoke(presenter);
+
+        int baseRasterHeight = (Integer) getField(
+                presenter, "modeOptionsBaseRasterHeightPixels");
+        int fittedRasterHeight = (Integer) getField(
+                presenter, "modeOptionsRasterHeightPixels");
+        assertEquals(height, baseRasterHeight);
+        assertTrue(fittedRasterHeight > baseRasterHeight);
+        assertTrue(fittedRasterHeight <=
+                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                        Integer.MAX_VALUE, baseRasterHeight, 0.52f, 0.90f));
+        InOrder resizeOrder = inOrder(panel);
+        resizeOrder.verify(panel).setSizeInPixels(any(IntSize2d.class));
+        resizeOrder.verify(panel).setSize(any(FloatSize2d.class));
         controller.destroy();
     }
 

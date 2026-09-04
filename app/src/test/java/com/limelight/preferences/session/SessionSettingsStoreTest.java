@@ -179,6 +179,51 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
+    public void globalModelSelectionCanClearOnlyItsEffectiveOverridesAcrossCurrentSessions() {
+        PcIdentity secondPc = new PcIdentity(
+                "6e5f46ab-c7db-47b5-a6ce-cc834170a808", "192.168.1.3");
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, firstApp, "first", 10L));
+        assertTrue(store.startNewSession(secondPc, secondApp, "second", 20L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(MODEL, "legacy-shared", "global")
+                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL, "first-model", "global")
+                .setModeValue(PresenterMode.CLIENT_SBS_AI, FPS, "90", "60")
+                .commit());
+        assertTrue(store.edit(secondPc, secondApp)
+                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL, "second-model", "global")
+                .setModeValue(PresenterMode.HOST_SBS_AI, MODEL, "host-value", "global")
+                .commit());
+        String firstStorageKey = "session." + pc.getStorageId();
+        String firstJson = storage.getString(firstStorageKey, null);
+        assertNotNull(firstJson);
+        assertTrue(storage.edit()
+                .putString(firstStorageKey,
+                        firstJson.substring(0, firstJson.length() - 1)
+                                + ",\"future_marker\":\"keep\"}")
+                .putString("session.malformed", "{\"schema\":1,\"modes\":{}}")
+                .commit());
+
+        assertTrue(store.clearModeValueOverridesForAllCurrentSessions(
+                PresenterMode.CLIENT_SBS_AI, MODEL));
+
+        SessionRecord first = store.getCurrentSession(pc);
+        SessionRecord second = store.getCurrentSession(secondPc);
+        assertFalse(first.getSharedOverrides().containsKey(MODEL));
+        assertFalse(first.getModeOverrides(PresenterMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertEquals("90", first.getModeOverrides(PresenterMode.CLIENT_SBS_AI).get(FPS));
+        assertFalse(second.getModeOverrides(PresenterMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertEquals("host-value",
+                second.getModeOverrides(PresenterMode.HOST_SBS_AI).get(MODEL));
+        assertEquals("first", first.getResumeMetadata().getHostSessionId());
+        assertEquals("second", second.getResumeMetadata().getHostSessionId());
+        assertTrue(storage.getString(firstStorageKey, "").contains(
+                "\"future_marker\":\"keep\""));
+        assertEquals("{\"schema\":1,\"modes\":{}}",
+                storage.getString("session.malformed", null));
+    }
+
+    @Test
     public void legacyHostResumePreservesSettingsUsingApplicationIdentity() {
         assertTrue(store.startNewSession(pc, firstApp, null, 100L));
         assertTrue(store.edit(pc, firstApp)

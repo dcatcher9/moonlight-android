@@ -241,6 +241,62 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void depthArtS448ChoiceUsesItsResolutionDerivedQualityBucket() {
+        XrSessionSettingsController controller = controller();
+        controller.selectClientSbsModel(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16);
+
+        ClientSbsModeSettingsModel model = controller.getClientSbsModel();
+        assertEquals("DepthART S448 (Experimental)", model.pendingModelName);
+        assertEquals("672 x 384", model.bucket);
+        assertEquals(4, model.choices.size());
+        assertEquals("DepthART S448 (Experimental)", model.choices.get(2).label);
+        assertEquals("ZipDepth Base (Experimental · short 384)",
+                model.choices.get(3).label);
+
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                SessionSettingsModel.Key.RESOLUTION, "3440x1440");
+        assertEquals("928 x 384", controller.getClientSbsModel().bucket);
+    }
+
+    @Test
+    public void zipDepthBaseChoiceUsesItsThreeShort384Buckets() {
+        XrSessionSettingsController controller = controller();
+        controller.selectClientSbsModel(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16);
+
+        ClientSbsModeSettingsModel model = controller.getClientSbsModel();
+        assertEquals("ZipDepth Base (Experimental · short 384)", model.pendingModelName);
+        assertEquals("672 x 384", model.bucket);
+        assertEquals(4, model.choices.size());
+        assertEquals("ZipDepth Base (Experimental · short 384)",
+                model.choices.get(3).label);
+
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                SessionSettingsModel.Key.RESOLUTION, "3440x1440");
+        assertEquals("928 x 384", controller.getClientSbsModel().bucket);
+
+        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                SessionSettingsModel.Key.RESOLUTION, "2560x1080");
+        assertEquals("896 x 384", controller.getClientSbsModel().bucket);
+    }
+
+    @Test
+    public void clientModelToggleIncludesZipDepthAndWrapsToDepthAnything() {
+        XrSessionSettingsController controller = controller();
+        controller.selectClientSbsModel(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16);
+
+        controller.toggleClientSbsModel();
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                controller.getClientSbsModel().pendingModelId);
+
+        controller.toggleClientSbsModel();
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                controller.getClientSbsModel().pendingModelId);
+    }
+
+    @Test
     public void unknownStoredClientModelUsesTheRendererFallbackDuringResizeClassification() {
         assertTrue(store.edit(pc, app)
                 .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
@@ -1480,6 +1536,14 @@ public final class XrSessionSettingsControllerTest {
         assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 aspect205, aspect237));
+        // ZipDepth's 896x384 bucket spans both and owns its shader probe interval.
+        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                aspect205, aspect237));
+        // Its first boundary sits between 2.01 and 2.03.
+        assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                new int[] {2010, 1000}, new int[] {2030, 1000}));
     }
 
     @Test

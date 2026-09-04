@@ -2,7 +2,10 @@
 
 This is the reproducible evaluation entry point for Artemis Client SBS. Production has one depth
 backend—the native LiteRT 2.x GPU path—with DA-V2 Small and MiDaS v2.1 Small as explicit model
-choices. The guide separates four questions:
+production choices. Selectable DepthART S448 and original ZipDepth Base short-384 candidates are
+included for controlled live evaluation. Their corrected FP16 graphs pass isolated Galaxy GPU
+qualification, but sustained decode/reprojection/thermal validation is still pending. The guide
+separates four questions:
 
 1. Do the model, shader, and frame-ownership contracts pass on the JVM?
 2. Does the supported Android XR APK assemble?
@@ -16,11 +19,11 @@ client artifacts into the Apollo checkout.
 ## Production contract
 
 Client SBS has one native LiteRT GPU backend with DA-V2 Small and MiDaS v2.1 Small as its two
-production model families. Because the Galaxy XR GPU delegate requires static graphs, each family
-has three canonical aspect buckets with Float32 public tensors and FP16-stored large weights. The
-renderer selects the concrete bucket with the smallest multiplicative error,
-`abs(log(bucketAspect / sourceAspect))`, directly among that family's three buckets exactly once
-when the stream is created.
+production model families, plus two experimental families. Because the Galaxy XR GPU delegate
+requires static graphs, every family uses fixed aspect buckets with Float32 public tensors and
+FP16-stored large weights. The renderer selects the concrete bucket with the smallest
+multiplicative error, `abs(log(bucketAspect / sourceAspect))`, directly within the selected family
+exactly once when the stream is created.
 
 | DA-V2 target aspect | Fixed input and output | Pixels / tokens | Logical model and SHA-256 |
 | --- | --- | ---: | --- |
@@ -51,6 +54,76 @@ Float32 model's input, output, and decoder-resize constants, then round its larg
 weights to FP16 storage. Small biases and control constants remain Float32. They use MiDaS-specific
 dimensions rather than DA-V2's 14-aligned dimensions.
 
+### Experimental original ZipDepth Base short-384 candidate
+
+ZipDepth uses the original `base` checkpoint and learned convex upsampler, not the lower-edge-detail
+`base_npu` variant. All three static graphs keep the short side at 384; `896 x 384` exactly serves
+21:9, while `928 x 384` is the bounded-compute ultrawide bucket rather than a true 32:9 raster.
+
+| ZipDepth target | Fixed input and output | Pixels | Asset and SHA-256 |
+| --- | --- | ---: | --- |
+| 16:9-nearest | `image[1,384,672,3]` → `depth[1,384,672,1]` | 258,048 | `zipdepth-base-static-672x384-fp16weights.tflite.model` — `6296d5c2e4f857fd551d854ebf4dd2ab2462c0d7372d526bf0a7463718b8b6d1` |
+| 21:9-nearest | `image[1,384,896,3]` → `depth[1,384,896,1]` | 344,064 | `zipdepth-base-static-896x384-fp16weights.tflite.model` — `31467ab0cd187b74c65b3b20f4850973309d120519b587610e3dd3e27b72df4a` |
+| ultrawide-nearest | `image[1,384,928,3]` → `depth[1,384,928,1]` | 356,352 | `zipdepth-base-static-928x384-fp16weights.tflite.model` — `169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc` |
+
+The shared packer supplies raw Float32 RGB in `[0, 1]`; ImageNet normalization remains inside each
+graph. ZipDepth emits nonnegative relative inverse depth with larger values nearer. Its absolute
+numbers are much smaller than MiDaS and DA-V2, but they must not receive a fixed gain or offset.
+The common GPU processor finds raw P2/P98 per frame, resets or attack-fast/release-slow smooths that
+range across a scene, maps it to `[0, 1]`, temporally filters it, and applies a second normalized-depth
+P2/P98 profile stretch. Any fixed positive affine scale therefore cancels apart from fixed-point and
+histogram rounding. A representative `672 x 384` frame measured raw P2/P98 `0.0170/0.1949`, which
+still spans more than 11,000 Q16.16 codes before histogram binning. Polarity, nonlinear calibration,
+and frame-varying scale do not cancel; whole-clip polarity passed 192/192 frames.
+
+The exact convex tail is expressed with standard convolution, four nine-way softmax groups,
+weighted sums, and transpose convolution. One delegate-incompatible grouped convolution is
+densified, and an algebraically equivalent 1024x/1024x global-context reduction keeps small FP16
+products out of Adreno's flush-to-zero range. Each final graph has 163 operations, fully delegates
+as one OpenCL partition, and preserves Float32 public I/O with FP16-stored weights.
+
+### Experimental DepthART S448 short-384 candidate
+
+The DepthART option uses one S448 checkpoint exported into two immutable, fixed-shape aspect
+graphs; these are not two independently trained models. The renderer selects one graph when the
+stream is created and keeps it for that stream. There is no dedicated 32:9 graph yet, so an extreme
+ultrawide source currently routes to the nearer `928 x 384` graph and incurs substantial
+direct-resize aspect compression.
+
+| DepthART target | Fixed input and output | Pixels | Asset and SHA-256 |
+| --- | --- | ---: | --- |
+| 16:9-nearest | `image[1,384,672,3]` → `depth[1,384,672,1]` | 258,048 | `depthart-s448-static-672x384-fp16weights.tflite.model` — `3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b` |
+| 21:9-nearest | `image[1,384,928,3]` → `depth[1,384,928,1]` | 356,352 | `depthart-s448-static-928x384-fp16weights.tflite.model` — `d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2` |
+
+The shared packer still supplies raw Float32 RGB in `[0, 1]`. Each graph bakes the checkpoint's
+ImageNet input normalization into the model, so adding external input normalization would apply it
+twice. The model emits disparity-like relative depth with larger values nearer. Do not add a fixed
+output scale, offset, or polarity transform: the existing GPU path derives robust raw P2/P98 bounds,
+temporally stabilizes the effective range, maps it to normalized depth, and applies the established
+profile stretch before reprojection.
+
+Large weights use FP16 storage, while public input/output tensors remain packed Float32 for the
+existing GL-buffer contract. The runtime requests the same OpenCL `AUTOMATIC_FP16` execution policy
+used by the production families. Both corrected graphs have now demonstrated complete one-partition
+GPU delegation, finite structured output, and bounded isolated latency on Galaxy XR. Keep this
+family experimental until the sustained stream test below establishes cadence, XR-compositor
+responsiveness, and thermals. Model provenance and license metadata are recorded in the bundled
+third-party notice.
+
+DepthART's first selective-scan LayerNorm needs one delegate-specific numerical stabilization. The
+unmodified graph adds epsilon `1e-5`, a binary16 subnormal, to low block-0 variance. Galaxy's Adreno
+FP16 path flushed both operands to zero for 59 of 252 test tokens; reciprocal standard deviation
+then became `+Inf`, the first encoder stage contained 261,120 NaNs, and the final graph returned only
+its FP16-rounded bias (`0.8330078`). The packaged graph uses the algebraically equivalent block-0
+form `z = 4 * (x - mean)` and `z / sqrt(mean(z*z) + 16e-5)`. This adds one scalar `MUL`, keeps the
+variance and epsilon normal in FP16, and leaves the other four LayerNorms unchanged. Structural
+audits permit only those block-0 rewires; CPU output is bit-identical to the source graph on the
+deterministic probe and all eight sampled real clips. Uniformly scaling all five LayerNorms is
+rejected because deep real-frame activations can overflow FP16 when squared.
+`tools/stabilize-depthart-fp16-layernorm.py` hash-pins both immediate inputs, performs this one
+rewrite, verifies exact output hashes and zero-error CPU parity, and atomically publishes the
+result; `tools/model-sources/README.md` records the commands and pinned environment.
+
 The guarded `tools/convert-tflite-fp16-weights.py` promotion step inserts delegated `DEQUANTIZE`
 nodes ahead of the original Float32 graph tensors. It converts only finite live rank-2-or-higher
 constants of at least 1 KiB, reparses the result, verifies public I/O, and requires finite non-flat
@@ -60,16 +133,20 @@ dequantizations); MiDaS contains 234 (138 plus 96). MiDaS CPU correlations were 
 and 0.999609 for 16:9, 21:9, and 32:9 respectively. Complete-acceleration validation applies to the
 full packaged graphs, not only to their pre-storage cores.
 
-The non-root flavor stores the models in two standard solid family TAR/XZ assets; root APKs contain neither
-archive nor the LiteRT runtime:
+The non-root flavor stores the two production families and two experimental candidates in separate
+standard solid TAR/XZ assets; root APKs contain neither the archives nor the LiteRT runtime:
 
 - `app/src/nonRoot_game/assets/client-sbs-dav2-models.tar.xz` contains all three complete DA-V2 model
   files.
 - `app/src/nonRoot_game/assets/client-sbs-midas-models.tar.xz` contains all three complete MiDaS model
   files.
+- `app/src/nonRoot_game/assets/client-sbs-depthart-models.tar.xz` contains the two complete
+  experimental DepthART graphs.
+- `app/src/nonRoot_game/assets/client-sbs-zipdepth-models.tar.xz` contains the three complete
+  experimental original-Base ZipDepth graphs.
 
 Every `.tflite.model` is a complete standard TAR entry using the exact logical filename in the
-contract tables. A single XZ/LZMA2 stream compresses each family's entire three-entry TAR, allowing
+contract tables. A single XZ/LZMA2 stream compresses each family's complete TAR, allowing
 ordinary solid compression to exploit the graphs' cross-file similarity. There are no base entries,
 deltas, XOR transforms, custom model representations, or reconstructed model bytes. The Java model
 manifest records each model's family archive, TAR entry, and expected SHA-256.
@@ -77,8 +154,13 @@ manifest records each model's family archive, TAR entry, and expected SHA-256.
 The deterministic DA-V2 TAR/XZ is 44,429,612 bytes (42.37 MiB), SHA-256
 `3f9892624253e5d7301d6b0eb28acc7ef30ac2cf3131acbc7a8c1f59696ad148`; the MiDaS TAR/XZ is
 29,947,928 bytes (28.56 MiB), SHA-256
-`166be90ec3866dfeae61ce7163df49414840b6d054466d79dbe153ea3ebc8b94`. Together they are
-74,377,540 bytes (70.93 MiB), with both already-compressed XZ assets stored directly in the APK.
+`166be90ec3866dfeae61ce7163df49414840b6d054466d79dbe153ea3ebc8b94`.
+The experimental DepthART TAR/XZ is 10,991,860 bytes (10.48 MiB), SHA-256
+`1dccec4aa315288b5cc471a9d585d57e00d0e12a56870cb4712da5f20fb476a6`.
+The experimental ZipDepth TAR/XZ is 11,149,420 bytes (10.63 MiB), SHA-256
+`0b737e7ff7d6717c9b376e2e6d195eb5ff4a54d49d862e3415f155d137c78558`. All four archives total
+96,518,820 bytes (92.05 MiB) and are stored directly because a second APK compression layer would
+not help.
 Measure total APK size from the current build output rather than treating a debug APK byte count as
 a stable model-package property.
 
@@ -97,8 +179,9 @@ resident when presentation switches from Client SBS to Normal, Raw, or Host SBS,
 without a compile stall if Client SBS is selected again. It is closed at full stream teardown;
 inactive modes do not submit inference work.
 
-Both DA-V2 and MiDaS receive one direct bilinear resize of the complete decoded frame into the
-selected rectangle. There is no crop, square padding, or reflected border. Only the model-input
+DA-V2, MiDaS, DepthART, and ZipDepth receive one direct bilinear resize of the complete decoded
+landscape frame into the selected rectangle. There is no crop or square padding. Portrait input is
+aspect-fitted with reflected side padding and cropped back in depth processing. Only the model-input
 branch is downscaled. The matched-color and per-eye targets use the client-requested `W x H` output
 contract. If a legacy host negotiates a lower decoded resolution, that input is upscaled to `W x
 H`; the stats resolution remains the request/output target rather than a claim about the decoded
@@ -111,17 +194,18 @@ SBS Raw; Client SBS would process that packed image as one mono input.
 The renderer writes packed Float32 model input into a shared OpenGL buffer. The normal preprocess
 combines that pack with the color-cut luma reduction in one 16x16 compute pass. LiteRT converts that
 public layout to its internal GPU layout, runs the model's validated OpenCL precision, and returns
-Float32 depth in a shared OpenGL buffer. Both production families report
+Float32 depth in a shared OpenGL buffer. Both Galaxy-qualified production families report
 `LITERT_OPENCL_FP16_GL_IO`. Initialization is accepted only when the complete graph is delegated to
 OpenCL; partial delegation or CPU execution makes the backend unavailable. GLES then performs
 depth statistics, temporal processing, profile generation, prefiltering, and two-eye reprojection.
 The GPU color-cut detector consumes the exact rectangular SDR model-input frame and publishes its
 cut flag directly to the depth processor through an SSBO.
 
-Both families use LiteRT's device-specific automatic OpenCL storage policy and
-`AUTOMATIC_FP16` execution policy. The retired non-C4 DA-V2 Quality graphs were not FP16-safe on
-this Galaxy XR firmware: an edge-rich input exposed the packed-softmax-tail defect and collapsed to
-the final output-convolution bias (`0.088684082`). Tail-padding plus exact-GELU variants proved the
+All four configured families request LiteRT's device-specific automatic OpenCL storage policy and
+`AUTOMATIC_FP16` execution policy. Isolated Galaxy GPU evidence covers every family; DepthART and
+ZipDepth sustained live-stream qualification remains pending. The retired non-C4 DA-V2 Quality graphs were not
+FP16-safe on this Galaxy XR firmware: an edge-rich input exposed the packed-softmax-tail defect and
+collapsed to the final output-convolution bias (`0.088684082`). Tail-padding plus exact-GELU variants proved the
 workaround, but production now uses only the three naturally C4-aligned canonical graphs. They need
 no tail padding, use delegated builtin exact GELU, and pass the edge-rich FP16-vs-FP32 parity gate.
 Execution policy is part of the compiler-cache namespace. Public GL tensors stay packed Float32. A debug-only direct
@@ -250,12 +334,14 @@ destroy.
 
 The live order mirrors Apollo: adopt/postprocess completed pair N, capture and enqueue N+1 into the
 other slot, then blur/warp/submit N. Inference and compose may overlap on the GPU, but the color and
-depth identities do not. The direct rectangular depth shaders for both model families use one raw
-tensor load per requested sample; no selected production model uses the legacy reflected-padding
-mapping. The 1x-depth two-eye inverse-warp map shares one stream-fixed 19/14/12-step
-depth/parallax solve across both eyes for the 16:9, 21:9, and 32:9 buckets respectively. Its
-validated compose path emits the full-width packed SBS image in one draw; only the direct
-compatibility path retains two half-width draws.
+depth identities do not. For landscape sources, the direct rectangular depth shaders for all four
+model families use one raw tensor load per requested sample and do not use reflected padding.
+Portrait sources retain the reflected aspect-fit mapping described above.
+The 1x-depth two-eye inverse-warp map shares one stream-fixed depth/parallax solve across both eyes:
+DA-V2 and MiDaS use 19/14/12 probes for the 16:9, 21:9, and 32:9 buckets. DepthART uses 36 for
+`672 x 384` and 33 for `928 x 384`; ZipDepth uses its own nearest-bucket intervals rather than
+reusing another family's boundaries. The validated compose path emits the full-width packed SBS
+image in one draw; only the direct compatibility path retains two half-width draws.
 
 Inference is uncapped: there is no target FPS, thermal cadence reduction, or fixed idle interval
 after LiteRT completes. Low GPU priority controls queue priority, not inference cadence. The atomic
@@ -334,17 +420,17 @@ The tests cover:
   process-wide single-model ownership slot.
 - `ClientSbsOutputSurfaceValidationTest`: exact `2W x H` EGL realization and per-eye GL limit
   validation, including packed widths larger than the per-viewport limit.
-- `ClientSbsModelManifestTest`: exact DA-V2 and MiDaS logical model identities, hashes, fixed tensor
-  contracts, dimensions, buffer sizes, nearest-aspect routing, legacy-ID migration, and archive
-  references.
+- `ClientSbsModelManifestTest`: exact DA-V2, MiDaS, DepthART, and ZipDepth logical model identities, hashes,
+  fixed tensor contracts, dimensions, buffer sizes, nearest-aspect routing, legacy-ID migration,
+  and archive references.
 - `ClientSbsModelArchiveTest`: flavor-neutral solid TAR/XZ entry extraction and missing-entry
   rejection.
-- `ClientSbsPackagedModelArchiveTest`: every `nonRoot_game` production archive entry matches its
-  manifest SHA-256.
+- `ClientSbsPackagedModelArchiveTest`: every `nonRoot_game` production or experimental archive
+  entry matches its manifest SHA-256.
 - `Stereo3DRendererSchedulingTest`: stale-result overlap ownership, packed-viewport limits, and
   Stats epoch boundaries.
-- `ShaderUtilsTest`: direct full-frame DA-V2 and MiDaS resize, per-stream fixed-shape packing,
-  HDR-only inference tonemapping, depth prefiltering, and reprojection invariants.
+- `ShaderUtilsTest`: direct full-frame DA-V2, MiDaS, DepthART, and ZipDepth resize, per-stream fixed-shape
+  packing, HDR-only inference tonemapping, depth prefiltering, and reprojection invariants.
 - `XrStreamPresenterLayoutTest` and `XrStreamPresenterTransitionTest`: readable right-side panel
   placement and whether a presentation-mode change requires a decoder surface transition.
 - `XrViewStateStoreTest`: per-machine/app isolation, fresh-session Normal defaults, and
@@ -390,10 +476,13 @@ an install task and omits the required build type.
 
 The physical-device smoke class creates real shared EGL contexts, uploads a deterministic packed
 Float32 gradient, invokes the selected fixed-shape graph through native LiteRT, waits for the
-returned GL fence, and rejects missing, non-finite, zero, or flat output. Its six graph/bucket tests
-cover the two selectable model families independently: three canonical DA-V2 buckets (`322 x 182`,
-`350 x 154`, and `434 x 126`) and three MiDaS buckets (`352 x 192`, `384 x 160`, and `448 x 128`)
-through the same packed-GL native path.
+returned GL fence, and rejects missing, non-finite, zero, or flat output. Its eleven graph/bucket
+tests cover the four selectable model families independently: three canonical DA-V2 buckets
+(`322 x 182`, `350 x 154`, and `434 x 126`), three MiDaS buckets (`352 x 192`, `384 x 160`, and
+`448 x 128`), two experimental DepthART buckets (`672 x 384` and `928 x 384`), and three
+experimental ZipDepth buckets (`672 x 384`, `896 x 384`, and `928 x 384`) through the same packed-GL
+native path. The corrected experimental graphs have passed this isolated Galaxy XR path; sustained
+streaming remains a separate acceptance gate.
 
 ### Protect the installed Artemis data
 
@@ -449,8 +538,8 @@ if (-not $TestPassed) { throw "Client SBS GPU smoke test failed" }
 A pass requires all of the following:
 
 - Native LiteRT initializes with OpenCL/OpenGL interoperability.
-- Archive validation checks both family TAR/XZ assets, all six complete TAR entries, each extracted byte
-  count, and all six final SHA-256 values. Only the selected fixed-shape graph may remain
+- Archive validation checks all four family TAR/XZ assets, all eleven complete TAR entries, each
+  extracted byte count, and all eleven final SHA-256 values. Only the selected fixed-shape graph may remain
   staged in `code_cache/client-sbs-model-assets`.
 - Offline graph verification fixes every DA-V2 core at 683 operations, while the native smoke test
   programmatically requires complete acceleration. Confirm the accompanying LiteRT log says
@@ -458,8 +547,12 @@ A pass requires all of the following:
   `yielding 1 partitions`; partial delegation or more than one partition is a failure.
 - Each of the three MiDaS buckets reports complete acceleration and exactly one OpenCL partition;
   record its actual delegated/total operator count rather than assuming the DA-V2 count.
+- Each corrected DepthART bucket reports complete acceleration and exactly one OpenCL partition:
+  `2231/2231` serialized operations at `672 x 384` and `2371/2371` at `928 x 384`.
+- Each corrected original-Base ZipDepth bucket reports `163/163` operations in exactly one OpenCL
+  partition.
 - `LiteRtCompiledModelIsFullyAccelerated()` succeeds, and the log confirms CL/GL buffer
-  interoperability for all six buckets.
+  interoperability for all eleven buckets.
 - Each bucket reports its expected logical name, extracted SHA-256, and fixed input/output
   layouts. No runtime tensor resize occurs.
 - Exactly two native input/output tensor slots are present.
@@ -468,7 +561,7 @@ A pass requires all of the following:
   DA-V2 test additionally checks range, checksum, and sampled pixels against an edge-rich desktop
   CPU golden; a smooth gradient alone is not an adequate FP16 correctness test.
 - Extraction/verification, initialization, and warm invocation latency are recorded separately
-  for all six buckets.
+  for all eleven buckets.
 - Both slots exchange mandatory input-ready, output-ready, and final output-consumed fences without
   aliasing, reuse-before-consume, or teardown errors.
 
@@ -496,6 +589,35 @@ interoperability, and finite, non-flat, repeatable output. The same controlled 2
 | `384 x 160` | 9.703 / 9.872 ms | 10.332 / 10.557 ms | 96.23/s |
 | `448 x 128` | 9.430 / 9.593 ms | 10.051 / 10.279 ms | 99.05/s |
 
+The corrected DepthART graphs were measured separately with the production low-priority hint,
+20 discarded warm-ups, 100 measured invocations, and thermal status 0:
+
+| Shape | LiteRT median / p95 | Output-ready median / p95 | Mean LiteRT wall |
+| --- | ---: | ---: | ---: |
+| `672 x 384` | 27.760 / 28.028 ms | 28.385 / 28.740 ms | 27.758 ms |
+| `928 x 384` | 38.258 / 38.486 ms | 38.904 / 39.149 ms | 38.249 ms |
+
+The deterministic gradient and four representative `672 x 384` real inputs all produced complete,
+finite, non-flat FP16 output. Against Galaxy FP32 execution of the same corrected graph, the real
+frames measured Pearson correlation `0.99639`–`0.99972` and affine range-normalized RMSE
+`0.83%`–`2.28%`. A real `928 x 384` probe measured `0.99711` and `2.10%`, respectively. These are
+precision diagnostics, not substitutes for the ground-truth quality suite or sustained thermal
+testing.
+
+The original-Base ZipDepth graphs were measured with the production low-priority hint, 20 discarded
+warm-ups, 100 measured invocations, thermal status 0, and complete one-partition OpenCL delegation:
+
+| Shape | LiteRT median / p95 | Output-ready median / p95 |
+| --- | ---: | ---: |
+| `672 x 384` | 10.089 / 10.310 ms | 10.670 / 10.919 ms |
+| `896 x 384` | 12.991 / 13.189 ms | 13.599 / 13.815 ms |
+| `928 x 384` | 13.308 / 13.488 ms | 13.924 / 14.128 ms |
+
+Representative real-frame FP16 output retained Pearson `0.9976`–`0.9992` and affine
+range-normalized RMSE `1.16%`–`1.43%` against FP32 across the three shapes. These numbers exclude
+decoder, input pack, depth processing, reprojection, and XR composition; they do not establish
+sustained stream thermals.
+
 For an apples-to-apples 16:9 ranking, use the controlled LiteRT call-wall medians, not sequential
 live-stream windows:
 
@@ -518,7 +640,7 @@ not mix it into the rectangular-bucket range.
 
 The smoke timings above use only four invocations per fixed-shape graph and predate the controlled
 wake-lock benchmark. Do not use them for current throughput decisions. The dedicated benchmark
-class keeps the normal six-graph/two-family smoke suite unchanged, holds a bounded partial wake lock
+class is separate from the eleven-graph/four-family smoke suite, holds a bounded partial wake lock
 to prevent off-head
 system suspend, discards 20 warm-ups, and records 100 fence-complete invocations per result.
 
@@ -604,17 +726,21 @@ reuse look like a stalled pipeline.
 
 Open the in-headset Stats panel and verify:
 
-- `Depth backend` is `LITERT_OPENCL_FP16_GL_IO` for both DA-V2 and MiDaS, never a managed, CPU, or
-  QNN backend.
+- `Depth backend` is `LITERT_OPENCL_FP16_GL_IO` for DA-V2, MiDaS, DepthART, and ZipDepth, never a
+  managed, CPU, or QNN backend. Both experimental families have passed this check in isolated
+  instrumentation; confirm it again under the live decode/reprojection workload.
 - `Depth inference policy` reports `Uncapped | single flight | newest frame when free`; there is no
   FPS ceiling or inference-gap row. `Android thermal status` is informational only.
 - The selected logical model and fixed input dimensions match the source aspect. DA-V2 reports
   `322 x 182`, `350 x 154`, and `434 x 126` for canonical 16:9, 21:9, and 32:9 streams; MiDaS
   reports `352 x 192`, `384 x 160`, and `448 x 128`. Other aspects use the documented stream-fixed
-  nearest-bucket routing for the selected family.
-- A/B DA-V2 and MiDaS on the same moving content at each canonical aspect. Record exact-output
-  cadence, thermals, depth detail/pop, and visible geometry; DA-V2's `350 x 154` and `434 x 126`
-  direct-resize paths carry -2.60% and -3.125% aspect distortion.
+  nearest-bucket routing for the selected family. DepthART should report `672 x 384` for 16:9-nearest
+  and `928 x 384` for 21:9-nearest; 32:9 currently also selects `928 x 384`. ZipDepth should report
+  `672 x 384`, `896 x 384`, and `928 x 384` for 16:9, 21:9, and ultrawide-nearest sources.
+- A/B DA-V2, MiDaS, DepthART, and ZipDepth on the same moving content at each relevant aspect. Record
+  exact-output cadence, thermals, depth detail/pop, and visible geometry; DA-V2's `350 x 154` and
+  `434 x 126` direct-resize paths carry -2.60% and -3.125% aspect distortion, while DepthART lacks
+  a dedicated 32:9 bucket.
 - `Latch / depth / output FPS` shows the decoder-consumer cadence, adopted depth cadence, and final
   SBS submission cadence. Depth and output should track one another; latch may be higher while
   single-flight inference is occupied.
@@ -636,7 +762,10 @@ Open the in-headset Stats panel and verify:
   `warp-map compose validated`.
   `Direct GLES N-probe` is still GPU reprojection, but its timings must be analyzed separately
   because it repeats the inverse solve per output pixel. `N` is fixed when the stream starts from
-  the selected 16:9, 21:9, or 32:9 aspect bucket (19/14/12 probes for either model family).
+  the selected model and aspect bucket: DA-V2 and MiDaS retain 19/14/12 probes for 16:9, 21:9, and
+  32:9; DepthART uses 36 probes for every landscape aspect routed to `672 x 384`
+  and 33 for every landscape aspect routed to `928 x 384`, including 32:9. ZipDepth uses 36, 32,
+  and 28 probes for its `672 x 384`, `896 x 384`, and `928 x 384` intervals.
 - App CPU core-equivalent load, device GPU busy/clock, and Android thermal status remain plausible.
   The pane intentionally has no NPU row or custom CPU/GPU temperature probes; Android 14 exposes no
   trustworthy public per-app NPU-utilization API. The production backend is GPU.
@@ -695,9 +824,10 @@ as part of the first sample.
 ## Sustained comparison
 
 For optimization decisions, use the same moving host clip, resolution, frame rate, codec, HDR
-mode, and headset power state for Normal, DA-V2 Client SBS, and MiDaS Client SBS runs. Model changes
-take effect on the next stream so that one concrete shape and one compiled model remain stable for
-the entire capture. Collect at least 15 minutes after warm-up and record:
+mode, and headset power state for Normal, DA-V2 Client SBS, MiDaS Client SBS, experimental
+DepthART, and experimental ZipDepth runs. Model changes take effect on the next stream so that one
+concrete shape and one compiled model remain stable for the entire capture. Collect at least 15
+minutes after warm-up and record:
 
 - Stats-panel screenshots at the start, middle, and end.
 - Latch/depth/output FPS, LiteRT call-wall average/maximum, and depth-age average/maximum.
@@ -727,9 +857,11 @@ itself increase the unique exact-pair cadence above the inference/adoption rate.
 - **Wrong static bucket selected:** verify the selected model family, decoded source aspect supplied
   when the renderer was created, and nearest-multiplicative-aspect selector. The model must not
   change midstream.
-- **A DA-V2 bucket delegates fewer than 683/683 core operations, a MiDaS bucket is not completely
-  accelerated, or either family creates more than one partition:** reject it and verify the archive
-  manifest mapping, extracted SHA-256, and rank-4 static graph. CPU fallback is not a valid result.
+- **A DA-V2 bucket delegates fewer than 683/683 core operations, a ZipDepth bucket delegates fewer
+  than 163/163 operations, another bucket is not completely accelerated, or any family creates
+  more than one partition:** reject it and verify
+  the archive manifest mapping, extracted SHA-256, and rank-4 static graph. CPU fallback is not a
+  valid result.
 - **An isolated early inference tail appears despite complete delegation:** retain the sample,
   correlate it with initialization, scheduling, and thermal state, then judge sustained live-stream
   cadence. Do not misclassify a one-off tail as partial delegation when the model's complete

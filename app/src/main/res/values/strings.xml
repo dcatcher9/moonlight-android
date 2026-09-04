@@ -579,9 +579,11 @@
     <string name="title_checkbox_resume_without_confirm">Quick Resume</string>
     <string name="summary_checkbox_resume_without_confirm">Do not show resume menu when clicking resume button, resume the app immediately.</string>
     <string name="title_client_sbs_depth_model">Client SBS depth model</string>
-    <string name="summary_client_sbs_depth_model">Depth Anything V2 Small and MiDaS 2.1 select the nearest static OpenCL bucket for 16:9, 21:9, and 32:9 content.</string>
+    <string name="summary_client_sbs_depth_model">Select a GPU-only depth model. DepthART S448 and ZipDepth Base are experimental short-384 options for controlled evaluation.</string>
     <string name="client_sbs_depth_model_da_v2_static">Depth Anything V2 Small — aspect buckets (OpenCL)</string>
     <string name="client_sbs_depth_model_midas_v2">MiDaS 2.1 — aspect buckets (OpenCL)</string>
+    <string name="client_sbs_depth_model_depthart_s448">DepthART S448 FP16 — Experimental (OpenCL)</string>
+    <string name="client_sbs_depth_model_zipdepth_base">ZipDepth Base FP16 — Experimental short-384 (OpenCL)</string>
     <string name="title_raw_sbs_per_eye_resolution">Raw SBS per-eye resolution</string>
     <string name="summary_raw_sbs_per_eye_resolution">Full sends two complete eye views at double width. Half keeps the selected stream width and gives each eye half its horizontal pixels.</string>
     <string name="title_checkbox_enable_sticky_modifier_key_virtual_keyboard">Sticky modifier keys</string>
@@ -814,6 +816,8 @@
     <string name="xr_pacing_smooth">Smooth</string>
     <string name="xr_depth_model_da_v2">Depth Anything V2</string>
     <string name="xr_depth_model_midas">MiDaS 2.1</string>
+    <string name="xr_depth_model_depthart_s448">DepthART S448 (Experimental)</string>
+    <string name="xr_depth_model_zipdepth_base">ZipDepth Base (Experimental · short 384)</string>
     <string name="xr_raw_per_eye_resolution">Per-Eye Resolution</string>
     <string name="xr_raw_per_eye_full">Full</string>
     <string name="xr_raw_per_eye_half">Half</string>

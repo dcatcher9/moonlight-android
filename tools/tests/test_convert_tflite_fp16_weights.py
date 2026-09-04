@@ -32,7 +32,7 @@ def make_tensor(name: str, shape: list[int], buffer: int = 0) -> object:
     return tensor
 
 
-def make_mul_model() -> object:
+def make_mul_model(weight_scale: float = 1.0) -> object:
     model = SCHEMA.ModelT()
     model.version = 3
     model.description = "FP16 weight conversion test"
@@ -45,7 +45,9 @@ def make_mul_model() -> object:
 
     empty_buffer = SCHEMA.BufferT()
     weight_buffer = SCHEMA.BufferT()
-    values = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype="<f4")
+    values = weight_scale * np.array(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype="<f4"
+    )
     weight_buffer.data = np.frombuffer(values.tobytes(), dtype=np.uint8).copy()
     model.buffers = [empty_buffer, weight_buffer]
 
@@ -119,6 +121,28 @@ class ConvertTfliteFp16WeightsTest(unittest.TestCase):
                 TOOL.REPOSITORY_ROOT / "source.tflite",
                 TOOL.REPOSITORY_ROOT.parent / "Apollo-3D" / "model.tflite",
             )
+
+    def test_affine_output_parity_is_explicit(self) -> None:
+        build_directory = TOOL.REPOSITORY_ROOT / "build"
+        build_directory.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="fp16-weight-affine-test-", dir=build_directory
+        ) as directory:
+            source = Path(directory) / "source.tflite.model"
+            scaled = Path(directory) / "scaled.tflite.model"
+            TOOL.serialize_model(make_mul_model(), source)
+            TOOL.serialize_model(make_mul_model(weight_scale=2.0), scaled)
+
+            with self.assertRaisesRegex(TOOL.WeightConversionError, "parity failed"):
+                TOOL.validate_cpu_parity(source, scaled)
+
+            parity = TOOL.validate_cpu_parity(
+                source,
+                scaled,
+                allow_affine_output=True,
+            )
+            self.assertEqual(1.0, parity["correlation"])
+            self.assertAlmostEqual(0.0, parity["affine_normalized_rmse"])
 
 
 if __name__ == "__main__":

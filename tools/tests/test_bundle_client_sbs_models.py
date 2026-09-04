@@ -27,6 +27,11 @@ FIXTURES = {
     TOOL.MIDAS_MODELS[0]: b"shared-midas-weights-" * 2048 + b"-352x192",
     TOOL.MIDAS_MODELS[1]: b"shared-midas-weights-" * 2048 + b"-384x160",
     TOOL.MIDAS_MODELS[2]: b"shared-midas-weights-" * 2048 + b"-448x128",
+    TOOL.DEPTHART_MODELS[0]: b"shared-depthart-weights-" * 2048 + b"-672x384",
+    TOOL.DEPTHART_MODELS[1]: b"shared-depthart-weights-" * 2048 + b"-928x384",
+    TOOL.ZIPDEPTH_MODELS[0]: b"shared-zipdepth-weights-" * 2048 + b"-672x384",
+    TOOL.ZIPDEPTH_MODELS[1]: b"shared-zipdepth-weights-" * 2048 + b"-896x384",
+    TOOL.ZIPDEPTH_MODELS[2]: b"shared-zipdepth-weights-" * 2048 + b"-928x384",
 }
 
 
@@ -105,6 +110,41 @@ class BundleClientSbsModelsTest(unittest.TestCase):
                 output_directory / TOOL.MIDAS_ARCHIVE_FILENAME, mode="r:xz"
             ) as archive:
                 self.assertEqual(list(TOOL.MIDAS_MODELS), archive.getnames())
+            with tarfile.open(
+                output_directory / TOOL.DEPTHART_ARCHIVE_FILENAME, mode="r:xz"
+            ) as archive:
+                self.assertEqual(list(TOOL.DEPTHART_MODELS), archive.getnames())
+            with tarfile.open(
+                output_directory / TOOL.ZIPDEPTH_ARCHIVE_FILENAME, mode="r:xz"
+            ) as archive:
+                self.assertEqual(list(TOOL.ZIPDEPTH_MODELS), archive.getnames())
+
+    def test_depthart_family_uses_the_short_384_static_buckets(self) -> None:
+        self.assertEqual(
+            "client-sbs-depthart-models.tar.xz",
+            TOOL.DEPTHART_ARCHIVE_FILENAME,
+        )
+        self.assertEqual(
+            (
+                "depthart-s448-static-672x384-fp16weights.tflite.model",
+                "depthart-s448-static-928x384-fp16weights.tflite.model",
+            ),
+            TOOL.DEPTHART_MODELS,
+        )
+
+    def test_zipdepth_family_uses_original_base_short_384_static_buckets(self) -> None:
+        self.assertEqual(
+            "client-sbs-zipdepth-models.tar.xz",
+            TOOL.ZIPDEPTH_ARCHIVE_FILENAME,
+        )
+        self.assertEqual(
+            (
+                "zipdepth-base-static-672x384-fp16weights.tflite.model",
+                "zipdepth-base-static-896x384-fp16weights.tflite.model",
+                "zipdepth-base-static-928x384-fp16weights.tflite.model",
+            ),
+            TOOL.ZIPDEPTH_MODELS,
+        )
 
     def test_missing_required_model_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory(prefix="client-sbs-model-bundle-test-") as root:

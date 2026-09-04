@@ -77,6 +77,29 @@ public class ShaderUtilsTest {
                 .contains("const int PROBE_STEPS = 12;"));
     }
 
+    @Test
+    public void largerSelectedDepthOutputsRaiseTheProbeBudget() {
+        float depthArtWideLowerBound = (float) Math.sqrt(
+                (672.0f / 384.0f) * (928.0f / 384.0f));
+        assertEquals(36, ClientSbsShaders.probeStepsForDepthOutput(
+                16.0f / 9.0f, 672, 4.0f / 3.0f));
+        assertEquals(36, ClientSbsShaders.probeStepsForDepthOutput(
+                2.03f, 672, 4.0f / 3.0f));
+        assertEquals(33, ClientSbsShaders.probeStepsForDepthOutput(
+                21.0f / 9.0f, 928, depthArtWideLowerBound));
+        assertEquals(33, ClientSbsShaders.probeStepsForDepthOutput(
+                32.0f / 9.0f, 928, depthArtWideLowerBound));
+        assertTrue(ClientSbsShaders.createReprojectionFragment(36)
+                .contains("const int PROBE_STEPS = 36;"));
+        assertTrue(ClientSbsShaders.createWarpMapFragment(33)
+                .contains("const int PROBE_STEPS = 33;"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void selectedDepthOutputRejectsInvalidWidth() {
+        ClientSbsShaders.probeStepsForDepthOutput(16.0f / 9.0f, 0);
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void probeBudgetRejectsInvalidStreamAspect() {
         ClientSbsShaders.probeStepsForAspect(Float.NaN);

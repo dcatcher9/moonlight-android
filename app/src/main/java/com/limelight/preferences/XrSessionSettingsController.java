@@ -76,7 +76,11 @@ public final class XrSessionSettingsController {
     private static final List<SessionSettingsModel.Choice> CLIENT_MODEL_CHOICES = choices(
             choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
                     "Depth Anything"),
-            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2, "MiDaS"));
+            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2, "MiDaS"),
+            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
+                    "DepthART S448 (Experimental)"),
+            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                    "ZipDepth Base (Experimental · short 384)"));
 
     private static final EnumMap<SessionSettingsModel.Key, String> PREF_KEYS =
             new EnumMap<>(SessionSettingsModel.Key.class);
@@ -443,8 +447,6 @@ public final class XrSessionSettingsController {
         int[] size = parseResolution((String) pendingModeQuality.get(
                 SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).get(
                 SessionSettingsModel.Key.RESOLUTION));
-        boolean midas = PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2
-                .equals(pendingClientModel);
         SessionSettingsModel.Source source = pendingClientModel.equals(globalClientModel)
                 ? SessionSettingsModel.Source.GLOBAL
                 : SessionSettingsModel.Source.CURRENT_SESSION;
@@ -454,7 +456,8 @@ public final class XrSessionSettingsController {
         return new ClientSbsModeSettingsModel(
                 appliedClientModel, clientModelName(appliedClientModel),
                 pendingClientModel, clientModelName(pendingClientModel), source,
-                ClientSbsModeSettingsModel.selectBucket(midas, size[0], size[1]),
+                ClientSbsModeSettingsModel.selectBucket(
+                        pendingClientModel, size[0], size[1]),
                 "GPU-only \u00b7 initializes on first use",
                 clientModelChoices(appliedClientModel, pendingClientModel),
                 pendingClientModel);
@@ -687,10 +690,7 @@ public final class XrSessionSettingsController {
     }
 
     public void toggleClientSbsModel() {
-        selectClientSbsModel(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2
-                .equals(pendingClientModel)
-                ? PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC
-                : PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2);
+        selectClientSbsModel(nextChoiceId(CLIENT_MODEL_CHOICES, pendingClientModel));
     }
 
     /** Stages one exact Client SBS model family from the mode-specific choice group. */
@@ -1361,7 +1361,15 @@ public final class XrSessionSettingsController {
     }
 
     private static String clientModelName(String id) {
-        return PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id)
-                ? "MiDaS" : "Depth Anything";
+        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id)) {
+            return "MiDaS";
+        }
+        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(id)) {
+            return "DepthART S448 (Experimental)";
+        }
+        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(id)) {
+            return "ZipDepth Base (Experimental · short 384)";
+        }
+        return "Depth Anything";
     }
 }

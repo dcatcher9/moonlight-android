@@ -18,6 +18,8 @@ import tempfile
 
 DEPTH_ANYTHING_ARCHIVE_FILENAME = "client-sbs-dav2-models.tar.xz"
 MIDAS_ARCHIVE_FILENAME = "client-sbs-midas-models.tar.xz"
+DEPTHART_ARCHIVE_FILENAME = "client-sbs-depthart-models.tar.xz"
+ZIPDEPTH_ARCHIVE_FILENAME = "client-sbs-zipdepth-models.tar.xz"
 COPY_CHUNK_BYTES = 1024 * 1024
 XZ_PRESET = 9
 XZ_DICTIONARY_BYTES = 64 * 1024 * 1024
@@ -32,11 +34,22 @@ MIDAS_MODELS = (
     "midas-v2-small-static-384x160-fp16weights.tflite.model",
     "midas-v2-small-static-448x128-fp16weights.tflite.model",
 )
+DEPTHART_MODELS = (
+    "depthart-s448-static-672x384-fp16weights.tflite.model",
+    "depthart-s448-static-928x384-fp16weights.tflite.model",
+)
+ZIPDEPTH_MODELS = (
+    "zipdepth-base-static-672x384-fp16weights.tflite.model",
+    "zipdepth-base-static-896x384-fp16weights.tflite.model",
+    "zipdepth-base-static-928x384-fp16weights.tflite.model",
+)
 
 # Tuple order defines both archive publication order and USTAR entry order.
 MODEL_FAMILIES = (
     (DEPTH_ANYTHING_ARCHIVE_FILENAME, DEPTH_ANYTHING_MODELS),
     (MIDAS_ARCHIVE_FILENAME, MIDAS_MODELS),
+    (DEPTHART_ARCHIVE_FILENAME, DEPTHART_MODELS),
+    (ZIPDEPTH_ARCHIVE_FILENAME, ZIPDEPTH_MODELS),
 )
 
 
@@ -125,7 +138,7 @@ def bundle_models(
     input_directory: Path,
     output_directory: Path,
 ) -> dict[str, tuple[dict[str, object], ...]]:
-    """Validate and build both archives, then atomically replace each archive file."""
+    """Validate and build all archives, then atomically replace each archive file."""
     model_paths = _validate_paths(input_directory, output_directory)
     output_directory = output_directory.resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -170,13 +183,13 @@ def parse_args() -> argparse.Namespace:
         "--input-dir",
         required=True,
         type=Path,
-        help="directory containing the six raw production model files",
+        help="directory containing the eleven packaged model files",
     )
     parser.add_argument(
         "--output-dir",
         required=True,
         type=Path,
-        help="directory that will receive the two solid model-family tar.xz archives",
+        help="directory that will receive the four solid model-family tar.xz archives",
     )
     return parser.parse_args()
 

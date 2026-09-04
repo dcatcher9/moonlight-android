@@ -2123,10 +2123,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 ShaderUtils.VERTEX_SHADER, ClientSbsShaders.DEPTH_PREFILTER_FRAGMENT);
         dibr3dProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER,
-                ClientSbsShaders.createReprojectionFragment(sourceAspect));
+                ClientSbsShaders.createReprojectionFragment(reprojectionProbeSteps));
         warpMapProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER,
-                ClientSbsShaders.createWarpMapFragment(sourceAspect));
+                ClientSbsShaders.createWarpMapFragment(reprojectionProbeSteps));
         warpedDibr3dProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER, ClientSbsShaders.WARPED_REPROJECTION_FRAGMENT);
         simpleProgramBindings = simple3dProgram != 0

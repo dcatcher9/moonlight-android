@@ -29,6 +29,7 @@ import java.io.File;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -174,6 +175,51 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                 434, 126);
     }
 
+    @Test
+    public void depthArtS448672x384RunsWithPackedGlBuffers() throws Exception {
+        assertDepthArtBucket(
+                ClientSbsModelManifest.DEPTHART_S448_STATIC_16_9,
+                "depthart-s448-static-672x384-fp16weights.tflite.model",
+                "3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b",
+                672, 384);
+    }
+
+    @Test
+    public void depthArtS448928x384RunsWithPackedGlBuffers() throws Exception {
+        assertDepthArtBucket(
+                ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
+                "depthart-s448-static-928x384-fp16weights.tflite.model",
+                "d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2",
+                928, 384);
+    }
+
+    @Test
+    public void zipDepthBase672x384RunsWithPackedGlBuffers() throws Exception {
+        assertZipDepthBucket(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                "zipdepth-base-static-672x384-fp16weights.tflite.model",
+                "6296d5c2e4f857fd551d854ebf4dd2ab2462c0d7372d526bf0a7463718b8b6d1",
+                672, 384);
+    }
+
+    @Test
+    public void zipDepthBase896x384RunsWithPackedGlBuffers() throws Exception {
+        assertZipDepthBucket(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                "zipdepth-base-static-896x384-fp16weights.tflite.model",
+                "31467ab0cd187b74c65b3b20f4850973309d120519b587610e3dd3e27b72df4a",
+                896, 384);
+    }
+
+    @Test
+    public void zipDepthBase928x384RunsWithPackedGlBuffers() throws Exception {
+        assertZipDepthBucket(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9,
+                "zipdepth-base-static-928x384-fp16weights.tflite.model",
+                "169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc",
+                928, 384);
+    }
+
     /**
      * Runs an externally pushed, output-rewired DA-V2 graph at both delegate precisions. Invoke
      * this test directly with instrumentation arguments; it is deliberately absent from normal
@@ -201,6 +247,7 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                 arguments, "max_abs", 0.5);
         String precision = arguments.getString("precision", "both");
         String order = arguments.getString("order", "fp16-fp32");
+        String outputPrefix = arguments.getString("output_prefix");
         assertTrue("precision must be fp16, fp32, or both",
                 precision.equals("fp16") || precision.equals("fp32")
                         || precision.equals("both"));
@@ -212,6 +259,14 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         assertNotNull("Target external-files directory must be available", checkpointRoot);
         File checkpoint = new File(checkpointRoot, checkpointName);
         assertExternalModelPresent("externallyPushedCheckpointFp16VsFp32", checkpoint);
+        String inputFileName = arguments.getString("input_file");
+        File inputTensor = inputFileName == null || inputFileName.trim().isEmpty()
+                ? null : new File(checkpointRoot, inputFileName.trim());
+        if (inputTensor != null) {
+            assertTrue("Externally pushed input tensor is missing: "
+                            + inputTensor.getAbsolutePath(),
+                    inputTensor.isFile());
+        }
         PowerManager powerManager = (PowerManager) runtimeContext.getSystemService(
                 Context.POWER_SERVICE);
         PowerManager.WakeLock wakeLock = powerManager == null ? null
@@ -244,7 +299,7 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                                 checkpointSha256, inputShape, outputShape, executionPolicy);
                 CheckpointRun result = runExternalCheckpoint(
                         runtimeContext, powerManager, egl, checkpoint, manifest,
-                        warmupRuns, measuredRuns);
+                        inputTensor, warmupRuns, measuredRuns);
                 if (policy.equals("fp16")) {
                     fp16 = result;
                 } else {
@@ -265,9 +320,11 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         int expectedElements = tensorElementCount(outputShape);
         if (fp16 != null) {
             assertCompleteFiniteTensor("FP16 checkpoint", fp16.output, expectedElements);
+            writeOptionalTensorSnapshot(checkpointRoot, outputPrefix, "fp16", fp16.output);
         }
         if (fp32 != null) {
             assertCompleteFiniteTensor("FP32 checkpoint", fp32.output, expectedElements);
+            writeOptionalTensorSnapshot(checkpointRoot, outputPrefix, "fp32", fp32.output);
         }
         if (fp16 != null && fp32 != null) {
             TensorComparison comparison = TensorComparison.compare(fp16.output, fp32.output);
@@ -342,9 +399,9 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         CheckpointRun candidateRun;
         try (EglFixture egl = EglFixture.create()) {
             referenceRun = runExternalCheckpoint(runtimeContext, powerManager, egl,
-                    reference, referenceManifest, warmupRuns, measuredRuns);
+                    reference, referenceManifest, null, warmupRuns, measuredRuns);
             candidateRun = runExternalCheckpoint(runtimeContext, powerManager, egl,
-                    candidate, candidateManifest, warmupRuns, measuredRuns);
+                    candidate, candidateManifest, null, warmupRuns, measuredRuns);
         } finally {
             try {
                 if (wakeLock != null && wakeLock.isHeld()) {
@@ -441,10 +498,50 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         runPackedGlModelSmokeTest(manifest);
     }
 
+    private static void assertDepthArtBucket(ClientSbsModelManifest manifest,
+                                             String assetName,
+                                             String assetSha256,
+                                             int width,
+                                             int height) throws Exception {
+        assertEquals(assetName, manifest.getAssetName());
+        assertEquals(assetSha256, manifest.getAssetSha256());
+        assertEquals(width, manifest.getInputWidth());
+        assertEquals(height, manifest.getInputHeight());
+        assertTrue("DepthART dimensions must be divisible by 16",
+                width % 16 == 0 && height % 16 == 0);
+        assertTrue("DepthART must use direct full-frame resize",
+                manifest.usesDirectFullFrameResize());
+        assertTrue("Static bucket must skip dynamic tensor resize",
+                !manifest.hasDynamicSpatialShape());
+        assertEquals(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
+                manifest.getGpuExecutionPolicy());
+        runPackedGlModelSmokeTest(manifest);
+    }
+
+    private static void assertZipDepthBucket(ClientSbsModelManifest manifest,
+                                             String assetName,
+                                             String assetSha256,
+                                             int width,
+                                             int height) throws Exception {
+        assertEquals(assetName, manifest.getAssetName());
+        assertEquals(assetSha256, manifest.getAssetSha256());
+        assertEquals(width, manifest.getInputWidth());
+        assertEquals(height, manifest.getInputHeight());
+        assertTrue("ZipDepth dimensions must be divisible by 32",
+                width % 32 == 0 && height % 32 == 0);
+        assertTrue("ZipDepth must use direct full-frame resize",
+                manifest.usesDirectFullFrameResize());
+        assertTrue("Static bucket must skip dynamic tensor resize",
+                !manifest.hasDynamicSpatialShape());
+        assertEquals(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
+                manifest.getGpuExecutionPolicy());
+        runPackedGlModelSmokeTest(manifest);
+    }
+
     private static CheckpointRun runExternalCheckpoint(
             Context runtimeContext, PowerManager powerManager, EglFixture egl,
             File checkpoint, ClientSbsModelManifest manifest,
-            int warmupRuns, int measuredRuns) throws Exception {
+            File inputTensor, int warmupRuns, int measuredRuns) throws Exception {
         int thermalBefore = powerManager == null
                 ? -1 : powerManager.getCurrentThermalStatus();
         ClientSbsGpuInferenceEngine engine = ClientSbsGpuInferenceEngine.createShared();
@@ -470,8 +567,13 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                     engine.getInputPixelStrideBytes(0));
             assertEquals(manifest.getOutputTensor().getChannels() * Float.BYTES,
                     engine.getOutputPixelStrideBytes(0));
-            uploadGradient(inputBuffer, manifest.getInputWidth(), manifest.getInputHeight(),
-                    false, false);
+            if (inputTensor == null) {
+                uploadGradient(inputBuffer, manifest.getInputWidth(), manifest.getInputHeight(),
+                        false, false);
+            } else {
+                uploadPackedFloatTensor(inputBuffer, inputTensor,
+                        manifest.getInputByteSize());
+            }
             assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
 
             for (int iteration = 0; iteration < warmupRuns; iteration++) {
@@ -815,6 +917,24 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
             elements = Math.multiplyExact(elements, dimension);
         }
         return elements;
+    }
+
+    private static void writeOptionalTensorSnapshot(File root, String prefix,
+                                                    String precision,
+                                                    TensorSnapshot tensor) throws Exception {
+        if (prefix == null || prefix.trim().isEmpty()) {
+            return;
+        }
+        String safePrefix = prefix.trim();
+        assertTrue("output_prefix must be a simple file-name prefix",
+                safePrefix.matches("[A-Za-z0-9._-]+"));
+        ByteBuffer bytes = ByteBuffer.allocate(tensor.values.length * Float.BYTES)
+                .order(ByteOrder.LITTLE_ENDIAN);
+        bytes.asFloatBuffer().put(tensor.values);
+        File output = new File(root, safePrefix + '-' + precision + ".f32le");
+        Files.write(output.toPath(), bytes.array());
+        Log.i(BISECT_TAG, "wrote checkpoint output=" + output.getAbsolutePath()
+                + " bytes=" + bytes.capacity());
     }
 
     private static void assertCompleteFiniteTensor(String label,
@@ -1296,6 +1416,18 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
     }
 
+    private static void uploadPackedFloatTensor(int bufferId, File inputTensor,
+                                                int expectedBytes) throws Exception {
+        byte[] bytes = Files.readAllBytes(inputTensor.toPath());
+        assertEquals("External input tensor byte count", expectedBytes, bytes.length);
+        ByteBuffer input = ByteBuffer.allocateDirect(bytes.length)
+                .order(ByteOrder.nativeOrder());
+        input.put(bytes).flip();
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId);
+        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, input.remaining(), input);
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
     private static void uploadGradientPhwc4Fp16(int bufferId, int width, int height) {
         ByteBuffer input = ByteBuffer.allocateDirect(
                         width * height * PHWC4_FP16_PIXEL_BYTES)
@@ -1765,15 +1897,25 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         final double maximumAbsoluteError;
         final double cosineSimilarity;
         final double rmsRatio;
+        final double pearsonCorrelation;
+        final double affineNormalizedRmse;
+        final double affineScale;
+        final double affineOffset;
 
         TensorComparison(int compared, double normalizedRmse,
                          double maximumAbsoluteError, double cosineSimilarity,
-                         double rmsRatio) {
+                         double rmsRatio, double pearsonCorrelation,
+                         double affineNormalizedRmse, double affineScale,
+                         double affineOffset) {
             this.compared = compared;
             this.normalizedRmse = normalizedRmse;
             this.maximumAbsoluteError = maximumAbsoluteError;
             this.cosineSimilarity = cosineSimilarity;
             this.rmsRatio = rmsRatio;
+            this.pearsonCorrelation = pearsonCorrelation;
+            this.affineNormalizedRmse = affineNormalizedRmse;
+            this.affineScale = affineScale;
+            this.affineOffset = affineOffset;
         }
 
         static TensorComparison compare(TensorSnapshot fp16, TensorSnapshot fp32) {
@@ -1785,6 +1927,10 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
             double fp32Squares = 0.0;
             double dot = 0.0;
             double maximumAbsoluteError = 0.0;
+            double fp16Sum = 0.0;
+            double fp32Sum = 0.0;
+            double fp32Minimum = Double.POSITIVE_INFINITY;
+            double fp32Maximum = Double.NEGATIVE_INFINITY;
             for (int index = 0; index < fp16.values.length; index++) {
                 float candidate = fp16.values[index];
                 float reference = fp32.values[index];
@@ -1798,9 +1944,14 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                 fp32Squares += (double) reference * reference;
                 dot += (double) candidate * reference;
                 maximumAbsoluteError = Math.max(maximumAbsoluteError, Math.abs(error));
+                fp16Sum += candidate;
+                fp32Sum += reference;
+                fp32Minimum = Math.min(fp32Minimum, reference);
+                fp32Maximum = Math.max(fp32Maximum, reference);
             }
             if (compared == 0) {
                 return new TensorComparison(0, Double.NaN, Double.NaN,
+                        Double.NaN, Double.NaN, Double.NaN, Double.NaN,
                         Double.NaN, Double.NaN);
             }
             double rmse = Math.sqrt(squaredError / compared);
@@ -1810,16 +1961,54 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
             double cosine = dot / Math.max(
                     Math.sqrt(fp16Squares * fp32Squares), 1.0e-30);
             double rmsRatio = fp16Rms / Math.max(fp32Rms, 1.0e-30);
+            double fp16Mean = fp16Sum / compared;
+            double fp32Mean = fp32Sum / compared;
+            double fp16CenteredSquares = 0.0;
+            double fp32CenteredSquares = 0.0;
+            double centeredDot = 0.0;
+            for (int index = 0; index < fp16.values.length; index++) {
+                float candidate = fp16.values[index];
+                float reference = fp32.values[index];
+                if (!Float.isFinite(candidate) || !Float.isFinite(reference)) {
+                    continue;
+                }
+                double centeredCandidate = candidate - fp16Mean;
+                double centeredReference = reference - fp32Mean;
+                fp16CenteredSquares += centeredCandidate * centeredCandidate;
+                fp32CenteredSquares += centeredReference * centeredReference;
+                centeredDot += centeredCandidate * centeredReference;
+            }
+            double pearson = centeredDot / Math.max(
+                    Math.sqrt(fp16CenteredSquares * fp32CenteredSquares), 1.0e-30);
+            double affineScale = centeredDot / Math.max(fp16CenteredSquares, 1.0e-30);
+            double affineOffset = fp32Mean - affineScale * fp16Mean;
+            double affineSquaredError = 0.0;
+            for (int index = 0; index < fp16.values.length; index++) {
+                float candidate = fp16.values[index];
+                float reference = fp32.values[index];
+                if (!Float.isFinite(candidate) || !Float.isFinite(reference)) {
+                    continue;
+                }
+                double error = affineScale * candidate + affineOffset - reference;
+                affineSquaredError += error * error;
+            }
+            double affineRmse = Math.sqrt(affineSquaredError / compared);
+            double affineNormalizedRmse = affineRmse
+                    / Math.max(fp32Maximum - fp32Minimum, 1.0e-30);
             return new TensorComparison(compared, normalizedRmse,
-                    maximumAbsoluteError, cosine, rmsRatio);
+                    maximumAbsoluteError, cosine, rmsRatio, pearson,
+                    affineNormalizedRmse, affineScale, affineOffset);
         }
 
         @Override
         public String toString() {
             return String.format(Locale.ROOT,
-                    "{finitePairs=%d nrmse=%.9g maxAbs=%.9g cosine=%.9g rmsRatio=%.9g}",
+                    "{finitePairs=%d nrmse=%.9g maxAbs=%.9g cosine=%.9g rmsRatio=%.9g "
+                            + "pearson=%.9g affineNrmse=%.9g affineScale=%.9g "
+                            + "affineOffset=%.9g}",
                     compared, normalizedRmse, maximumAbsoluteError,
-                    cosineSimilarity, rmsRatio);
+                    cosineSimilarity, rmsRatio, pearsonCorrelation,
+                    affineNormalizedRmse, affineScale, affineOffset);
         }
     }
 

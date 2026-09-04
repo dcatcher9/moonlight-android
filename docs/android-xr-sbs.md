@@ -107,11 +107,13 @@ MediaCodec
   -> SceneCore retains that submitted buffer until the next exact pair is adopted
 ```
 
-Production offers Depth Anything V2 Small and MiDaS v2.1 Small as explicit model families. Each
-family has three fixed-shape aspect buckets with FP16-stored large weights and Float32 public
-tensors. When the renderer is constructed, it chooses the graph with the smallest multiplicative
-aspect error, `abs(log(bucketAspect / streamAspect))`, directly among the selected family's three
-buckets. The selection is immutable until the next stream.
+Production offers Depth Anything V2 Small and MiDaS v2.1 Small as explicit model families, plus
+explicitly labeled experimental DepthART S448 and original ZipDepth Base candidates. DA-V2, MiDaS,
+and ZipDepth each have three fixed-shape aspect buckets; DepthART currently has two short-384
+graphs. All use FP16-stored large weights and Float32 public tensors. When the renderer is
+constructed, it chooses the graph with the smallest multiplicative aspect error,
+`abs(log(bucketAspect / streamAspect))`, directly within the selected family. The selection is
+immutable until the next stream.
 
 | DA-V2 target aspect | Input/output size | Logical model | SHA-256 |
 | --- | --- | --- | --- |
@@ -125,15 +127,28 @@ buckets. The selection is immutable until the next stream.
 | 21:9 | `384 x 160` | `midas-v2-small-static-384x160-fp16weights.tflite.model` | `5a66ab484a888c3c9e1642580ac3086c7d6d3175a860ca1e82f30d7a58c532bd` |
 | 32:9 | `448 x 128` | `midas-v2-small-static-448x128-fp16weights.tflite.model` | `060ec0e16fd4e20f2626d6ac51d80853a1bdf9b2f082c3d933099784cf9cabfb` |
 
-The non-root flavor packages the six fixed-shape aspect graphs for those two selectable model
-families in two standard solid family archives:
+| Experimental DepthART target | Input/output size | Asset | SHA-256 |
+| --- | --- | --- | --- |
+| 16:9-nearest | `672 x 384` | `depthart-s448-static-672x384-fp16weights.tflite.model` | `3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b` |
+| 21:9-nearest | `928 x 384` | `depthart-s448-static-928x384-fp16weights.tflite.model` | `d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2` |
+
+| Experimental ZipDepth target | Input/output size | Asset | SHA-256 |
+| --- | --- | --- | --- |
+| 16:9-nearest | `672 x 384` | `zipdepth-base-static-672x384-fp16weights.tflite.model` | `6296d5c2e4f857fd551d854ebf4dd2ab2462c0d7372d526bf0a7463718b8b6d1` |
+| 21:9-nearest | `896 x 384` | `zipdepth-base-static-896x384-fp16weights.tflite.model` | `31467ab0cd187b74c65b3b20f4850973309d120519b587610e3dd3e27b72df4a` |
+| ultrawide-nearest | `928 x 384` | `zipdepth-base-static-928x384-fp16weights.tflite.model` | `169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc` |
+
+The non-root flavor packages the eleven fixed-shape graphs for the four selectable families in
+four standard solid family archives:
 
 - `app/src/nonRoot_game/assets/client-sbs-dav2-models.tar.xz`
 - `app/src/nonRoot_game/assets/client-sbs-midas-models.tar.xz`
+- `app/src/nonRoot_game/assets/client-sbs-depthart-models.tar.xz`
+- `app/src/nonRoot_game/assets/client-sbs-zipdepth-models.tar.xz`
 
-Each archive is a standard TAR containing its family's three complete `.tflite.model` files under
+Each archive is a standard TAR containing its family's complete `.tflite.model` files under
 the exact logical filenames in the tables above. One XZ/LZMA2 stream compresses the complete TAR,
-so the compressor can exploit redundancy across all three static graphs. There is no base/delta
+so the compressor can exploit redundancy across the family's static graphs. There is no base/delta
 encoding, XOR transform, custom model representation, or model reconstruction step. The Java model
 manifest maps each logical model to its family archive and TAR entry and records its expected
 SHA-256.
@@ -141,10 +156,14 @@ SHA-256.
 The deterministic DA-V2 TAR/XZ is 44,429,612 bytes (42.37 MiB), SHA-256
 `3f9892624253e5d7301d6b0eb28acc7ef30ac2cf3131acbc7a8c1f59696ad148`. The MiDaS TAR/XZ is
 29,947,928 bytes (28.56 MiB), SHA-256
-`166be90ec3866dfeae61ce7163df49414840b6d054466d79dbe153ea3ebc8b94`. Together they are
-74,377,540 bytes (70.93 MiB). Android stores the already-compressed XZ assets directly rather than
-adding a second compression layer. Measure the current APK from the requested build output; its
-total size is intentionally not pinned here because application code and build metadata change it.
+`166be90ec3866dfeae61ce7163df49414840b6d054466d79dbe153ea3ebc8b94`. The experimental DepthART
+TAR/XZ is 10,991,860 bytes (10.48 MiB), SHA-256
+`1dccec4aa315288b5cc471a9d585d57e00d0e12a56870cb4712da5f20fb476a6`. The experimental ZipDepth
+TAR/XZ is 11,149,420 bytes (10.63 MiB), SHA-256
+`0b737e7ff7d6717c9b376e2e6d195eb5ff4a54d49d862e3415f155d137c78558`. All four total 96,518,820
+bytes (92.05 MiB). Android stores the already-compressed XZ assets directly rather than adding a
+second compression layer. Measure the current APK from the requested build output; its total size
+is intentionally not pinned here because application code and build metadata change it.
 
 On the first Client SBS activation in a stream session, the loader selects one model contract and
 scans the family TAR/XZ stream,
@@ -153,7 +172,7 @@ SHA-256, and gives LiteRT the verified read-only file. XZ decompression is seque
 later TAR entry on a cold cache must decompress the preceding stream even though those earlier files
 are not materialized. The verified cache avoids that work on later use. The loader prunes other
 staged models, while a later stream may extract a different selection. The root flavor contains
-neither family archive nor the LiteRT runtime.
+none of the family archives or the LiteRT runtime.
 
 The selected LiteRT model and compiled GPU delegate remain resident for that stream session after
 the first Client SBS activation. Normal, Raw, and Host SBS submit no Client SBS inference work, but
@@ -161,7 +180,7 @@ retain the idle engine so returning to Client SBS has no model reload or compila
 stream teardown closes it. A process-wide ownership guard permits at most one Client SBS model to
 be compiling or GPU-resident, including during context recovery and deferred native teardown.
 
-All six public contracts are packed Float32 NHWC RGB `[1, H, W, 3]` to packed Float32 BHWC depth
+All eleven public contracts are packed Float32 NHWC RGB `[1, H, W, 3]` to packed Float32 BHWC depth
 `[1, H, W, 1]` in shared GL buffers. DA-V2 dimensions are divisible by its 14-pixel patch size and
 use 58,604, 53,900, and 54,684 pixels. Their patch grids are `23 x 13`, `25 x 11`, and `31 x 9`;
 including CLS, they produce 300, 276, and 280 exactly C4-aligned tokens. Static specialization folds
@@ -178,12 +197,27 @@ resize targets, then use guarded FP16 storage for the large convolution weights.
 Float32. They deliberately use `352 x 192`, `384 x 160`, and `448 x 128` rather than DA-V2's
 14-aligned dimensions.
 
-After model selection, both families use the identical native path: direct full-frame GLES resize,
-packed Float32 GL input, LiteRT OpenCL inference, packed Float32 GL depth output, and GLES
-depth/profile/reprojection. The packaged models insert `DEQUANTIZE` nodes between FP16-stored
+DepthART uses one official relative-depth S448 checkpoint exported into two static graphs. Its five
+SelectiveScan sites are expressed as exact associative prefix scans using only builtin operators;
+ImageNet normalization is baked into each graph. The first scan block's LayerNorm is algebraically
+rescaled by four with epsilon rescaled by sixteen so low variance remains a normal binary16 value
+on Adreno. The other four LayerNorm blocks are untouched. The corrected graphs contain 2231 and
+2371 serialized operations. The exact pre-stabilization inputs, final hashes, and guarded
+reproduction commands are recorded in `tools/model-sources/README.md`.
+
+ZipDepth uses the original `base` checkpoint and learned convex upsampler, not `base_npu`. Its exact
+tail is lowered to standard operators, one grouped convolution is densified, and its global-context
+weighted reduction uses an algebraically equivalent 1024x/1024x scale to avoid Adreno FP16
+flush-to-zero. Every graph has 163 operations. Embedded ImageNet normalization consumes the shared
+raw `[0,1]` RGB input, and the output is nonnegative high-is-near relative inverse depth.
+
+After model selection, all four families use the identical native path: direct full-frame GLES resize
+for landscape sources (reflected aspect-fit for portrait), packed Float32 GL input, LiteRT OpenCL
+inference, packed Float32 GL depth output, and GLES depth/profile/reprojection. The packaged models
+insert `DEQUANTIZE` nodes between FP16-stored
 weights and the unchanged Float32 graph contract; the GPU delegate can fold those constants into
-its internal representation. Both use `AUTOMATIC_FP16` compute and report
-`LITERT_OPENCL_FP16_GL_IO`. Neither family uses a CPU tensor copy or a separate inference backend.
+its internal representation. All use `AUTOMATIC_FP16` compute and report
+`LITERT_OPENCL_FP16_GL_IO`. No family uses a CPU tensor copy or a separate inference backend.
 MiDaS similarly grows from a 138-operation core to 234 serialized operators through 96 constant
 dequantizations. Initialization still rejects any packaged graph that is not completely delegated.
 
@@ -247,21 +281,37 @@ with automatic internal storage were 16.84–21.06 ms for `352 x 192`, 15.68–1
 17.17–21.55 ms, 15.94–16.81 ms, and 15.59–16.74 ms. The previous 10.79–18.37 ms measurement belongs
 only to the retired `256 x 256` graph and is historical.
 
+The corrected experimental DepthART graphs also pass isolated Galaxy XR validation: each is fully
+delegated in one OpenCL partition, retains CL/GL interop, and returns finite structured output.
+With 20 discarded warm-ups and 100 low-priority measured invocations at thermal status 0, the
+`672 x 384` graph measured 27.760 ms median / 28.028 ms p95 LiteRT wall and 28.385 / 28.740 ms
+invoke-to-output-ready; `928 x 384` measured 38.258 / 38.486 ms and 38.904 / 39.149 ms. This is
+isolated model evidence, not sustained live-stream qualification. DepthART remains experimental
+until decode, high-resolution depth postprocessing/reprojection, compositor responsiveness, and
+thermal behavior are measured together. It has no dedicated 32:9 graph; 32:9 currently selects
+`928 x 384` and incurs substantial direct-resize aspect compression.
+
+The corrected original-Base ZipDepth graphs also pass isolated Galaxy XR validation with 163/163
+operations in one OpenCL partition, CL/GL interop, and finite structured output. Controlled
+low-priority LiteRT median/p95 times were 10.089/10.310 ms at `672 x 384`, 12.991/13.189 ms at `896 x 384`, and
+13.308/13.488 ms at `928 x 384`; output-ready medians were 10.670, 13.599, and 13.924 ms. These are
+isolated model results, not sustained decode/reprojection or thermal qualification.
+
 Native initialization extracts and SHA-verifies the selected complete archive entry, verifies its fixed
 tensor layouts, compiles it once, and allocates two GL input/output slot pairs from those layouts.
 Per-frame code reuses that graph and those allocations; it must never extract, resize, or recompile
 in the render loop. LiteRT performs its packed-to-internal conversion on the GPU. Production keeps
 the public renderer contract packed
 NHWC: a debug-only half4 external-buffer probe was slightly faster but reproducibly left output
-pixels unwritten after a fresh refill, so it failed completeness/parity and remains rejected. Both
+pixels unwritten after a fresh refill, so it failed completeness/parity and remains rejected. All
 families use automatic internal OpenCL storage.
 Their execution policies are included in the compiler-cache namespace. The
 renderer and inference worker
 exchange GL fences
 across shared EGL contexts; model tensors are not mapped into Java or staged through CPU memory.
 Complete one-partition OpenCL delegation is mandatory; partial delegation or CPU execution is
-initialization failure. MiDaS v2.1 Small remains an explicit user-selected A/B family, not an
-automatic failure fallback.
+initialization failure. MiDaS v2.1 Small remains an explicit user-selected A/B family; DepthART and
+ZipDepth remain explicitly labeled experimental choices. None is an automatic failure fallback.
 
 There is no production managed Java LiteRT interpreter, QNN/HTP delegate, CPU inference path, PBO
 tensor readback, or Java depth-result worker. Native initialization requires full GPU delegation
@@ -342,16 +392,29 @@ cut, and resolved once more when the new shot settles. There is no subject-lock 
 separate convergence bias. Do not reintroduce the removed strength, convergence, balance,
 movie-mode, zero-plane, or legacy shader parameters.
 
+Model output units are deliberately not part of this contract. The GPU derives outer-edge raw
+P2/P98 bounds per frame, resets or attack-fast/release-slow smooths the effective range across the
+scene, and maps it to `[0,1]` before temporal filtering and the profile's second normalized-depth
+P2/P98 stretch. That removes any fixed positive gain/offset difference between DA-V2, MiDaS,
+DepthART, and ZipDepth without per-model tuning. It does not correct reversed polarity or arbitrary
+nonlinear/time-varying remaps, so every manifest must explicitly qualify high-is-near output.
+ZipDepth passed that polarity check on all 192 evaluation frames and its tested raw range is well
+inside the Q16.16 histogram limits.
+
 The depth model never runs on the full decoded frame. DA-V2 directly bilinear-resizes the entire
-frame to the selected canonical rectangle (`322 x 182`, `350 x 154`, or `434 x 126`); MiDaS does the same for
-its selected `352 x 192`, `384 x 160`, or `448 x 128` rectangle. Neither family crops, adds square
-padding, or uses a reflected border. The matched color texture remains at the client-requested `W x
-H` output resolution for reprojection.
+frame to the selected canonical rectangle (`322 x 182`, `350 x 154`, or `434 x 126`); MiDaS does the
+same for `352 x 192`, `384 x 160`, or `448 x 128`; experimental DepthART uses `672 x 384` or
+`928 x 384`; experimental ZipDepth uses `672 x 384`, `896 x 384`, or `928 x 384`. Landscape input
+uses direct resize without crop or square padding. Portrait input uses reflected side padding and
+crops it from model output. The matched color texture remains at the client-requested `W x H`
+output resolution for reprojection.
 
 The preferred compose path solves the Bestv2 inverse field once per newly adopted depth/profile
-pair. The probe count is compiled once from the stream aspect: 19 for 16:9, 14 for 21:9, and 12 for
-32:9. These counts apply Apollo's 1.22-depth-texel spacing rule to the client's coarser canonical
-depth grids, without a per-frame branch. The pass stores small signed left- and right-eye source
+pair. The probe count is compiled once from the selected model grid. DA-V2 and MiDaS use 19 for
+16:9, 14 for 21:9, and 12 for 32:9; DepthART uses 36 with `672 x 384` and 33 with `928 x 384`;
+ZipDepth uses 36, 32, and 28 with `672 x 384`, `896 x 384`, and `928 x 384`.
+These counts apply Apollo's 1.22-depth-texel spacing rule to each canonical depth grid, without a
+per-frame branch. The pass stores small signed left- and right-eye source
 displacements in red and green of an `RG16F` map at the source-aligned depth resolution. Signed
 displacements retain more useful half-float precision than absolute normalized source coordinates,
 while linear sampling reconstructs the field at presentation resolution. Final output uses one
@@ -650,8 +713,8 @@ unset so SceneCore consumes the decoded `HardwareBuffer` dataspace, HDR transfer
 
 Client SBS is a new RGB producer after OES sampling. Apply the `SurfaceTexture` transform matrix to
 all OES samples so crop/orientation metadata is identical for the model input and matched color.
-The rectangular model input is always SDR and tonemaps PQ before DA-V2 or MiDaS inference. That does
-not require the full-resolution presentation path to become SDR.
+The rectangular model input is always SDR and tonemaps PQ before DA-V2, MiDaS, DepthART, or ZipDepth
+inference. That does not require the full-resolution presentation path to become SDR.
 
 HDR presentation is negotiated and verified at runtime:
 
@@ -696,7 +759,11 @@ requiring a pane. The main dock remains level at its fixed pose beneath the vide
 another surface must not move that dock.
 
 The contextual mode panel is anchored directly below the dock and pitches upward toward the
-viewer while leaving the dock pose unchanged. Session Settings opens to the **left** of the video;
+viewer while leaving the dock pose unchanged. When fitting mode content between its 0.52 m
+baseline and 0.90 m cap, resize both the hosted Android
+raster with `setSizeInPixels()` and the physical quad with `setSize()`. Derive both from the original
+raster/metre pair so repeated mode refreshes cannot accumulate rounding drift; retain the whole-pane
+`ScrollView` beyond the cap. Session Settings opens to the **left** of the video;
 its inner edge remains anchored outside the video and the panel yaws inward toward the viewer's
 face. **Stats** uses the **right** side as a compact, single-column panel whose
 inner edge is anchored just beyond the video's right edge. It yaws inward around local Y so its
@@ -763,8 +830,8 @@ cannot fit, the entire control becomes a
 full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
 make the user scroll an enum sideways. Bitrate follows the same direct-manipulation rule with its
 six-rung connected segmented ladder; do not regress it to an inline slider or bandwidth meter.
-The Client SBS model is selected from the same kind of two-button group inside its existing Options
-row, without opening another panel. Raw SBS uses an equivalent direct two-button **Full / Half**
+The Client SBS model is selected from the same kind of connected choice group inside its existing
+Options row, without opening another panel. Raw SBS uses an equivalent direct two-button **Full / Half**
 group labeled **Per-Eye Resolution**; it also shows the derived encoded-per-eye and packed-stream
 dimensions so the choice is visible rather than merely numeric. Tapping the running application card resumes it directly; a
 compact close button in its top-right corner ends the session. More stays in the bottom-right and is
@@ -920,17 +987,20 @@ For every mode/surface change, test:
   reconnects. Any other staged edits must be
   committed in the same atomic record before that automatic Activity recreation.
 - Normal and Host SBS remain direct and work when Client SBS initialization fails.
-- Test both selectable model families across all six fixed-shape aspect graphs on Galaxy XR: the
+- Test all four selectable model families across all eleven fixed-shape graphs on Galaxy XR: the
   three canonical DA-V2 entries from
   `client-sbs-dav2-models.tar.xz` and the three MiDaS entries from
-  `client-sbs-midas-models.tar.xz`. Both
+  `client-sbs-midas-models.tar.xz`, plus the two experimental DepthART entries from
+  `client-sbs-depthart-models.tar.xz` and three original-Base ZipDepth entries from
+  `client-sbs-zipdepth-models.tar.xz`. All four
   families must report
   `LITERT_OPENCL_FP16_GL_IO`. The smoke test enforces
   `LiteRtCompiledModelIsFullyAccelerated() == true`; confirm exactly one OpenCL partition from the
   accompanying LiteRT delegate log, together with OpenCL/OpenGL interoperability, the expected
   fixed tensor layouts, and finite non-flat depth. Every DA-V2 graph must retain 683/683 core
-  coverage; record the actual delegated/total
-  count for each MiDaS graph rather than assuming it. Record
+  coverage; MiDaS must retain its complete 234-operation graph, and corrected DepthART must retain
+  2231/2231 at `672 x 384` and 2371/2371 at `928 x 384`; every ZipDepth graph must retain 163/163.
+  Record
   archive extraction/SHA verification, compile/init, and warm invocation latency for every
   logical model.
 - DA-V2 acceptance requires the edge-rich CPU-golden fixture; the old smooth gradient is not a
@@ -944,12 +1014,22 @@ For every mode/surface change, test:
   output. Controlled LiteRT median/p95 times are 10.293/10.473 ms for `352 x 192`,
   9.703/9.872 ms for `384 x 160`, and 9.430/9.593 ms for `448 x 128`. These are not end-to-end
   stream latencies; live visual and sustained-cadence testing remains required.
-- Exercise representative 16:9, 21:9, and 32:9 streams and bucket boundaries for both model
+- Both experimental DepthART graphs have passed the isolated physical-device graph gate in one
+  OpenCL partition with CL/GL interop and finite structured output. Controlled LiteRT median/p95
+  times are 27.760/28.028 ms for `672 x 384` and 38.258/38.486 ms for `928 x 384`. These are not
+  end-to-end stream or thermal results; sustained qualification remains pending.
+- All three original-Base ZipDepth graphs have passed the isolated physical-device graph gate in
+  one OpenCL partition with CL/GL interop and finite structured output. Controlled low-priority
+  LiteRT median/p95 times are 10.089/10.310 ms for `672 x 384`, 12.991/13.189 ms for `896 x 384`, and
+  13.308/13.488 ms for `928 x 384`. These are not end-to-end stream or thermal results.
+- Exercise representative 16:9, 21:9, and 32:9 streams and bucket boundaries for all four model
   families. Confirm the nearest bucket is selected directly within the active setting and that
   LiteRT is not recreated during a stable stream.
-- A/B DA-V2 and MiDaS on the same moving 16:9, 21:9, and 32:9 content. Record exact-output cadence,
-  thermals, depth-detail/pop, and visible geometry. DA-V2's 21:9 and 32:9 buckets carry -2.60% and
-  -3.125% direct-resize aspect distortion, so live visual acceptance remains required.
+- A/B DA-V2, MiDaS, experimental DepthART, and experimental ZipDepth on the same moving 16:9, 21:9,
+  and 32:9 content.
+  Record exact-output cadence, thermals, depth-detail/pop, and visible geometry. DA-V2's 21:9 and
+  32:9 buckets carry -2.60% and -3.125% direct-resize aspect distortion; DepthART has no dedicated
+  32:9 graph and routes it to `928 x 384`. Both cases require live visual acceptance.
 - Left/right eyes are not swapped and the packed split is centered exactly.
 - HDR input shows either verified preserved HDR with a high-precision target or the explicit
   BT.709/sRGB tonemap path; SDR shows BT.709/SDR. Direct modes clear Client SBS metadata.

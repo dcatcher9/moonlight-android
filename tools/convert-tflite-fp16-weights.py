@@ -28,15 +28,26 @@ from typing import Iterable
 
 import flatbuffers
 import numpy as np
-import tensorflow as tf
-from tensorflow.lite.python import schema_py_generated as schema
-from tensorflow.lite.python.interpreter import OpResolverType
+
+try:
+    import tensorflow as tf
+    from tensorflow.lite.python import schema_py_generated as schema
+    from tensorflow.lite.python.interpreter import OpResolverType
+
+    Interpreter = tf.lite.Interpreter
+except ModuleNotFoundError:
+    # LiteRT ships the same generated TFLite schema and interpreter without the
+    # much larger TensorFlow package. This keeps the standalone weight packer
+    # usable in the model-conversion environment used by the XR client.
+    from ai_edge_litert import schema_py_generated as schema
+    from ai_edge_litert.interpreter import Interpreter, OpResolverType
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MINIMUM_BUFFER_BYTES = 1024
 MINIMUM_CORRELATION = 0.995
 MAXIMUM_NORMALIZED_RMSE = 0.03
+MAXIMUM_AFFINE_NORMALIZED_RMSE = 0.03
 
 
 class WeightConversionError(RuntimeError):
@@ -293,7 +304,7 @@ def _make_validation_input(shape: Iterable[int]) -> np.ndarray:
 
 
 def _run_cpu(path: Path, sample: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    interpreter = tf.lite.Interpreter(
+    interpreter = Interpreter(
         model_path=str(path),
         num_threads=1,
         experimental_op_resolver_type=OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES,
@@ -328,7 +339,11 @@ def _run_cpu(path: Path, sample: np.ndarray | None = None) -> tuple[np.ndarray, 
     return sample, output
 
 
-def validate_cpu_parity(source: Path, candidate: Path) -> dict[str, float]:
+def validate_cpu_parity(
+    source: Path,
+    candidate: Path,
+    allow_affine_output: bool = False,
+) -> dict[str, float]:
     sample, reference = _run_cpu(source)
     _, converted = _run_cpu(candidate, sample)
     if converted.shape != reference.shape:
@@ -344,17 +359,53 @@ def validate_cpu_parity(source: Path, candidate: Path) -> dict[str, float]:
     normalized_rmse = rmse / max(reference_range, 1.0e-12)
     correlation = float(np.corrcoef(reference64, converted64)[0, 1])
     max_absolute_error = float(np.max(np.abs(difference)))
-    if not np.isfinite([normalized_rmse, correlation, max_absolute_error]).all():
+
+    # Relative-depth models are consumed only after per-frame affine
+    # normalization. FP16 weights can shift their arbitrary output scale and
+    # offset while preserving the actual depth ordering. Keep the stricter raw
+    # check as the default, but permit an explicit affine-invariant check for
+    # those graphs.
+    converted_centered = converted64 - float(np.mean(converted64))
+    reference_centered = reference64 - float(np.mean(reference64))
+    converted_energy = float(np.dot(converted_centered, converted_centered))
+    if converted_energy <= 1.0e-24:
+        raise WeightConversionError("Converted CPU output has no usable variance")
+    affine_scale = float(
+        np.dot(converted_centered, reference_centered) / converted_energy
+    )
+    affine_offset = float(np.mean(reference64) - affine_scale * np.mean(converted64))
+    affine_difference = affine_scale * converted64 + affine_offset - reference64
+    affine_rmse = float(np.sqrt(np.mean(np.square(affine_difference))))
+    affine_normalized_rmse = affine_rmse / max(reference_range, 1.0e-12)
+
+    metrics = [
+        normalized_rmse,
+        correlation,
+        max_absolute_error,
+        affine_scale,
+        affine_offset,
+        affine_normalized_rmse,
+    ]
+    if not np.isfinite(metrics).all():
         raise WeightConversionError("CPU parity metrics contain non-finite values")
-    if correlation < MINIMUM_CORRELATION or normalized_rmse > MAXIMUM_NORMALIZED_RMSE:
+    parity_error = (
+        affine_normalized_rmse > MAXIMUM_AFFINE_NORMALIZED_RMSE
+        if allow_affine_output
+        else normalized_rmse > MAXIMUM_NORMALIZED_RMSE
+    )
+    if correlation < MINIMUM_CORRELATION or parity_error:
         raise WeightConversionError(
             "FP16 weight CPU parity failed: "
             f"correlation={correlation:.9f}, normalized_rmse={normalized_rmse:.9f}, "
+            f"affine_normalized_rmse={affine_normalized_rmse:.9f}, "
             f"max_abs={max_absolute_error:.9f}"
         )
     return {
         "correlation": correlation,
         "normalized_rmse": normalized_rmse,
+        "affine_normalized_rmse": affine_normalized_rmse,
+        "affine_scale": affine_scale,
+        "affine_offset": affine_offset,
         "max_absolute_error": max_absolute_error,
     }
 
@@ -364,6 +415,7 @@ def convert_file(
     output: Path,
     expected_source_sha256: str | None,
     minimum_buffer_bytes: int,
+    allow_affine_output: bool = False,
 ) -> tuple[dict[str, int], dict[str, float]]:
     source = source.resolve()
     output = output.resolve()
@@ -389,7 +441,11 @@ def convert_file(
         reparsed = load_model(temporary_output)
         if _public_contract(reparsed) != _public_contract(load_model(source)):
             raise WeightConversionError("Serialized candidate changed the public contract")
-        parity = validate_cpu_parity(source, temporary_output)
+        parity = validate_cpu_parity(
+            source,
+            temporary_output,
+            allow_affine_output=allow_affine_output,
+        )
         os.replace(temporary_output, output)
     finally:
         temporary_output.unlink(missing_ok=True)
@@ -400,6 +456,7 @@ def convert_file(
         f"saved={conversion['weight_bytes_saved']} bytes "
         f"correlation={parity['correlation']:.9f} "
         f"nrmse={parity['normalized_rmse']:.9f} "
+        f"affine_nrmse={parity['affine_normalized_rmse']:.9f} "
         f"max_abs={parity['max_absolute_error']:.9f} "
         f"sha256={sha256(output)}",
         flush=True,
@@ -420,6 +477,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_MINIMUM_BUFFER_BYTES,
     )
+    parser.add_argument(
+        "--allow-affine-output-parity",
+        action="store_true",
+        help=(
+            "validate after optimal scale/offset alignment; only use for "
+            "relative-depth outputs that are normalized per frame"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -430,6 +495,7 @@ def main() -> None:
         args.output,
         args.expected_source_sha256,
         args.minimum_buffer_bytes,
+        allow_affine_output=args.allow_affine_output_parity,
     )
 
 

@@ -64,6 +64,74 @@ public class ClientSbsModelManifestTest {
     }
 
     @Test
+    public void depthArtS448SelectsNearestShort384Bucket() {
+        assertSame(ClientSbsModelManifest.DEPTHART_S448_STATIC_16_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.DEPTHART_S448_FP16_ID, 16.0 / 9.0));
+        assertSame(ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.DEPTHART_S448_FP16_ID, 21.0 / 9.0));
+        assertSame(ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.DEPTHART_S448_FP16_ID, 32.0 / 9.0));
+
+        assertDepthArtManifest(
+                ClientSbsModelManifest.DEPTHART_S448_STATIC_16_9,
+                "depthart-s448-static-672x384",
+                "depthart-s448-static-672x384-fp16weights.tflite.model",
+                "3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b",
+                672, 384);
+        assertDepthArtManifest(
+                ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
+                "depthart-s448-static-928x384",
+                "depthart-s448-static-928x384-fp16weights.tflite.model",
+                "d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2",
+                928, 384);
+    }
+
+    @Test
+    public void zipDepthBaseSelectsNearestShort384Bucket() {
+        assertSame(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, 16.0 / 9.0));
+        assertSame(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, 21.0 / 9.0));
+        assertSame(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, 32.0 / 9.0));
+
+        assertSame(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, 2.02));
+        assertSame(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, 2.03));
+        assertSame(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9,
+                ClientSbsModelManifest.forStream(
+                        ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, 2.38));
+
+        assertZipDepthManifest(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                "zipdepth-base-static-672x384",
+                "zipdepth-base-static-672x384-fp16weights.tflite.model",
+                "6296d5c2e4f857fd551d854ebf4dd2ab2462c0d7372d526bf0a7463718b8b6d1",
+                672, 384);
+        assertZipDepthManifest(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                "zipdepth-base-static-896x384",
+                "zipdepth-base-static-896x384-fp16weights.tflite.model",
+                "31467ab0cd187b74c65b3b20f4850973309d120519b587610e3dd3e27b72df4a",
+                896, 384);
+        assertZipDepthManifest(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9,
+                "zipdepth-base-static-928x384",
+                "zipdepth-base-static-928x384-fp16weights.tflite.model",
+                "169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc",
+                928, 384);
+    }
+
+    @Test
     public void depthAnythingSelectsNaturalC4BucketForEveryAspect() {
         ClientSbsModelManifest model16By9 =
                 ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_16_9;
@@ -225,6 +293,57 @@ public class ClientSbsModelManifestTest {
                 manifest.getGpuExecutionPolicy().getBackendId());
         assertEquals("opencl-auto-v2",
                 manifest.getGpuExecutionPolicy().getCompilerCacheSuffix());
+        manifest.validateFloatGpuRendererContract();
+    }
+
+    private static void assertDepthArtManifest(ClientSbsModelManifest manifest,
+                                               String id,
+                                               String assetName,
+                                               String assetSha256,
+                                               int width,
+                                               int height) {
+        assertEquals(id, manifest.getId());
+        assertEquals("client-sbs-depthart-models.tar.xz",
+                manifest.getModelArchiveAssetName());
+        assertEquals(assetName, manifest.getAssetName());
+        assertEquals(assetSha256, manifest.getAssetSha256());
+        assertArrayEquals(new int[] {1, height, width, 3},
+                manifest.getInputTensor().getShape());
+        assertArrayEquals(new int[] {1, height, width, 1},
+                manifest.getOutputTensor().getShape());
+        assertEquals("image", manifest.getInputTensor().getName());
+        assertEquals("depth", manifest.getOutputTensor().getName());
+        assertTrue(manifest.usesDirectFullFrameResize());
+        assertFalse(manifest.hasDynamicSpatialShape());
+        assertSame(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
+                manifest.getGpuExecutionPolicy());
+        manifest.validateFloatGpuRendererContract();
+    }
+
+    private static void assertZipDepthManifest(ClientSbsModelManifest manifest,
+                                               String id,
+                                               String assetName,
+                                               String assetSha256,
+                                               int width,
+                                               int height) {
+        assertEquals(id, manifest.getId());
+        assertEquals("client-sbs-zipdepth-models.tar.xz",
+                manifest.getModelArchiveAssetName());
+        assertEquals(assetName, manifest.getAssetName());
+        assertEquals(assetSha256, manifest.getAssetSha256());
+        assertArrayEquals(new int[] {1, height, width, 3},
+                manifest.getInputTensor().getShape());
+        assertArrayEquals(new int[] {1, height, width, 1},
+                manifest.getOutputTensor().getShape());
+        assertEquals("image", manifest.getInputTensor().getName());
+        assertEquals("depth", manifest.getOutputTensor().getName());
+        assertEquals(width * height * 3 * Float.BYTES, manifest.getInputByteSize());
+        assertEquals(width * height * Float.BYTES, manifest.getOutputByteSize());
+        assertTrue(manifest.usesDirectFullFrameResize());
+        assertFalse(manifest.hasDynamicSpatialShape());
+        assertSame(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
+                manifest.getGpuExecutionPolicy());
+        assertFalse(manifest.getGpuExecutionPolicy().forcesFp32Compute());
         manifest.validateFloatGpuRendererContract();
     }
 

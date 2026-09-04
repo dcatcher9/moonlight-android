@@ -48,4 +48,41 @@ public final class PreferenceConfigurationClientSbsModelMigrationTest {
                 preferences.getString(
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING, null));
     }
+
+    @Test
+    public void depthArtS448Fp16IsPreservedAsASelectableModel() {
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16)
+                .commit());
+
+        PreferenceConfiguration effective =
+                PreferenceConfiguration.readPreferences(context, preferences);
+
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
+                effective.clientSbsDepthModelId);
+    }
+
+    @Test
+    public void zipDepthBaseFp16IsPreservedAsASelectableModel() {
+        assertTrue(preferences.edit()
+                .putString(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16)
+                .commit());
+
+        PreferenceConfiguration effective =
+                PreferenceConfiguration.readPreferences(context, preferences);
+
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
+                effective.clientSbsDepthModelId);
+    }
+
+    @Test
+    public void absentGlobalModelUsesCanonicalMidasDefault() {
+        PreferenceConfiguration effective =
+                PreferenceConfiguration.readPreferences(context, preferences);
+
+        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                effective.clientSbsDepthModelId);
+    }
 }

@@ -194,6 +194,10 @@ public class PreferenceConfiguration {
     private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350 =
             "depth-anything-v2-small-static-350";
     public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
+    public static final String CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16 =
+            "depthart-s448-fp16";
+    public static final String CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16 =
+            "zipdepth-base-fp16";
     private static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
             CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
 
@@ -211,7 +215,9 @@ public class PreferenceConfiguration {
             return CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
         }
         if (CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(modelId)
-                || CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(modelId)) {
+                || CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(modelId)
+                || CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(modelId)
+                || CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(modelId)) {
             return modelId;
         }
         return DEFAULT_CLIENT_SBS_DEPTH_MODEL;

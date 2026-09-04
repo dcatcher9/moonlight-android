@@ -168,6 +168,15 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void modeOptionsHeightExpandsAndShrinksWithinBounds() {
+        assertEquals(500,
+                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                        500, 300, 0.52f, 0.90f));
+        assertEquals(520,
+                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                        600, 300, 0.52f, 0.90f));
+        assertEquals(300,
+                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                        200, 300, 0.52f, 0.90f));
         assertEquals(0.8667f,
                 XrStreamPresenter.calculateModeOptionsHeightMeters(
                         0.52f, 300, 500,

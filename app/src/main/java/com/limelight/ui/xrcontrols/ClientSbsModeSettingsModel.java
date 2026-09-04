@@ -1,5 +1,7 @@
 package com.limelight.ui.xrcontrols;
 
+import com.limelight.utils.ClientSbsPipelineContract;
+
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -46,25 +48,13 @@ public final class ClientSbsModeSettingsModel {
     }
 
     /** Select the same immutable aspect bucket that will be compiled when the stream reconnects. */
-    public static String selectBucket(boolean midas, int streamWidth, int streamHeight) {
+    public static String selectBucket(String modelId, int streamWidth, int streamHeight) {
         if (streamWidth <= 0 || streamHeight <= 0) {
             throw new IllegalArgumentException("stream dimensions must be positive");
         }
-        int[][] buckets = midas
-                ? new int[][] {{352, 192}, {384, 160}, {448, 128}}
-                : new int[][] {{322, 182}, {350, 154}, {434, 126}};
-        double streamAspect = (double) streamWidth / streamHeight;
-        int[] best = buckets[0];
-        double bestError = Double.POSITIVE_INFINITY;
-        for (int[] candidate : buckets) {
-            double aspect = (double) candidate[0] / candidate[1];
-            double error = Math.abs(Math.log(aspect / streamAspect));
-            if (error < bestError) {
-                best = candidate;
-                bestError = error;
-            }
-        }
-        return best[0] + " x " + best[1];
+        ClientSbsPipelineContract contract = ClientSbsPipelineContract.forStream(
+                modelId, (double) streamWidth / streamHeight);
+        return contract.getModelInputWidth() + " x " + contract.getModelInputHeight();
     }
 
     private static String requireText(String value, String name) {

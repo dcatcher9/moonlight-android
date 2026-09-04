@@ -82,7 +82,7 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.InlineListPreference
-            android:defaultValue="depth-anything-v2-small-static-performance"
+            android:defaultValue="midas-v2-float"
             android:entries="@array/xr_client_sbs_depth_model_names"
             android:entryValues="@array/xr_client_sbs_depth_model_values"
             android:key="list_client_sbs_depth_model"

@@ -4,6 +4,9 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.JsonParseException;
 import com.google.gson.annotations.SerializedName;
 
@@ -554,6 +557,72 @@ public final class SessionSettingsStore {
     }
 
     /**
+     * Removes one effective mode override from every current-session record.
+     *
+     * <p>This is intentionally narrower than clearing a mode or session. It is used by explicit
+     * device A/B helpers after changing a global default, so an existing per-PC session cannot
+     * silently keep the old value. The matching legacy shared override is removed too because it
+     * participates in the same effective mode preference overlay. Unrelated settings, resume
+     * metadata, unknown JSON fields, malformed records, and other schema versions are preserved.</p>
+     */
+    public boolean clearModeValueOverridesForAllCurrentSessions(PresenterMode mode, String key) {
+        Objects.requireNonNull(mode, "mode");
+        validateSettingKey(key);
+        synchronized (WRITE_LOCK) {
+            SharedPreferences.Editor editor = null;
+            for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
+                if (!entry.getKey().startsWith(RECORD_PREFIX)
+                        || !(entry.getValue() instanceof String)) {
+                    continue;
+                }
+
+                JsonObject root;
+                try {
+                    JsonElement parsed = JsonParser.parseString((String) entry.getValue());
+                    if (!parsed.isJsonObject()) {
+                        continue;
+                    }
+                    root = parsed.getAsJsonObject();
+                    JsonElement schema = root.get("schema");
+                    if (schema == null || !schema.isJsonPrimitive()
+                            || !schema.getAsJsonPrimitive().isNumber()
+                            || schema.getAsInt() != SCHEMA_VERSION) {
+                        continue;
+                    }
+                    if (fromDto(GSON.fromJson(root, RecordDto.class)) == null) {
+                        continue;
+                    }
+                } catch (JsonParseException | IllegalStateException | NumberFormatException ignored) {
+                    continue;
+                }
+
+                boolean changed = removeJsonMapValue(root, "shared", key);
+                JsonElement modesElement = root.get("modes");
+                if (modesElement != null && modesElement.isJsonObject()) {
+                    JsonObject modes = modesElement.getAsJsonObject();
+                    JsonElement modeElement = modes.get(mode.name());
+                    if (modeElement != null && modeElement.isJsonObject()) {
+                        JsonObject modeValues = modeElement.getAsJsonObject();
+                        if (modeValues.remove(key) != null) {
+                            changed = true;
+                            if (modeValues.size() == 0) {
+                                modes.remove(mode.name());
+                            }
+                        }
+                    }
+                }
+                if (changed) {
+                    if (editor == null) {
+                        editor = preferences.edit();
+                    }
+                    editor.putString(entry.getKey(), GSON.toJson(root));
+                }
+            }
+            return editor == null || editor.commit();
+        }
+    }
+
+    /**
      * Starts a genuinely new host session, replacing any previous record for this PC. New sessions
      * have no overrides and always start in Normal mode.
      */
@@ -746,6 +815,12 @@ public final class SessionSettingsStore {
 
     private static String recordKey(PcIdentity pc) {
         return RECORD_PREFIX + pc.storageId;
+    }
+
+    private static boolean removeJsonMapValue(JsonObject root, String mapName, String key) {
+        JsonElement mapElement = root.get(mapName);
+        return mapElement != null && mapElement.isJsonObject()
+                && mapElement.getAsJsonObject().remove(key) != null;
     }
 
     private static void applyChanges(Map<String, Object> target, Map<String, Object> changes) {
