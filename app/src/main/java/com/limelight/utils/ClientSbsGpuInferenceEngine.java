@@ -7,20 +7,8 @@ import android.os.ParcelFileDescriptor;
 import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
-import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
-
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -35,6 +23,27 @@ import java.util.concurrent.TimeUnit;
  */
 final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     static final int BUFFER_SLOT_COUNT = 2;
+
+    enum RunDisposition {
+        INFER(1),
+        REUSE(2);
+
+        final int wireValue;
+
+        RunDisposition(int wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        static RunDisposition fromNativeValue(int value) {
+            for (RunDisposition disposition : values()) {
+                if (disposition.wireValue == value) {
+                    return disposition;
+                }
+            }
+            throw new IllegalStateException(
+                    "Unknown native Client SBS run disposition: " + value);
+        }
+    }
 
     enum GpuPriorityHint {
         LOW(1, "Low"),
@@ -59,18 +68,13 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     }
 
     private static final boolean NATIVE_BRIDGE_AVAILABLE = loadNativeBridge();
-    private static final Object VERIFIED_MODELS_LOCK = new Object();
-    private static final Set<String> VERIFIED_MODELS = new HashSet<>();
     private static final Object DEFERRED_CLOSES_LOCK = new Object();
     private static final Set<ClientSbsGpuInferenceEngine> DEFERRED_CLOSES = new HashSet<>();
     /** Process-wide guard: compiling a replacement model must never overlap the current one. */
     private static final ProcessModelSlot PROCESS_MODEL_SLOT = new ProcessModelSlot();
     private static final long PROCESS_MODEL_SLOT_WAIT_SECONDS = 10L;
     private static final long PROCESS_MODEL_SLOT_RETRY_MILLIS = 250L;
-    private static final int MODEL_IO_BUFFER_BYTES = 64 * 1024;
-    private static final String PRODUCTION_MODEL_CACHE = "client-sbs-model-assets";
     private static final String PRODUCTION_COMPILER_CACHE = "client-sbs-litert-gpu";
-    private static final String BENCHMARK_MODEL_CACHE = "client-sbs-benchmark-model-assets";
     private static final String BENCHMARK_COMPILER_CACHE = "client-sbs-benchmark-litert-gpu";
     private static final String BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE =
             "client-sbs-benchmark-litert-gpu-external-phwc4";
@@ -253,6 +257,10 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
 
     /** Must be called once on the inference worker thread. */
     void initialize(Context context, ClientSbsModelManifest manifest) throws IOException {
+        if (!isZipDepthManifest(manifest)) {
+            throw new IllegalArgumentException(
+                    "Production Client SBS inference supports only ZipDepth Base");
+        }
         initialize(context, context.getAssets(), manifest, false, false);
     }
 
@@ -317,7 +325,8 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         }
 
         long verificationStartedNs = System.nanoTime();
-        if (!digestMatches(canonicalModel, manifest.getAssetSha256())) {
+        if (!ClientSbsModelAssetCache.digestMatches(
+                canonicalModel, manifest.getAssetSha256())) {
             throw new IOException("Client SBS checkpoint SHA-256 mismatch: " + canonicalModel);
         }
         lastAssetVerificationNanos = Math.max(0L,
@@ -339,12 +348,14 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         }
         manifest.validateFloatGpuRendererContract();
         long verificationStartedNs = System.nanoTime();
-        String modelCacheName = benchmarkCache ? BENCHMARK_MODEL_CACHE : PRODUCTION_MODEL_CACHE;
+        String modelCacheName = benchmarkCache
+                ? ClientSbsModelAssetCache.BENCHMARK_MODEL_CACHE
+                : ClientSbsModelAssetCache.PRODUCTION_MODEL_CACHE;
         String compilerCacheName = directExternalPhwc4Probe
                 ? BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE
                 : (benchmarkCache ? BENCHMARK_COMPILER_CACHE : PRODUCTION_COMPILER_CACHE);
-        File modelFile = prepareVerifiedModelFile(
-                runtimeContext, modelAssets, manifest, modelCacheName);
+        File modelFile = ClientSbsModelAssetCache.prepareVerifiedModelFile(
+                runtimeContext, modelAssets, manifest, modelCacheName, true);
         lastAssetVerificationNanos = Math.max(0L,
                 System.nanoTime() - verificationStartedNs);
 
@@ -383,9 +394,14 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                                          String compilerCacheName,
                                          boolean enableDiagnosticProfiling,
                                          boolean directExternalPhwc4Probe) throws IOException {
-        File cacheRoot = new File(runtimeContext.getCodeCacheDir(), compilerCacheName);
+        File codeCacheRoot = runtimeContext.getCodeCacheDir();
+        File cacheRoot = new File(codeCacheRoot, compilerCacheName);
         // Compute precision is part of the key, so a model can never reuse an artifact compiled
         // under a different policy. Both policies let LiteRT choose internal tensor storage.
+        if (PRODUCTION_COMPILER_CACHE.equals(compilerCacheName)
+                && isZipDepthManifest(manifest)) {
+            pruneRetiredProductionCompilerCaches(codeCacheRoot, cacheRoot);
+        }
         File cacheDirectory = new File(cacheRoot, compilerCacheDirectoryName(manifest));
         if (!cacheDirectory.isDirectory() && !cacheDirectory.mkdirs()) {
             LimeLog.warning("Unable to create LiteRT GPU cache directory");
@@ -509,144 +525,13 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                 4 * Short.BYTES);
     }
 
-    /**
-     * Extracts only the selected full graph from its solid model-family TAR.XZ into a hash-named
-     * code-cache file and verifies it before native LiteRT maps it.
-     */
-    private static File prepareVerifiedModelFile(Context storageContext,
-                                                 AssetManager modelAssets,
-                                                 ClientSbsModelManifest manifest,
-                                                 String modelCacheName)
-            throws IOException {
-        String verificationKey = manifest.getAssetName() + ':' + manifest.getAssetSha256();
-        synchronized (VERIFIED_MODELS_LOCK) {
-            File modelDirectory = new File(storageContext.getCodeCacheDir(), modelCacheName);
-            if (!modelDirectory.isDirectory() && !modelDirectory.mkdirs()
-                    && !modelDirectory.isDirectory()) {
-                throw new IOException("Unable to create Client SBS model staging directory");
-            }
-            String safeId = manifest.getId().replaceAll("[^A-Za-z0-9._-]", "_");
-            File verifiedFile = new File(modelDirectory, safeId + '-'
-                    + manifest.getAssetSha256().substring(0, 16) + ".tflite");
-            pruneStagedModelDirectory(modelDirectory, verifiedFile);
-
-            if (VERIFIED_MODELS.contains(verificationKey) && verifiedFile.isFile()) {
-                return verifiedFile;
-            }
-            if (verifiedFile.isFile()
-                    && digestMatches(verifiedFile, manifest.getAssetSha256())) {
-                VERIFIED_MODELS.add(verificationKey);
-                return verifiedFile;
-            }
-            if (verifiedFile.exists() && !verifiedFile.delete()) {
-                throw new IOException("Unable to replace corrupt Client SBS staged model");
-            }
-
-            File temporaryFile = File.createTempFile(safeId + '-', ".partial", modelDirectory);
-            boolean published = false;
-            MessageDigest digest = newSha256Digest();
-            try {
-                try (FileOutputStream fileOutput = new FileOutputStream(temporaryFile);
-                     BufferedOutputStream output = new BufferedOutputStream(
-                             fileOutput, MODEL_IO_BUFFER_BYTES)) {
-                    extractArchivedModel(modelAssets, manifest, output, digest);
-                    output.flush();
-                    fileOutput.getFD().sync();
-                }
-                String actual = toHex(digest.digest());
-                if (!manifest.getAssetSha256().equals(actual)) {
-                    throw new IOException("Client SBS model " + manifest.getId()
-                            + " SHA-256 mismatch: expected " + manifest.getAssetSha256()
-                            + ", got " + actual);
-                }
-                if (!temporaryFile.renameTo(verifiedFile)) {
-                    throw new IOException("Unable to publish verified Client SBS model file");
-                }
-                published = true;
-            } finally {
-                if (!published && temporaryFile.exists() && !temporaryFile.delete()) {
-                    LimeLog.warning("Unable to remove incomplete Client SBS model staging file");
-                }
-            }
-            VERIFIED_MODELS.add(verificationKey);
-            return verifiedFile;
-        }
-    }
-
-    private static void extractArchivedModel(AssetManager modelAssets,
-                                             ClientSbsModelManifest manifest,
-                                             BufferedOutputStream output,
-                                             MessageDigest digest) throws IOException {
-        InputStream archiveInput = modelAssets.open(
-                manifest.getModelArchiveAssetName(), AssetManager.ACCESS_STREAMING);
-        extractArchivedModel(archiveInput, manifest.getAssetName(), output, digest);
-    }
-
-    /** Package-private deterministic core used by JVM tests with a synthetic family archive. */
-    static void extractArchivedModel(InputStream archiveInput,
-                                     String targetAsset,
-                                     OutputStream output,
-                                     MessageDigest digest) throws IOException {
-        boolean targetFound = false;
-        try (BufferedInputStream bufferedInput = new BufferedInputStream(
-                     archiveInput, MODEL_IO_BUFFER_BYTES);
-             XZCompressorInputStream decompressed = new XZCompressorInputStream(bufferedInput);
-             TarArchiveInputStream archive = new TarArchiveInputStream(decompressed)) {
-            TarArchiveEntry entry;
-            while ((entry = archive.getNextEntry()) != null) {
-                if (entry.isFile() && targetAsset.equals(entry.getName())) {
-                    copyArchiveEntry(archive, output, digest);
-                    targetFound = true;
-                    break;
-                }
-            }
-        }
-
-        if (!targetFound) {
-            throw new IOException("Client SBS model archive is missing " + targetAsset);
-        }
-    }
-
-    private static void copyArchiveEntry(InputStream input, OutputStream output,
-                                         MessageDigest digest) throws IOException {
-        byte[] chunk = new byte[MODEL_IO_BUFFER_BYTES];
-        int count;
-        while ((count = input.read(chunk)) != -1) {
-            if (digest != null) {
-                digest.update(chunk, 0, count);
-            }
-            output.write(chunk, 0, count);
-        }
-    }
-
-    /** Keeps code-cache bounded to the selected verified graph and removes crash-left extracts. */
-    private static void pruneStagedModelDirectory(File modelDirectory, File selectedFile) {
-        File[] stagedFiles = modelDirectory.listFiles();
-        if (stagedFiles == null) {
-            return;
-        }
-        for (File stagedFile : stagedFiles) {
-            if (stagedFile.equals(selectedFile)) {
-                continue;
-            }
-            String name = stagedFile.getName();
-            if (stagedFile.isFile()
-                    && (name.endsWith(".partial") || name.endsWith(".tflite"))
-                    && !stagedFile.delete()) {
-                LimeLog.warning("Unable to prune stale Client SBS model cache file: " + name);
-            }
-        }
-    }
-
     /** Deletes only the dedicated benchmark namespaces after every benchmark engine is closed. */
     static boolean clearBenchmarkCaches(Context context) {
-        synchronized (VERIFIED_MODELS_LOCK) {
-            File codeCache = context.getCodeCacheDir();
-            return deleteExactCodeCacheChild(codeCache, BENCHMARK_MODEL_CACHE)
-                    && deleteExactCodeCacheChild(codeCache, BENCHMARK_COMPILER_CACHE)
-                    && deleteExactCodeCacheChild(
-                    codeCache, BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE);
-        }
+        File codeCache = context.getCodeCacheDir();
+        return ClientSbsModelAssetCache.clearBenchmarkModelCache(context)
+                && deleteExactCodeCacheChild(codeCache, BENCHMARK_COMPILER_CACHE)
+                && deleteExactCodeCacheChild(
+                codeCache, BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE);
     }
 
     private static boolean deleteExactCodeCacheChild(File codeCache, String childName) {
@@ -683,34 +568,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             }
         }
         return !entry.exists() || entry.delete();
-    }
-
-    private static boolean digestMatches(File file, String expectedSha256) throws IOException {
-        MessageDigest digest = newSha256Digest();
-        byte[] chunk = new byte[64 * 1024];
-        try (InputStream input = new FileInputStream(file)) {
-            int count;
-            while ((count = input.read(chunk)) != -1) {
-                digest.update(chunk, 0, count);
-            }
-        }
-        return expectedSha256.equals(toHex(digest.digest()));
-    }
-
-    private static MessageDigest newSha256Digest() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new AssertionError("SHA-256 is unavailable", impossible);
-        }
-    }
-
-    private static String toHex(byte[] hash) {
-        StringBuilder result = new StringBuilder(hash.length * 2);
-        for (byte value : hash) {
-            result.append(String.format(java.util.Locale.ROOT, "%02x", value & 0xFF));
-        }
-        return result.toString();
     }
 
     boolean isInitialized() {
@@ -759,6 +616,95 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
      * discarded result may reuse its output-ready fence as the slot's no-op consumption fence.</p>
      */
     long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence) {
+        return run(slotIndex, inputReadyFence, previousOutputConsumedFence,
+                false, 0, 0, 0L);
+    }
+
+    /**
+     * Removes compiler artifacts for retired production model families while retaining every
+     * ZipDepth aspect bucket. This runs only during ZipDepth initialization and only beneath the
+     * exact app-private production compiler-cache root.
+     */
+    private static void pruneRetiredProductionCompilerCaches(File codeCacheRoot, File cacheRoot) {
+        if (!cacheRoot.isDirectory()) {
+            return;
+        }
+        Set<String> retained = new HashSet<>();
+        retained.add(compilerCacheDirectoryName(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9));
+        retained.add(compilerCacheDirectoryName(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9));
+        retained.add(compilerCacheDirectoryName(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9));
+
+        try {
+            File canonicalCodeCache = codeCacheRoot.getCanonicalFile();
+            File canonicalCacheRoot = cacheRoot.getCanonicalFile();
+            if (!PRODUCTION_COMPILER_CACHE.equals(canonicalCacheRoot.getName())
+                    || !canonicalCodeCache.equals(canonicalCacheRoot.getParentFile())) {
+                LimeLog.warning("Refusing to prune Client SBS compiler cache outside code cache: "
+                        + canonicalCacheRoot);
+                return;
+            }
+            File[] entries = canonicalCacheRoot.listFiles();
+            if (entries == null) {
+                return;
+            }
+            for (File entry : entries) {
+                if (retained.contains(entry.getName())) {
+                    continue;
+                }
+                if (!deleteCacheTreeWithin(entry, canonicalCacheRoot)) {
+                    LimeLog.warning("Unable to prune retired Client SBS compiler cache: "
+                            + entry.getName());
+                }
+            }
+        }
+        catch (IOException error) {
+            LimeLog.warning("Unable to resolve Client SBS compiler cache: "
+                    + error.getMessage());
+        }
+    }
+
+    private static boolean isZipDepthManifest(ClientSbsModelManifest manifest) {
+        return manifest == ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9
+                || manifest == ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9
+                || manifest == ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9;
+    }
+
+    /** Refuses links or traversal before recursively deleting one immediate cache child. */
+    private static boolean deleteCacheTreeWithin(File entry, File canonicalRoot)
+            throws IOException {
+        File absoluteEntry = entry.getAbsoluteFile();
+        File canonicalEntry = entry.getCanonicalFile();
+        if (!absoluteEntry.equals(canonicalEntry)
+                || (!canonicalRoot.equals(canonicalEntry.getParentFile())
+                && !canonicalEntry.getAbsolutePath().startsWith(
+                canonicalRoot.getAbsolutePath() + File.separator))) {
+            return false;
+        }
+        if (canonicalEntry.isDirectory()) {
+            File[] children = canonicalEntry.listFiles();
+            if (children == null) {
+                return false;
+            }
+            for (File child : children) {
+                if (!deleteCacheTreeWithin(child, canonicalRoot)) {
+                    return false;
+                }
+            }
+        }
+        return !canonicalEntry.exists() || canonicalEntry.delete();
+    }
+
+    /**
+     * Runs one authenticated production transaction. A valid near-identical proposal may skip
+     * LiteRT, but native still consumes both transferred fences and returns a new completion fence
+     * that participates in the same per-slot ownership contract as an inferred output.
+     */
+    long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence,
+             boolean nearIdenticalCandidate, int decisionBufferId,
+             int decisionByteOffset, long decisionToken) {
         validateSlotIndex(slotIndex);
         if (!isInitialized()) {
             throw new IllegalStateException("Native GPU engine is not initialized");
@@ -767,12 +713,28 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Client SBS input-ready fence must be nonzero");
         }
+        if (nearIdenticalCandidate && (decisionBufferId == 0
+                || decisionByteOffset < 0 || (decisionByteOffset & 3) != 0
+                || decisionToken == 0L)) {
+            throw new IllegalArgumentException(
+                    "Near-identical candidate requires a decision buffer, aligned offset, and token");
+        }
         long resultFence = nativeRun(nativeHandle, slotIndex, inputReadyFence,
-                previousOutputConsumedFence);
+                previousOutputConsumedFence, nearIdenticalCandidate,
+                decisionBufferId, decisionByteOffset, decisionToken);
         if (resultFence == 0L) {
             throw new IllegalStateException(nativeGetLastError(nativeHandle));
         }
         return resultFence;
+    }
+
+    RunDisposition getLastRunDisposition(int slotIndex) {
+        validateSlotIndex(slotIndex);
+        if (!isInitialized()) {
+            throw new IllegalStateException("Native GPU engine is not initialized");
+        }
+        return RunDisposition.fromNativeValue(
+                nativeGetLastRunDisposition(nativeHandle, slotIndex));
     }
 
     /**
@@ -783,6 +745,21 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     long getLastLiteRtRunWallNanos(int slotIndex) {
         validateSlotIndex(slotIndex);
         return nativeGetLastLiteRtRunWallNanos(nativeHandle, slotIndex);
+    }
+
+    /**
+     * CPU monotonic wall time spent validating/reading the candidate's authenticated 32-byte
+     * decision record. This is zero for a run that was not a near-identical candidate.
+     */
+    long getLastNearIdenticalDecisionReadWallNanos(int slotIndex) {
+        validateSlotIndex(slotIndex);
+        return nativeGetLastNearIdenticalDecisionReadWallNanos(nativeHandle, slotIndex);
+    }
+
+    /** GPU-published reason for the most recent candidate's reuse/infer decision. */
+    int getLastNearIdenticalDecisionReason(int slotIndex) {
+        validateSlotIndex(slotIndex);
+        return nativeGetLastNearIdenticalDecisionReason(nativeHandle, slotIndex);
     }
 
     void startDiagnosticProfiler() {
@@ -962,7 +939,10 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                                                     boolean enableDiagnosticProfiling,
                                                     boolean directExternalPhwc4Probe);
     private static native long nativeRun(long handle, int slotIndex, long inputReadyFence,
-                                         long previousOutputConsumedFence);
+                                         long previousOutputConsumedFence,
+                                         boolean nearIdenticalCandidate,
+                                         int decisionBufferId, int decisionByteOffset,
+                                         long decisionToken);
     private static native int nativeGetBufferSlotCount();
     private static native int nativeGetInputBufferId(long handle, int slotIndex);
     private static native int nativeGetOutputBufferId(long handle, int slotIndex);
@@ -971,6 +951,11 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private static native int nativeGetInputPixelStrideBytes(long handle, int slotIndex);
     private static native int nativeGetOutputPixelStrideBytes(long handle, int slotIndex);
     private static native long nativeGetLastLiteRtRunWallNanos(long handle, int slotIndex);
+    private static native long nativeGetLastNearIdenticalDecisionReadWallNanos(
+            long handle, int slotIndex);
+    private static native int nativeGetLastNearIdenticalDecisionReason(
+            long handle, int slotIndex);
+    private static native int nativeGetLastRunDisposition(long handle, int slotIndex);
     private static native boolean nativeStartDiagnosticProfiler(long handle);
     private static native String nativeStopDiagnosticProfilerAndGetReport(long handle);
     private static native int nativeGetGpuPriorityHint(long handle);

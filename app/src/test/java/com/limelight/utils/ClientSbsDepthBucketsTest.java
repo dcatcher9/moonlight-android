@@ -7,9 +7,8 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
- * Pins the DA-V2/probe-grid bucket selection itself rather than trusting arithmetic done by hand.
- * Live-resize decisions compare {@link ClientSbsPipelineContract}, because MiDaS graph boundaries
- * do not match this table.
+ * Pins the retired DA-V2/probe-grid helper retained for offline candidate evaluation. Production
+ * live-resize decisions use the ZipDepth-only {@link ClientSbsPipelineContract} instead.
  */
 public class ClientSbsDepthBucketsTest {
     // Bucket aspects: 322/182, 350/154, 434/126. select() minimizes |log(bucket / source)|, so the

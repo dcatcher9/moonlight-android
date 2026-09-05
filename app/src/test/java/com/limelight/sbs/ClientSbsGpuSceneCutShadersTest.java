@@ -19,7 +19,7 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("blockTotals[lane] += blockTotals[lane + stride]"));
         assertFalse(shader.contains("atomicAdd(blockLumaSum"));
         assertTrue(shader.contains("dot(rgb, vec3(0.2126, 0.7152, 0.0722))"));
-        assertTrue(shader.contains("layout(r32ui, binding = 1)"));
+        assertTrue(shader.contains("layout(rgba32ui, binding = 1)"));
         assertTrue(shader.contains("imageStore(uCurrentLuma"));
         assertTrue(shader.contains("atomicAdd(currentBlockCount, 1u)"));
         assertTrue(shader.contains("shared uint blockOrdinalValues[256]"));
@@ -33,11 +33,97 @@ public class ClientSbsGpuSceneCutShadersTest {
     }
 
     @Test
+    public void fusedPassMeasuresNearIdenticalEvidenceAgainstCommittedTensorOnly() {
+        String shader = ClientSbsGpuSceneCutShaders.createPackAndDownsampleLuma(350, 196);
+        assertTrue(shader.contains("binding = 3) readonly buffer PreviousInputTensor"));
+        assertTrue(shader.contains("uniform int uNearIdenticalCandidate"));
+        assertTrue(shader.contains("uniform uvec2 uCurrentFrameSequence"));
+        assertTrue(shader.contains("uniform uvec2 uCurrentCapturedAtNs"));
+        assertTrue(shader.contains("nearOwnerValid == 0u"));
+        assertTrue(shader.contains("frameDelta.x <= 4u"));
+        assertTrue(shader.contains("age.x < 100000000u"));
+        assertTrue(shader.contains("if (inBounds && effectiveNearIdenticalCandidate)"));
+        assertTrue(shader.contains("memoryBarrierBuffer()"));
+        assertTrue(shader.contains("vec3 currentRgb = vec3(tensorValues[firstValue]"));
+        assertTrue(shader.contains("previousTensorValues[firstValue]"));
+        assertTrue(shader.contains("const float MEDIUM_DELTA = 0.015625"));
+        assertTrue(shader.contains("const float STRONG_DELTA = 0.2"));
+        assertTrue(shader.contains("maxDelta >= MEDIUM_DELTA"));
+        assertTrue(shader.contains("maxDelta >= STRONG_DELTA"));
+        assertTrue(shader.contains("shared uvec4 nearIdenticalTotals[256]"));
+        assertTrue(shader.contains("nearIdenticalTotals[lane] = uvec4(0u)"));
+        assertTrue(shader.contains("nearEvidence.w << 16u"));
+        assertTrue(shader.contains("uvec4(packedBlock, nearEvidence.x"));
+
+        int modelWrite = shader.indexOf("tensorValues[firstValue + 2u] = tensorRgb.b");
+        int bufferBarrier = shader.indexOf("memoryBarrierBuffer()", modelWrite);
+        int workgroupBarrier = shader.indexOf("barrier()", bufferBarrier);
+        int candidateBranch = shader.indexOf(
+                "if (inBounds && effectiveNearIdenticalCandidate)");
+        int committedRead = shader.indexOf("tensorValues[firstValue]", candidateBranch);
+        int previousRead = shader.indexOf("previousTensorValues[firstValue]", candidateBranch);
+        int branchEnd = shader.indexOf("        }", previousRead);
+        assertTrue(modelWrite >= 0 && bufferBarrier > modelWrite
+                && workgroupBarrier > bufferBarrier && candidateBranch > workgroupBarrier
+                && committedRead > candidateBranch && previousRead > committedRead
+                && branchEnd > previousRead);
+        assertFalse(shader.substring(0, candidateBranch).contains(
+                "previousTensorValues[firstValue]"));
+    }
+
+    @Test
+    public void nearIdenticalResolveValidatesExactHostBoundsAndPublishesAuthenticatedRecord() {
+        String shader = ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(350, 196);
+        assertTrue(shader.contains("layout(local_size_x = 64)"));
+        assertTrue(shader.contains("layout(rgba32ui, binding = 1)"));
+        assertTrue(shader.contains("GRID_TILE_COUNT = GRID_WIDTH * GRID_HEIGHT"));
+        assertTrue(shader.contains("admitted != expectedAdmitted"));
+        assertTrue(shader.contains("medium > admitted || strong > medium"));
+        assertTrue(shader.contains("nonfinite != 0u"));
+        assertTrue(shader.contains("admitted >= 64u"));
+        assertTrue(shader.contains("strong * 4u > admitted * 3u"));
+        assertTrue(shader.contains("evidence.y * 10u <= evidence.x"));
+        assertTrue(shader.contains("evidence.z * 40u <= evidence.x"));
+        assertTrue(shader.contains("uint ownerRejectionReason()"));
+        assertTrue(shader.contains("return REASON_OWNER_FRAME_GAP"));
+        assertTrue(shader.contains("return REASON_OWNER_AGE"));
+        assertTrue(shader.contains("if (!complete) reason = REASON_EVIDENCE_INVALID"));
+        assertTrue(shader.contains("else if (rejected.y != 0u) reason = REASON_CONTENT_LOCAL"));
+        assertTrue(shader.contains("else if (!strongQuiet) reason = REASON_CONTENT_STRONG"));
+        assertTrue(shader.contains("else if (!mediumQuiet) reason = REASON_CONTENT_MEDIUM"));
+        assertTrue(shader.contains("DECISION_REUSE = 0u"));
+        assertTrue(shader.contains("DECISION_INFER = 1u"));
+        assertTrue(shader.contains("0xd1ec15a5u"));
+        assertTrue(shader.contains("0xa3756c91u"));
+        assertTrue(shader.contains("0x5c8a936eu"));
+        assertTrue(shader.contains("0x504f5250u"));
+        assertTrue(shader.contains("decisionWords[uDecisionWordOffset + 6u] = 0u"));
+        assertTrue(shader.contains("memoryBarrierBuffer()"));
+        assertTrue(shader.contains(
+                "decisionWords[uDecisionWordOffset + 6u] = RECORD_MAGIC"));
+        assertTrue(shader.contains(
+                "decisionWords[uDecisionWordOffset + 7u] = reason"));
+
+        int invalidate = shader.indexOf("decisionWords[uDecisionWordOffset + 6u] = 0u");
+        int payload = shader.indexOf("decisionWords[uDecisionWordOffset] = decision");
+        int publishBarrier = shader.lastIndexOf("memoryBarrierBuffer()");
+        int publish = shader.indexOf(
+                "decisionWords[uDecisionWordOffset + 6u] = RECORD_MAGIC");
+        assertTrue(invalidate >= 0 && payload > invalidate && publishBarrier > payload
+                && publish > publishBarrier);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void nearIdenticalResolveRejectsInvalidTensorShape() {
+        ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(350, 0);
+    }
+
+    @Test
     public void fusedPassPreservesTopFirstTensorAndRectangularPartialTileMath() {
         String shader = ClientSbsGpuSceneCutShaders.createPackAndDownsampleLuma(392, 168);
         assertTrue(shader.contains("const uint TENSOR_WIDTH = 392u"));
         assertTrue(shader.contains("const uint TENSOR_HEIGHT = 168u"));
-        assertTrue(shader.contains("if (all(lessThan(point, INPUT_SIZE)))"));
+        assertTrue(shader.contains("bool inBounds = all(lessThan(point, INPUT_SIZE))"));
         assertTrue(shader.contains("uint tensorY = TENSOR_HEIGHT - 1u - point.y"));
         assertTrue(shader.contains("(tensorY * TENSOR_WIDTH + point.x) * 3u"));
         assertTrue(shader.contains("tensorValues[firstValue] = tensorRgb.r"));
@@ -97,9 +183,8 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("bool bridgedReturn"));
         assertTrue(shader.contains("bool persistentLowStart"));
         assertTrue(shader.contains("bool supportedReturn"));
-        assertTrue(shader.contains(
-                "histogramL1 = l1\n"
-                        + "            | (structurelessInterval ? COMMIT_HOLD_HISTORY : 0u)"));
+        assertTrue(shader.contains("histogramL1 = l1;"));
+        assertFalse(shader.contains("COMMIT_HOLD_HISTORY"));
         assertTrue(shader.contains(
                 "structurelessInterval || preservedExposure || bridgedReturn"));
         assertTrue(shader.contains("SCENE_EVIDENCE_EXPOSURE_LIKE"));
@@ -110,7 +195,17 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertFalse(shader.contains("histogramChanged"));
         assertFalse(shader.contains("overwhelmingStructure"));
         assertFalse(shader.contains("uniformHardTransition"));
-        assertTrue(shader.contains("sceneCutWords[uOutputWordOffset] = evidence"));
+        assertTrue(shader.contains(
+                "sceneCutWords[uOutputWordOffset + SCENE_CUT_RECORD_EVIDENCE] = evidence"));
+        assertTrue(shader.contains("SCENE_CUT_RECORD_RAW_MODERATE_COUNT"));
+        assertTrue(shader.contains("SCENE_CUT_RECORD_RAW_DELTA_SUM"));
+        assertTrue(shader.contains("SCENE_CUT_RECORD_STRUCTURAL_CHANGE_COUNT"));
+        assertTrue(shader.contains("SCENE_CUT_RECORD_CURRENT_SUPPORT_COUNT"));
+        assertTrue(shader.contains("SCENE_CUT_RECORD_COMMON_SUPPORT_COUNT"));
+        assertTrue(shader.contains("SCENE_CUT_RECORD_DIAGNOSTIC_FLAGS"));
+        assertTrue(shader.contains("historyStructureSupported ? "
+                + ClientSbsGpuSceneCutDetector.DIAGNOSTIC_PREVIOUS_STRUCTURE_SUPPORTED
+                + "u : 0u"));
     }
 
     @Test
@@ -210,10 +305,15 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
                 detector.detectAndCommit(flat));
         assertEquals(0, detector.detectAndCommit(quietColorSceneB));
-        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
                 true, ClientSbsShotCutPolicy.CUT_STATE_READY,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        assertTrue(ClientSbsShotCutPolicy.startsGeometryConfirmation(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, false, false));
     }
 
     @Test
@@ -234,7 +334,8 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
                 true, ClientSbsShotCutPolicy.CUT_STATE_READY,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
-                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, true, false));
         // History advanced to the real flat shot, so continued persistence remains quiet instead
         // of periodically retriggering.
         assertEquals(0, detector.detectAndCommit(flatScene));
@@ -252,16 +353,21 @@ public class ClientSbsGpuSceneCutShadersTest {
         int returnEvidence = detector.detectAndCommit(sceneA);
         assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN, returnEvidence);
         assertEquals(1, detector.historyState);
-        // The first supported return has one absolute decision even while normal geometry remains
-        // latched and refractory, then consumes the marker regardless of the result.
-        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+        // The first supported return may propose absolute geometry while latched, but the normal
+        // two-update confirmation still owns acceptance.
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 1.0f, 0, marker, false, true));
+        assertTrue(ClientSbsShotCutPolicy.startsGeometryConfirmation(
                 true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 1.0f, 0, marker, false, true));
         marker = ClientSbsShotCutPolicy.nextLowStructureSceneMarker(marker, false, true);
         assertEquals(ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, marker);
-        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
-                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED
+                        | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_CONFIRMATION_PENDING,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 1.0f, 0, marker, false, false));
     }
@@ -275,7 +381,7 @@ public class ClientSbsGpuSceneCutShadersTest {
         int evidence = detector.detectAndCommit(structured);
         assertEquals(0, evidence);
 
-        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
                 true, ClientSbsShotCutPolicy.CUT_STATE_READY,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
@@ -333,44 +439,42 @@ public class ClientSbsGpuSceneCutShadersTest {
     public void firstFrameIsSuppressedAndAcceptedHistoryHasASeparateGpuCommit() {
         String compare = ClientSbsGpuSceneCutShaders.COMPARE;
         String resolve = ClientSbsGpuSceneCutShaders.RESOLVE;
-        String commit = ClientSbsGpuSceneCutShaders.COMMIT;
+        String commit = ClientSbsGpuSceneCutShaders.createCommit(896, 384);
         assertTrue(compare.contains("bool comparable = uHistoryValid != 0"));
+        assertTrue(compare.contains("detectorHistoryValid != 0u"));
         assertTrue(resolve.contains("bool comparable = uHistoryValid != 0"));
+        assertTrue(resolve.contains("detectorHistoryValid != 0u"));
         assertFalse(resolve.contains("previousHistogram[bin] = currentHistogram[bin]"));
-        assertTrue(commit.contains("bool holdHistory = uHistoryValid != 0"));
+        assertTrue(commit.contains("processorStateWords[PROCESSOR_FRAME_STATE_WORD]"));
+        assertTrue(commit.contains("FRAME_STATE_HISTORY_ADVANCES"));
+        assertTrue(commit.contains("FRAME_STATE_STRUCTURELESS_GAP"));
+        assertTrue(commit.contains("FRAME_STATE_CURRENT_DEPTH_VALID"));
+        assertTrue(commit.contains("FRAME_STATE_CURRENT_V2_VALID"));
+        assertTrue(commit.contains("bool currentV2Valid = (processorFrameState"));
         assertTrue(commit.contains("bool historyGapPending ="));
         assertTrue(commit.contains("bool lowStructureScene ="));
-        assertTrue(commit.contains(
-                "&& (histogramL1 & COMMIT_HOLD_HISTORY) != 0u"));
         assertTrue(commit.contains("bool persistentLowScene = !currentStructureSupported"));
         assertTrue(commit.contains("historyStructureSupported"));
         assertTrue(commit.contains("currentStructuralSupportCount, currentBlockCount, 5u"));
-        assertTrue(commit.contains("imageStore(uCurrentLuma, block, imageLoad(uPreviousLuma, block))"));
-        assertTrue(commit.contains("previousBlockCount & HISTORY_BLOCK_COUNT_MASK"));
         assertTrue(commit.contains(
-                "| HISTORY_STRUCTURE_SUPPORTED | HISTORY_GAP_PENDING"));
+                "imageStore(uCurrentLuma, point, imageLoad(uPreviousLuma, point))"));
+        assertTrue(commit.contains("if (currentDepthValid)"));
+        assertTrue(commit.contains("previousBlockCount = structurelessGap"));
+        assertTrue(commit.contains("| HISTORY_GAP_PENDING"));
+        assertTrue(commit.contains("nearOwnerValid = 0u"));
+        assertTrue(commit.contains("nearOwnerFrameSequence = uCurrentFrameSequence"));
+        assertTrue(commit.contains("nearOwnerCapturedAtNs = uCurrentCapturedAtNs"));
+        assertTrue(commit.contains("nearOwnerValid = currentV2Valid ? 1u : 0u"));
+        assertTrue(commit.contains("previousTensorValues[tensorIndex]"));
         assertTrue(commit.contains("previousBlockCount = currentBlockCount"));
         assertTrue(commit.contains("? HISTORY_STRUCTURE_SUPPORTED"));
         assertTrue(commit.contains(
                 ": (persistentLowScene ? HISTORY_GAP_PENDING : 0u)"));
         assertTrue(commit.contains(
-                "previousHistogram[block.x] = currentHistogram[block.x]"));
+                "previousHistogram[point.x] = currentHistogram[point.x]"));
         assertFalse(commit.contains("previousLumaSum"));
         assertFalse(commit.contains("previousLumaSquaredSum"));
         assertFalse(commit.contains("SceneCutOutput"));
-
-        // COMMIT spans multiple workgroups. Its branch decision must come entirely from RESOLVE's
-        // immutable word; only the sole metadata writer may read previousBlockCount after that.
-        int main = commit.indexOf("void main()");
-        int blockDeclaration = commit.indexOf("ivec2 block", main);
-        int metadataWriter = commit.indexOf("if (block.x == 0)", main);
-        assertTrue(main >= 0 && blockDeclaration > main && metadataWriter > blockDeclaration);
-        String branchDecision = commit.substring(main, blockDeclaration);
-        assertTrue(branchDecision.contains("histogramL1 & COMMIT_HOLD_HISTORY"));
-        assertFalse(branchDecision.contains("previousBlockCount"));
-        String holdPath = commit.substring(blockDeclaration, metadataWriter);
-        assertTrue(holdPath.indexOf("if (all(equal(block, ivec2(0))))")
-                < holdPath.indexOf("previousBlockCount"));
     }
 
     @Test
@@ -379,8 +483,10 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(reset.contains("uniform int uClearHistory"));
         assertTrue(reset.contains(
                 "if (uClearHistory != 0) previousHistogram[index] = 0u"));
-        assertTrue(reset.contains(
-                "if (uClearHistory != 0) previousBlockCount = 0u"));
+        assertTrue(reset.contains("if (uClearHistory != 0) {"));
+        assertTrue(reset.contains("previousBlockCount = 0u"));
+        assertTrue(reset.contains("detectorHistoryValid = 0u"));
+        assertTrue(reset.contains("nearOwnerValid = 0u"));
 
         int[] structured = rampGrid(12, 10, 40, 16, 0);
         int[] flat = repeatingLuma(structured.length, 32);
@@ -402,15 +508,18 @@ public class ClientSbsGpuSceneCutShadersTest {
     }
 
     @Test
-    public void outputCanTargetAStableWordForEachTensorSlot() {
+    public void outputCanTargetAStableRecordForEachTensorSlot() {
         String outputWriter = ClientSbsGpuSceneCutShaders.RESOLVE;
         String reset = ClientSbsGpuSceneCutShaders.RESET;
         assertTrue(outputWriter.contains("binding = 1) buffer SceneCutOutput"));
         assertTrue(outputWriter.contains("uint sceneCutWords[]"));
         assertTrue(outputWriter.contains("uniform uint uOutputWordOffset"));
         assertTrue(reset.contains("uniform uint uOutputWordOffset"));
-        assertTrue(reset.contains("sceneCutWords[uOutputWordOffset] = 0u"));
+        assertTrue(reset.contains("index < SCENE_CUT_RECORD_WORD_COUNT"));
+        assertTrue(reset.contains("sceneCutWords[uOutputWordOffset + index] = 0u"));
         assertTrue(ClientSbsGpuSceneCutDetector.SCENE_CUT_BYTE_OFFSET == 0);
+        assertEquals(8, ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_WORD_COUNT);
+        assertEquals(32, ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES);
     }
 
     private static int occurrences(String text, String needle) {

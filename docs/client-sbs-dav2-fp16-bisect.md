@@ -1,5 +1,9 @@
 # Depth Anything V2 FP16/OpenCL bisect
 
+> Historical record. DA-V2 is no longer selectable or packaged after the 2026-09-03 ZipDepth-only
+> production decision. Its former family archive is retained outside Android source sets under
+> `tools/model-sources/retired-client-sbs-archives/` for offline reproduction.
+
 Date: 2026-07-21
 
 ## Result
@@ -337,14 +341,14 @@ head to `175 x 98` saved about 0.67 ms, too little to fund edge-aware
 reconstruction; removing more decoder work produced unacceptable depth-quality
 loss.
 
-## Production decision
+## Historical production decision (superseded)
 
 Do not enable FP16 for an original non-C4 959-operation Quality graph. The
 tail-padding plus exact-GELU variants proved the defect and workaround, but the
-larger Quality set is now retired. Production ships only the naturally aligned,
+larger Quality set was then retired. At that time, production shipped only the naturally aligned,
 exact-GELU canonical graphs with `AUTOMATIC_FP16`:
 
-| Role | Bucket | Production SHA-256 |
+| Role | Bucket | Former production SHA-256 |
 | --- | --- | --- |
 | Canonical DA-V2 | `322 x 182` | `82f8594f4ee615ab82f968aa461a3960c4cd680293fd087cb65d8631b18e4271` |
 | Canonical DA-V2 | `350 x 154` | `2739f306ce71b19a913cdc32c779226a620f7f81685a1946ac213fdbeeba67b0` |
@@ -358,7 +362,7 @@ The corrected Quality graphs remain historical evidence only:
 | Quality | `392 x 168` | `0be8def82de0993caf64201baa59782224bb64bc0087a04cbb4e56842425476b` |
 | Quality | `490 x 140` | `85ffc4360718b5b1f273de8508fc16783152d4641f385a563c521cff3119a918` |
 
-The production hashes are the FP16-weight-storage packaging of the validated
+The former production hashes are the FP16-weight-storage packaging of the validated
 aligned graphs discussed above. Their public tensors remain Float32, and their
 CPU outputs are bit-identical to the corresponding Float32-stored transformed
 sources. Historical `float32` filenames and hashes earlier in this document
@@ -370,9 +374,10 @@ must pass complete acceleration as 765-operation graphs. All three passed CL/GL
 interop, finite non-flat edge-rich output, repeatability, FP16-vs-FP32 parity,
 and transformed-FP32-vs-original-FP32 parity on the Galaxy XR.
 
-The APK stores the three DA-V2 graphs as complete standard TAR entries in the solid
-`client-sbs-dav2-models.tar.xz` archive and the three MiDaS graphs as complete
-standard TAR entries in `client-sbs-midas-models.tar.xz`. One XZ/LZMA2 stream
+The APK formerly stored the three DA-V2 graphs as complete standard TAR entries in the solid
+`client-sbs-dav2-models.tar.xz` archive and the three MiDaS graphs as complete standard TAR entries
+in `client-sbs-midas-models.tar.xz`. Those retired archives now live under
+`tools/model-sources/retired-client-sbs-archives/`, outside Android source sets. One XZ/LZMA2 stream
 compresses each family's entire TAR so ordinary compression can exploit similarity
 between all three complete graphs. There is no base/delta encoding, XOR transform,
 custom model representation, or reconstruction step. At stream initialization, the
@@ -380,7 +385,8 @@ loader scans the family stream, writes only the selected complete model into the
 code cache, and verifies its SHA-256 before LiteRT compiles it. Selecting a later
 entry on a cold cache decompresses the preceding stream, but verified cache reuse
 avoids that cost on later initialization.
-Legacy Quality model IDs migrate to the canonical DA-V2 selection.
+Legacy Quality model IDs then migrated to canonical DA-V2; current builds migrate every retired
+model ID to ZipDepth.
 
 The deterministic DA-V2 TAR/XZ is 44,429,612 bytes (42.37 MiB), SHA-256
 `3f9892624253e5d7301d6b0eb28acc7ef30ac2cf3131acbc7a8c1f59696ad148`;
@@ -389,8 +395,8 @@ the MiDaS TAR/XZ is 29,947,928 bytes (28.56 MiB), SHA-256
 Together they are 74,377,540 bytes (70.93 MiB). Total debug APK size is intentionally not pinned;
 measure the current requested split from Gradle's build output.
 
-MiDaS remains available as the explicit comparison family. The half-resolution
-head is rejected and is not selectable. Generated experiment models stay under
+MiDaS was available as the explicit comparison family during this investigation. Neither it nor
+the half-resolution head is now selectable. Generated experiment models stay under
 the client repository's ignored `build` tree or system temporary storage. Loose
 original assets are not retained in the working tree or APK; the recorded hashes
 and pinned reproduction inputs preserve the historical evidence without placing

@@ -69,7 +69,7 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
 
         Context runtimeContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
         AssetManager modelAssets = runtimeContext.getAssets();
-        ClientSbsModelManifest manifest = ClientSbsModelManifest.MIDAS_V2_STATIC_16_9;
+        ClientSbsModelManifest manifest = ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9;
         PowerManager powerManager = (PowerManager) runtimeContext.getSystemService(
                 Context.POWER_SERVICE);
         PowerManager.WakeLock wakeLock = powerManager == null ? null
@@ -116,81 +116,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         assertTrue("Direct external PHWC4 cosine is below " + minimumCosine
                         + ": " + comparison,
                 comparison.cosineSimilarity >= minimumCosine);
-    }
-
-    @Test
-    public void midasV2Small352x192RunsWithPackedGlBuffers() throws Exception {
-        assertMidasBucket(
-                ClientSbsModelManifest.MIDAS_V2_STATIC_16_9,
-                "midas-v2-small-static-352x192-fp16weights.tflite.model",
-                "2a3ee0a1e818c4f785bcd0ceb10f5c81f08b3b91304f2f15d113c1089d3e524e",
-                352, 192);
-    }
-
-    @Test
-    public void midasV2Small384x160RunsWithPackedGlBuffers() throws Exception {
-        assertMidasBucket(
-                ClientSbsModelManifest.MIDAS_V2_STATIC_21_9,
-                "midas-v2-small-static-384x160-fp16weights.tflite.model",
-                "5a66ab484a888c3c9e1642580ac3086c7d6d3175a860ca1e82f30d7a58c532bd",
-                384, 160);
-    }
-
-    @Test
-    public void midasV2Small448x128RunsWithPackedGlBuffers() throws Exception {
-        assertMidasBucket(
-                ClientSbsModelManifest.MIDAS_V2_STATIC_32_9,
-                "midas-v2-small-static-448x128-fp16weights.tflite.model",
-                "060ec0e16fd4e20f2626d6ac51d80853a1bdf9b2f082c3d933099784cf9cabfb",
-                448, 128);
-    }
-
-    @Test
-    public void depthAnythingV2Small322x182RunsWithPackedGlBuffers()
-            throws Exception {
-        assertDepthAnythingBucket(
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_16_9,
-                "depth-anything-v2-small-static-322x182-fp16weights.tflite.model",
-                "82f8594f4ee615ab82f968aa461a3960c4cd680293fd087cb65d8631b18e4271",
-                322, 182);
-    }
-
-    @Test
-    public void depthAnythingV2Small350x154RunsWithPackedGlBuffers()
-            throws Exception {
-        assertDepthAnythingBucket(
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_21_9,
-                "depth-anything-v2-small-static-350x154-fp16weights.tflite.model",
-                "2739f306ce71b19a913cdc32c779226a620f7f81685a1946ac213fdbeeba67b0",
-                350, 154);
-    }
-
-    @Test
-    public void depthAnythingV2Small434x126RunsWithPackedGlBuffers()
-            throws Exception {
-        assertDepthAnythingBucket(
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_32_9,
-                "depth-anything-v2-small-static-434x126-fp16weights.tflite.model",
-                "353eb80fd6b9c6f97552a20b7bd29f79466a9b05287dcd4bfd93baaa4c1730f5",
-                434, 126);
-    }
-
-    @Test
-    public void depthArtS448672x384RunsWithPackedGlBuffers() throws Exception {
-        assertDepthArtBucket(
-                ClientSbsModelManifest.DEPTHART_S448_STATIC_16_9,
-                "depthart-s448-static-672x384-fp16weights.tflite.model",
-                "3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b",
-                672, 384);
-    }
-
-    @Test
-    public void depthArtS448928x384RunsWithPackedGlBuffers() throws Exception {
-        assertDepthArtBucket(
-                ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
-                "depthart-s448-static-928x384-fp16weights.tflite.model",
-                "d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2",
-                928, 384);
     }
 
     @Test
@@ -464,58 +389,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
             assertTrue("Profile benchmark caches must be removed",
                     ClientSbsGpuInferenceEngine.clearBenchmarkCaches(runtimeContext));
         }
-    }
-
-    private static void assertDepthAnythingBucket(ClientSbsModelManifest manifest,
-                                                   String assetName,
-                                                   String assetSha256,
-                                                   int width,
-                                                   int height) throws Exception {
-        assertEquals(assetName, manifest.getAssetName());
-        assertEquals(assetSha256, manifest.getAssetSha256());
-        assertEquals(width, manifest.getInputWidth());
-        assertEquals(height, manifest.getInputHeight());
-        assertTrue("Static bucket must skip dynamic tensor resize",
-                !manifest.hasDynamicSpatialShape());
-        runPackedGlModelSmokeTest(manifest);
-    }
-
-    private static void assertMidasBucket(ClientSbsModelManifest manifest,
-                                          String assetName,
-                                          String assetSha256,
-                                          int width,
-                                          int height) throws Exception {
-        assertEquals(assetName, manifest.getAssetName());
-        assertEquals(assetSha256, manifest.getAssetSha256());
-        assertEquals(width, manifest.getInputWidth());
-        assertEquals(height, manifest.getInputHeight());
-        assertTrue("MiDaS dimensions must be divisible by 32",
-                width % 32 == 0 && height % 32 == 0);
-        assertTrue("Rectangular MiDaS must use direct full-frame resize",
-                manifest.usesDirectFullFrameResize());
-        assertTrue("Static bucket must skip dynamic tensor resize",
-                !manifest.hasDynamicSpatialShape());
-        runPackedGlModelSmokeTest(manifest);
-    }
-
-    private static void assertDepthArtBucket(ClientSbsModelManifest manifest,
-                                             String assetName,
-                                             String assetSha256,
-                                             int width,
-                                             int height) throws Exception {
-        assertEquals(assetName, manifest.getAssetName());
-        assertEquals(assetSha256, manifest.getAssetSha256());
-        assertEquals(width, manifest.getInputWidth());
-        assertEquals(height, manifest.getInputHeight());
-        assertTrue("DepthART dimensions must be divisible by 16",
-                width % 16 == 0 && height % 16 == 0);
-        assertTrue("DepthART must use direct full-frame resize",
-                manifest.usesDirectFullFrameResize());
-        assertTrue("Static bucket must skip dynamic tensor resize",
-                !manifest.hasDynamicSpatialShape());
-        assertEquals(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
-                manifest.getGpuExecutionPolicy());
-        runPackedGlModelSmokeTest(manifest);
     }
 
     private static void assertZipDepthBucket(ClientSbsModelManifest manifest,

@@ -53,16 +53,19 @@ public final class ClientSbsResizePolicyTest {
     public void coldBackendExtendsOnlyTheConfirmedPostAckSwapBoundary() {
         assertTrue(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
                 ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
-                true, true, 2_000L));
+                true, true, false, 2_000L));
         assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
                 ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
-                false, true, 2_000L));
+                false, true, false, 2_000L));
         assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
                 ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH,
-                true, true, 2_000L));
+                true, true, false, 2_000L));
         assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
                 ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
-                true, false, 2_000L));
+                true, false, false, 2_000L));
+        assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, true, 2_000L));
     }
 
     @Test
@@ -77,7 +80,47 @@ public final class ClientSbsResizePolicyTest {
                         ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
         assertFalse(ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
                 ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
-                true, true, ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+                true, true, false, ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+    }
+
+    @Test
+    public void readyTransitionGetsExactlyOneFreshProofWindow() {
+        assertTrue(ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, false, false,
+                ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+        assertEquals(ClientSbsResizePolicy.POST_ACK_SWAP_TIMEOUT_MS,
+                ClientSbsResizePolicy.boundedColdBackendReadyProofMillis(
+                        ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+        assertFalse(ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, false, true,
+                ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+        assertFalse(ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, true, false,
+                ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+        assertFalse(ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, false, false, false,
+                ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS));
+    }
+
+    @Test
+    public void readyProofWindowHasASeparateBoundedOverallDeadline() {
+        assertEquals(ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS
+                        + ClientSbsResizePolicy.POST_ACK_SWAP_TIMEOUT_MS,
+                ClientSbsResizePolicy.COLD_BACKEND_TOTAL_MAX_WAIT_MS);
+        assertEquals(500L,
+                ClientSbsResizePolicy.boundedColdBackendReadyProofMillis(
+                        ClientSbsResizePolicy.COLD_BACKEND_TOTAL_MAX_WAIT_MS - 500L));
+        assertEquals(0L,
+                ClientSbsResizePolicy.boundedColdBackendReadyProofMillis(
+                        ClientSbsResizePolicy.COLD_BACKEND_TOTAL_MAX_WAIT_MS));
+        assertFalse(ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP,
+                true, true, false, false,
+                ClientSbsResizePolicy.COLD_BACKEND_TOTAL_MAX_WAIT_MS));
     }
 
     @Test

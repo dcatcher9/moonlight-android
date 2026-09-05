@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import com.limelight.R;
+import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.shadows.ShadowMoonBridge;
 
@@ -105,6 +106,7 @@ public final class XrStreamPresenterControlTransportTeardownTest {
                 XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, false));
         assertTrue(XrStreamPresenter.isPresentationModeSupported(
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW, false));
+        assertEquals(MoonBridge.SBS_MODE_OFF, presenter.getInitialHostSbsWireMode());
         assertEquals(0, ShadowMoonBridge.getSetSbsModeCallCount());
         assertEquals(0, ShadowMoonBridge.getSetVideoModeCallCount());
         assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());

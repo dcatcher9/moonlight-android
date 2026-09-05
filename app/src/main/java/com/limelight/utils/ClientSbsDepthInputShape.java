@@ -1,18 +1,18 @@
 package com.limelight.utils;
 
 /**
- * Immutable, patch-aligned static input bucket for client-side depth inference.
+ * Historical DA-V2 patch-aligned bucket retained for probe calibration and offline evaluation.
  *
  * <p>LiteRT can resize dynamic tensors at the runtime layer, but the Android OpenCL delegate
- * currently accepts only fully static graphs. We therefore compile a small fixed bucket set and
- * choose the closest aspect once when the stream renderer is created.</p>
+ * currently accepts only fully static graphs. Production stream selection now uses ZipDepth's
+ * manifests directly; this table remains for legacy shader calibration and offline tests.</p>
  */
 final class ClientSbsDepthInputShape {
     static final int PATCH_MULTIPLE = 14;
     static final int MIN_PIXELS = 53_000;
     static final int MAX_PIXELS = 70_000;
 
-    /** Natural-C4 buckets keep attention tokens aligned without sentinel padding. */
+    /** Historical natural-C4 buckets keep attention tokens aligned without sentinel padding. */
     static final ClientSbsDepthInputShape ASPECT_16_9 =
             createAligned(322, 182);
     static final ClientSbsDepthInputShape ASPECT_21_9 =

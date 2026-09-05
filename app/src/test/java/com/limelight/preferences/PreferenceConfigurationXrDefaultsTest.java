@@ -54,8 +54,6 @@ public final class PreferenceConfigurationXrDefaultsTest {
                 configuration.audioConfiguration);
         assertFalse(configuration.playHostAudio);
         assertEquals(3, configuration.audioBoostDb);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                configuration.clientSbsDepthModelId);
         assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
                 configuration.rawSbsPerEyeResolution);
     }

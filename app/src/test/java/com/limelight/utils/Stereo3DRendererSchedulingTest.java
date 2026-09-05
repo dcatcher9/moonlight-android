@@ -10,9 +10,60 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Stereo3DRendererSchedulingTest {
+    @Test
+    public void refinementDoublesOnlyTheHorizontalWarpMapLattice() {
+        assertEquals(2, Stereo3DRenderer.WARP_MAP_HORIZONTAL_SCALE);
+        assertEquals(1, Stereo3DRenderer.WARP_MAP_VERTICAL_SCALE);
+    }
+
+    @Test
+    public void liveResizeDiscardsPendingImageBeforeGenerationAdvance() {
+        AtomicInteger generation = new AtomicInteger(7);
+        StringBuilder order = new StringBuilder();
+
+        int advancedGeneration = Stereo3DRenderer.advanceLiveResizeFrameBoundary(
+                generation,
+                () -> {
+                    assertEquals(7, generation.get());
+                    order.append("invalidate>");
+                },
+                () -> {
+                    assertEquals(7, generation.get());
+                    order.append("discard>");
+                },
+                () -> {
+                    assertEquals(7, generation.get());
+                    order.append("clear");
+                });
+
+        assertEquals("invalidate>discard>clear", order.toString());
+        assertEquals(8, advancedGeneration);
+        assertEquals(8, generation.get());
+    }
+
+    @Test
+    public void failedLiveResizeDiscardDoesNotAdvanceGenerationOrClearPendingFrame() {
+        AtomicInteger generation = new AtomicInteger(7);
+        boolean[] cleared = {false};
+
+        try {
+            Stereo3DRenderer.advanceLiveResizeFrameBoundary(
+                    generation,
+                    () -> { },
+                    () -> { throw new IllegalStateException("no EGL image"); },
+                    () -> cleared[0] = true);
+        } catch (IllegalStateException expected) {
+            assertEquals("no EGL image", expected.getMessage());
+        }
+
+        assertEquals(7, generation.get());
+        assertFalse(cleared[0]);
+    }
+
     @Test
     public void staleResultReleaseCannotClearNewOverlapClaim() {
         AtomicLong claim = new AtomicLong(41L);
@@ -37,6 +88,37 @@ public class Stereo3DRendererSchedulingTest {
         assertFalse(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(true, 11L, 12L));
         assertFalse(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(true, 0L, 12L));
         assertFalse(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(false, 12L, 12L));
+    }
+
+    @Test
+    public void unchangedDecodedSourceNeverExpiresMatchedPresentation() {
+        assertFalse(Stereo3DRenderer.shouldPresentCurrentFlatForStaleDepth(
+                41L, 41L, TimeUnit.HOURS.toNanos(1L)));
+    }
+
+    @Test
+    public void newerDecodedSourceUsesStrictHostPresentationAgeBoundary() {
+        long boundaryNs = Stereo3DRenderer.MAX_STALE_DEPTH_PRESENTATION_AGE_NS;
+
+        assertFalse(Stereo3DRenderer.shouldPresentCurrentFlatForStaleDepth(
+                41L, 42L, boundaryNs));
+        assertTrue(Stereo3DRenderer.shouldPresentCurrentFlatForStaleDepth(
+                41L, 42L, boundaryNs + 1L));
+    }
+
+    @Test
+    public void modeEntryAcceptsFreshFrameAlreadyLatchedByQueuedDrain() {
+        assertTrue(Stereo3DRenderer.hasFreshModeEntryFrame(false, true, 9, 9));
+        assertFalse(Stereo3DRenderer.hasFreshModeEntryFrame(false, true, 8, 9));
+        assertTrue(Stereo3DRenderer.hasFreshModeEntryFrame(true, false, 8, 9));
+        assertFalse(Stereo3DRenderer.hasFreshModeEntryFrame(false, false, 9, 9));
+    }
+
+    @Test
+    public void staleDepthWatchdogSchedulesAfterInclusiveBoundary() {
+        assertEquals(251L, Stereo3DRenderer.staleDepthWatchdogDelayMillis(0L));
+        assertEquals(1L, Stereo3DRenderer.staleDepthWatchdogDelayMillis(
+                Stereo3DRenderer.MAX_STALE_DEPTH_PRESENTATION_AGE_NS));
     }
 
     @Test

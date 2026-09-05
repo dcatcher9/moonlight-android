@@ -100,6 +100,9 @@ public class ClientSbsShotCutPolicyTest {
         assertTrue(ClientSbsShotCutPolicy.isAppearanceLatched(sequence.cutState));
 
         sequence.update(true, 0.58f, 0.0f);
+        assertEquals(1, sequence.relatchedShots);
+        assertTrue(ClientSbsShotCutPolicy.isGeometryConfirmationPending(sequence.cutState));
+        sequence.update(true, 0.58f, 0.0f);
         assertEquals(2, sequence.relatchedShots);
         assertEquals(ClientSbsShotCutPolicy.CUT_STATE_LATCHED, sequence.cutState);
     }
@@ -107,6 +110,9 @@ public class ClientSbsShotCutPolicyTest {
     @Test
     public void appearanceRearmsWhileDepthEvidenceRemainsElevated() {
         Sequence sequence = new Sequence(ClientSbsShotCutPolicy.CUT_STATE_READY);
+        sequence.update(false, 0.70f, 0.0f);
+        assertEquals(0, sequence.relatchedShots);
+        assertTrue(ClientSbsShotCutPolicy.isGeometryConfirmationPending(sequence.cutState));
         sequence.update(false, 0.70f, 0.0f);
         assertEquals(1, sequence.relatchedShots);
 
@@ -142,6 +148,9 @@ public class ClientSbsShotCutPolicyTest {
                 sequence.validDepthUpdateAge);
         assertTrue(ClientSbsShotCutPolicy.isGeometryLatched(sequence.cutState));
 
+        sequence.update(false, 0.50f, 0.0f);
+        assertEquals(1, sequence.relatchedShots);
+        assertTrue(ClientSbsShotCutPolicy.isGeometryConfirmationPending(sequence.cutState));
         sequence.update(false, 0.50f, 0.0f);
         assertEquals(2, sequence.relatchedShots);
         assertEquals(0.50f, sequence.geometryBaseline, 0.0f);
@@ -209,93 +218,146 @@ public class ClientSbsShotCutPolicyTest {
     }
 
     @Test
+    public void geometryUsesApolloStructuralCorroborationFloorAndStructurelessWaiver() {
+        float floor = ClientSbsShotCutPolicy.STRUCTURAL_GEOMETRY_CUT_FLOOR;
+        assertEquals(0.005f, floor, 0.0f);
+        assertFalse(ClientSbsShotCutPolicy.geometryStructureCorroborated(
+                Math.nextDown(floor), false, false));
+        assertTrue(ClientSbsShotCutPolicy.geometryStructureCorroborated(
+                floor, false, false));
+        assertTrue(ClientSbsShotCutPolicy.geometryStructureCorroborated(
+                0.0f, true, false));
+        assertTrue(ClientSbsShotCutPolicy.geometryStructureCorroborated(
+                0.0f, false, true));
+    }
+
+    @Test
+    public void geometryConfirmationRequiresIndependentStructureOnBothObservations() {
+        int ready = ClientSbsShotCutPolicy.CUT_STATE_READY;
+        int pending = ClientSbsShotCutPolicy.CUT_STATE_LATCHED
+                | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_CONFIRMATION_PENDING;
+        float depth = ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER;
+
+        assertFalse(ClientSbsShotCutPolicy.geometryConfirmationCandidate(
+                true, ready, false, depth, 0.0f, true, 0.05f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                false, false, 0.0f, true));
+        assertTrue(ClientSbsShotCutPolicy.geometryConfirmationCandidate(
+                true, ready, false, depth, 0.0f, true, 0.05f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                false, false,
+                ClientSbsShotCutPolicy.STRUCTURAL_GEOMETRY_CUT_FLOOR, true));
+
+        // The pending follow-up also needs reliable current structure, matching Apollo. A weak
+        // structural count cannot confirm merely because the depth spike persisted.
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, pending, false, false, depth, 0.0f, true, 0.50f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                false, false, 0.25f, false));
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, pending, false, false, depth, 0.0f, true, 0.50f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                false, false, 0.25f, true));
+    }
+
+    @Test
+    public void structurelessReferenceWaivesOnlyUnavailableOrdinalCorroboration() {
+        int marker = ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_ACTIVE;
+        int pending = ClientSbsShotCutPolicy.CUT_STATE_LATCHED
+                | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_CONFIRMATION_PENDING;
+        float depth = ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER;
+
+        // A naturally structureless retained reference is distinct from the persistent-low bridge
+        // marker. This is Apollo's explicit reference_structureless waiver.
+        assertFalse(ClientSbsShotCutPolicy.startsGeometryConfirmation(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, depth, 0.0f, true, 0.05f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                false, false, false, 0.0f, true));
+        assertTrue(ClientSbsShotCutPolicy.startsGeometryConfirmation(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, depth, 0.0f, true, 0.05f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                false, false, true, 0.0f, true));
+
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, pending, false, false, depth, 0.0f, true, 0.05f, 0,
+                marker, false, true, 0.0f, false));
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, pending, false, false, depth, 0.0f, true, 0.05f, 0,
+                marker, false, true, 0.0f, true));
+
+        // The second low-support observation is already the corroborating structureless bridge
+        // event, so it retains Apollo's immediate exception even though no ordinal pair exists.
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, false, depth, 0.0f, true, 0.05f, 0,
+                ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE,
+                true, false, 0.0f, false));
+    }
+
+    @Test
     public void supportedTransitionWithoutCommonSupportLeavesStrongGeometryAuthority() {
         // After a bridged gap, the color classifier emits neither typed bit for a supported broad
         // transition without common ordinal support. That ambiguity must not act like the veto.
-        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
                 true, ClientSbsShotCutPolicy.CUT_STATE_READY,
                 false, false,
                 ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
         assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY
+                        | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_CONFIRMATION_PENDING,
+                false, false,
+                ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 0.05f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
                 true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false,
+                0.50f, 0.0f, true, 0.20f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED
+                        | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_CONFIRMATION_PENDING,
                 false, false,
                 0.50f, 0.0f, true, 0.20f,
                 ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
     }
 
     @Test
-    public void currentTypedSceneEvidenceSupersedesPendingWithoutCrossTypeCollision() {
-        int selected = ClientSbsShotCutPolicy.selectSceneEvidence(
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE);
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE, selected);
-        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
-                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
-                selected == ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
-                selected == ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
-                1.0f, 1.0f, true, 0.05f,
-                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+    public void firstStructurelessHoldUsesSupportMetadataNotExposureClassAlone() {
+        int exposure = ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE;
 
-        selected = ClientSbsShotCutPolicy.selectSceneEvidence(
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE);
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE, selected);
-        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
-                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
-                true, false, 0.18f, 0.0f, true, 0.05f,
-                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
+        assertFalse(ClientSbsShotCutPolicy.isFirstStructurelessHold(
+                exposure, true, true, true));
+        assertTrue(ClientSbsShotCutPolicy.isFirstStructurelessHold(
+                exposure, true, true, false));
+        assertFalse(ClientSbsShotCutPolicy.isFirstStructurelessHold(
+                exposure, false, true, false));
+        assertFalse(ClientSbsShotCutPolicy.isFirstStructurelessHold(
+                ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START,
+                true, true, false));
 
-        // No current classification preserves either pending type through repeated invalid
-        // results; a new current classification replaces it on the next attempt.
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
-                ClientSbsShotCutPolicy.selectSceneEvidence(
-                        0, ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE));
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
-                ClientSbsShotCutPolicy.selectSceneEvidence(
-                        0, ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE));
-
-        // Manual appearance and a malformed dual-bit word keep appearance authority.
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
-                ClientSbsShotCutPolicy.selectSceneEvidence(
-                        ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE
-                                | ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE,
-                        0));
+        assertTrue(ClientSbsShotCutPolicy.historyAdvances(true, false, false));
+        assertFalse(ClientSbsShotCutPolicy.historyAdvances(true, true, false));
+        assertFalse(ClientSbsShotCutPolicy.historyAdvances(true, false, true));
+        assertFalse(ClientSbsShotCutPolicy.historyAdvances(false, false, false));
     }
 
     @Test
-    public void fullPendingWordPreservesLowStructureEventsAcrossInvalidDepth() {
-        int pendingStart = ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START
-                | ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE;
-        int encoded = ClientSbsShotCutPolicy.encodePendingSceneEvidence(pendingStart);
-        assertEquals(-pendingStart, encoded);
-        assertEquals(pendingStart,
-                ClientSbsShotCutPolicy.decodePendingSceneEvidence(encoded));
-
-        // A later current classification replaces only the stale classification. Both event
-        // transitions survive until a valid depth update can consume them.
-        int selected = ClientSbsShotCutPolicy.selectSceneEvidence(
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN
-                        | ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
-                ClientSbsShotCutPolicy.decodePendingSceneEvidence(encoded));
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE
-                        | ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START
-                        | ClientSbsShotCutPolicy.SCENE_EVIDENCE_SUPPORTED_RETURN,
-                selected);
-        assertEquals(-selected,
-                ClientSbsShotCutPolicy.encodePendingSceneEvidence(selected));
-        assertEquals(0, ClientSbsShotCutPolicy.decodePendingSceneEvidence(17));
-
-        // The second flat update is event-only. It must replace the stale first-flat exposure
-        // classification or the only persistent-low geometry decision would remain vetoed.
-        selected = ClientSbsShotCutPolicy.selectSceneEvidence(
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START,
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE);
-        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_PERSISTENT_LOW_START, selected);
-        assertFalse(ClientSbsShotCutPolicy.isExposureLikeEvidence(selected));
-        assertFalse(ClientSbsShotCutPolicy.shouldHoldDepthHistory(selected));
-        assertTrue(ClientSbsShotCutPolicy.shouldHoldDepthHistory(
-                ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE));
+    public void invalidDepthDoesNotCreatePendingSceneEvidenceAuthority() {
+        String range = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
+        String cut = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
+        assertTrue(cut.contains("uint selectedSceneEvidence = currentSceneEvidence"));
+        assertTrue(range.contains("stateCounters.z = 0"));
+        assertFalse(cut.contains("pendingSceneEvidence"));
+        assertFalse(cut.contains("-int(selectedSceneEvidence)"));
     }
 
     @Test
@@ -314,36 +376,36 @@ public class ClientSbsShotCutPolicyTest {
         assertEquals(marker, ClientSbsShotCutPolicy.nextLowStructureSceneMarker(
                 marker, false, false));
 
-        // The first supported return gets the absolute threshold even though the ordinary
-        // geometry arm is latched and refractory.
-        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+        // The first supported return gets the absolute threshold even while latched, but remains
+        // an ordinary geometry-only candidate and therefore starts confirmation.
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+                false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
+                true, 1.0f, 0, marker, false, true));
+        assertTrue(ClientSbsShotCutPolicy.startsGeometryConfirmation(
                 true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 1.0f, 0, marker, false, true));
         marker = ClientSbsShotCutPolicy.nextLowStructureSceneMarker(marker, false, true);
         assertEquals(ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, marker);
 
-        // The event is consumed whether or not it cuts, so a later supported update cannot retry.
-        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
-                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED,
+        // The event is consumed, but the pending bit authenticates one compatible next update.
+        assertTrue(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_LATCHED
+                        | ClientSbsShotCutPolicy.CUT_STATE_GEOMETRY_CONFIRMATION_PENDING,
                 false, false, ClientSbsShotCutPolicy.STANDALONE_DEPTH_CHANGE_ENTER, 0.0f,
                 true, 1.0f, 0, marker, false, false));
     }
 
     @Test
-    public void invalidDepthCarriesProposalToExactlyTheNextValidUpdate() {
+    public void invalidDepthDropsProposalInsteadOfApplyingItToTheNextValidUpdate() {
         Sequence sequence = new Sequence(ClientSbsShotCutPolicy.CUT_STATE_READY);
 
         sequence.invalidDepth(true);
         assertEquals(0, sequence.relatchedShots);
-        assertTrue(sequence.pendingExternalEvidence);
 
         sequence.validDepth(false, 0.24f, 0.08f);
-        assertEquals(1, sequence.relatchedShots);
-        assertFalse(sequence.pendingExternalEvidence);
-
-        sequence.validDepth(false, 0.24f, 0.08f);
-        assertEquals(1, sequence.relatchedShots);
+        assertEquals(0, sequence.relatchedShots);
     }
 
     @Test
@@ -399,6 +461,36 @@ public class ClientSbsShotCutPolicyTest {
                 ClientSbsShotCutPolicy.GEOMETRY_BASELINE_ALPHA));
     }
 
+    @Test
+    public void photometricRecoveryVetoesExactlyOneQuietUpdate() {
+        assertTrue(ClientSbsShotCutPolicy.photometricRecoveryVeto(true, false));
+        assertFalse(ClientSbsShotCutPolicy.photometricRecoveryVeto(true, true));
+
+        int recovered = ClientSbsShotCutPolicy.nextCutState(
+                ClientSbsShotCutPolicy.CUT_STATE_READY, true, false,
+                false, 0.20f, 9, false, true);
+        assertTrue(ClientSbsShotCutPolicy.isAppearanceRecoveryTail(recovered, false));
+        assertTrue(ClientSbsShotCutPolicy.appearanceVeto(recovered, false, false));
+        assertFalse("a real appearance proposal bypasses the quiet recovery tail",
+                ClientSbsShotCutPolicy.appearanceVeto(recovered, true, false));
+        assertEquals("the recovery tail must not contaminate the geometry baseline", 0.05f,
+                ClientSbsShotCutPolicy.nextGeometryBaseline(
+                        0.05f, true, false, 0.80f,
+                        false, true, false), 0.0f);
+
+        int consumed = ClientSbsShotCutPolicy.nextCutState(
+                recovered, true, false, false, 0.80f, 10, false, false);
+        assertFalse(ClientSbsShotCutPolicy.isAppearanceRecoveryTail(consumed, false));
+        assertFalse(ClientSbsShotCutPolicy.appearanceVeto(consumed, false, false));
+
+        int startupExposure = ClientSbsShotCutPolicy.nextCutState(
+                ClientSbsShotCutPolicy.CUT_STATE_STARTUP, true, false,
+                false, 0.10f, ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES,
+                false, true);
+        assertTrue(ClientSbsShotCutPolicy.isSettled(startupExposure));
+        assertTrue(ClientSbsShotCutPolicy.isAppearanceRecoveryTail(startupExposure, false));
+    }
+
     private static final class Sequence {
         int cutState;
         int validDepthUpdateAge;
@@ -406,7 +498,6 @@ public class ClientSbsShotCutPolicyTest {
         int relatchedShots;
         int anchorGeneration = 7;
         int popGeneration = 11;
-        boolean pendingExternalEvidence;
         boolean baselineInitialized = true;
         float geometryBaseline = 0.05f;
 
@@ -428,7 +519,7 @@ public class ClientSbsShotCutPolicyTest {
         }
 
         void invalidDepth(boolean externalEvidence) {
-            pendingExternalEvidence |= externalEvidence;
+            // Apollo clears evidence for an invalid depth transaction.
         }
 
         void validDepth(boolean externalEvidence, float changeFraction,
@@ -438,28 +529,35 @@ public class ClientSbsShotCutPolicyTest {
 
         void validDepth(boolean externalEvidence, float changeFraction,
                         float distributionShift, int referenceFrameAdvance) {
-            externalEvidence |= pendingExternalEvidence;
-            pendingExternalEvidence = false;
             int advancedValidDepthUpdateAge =
                     ClientSbsShotCutPolicy.nextValidDepthUpdateAge(
                             validDepthUpdateAge, true, false);
+            boolean startsConfirmation = ClientSbsShotCutPolicy.startsGeometryConfirmation(
+                    true, cutState, externalEvidence, false,
+                    changeFraction, distributionShift,
+                    baselineInitialized, geometryBaseline, advancedValidDepthUpdateAge,
+                    ClientSbsShotCutPolicy.LOW_STRUCTURE_SCENE_INACTIVE, false, false);
             boolean accepted = ClientSbsShotCutPolicy.acceptsShotCut(
                     true, cutState, externalEvidence, false,
                     changeFraction, distributionShift,
                     baselineInitialized, geometryBaseline, advancedValidDepthUpdateAge);
-            geometryBaseline = ClientSbsShotCutPolicy.nextGeometryBaseline(
-                    geometryBaseline, baselineInitialized, accepted, changeFraction);
+            if (ClientSbsShotCutPolicy.historyAdvances(true, false, startsConfirmation)) {
+                geometryBaseline = ClientSbsShotCutPolicy.nextGeometryBaseline(
+                        geometryBaseline, baselineInitialized, accepted, changeFraction);
+            }
             baselineInitialized = true;
-            advance(accepted, externalEvidence, changeFraction, referenceFrameAdvance);
+            advance(accepted, startsConfirmation, externalEvidence, changeFraction,
+                    referenceFrameAdvance);
         }
 
-        private void advance(boolean accepted, boolean externalEvidence, float changeFraction,
+        private void advance(boolean accepted, boolean startsConfirmation,
+                             boolean externalEvidence, float changeFraction,
                              int referenceFrameAdvance) {
             validDepthUpdateAge = ClientSbsShotCutPolicy.nextValidDepthUpdateAge(
                     validDepthUpdateAge, true, accepted);
             cutState = ClientSbsShotCutPolicy.nextCutState(
                     cutState, true, accepted, externalEvidence, changeFraction,
-                    validDepthUpdateAge);
+                    validDepthUpdateAge, startsConfirmation);
             if (accepted) {
                 profileSceneAge = 0;
             } else {

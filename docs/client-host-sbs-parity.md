@@ -1,30 +1,102 @@
-# Historical Client ↔ host SBS parity audit
+# Client ↔ host SBS parity audits
+
+## Current migration review (2026-09-04)
+
+This review compares Apollo-3D `e827a6fc` with the current Android XR implementation. Host
+production uses a high-grid DA-V2 Small plus frozen ZipDepth convex-2x composite; the client uses
+the original ZipDepth Base head because Galaxy XR must sustain the complete decode, inference,
+reprojection, and SceneCore workload on its GPU. “Follow the host” means matching the coordinate,
+ownership, cut, and failure contracts where the inputs support it—not pretending the two depth
+producers or Windows/Adreno mechanisms are identical.
+
+| Area | Host contract | Android XR contract / status |
+|---|---|---|
+| **Production model** | One hybrid DA-V2/ZipDepth composite at a high public grid. | One packaged/selected original ZipDepth Base family, with immutable `672x384`, `896x384`, and `928x384` aspect graphs. Retired DA-V2, MiDaS, and DepthART archives remain only under `tools/model-sources/retired-client-sbs-archives/`. Deliberate model/thermal adaptation. |
+| **Raw camera coordinate** | `(hostRaw - shotArithmeticMean) / 2.25`. | Implemented as `(zipRaw - shotArithmeticMean) / sGraph`, using offline fits `0.04864449`, `0.04707071`, and `0.05421491`. One scale per graph is required; one global ZipDepth scale is not fair. No runtime percentile or per-frame gauge normalization feeds geometry. |
+| **V2 curve/pop/container** | Far `0.75*expm1(c/0.75)`, linear on `[0,1]`, near `1+0.5*log1p((c-1)/0.5)`; pop `1.75`; `0.00375` parallax per pop; odd `+/-0.04` fourth-root container. | Implemented literally after the graph-specific affine coordinate conversion. The former normalized P2/P98 → subject/recenter → Bestv2 → adaptive-pop geometry route is absent from live composition. |
+| **Camera lifetime** | Arithmetic raw mean latched to the shot. A field with population standard deviation `<= 1e-6` is unavailable: a no-cut result retains the prior camera, a cut on that field clears it, and the next usable field reacquires it. | Implemented with per-workgroup Welford records merged in the existing range-resolve pass. The first usable depth and every usable accepted cut latch the complete raw-field mean. A collapsed result can still advance private normalized cut history, but never authorizes renderer geometry or pins the zero plane. No dispatch or readback was added. |
+| **Conditioning/inverse** | Vertical `2/W` upper/lower envelopes with `0.75/0.25` share, horizontal `0.5/W` least majorant, then 11-step unique inverse. | Implemented with four GLES compute passes, a host-exact 11-update 1x `RG16F` seed, and one paired-eye correction into a 2x-horizontal x 1x-depth `RG16F` refined cache. Packed compose still performs one map and one color lookup per output pixel. |
+| **Cut-only normalization** | Percentile/range state supports cut analysis, not V2 geometry scale. | Raw outer-edge P2/P98 and normalized temporal depth remain private to geometry-change/cut detection and diagnostics. They never feed the V2 disparity field. |
+| **Ordinary geometry cuts** | Two-update confirmation with reliable history frozen after the first candidate while live range/temporal state continues. | Implemented. The first geometry-only candidate holds camera/baseline/model-input/scene/reliable-depth history, while range and immediate temporal depth update and the finite current raw field maps through the existing shot camera. A qualifying second valid update accepts the cut and advances the tuple. |
+| **Appearance cuts** | Qualified appearance evidence can accept immediately; only first structureless and first geometry-confirmation states hold the reliable owner. Ordinary exposure advances it and starts a one-update recovery veto. | Implemented with the client GPU ordinal detector and depth corroboration. Geometry and appearance rearm independently. Append-only telemetry separates detector proposals from accepted appearance, geometry, and structureless-return cuts and records the latest causal evidence without another readback. Numeric thresholds remain client-grid calibrated. |
+| **Invalid/failure behavior** | A failed current coordinate transaction is current color flat, never old geometry on new color. | Implemented strictly. Any invalid raw texel, population-collapsed field, invalid raw center/scale, conditioner, seed map, refinement, `RG16F` target, or packed compose failure is flat. The 1x seed is not a geometry fallback; live Bestv2/cached-probe/direct-probe alternatives are not compiled. |
+| **Preprocess resize** | Exact source-cell area downsample; bilinear when upscaling. | Implemented with exact overlap weights and per-cell HDR conversion. Android retains an RGBA8 model-size render target before Float32 packing; direct OES-to-buffer fusion remains open. |
+| **Depth prefilter** | None in the current raw V2 coordinate. | None. Source-aligned raw `R32F` ZipDepth feeds the conditioner directly, avoiding two client-only passes and `R16F` rounding before subtraction against the `R32F` shot mean. |
+| **Near-identical reuse** | GPU conditional execution against the last renderer-valid real-inference owner, with literal pixel/tile/gap/age gates. | Implemented locally with the same bounds and current-color/cached-geometry result. A population-collapsed inference can advance private cut/color history but explicitly invalidates the reuse owner. A guarded 32-byte decision read is the measured Android synchronization adaptation. No host or wire signal is added. |
+| **Busy retention** | A changed source may retain output for at most 250 ms, then must show current flat. | Implemented using the newest successfully latched decoded buffer as the conservative changed-source signal. |
+| **Scheduling** | CUDA/D3D work is coordinated with the host encoder cadence. | Keep the Android readiness-driven, uncapped, single-flight/latest-frame-coalescing scheduler. Thermal status is telemetry, not a hidden cadence controller. |
+| **Exact/damage reuse and ROI metadata** | DDup content clock, route/format authority, dirty/move proof, cursor semantics, and foreground ROI are available host-side. | Deferred. MediaCodec/SurfaceTexture cannot infer this authority. Any later host-assisted path must be a separately versioned, advertised extension whose absence/malformation falls back to local arbitration or inference, preserving original Sunshine/Apollo compatibility. |
+| **Subtitles / local ROI plane** | Foreground-window ROI and independent subtitle detection/conditioning are production features. | Deferred for a separate quality, memory, cadence, and thermal evaluation. No subtitle or ROI-local plane currently influences client geometry. |
+| **Higher-precision/density map** | Host evaluates the conditioned field directly at packed-output pixels on a substantially larger depth field and different interop path. | The client now refines the exact 1x seed on a 2x-horizontal lattice with one correction. This targets interpolation error without a blind 2x-by-2x 11-step solve. Direct/full-resolution `R32F` remains a measured A/B candidate. |
+
+### Remaining disparities after this migration
+
+The core coordinate algorithm now matches, but output quality and cost are not expected to be
+identical. The remaining differences that require an explicit keep/change decision are:
+
+1. **Depth producer and grid:** host hybrid high-grid depth versus original ZipDepth at 384 short
+   side. Per-graph affine fitting aligns coordinate scale, not model errors, fine detail, or temporal
+   behavior.
+2. **Map precision/density:** the client still reconstructs from `RG16F` caches rather than solving
+   directly at every packed-output pixel. For `672x384`, its 1x seed is 258,048 texels / 0.98 MiB and
+   its `1344x384` refined cache is 516,096 texels / 1.97 MiB; both total 2.95 MiB. Refinement adds
+   0.516M seed and 1.032M parallax samples per changed depth, versus 22.708M parallax samples for a
+   blind 2x-by-2x 11-step solve. Compose remains one refined-map plus one color lookup per output.
+   September 4 4K windows reached thermal status 4 at 69-98% GPU busy, so the new route still needs
+   a same-clip edge/thermal A/B. RG16F quantization is bounded below 0.06 source pixel at 4K; the
+   remaining edge limits include residual map reconstruction and the ZipDepth/model grid itself.
+3. **Traversal count and staging:** Android still renders a model-size RGBA8 target, packs it in a
+   second pass, performs separate raw/cut/history passes, runs four serial-line conditioner passes,
+   and renders the inverse map. Host fusion and direct tensor writes remain
+   optimization opportunities, subject to exact-output tests.
+4. **Observation domain:** client appearance/reuse evidence sees decoded, tonemapped pixels and uses
+   decoder callbacks as source steps; host sees authoritative capture/route/damage state. Numeric
+   cut thresholds therefore remain client-calibrated even though confirmation/ownership semantics
+   match.
+5. **Optional features:** foreground ROI, subtitle detection/local-plane conditioning, and
+   authenticated host exact/damage metadata are deferred. Standard Sunshine and Apollo sessions
+   remain fully compatible because none is assumed.
+6. **Platform path:** D3D/CUDA/TensorRT/P010 and authenticated HLSL cache behavior cannot be copied
+   to GLES/OpenCL/SceneCore. Device logs and sustained Galaxy XR measurements remain the acceptance
+   authority.
+
+The next measurement gate is a same-clip, same-stream comparison of exact-area input, direct raw
+V2 output, exact-seed/refined-cache reconstruction error, cut recovery, near-identical reuse, GPU
+stage times, and 15-minute thermal behavior. A background-only slow gauge correction remains a contingency only if
+that evidence shows within-shot global ZipDepth scale drift; full-frame or foreground percentile
+normalization must not return.
+
+## Historical audit (2026-07-25)
 
 This records the historical gap analysis that compared the client's GLES SBS pipeline against
 Apollo's HLSL pipeline. The audit snapshot used Apollo-3D at `d37237d5` (2026-07-25) and the client
-at `c69b4f7f`. The findings and measurements remain below because they explain the current contract,
-but the audit-snapshot client behavior must not be read as the current implementation. The current
-production contract is documented in `android-xr-sbs.md`.
+at `c69b4f7f`. The findings and measurements remain below because they explain why several
+experiments were tried. They are not the current contract.
 
-## Current implementation status (2026-07-25)
+> **Historical terminology:** every use of “current client,” “closed,” “preferred,” or “fallback”
+> below refers to the July normalized-depth/Bestv2 implementation and its later closure work. That
+> geometry has since been removed from live production. The authoritative September contract is the
+> migration matrix above and `android-xr-sbs.md`.
 
-| Area | Current status |
+### Historical implementation status
+
+| Area | Status at the historical snapshot / later close |
 |---|---|
-| Zero plane | **Closed.** The client uses the shot-latched median anchor, resolved at the cut and settle crossing. |
-| Adaptive pop | **Closed.** Risk is gradient-magnitude weighted; endpoints are `0.04` / `0.20`; the settled, shot-latched strength spans `1.20`–`2.00`. |
-| Stretch band and raw normalization | **Closed.** Both use P2/P98 outer edges and attack-fast/release-slow temporal envelopes. |
-| Warp | **Partial.** Anchor consumption, convergence removal, unreachable-clamp removal, base pop, and the depth-grid-derived probe budget are fixed. The over-wide radius and output-relative probe lattice remain open. |
-| Cut detection | **Closed semantics.** Both sides use exposure-invariant structure plus depth corroboration and one-pulse/two-low hysteresis; model-grid depth thresholds remain intentionally different. |
+| Zero plane | The July path later used a shot-latched median/Bestv2 anchor. Raw V2 replaced it. |
+| Adaptive pop | The July path later used a settled `1.20`–`2.00` controller. Fixed `1.75` replaced it. |
+| Stretch and normalization | The July path later used P2/P98 for geometry. P2/P98 now survives only in private cut analysis. |
+| Warp | The July probe route and its later normalized contractive variant are no longer compiled by the live renderer. Raw V2 feeds the strict contractive inverse directly. |
+| Cut detection | Exposure-invariant evidence and independent rearming survived; ordinary geometry now adds two-update confirmation and coherent history ownership. |
 | Apollo depth geometry mirror | **Closed.** `APOLLO_MAX_DEPTH_LONG_SIDE` is `1036`. |
-| Model assumptions | **Open caveat.** Depth polarity is still implicit rather than declared and tested. |
+| Model assumptions | The sole ZipDepth family now declares high-is-near and carries one calibrated raw scale per graph. |
 
-The client's depth map is much coarser than the host's — canonical buckets `322x182`, `350x154`,
+At that snapshot, the client's depth map was much coarser than the host's — canonical buckets `322x182`, `350x154`,
 `434x126` (~55k px) against the host's `770x434` (~334k px), roughly 6x fewer pixels and a 2.4–3.4x
 coarser short side. Several host constants are expressed per depth texel and **must not be copied
 verbatim**; the last section lists exactly which, and the client already owns the right mechanism
 for most of them.
 
-## What already matches — do not "fix" these
+## What matched in the July pipeline — historical only
 
 | Element | Status |
 |---|---|
@@ -37,10 +109,10 @@ for most of them.
 | Subject EMA 0.20, recenter strength 0.35 | identical |
 | Separate convergence EMA/bias | absent under the explicit zero plane |
 | Shot state machine: startup blocks both arms through valid-depth-update age 8; accepted cuts latch; geometry and appearance rearm independently after two low/quiet updates; relative-spike escape at valid-depth-update age 8 | same mechanism; absolute thresholds are calibrated per depth grid (P2 table below) |
-| Separable `[0.375, 0.25, 0.375]` depth prefilter | identical |
+| Separable `[0.375, 0.25, 0.375]` depth prefilter | historical match; common to preferred fixed-inverse and legacy frontmost-probe branches on the client |
 | `spatialThresholdScale` reference-gradient normalization / `alphaForInterval` wall-time normalization | correct mechanism, keep |
 
-## P0 — the zero plane (closed)
+## P0 — the zero plane (historical closure; removed)
 
 The client now matches the host's **shot-latched `median`** anchor. Both resolve the median through
 the same shaped-depth and Bestv2 shift path used by reprojection, store the result as a source-pixel
@@ -68,7 +140,7 @@ to a shift through the exact warp shaping, publishes it in the profile texture, 
 shaders consume it as `anchorShift`. Under this explicit plane the convergence bias is identically
 zero.
 
-## P0 — adaptive pop (closed)
+## P0 — adaptive pop (historical closure; removed)
 
 The client now matches the production controller: above the 0.02 edge threshold it accumulates
 `min(referenceGradient / 0.02, 8.0) * 256` rather than a bare edge count, maps the resulting
@@ -96,7 +168,7 @@ The four audit defects, and why the closed changes matter, were:
    violent edge count more than a marginal one and evaluates the gradient in Apollo reference-grid
    units.
 
-## P1 — stretch band (closed)
+## P1 — stretch band (historical geometry; now cut-only)
 
 The current client uses the host contract: **P2/P98**, the crossing bins' outer edges, and an
 attack-fast/release-slow envelope in `(lo, hi)` space. Expansion is immediate; contraction uses the
@@ -126,7 +198,7 @@ Why all three closed changes matter:
   strength. The current client damps the release side at 0.18; the attack side is an immediate
   `min`/`max`, because symmetric lag itself clips.
 
-## P1 — raw normalization range (closed)
+## P1 — raw normalization range (historical geometry; now cut-only)
 
 The current client also uses P2/P98 outer bounds for raw normalization and expands the range
 immediately while contracting it with the wall-time-normalized α 0.18 envelope. The audit had the
@@ -148,14 +220,19 @@ same two temporal/quantization defects as the band:
   *lowers* the gain; fast shrinking is what makes the depth scale breathe. Measured host-side, jitter
   improved (core `static_jitter_p95` -2.75%) rather than regressing.
 
-## P2 — warp (partial)
+## P2 — legacy probe warp (historical; removed from live rendering)
+
+This section describes the July fallback and the normalized-depth contractive path that briefly
+superseded it. Neither is compiled by the current live renderer. The measurements remain useful for
+understanding why frontmost multi-probe inversion was rejected, but its radius and lattice are no
+longer production work items.
 
 Five audit items are closed: both warp paths consume the shot-latched anchor, `convergenceOffset`
 is gone, the unreachable parallax clamp is gone, base pop is `1.20`, and the compiled probe budget
 is derived from `1.22 / depthWidth` instead of fixed aspect counts. Two items remain open: the
 radius is still the historical over-wide bound, and probes still use an output-relative lattice.
 
-| Detail | Host | Current client | Audit-snapshot client |
+| Detail | Host at that audit | July closure path | Audit-snapshot client |
 |---|---|---|---|
 | `depthParallax` | `(shift - anchor) * parallaxScale * outputScale` | same anchor-relative form (with `outputScale` folded into `parallaxScale`) | added `convergenceOffset`, then wrapped in `clamp(±limit)` |
 | base pop | 1.20 | **1.20** | 1.25 |
@@ -179,13 +256,13 @@ radius is still the historical over-wide bound, and probes still use an output-r
   produce rather than this frame's, and the configured ceiling rather than the resolved ratio.
   Replacing it with the frame's own exact bound cut mean probes per pixel from 42.7 to 16.0 and warp
   time by ~46% host-side. The client still uses that over-wide form, so this is now a performance
-  gap rather than a correctness gap.
+  gap in that retired path rather than a correctness gap.
 * **Global lattice — open.** Probes at `uv.x ± i*step` move with every pixel, so narrowing the
   window moves every probe. On a global lattice `k * spacing`, a narrowed window is a strict
   *subset* at identical positions. This is what makes window-narrowing provable rather than
   hopeful.
 
-## P2 — cut detection (mechanism parity, calibrated numeric differences)
+## P2 — cut detection (historical baseline; current confirmation is above)
 
 | detail | host | client |
 |---|---|---|
@@ -212,9 +289,9 @@ spatially broad raw change are required for a proposal. The client also counts s
 reliable current relations and with four common relations. Five percent is sufficient frame-level
 support. Supported history losing current structure is exposure-like for one update regardless of
 raw color distance, and COMMIT preserves the last supported ordinal grid and histogram while setting
-supported-history and one-gap bits in the existing block count. The depth path also retains the
-pre-gap effective normalization range, geometry baseline, and depth texture on that exposure-like
-update. A second consecutive low-structure update resolves against that coherent tuple with
+supported-history and one-gap bits in the existing block count. The depth path retains the
+pre-gap geometry baseline and dedicated reliable depth on that first structureless update, while
+its live range and immediate temporal depth still update. A second consecutive low-structure update resolves against that reliable tuple with
 geometry authority, advances history, and enters
 an accepted persistent-low state. Later unsupported updates remain there without a timer or event,
 so a real persistent flat scene cannot extend the brightness veto or periodically retrigger it.
@@ -233,13 +310,26 @@ bit 2 marks accepted persistent-low start, and bit 3 marks its first supported r
 depth pipeline without another buffer, dispatch, or readback. The explicit CPU/manual cut input
 still asserts appearance authority and never creates the automatic veto.
 
-That proposal may still reset temporal depth filtering, but it is not sufficient authority to move
-shot-owned state. `RESOLVE_RAW_RANGE` accepts it as a one-update shot pulse only when at least 18%
-of depth texels changed, or at least 10% changed alongside a 6% range-distribution shift. Startup
+The color detector is optional to presentation. If its program cannot be created or later fails,
+Client SBS keeps inference and reprojection active, disables appearance/exposure classification and
+near-identical reuse, and falls back to bounded two-valid-observation geometry confirmation without
+inventing ordinal support. `CUT_DECISION_DEPTH_ONLY_FALLBACK` keeps pending, accepted, and rejected
+fallback decisions attributable in telemetry.
+
+That proposal does not reset immediate temporal depth and is not sufficient authority to move
+shot-owned state. The post-temporal cut/profile resolver accepts it as a one-update shot pulse only
+when at least 18% of depth texels changed, or at least 10% changed alongside a 6%
+range-distribution shift. Startup
 blocks both proposal arms until settling completes. An accepted cut clears both arms and latches
 shot state. Geometry and appearance then recover independently: two low-depth updates rearm
 geometry, while two proposal-quiet updates rearm appearance. One noisy channel therefore cannot
 starve the other.
+
+The six-dispatch Android implementation publishes an advancing result's scalar ownership decision
+at the final resolver, then promotes that result's exact temporal texture at the beginning of the
+next actual inference, before the new comparison. Scene/model history is committed after the
+result. This deferred per-pixel copy is the coherent equivalent of an end-of-result tuple advance;
+reuse dispatches nothing and cannot promote or alter it.
 
 Persistent-low start sets the existing reserved `cutStateCounters.y` lane to one. It stays one
 through later low-support updates. The typed first-supported-return event gets exactly one absolute
@@ -253,20 +343,18 @@ eligible only while geometry remains unarmed, so the representation difference d
 relative-spike authority. On or after the eighth valid depth update following a cut, a new geometry
 spike can still cut through persistent above-low motion when it exceeds both the absolute `0.30`
 floor and the previous depth-change EMA by `+0.20` or `2x`, unless that exact color transition is
-exposure-like. Absolute standalone geometry is vetoed under the same condition. The
+exposure-like or is the one-valid-update recovery tail after a preserved exposure/same-scene
+return. That tail freezes only the novelty baseline; a real appearance proposal bypasses it.
+Absolute standalone geometry is vetoed under the same condition. The
 depth-corroborated appearance route is unaffected. Constant
 motion converges into that EMA and cannot periodically retrigger; a genuinely
 stronger geometry event remains detectable. Client elapsed-time catch-up never advances this
 counter: `referenceFrameAdvance` applies only to the separate adaptive-pop/anchor profile age.
 
-If an accepted inference has no valid depth after its exact color frame has already committed
-detector history, the client stores the complete negated evidence word in GPU state and offers it
-to the next valid accepted depth update. A nonzero current word replaces the pending
-classification—even when the current word is an event with no classification—while event bits
-accumulate. This prevents the first-flat exposure veto from leaking onto the event-only second
-flat. Current geometry must corroborate an appearance proposal; an exposure-like classification
-vetoes only the standalone and relative geometry routes. The valid update consumes the word. This
-is GPU-state evidence carry, not color/depth re-pairing.
+If an accepted inference has no valid depth, its scene classification has no later authority.
+The invalid transaction preserves camera, cut FSM, range, immediate temporal depth, and every
+reliable history owner; only health/event telemetry may record it. The next valid update consumes
+only its own exact scene record, matching the host resolver's evidence lifetime.
 
 These numeric thresholds are intentionally not literal copies. The client evaluates a depth grid
 whose short side is roughly 2.4–3.4x coarser and has an authenticated range-distribution statistic
@@ -303,11 +391,11 @@ covers both regimes; dividing `edgeFraction` afterward would normalize twice and
 depth cadence. The raw-range and stretch-band release alphas (both based on 0.18) now go through it;
 their attack side is an immediate `min`/`max` and has no time constant.
 
-**2. Probe-budget rule is now handled correctly — keep the formula.**
-Host probe spacing is `BESTV2_TARGET_DEPTH_TEXELS / depth_width` with `TARGET = 1.22` — i.e. 1.22
+**2. Legacy probe-budget rule was handled correctly before removal.**
+Historical host probe spacing was `BESTV2_TARGET_DEPTH_TEXELS / depth_width` with `TARGET = 1.22` — i.e. 1.22
 *depth texels*, expressed in normalized source U. Feeding the client's own `depth_width` adapts
 automatically: at 322 wide, spacing is 2.4x the host's at 770, and the step count for a given radius
-falls proportionally. The current client derives:
+fell proportionally. The July closure path derived:
 
 ```
 spacing = 1.22 / clientDepthWidth
@@ -324,60 +412,54 @@ matches the resolution of the signal it samples; finer oversamples a bilinear ma
 one-breakpoint-per-interval argument. The client's coarser depth means **fewer** probes, not the same
 number — a direct perf win alongside the quality fixes.
 
-**3. Content calibration remains validation, not an implementation-parity gap.**
+**3. Historical content calibration.**
 The adaptive-pop endpoints (0.04 / 0.20) were calibrated against the *host's* measured weighted edge
 fraction at 434 short side. Resolution transfer comes from the linear
 weighted-gradient/coarse-density cancellation plus the cap-aware producer normalization described
 above, not from an extra division of `edgeFraction`. The `0.04` / `0.20` implementation parity work
-is closed, but this remains an empirical calibration rather than an identity: MiDaS v2 and DA-V2
-may produce different edge-density distributions. Measure representative content before making any
-model-specific retuning. The old, unmeasured `0.007` / `0.016` endpoints are the known-bad
-historical values.
+was closed for that normalized-depth controller, but it is no longer a production geometry input.
+The current raw V2 path fixes pop at `1.75`; private edge density remains cut/diagnostic evidence.
 
-## Model note: DA-V2 vs MiDaS v2 — verified
+## Historical model note: DA-V2 vs MiDaS v2 (superseded)
 
-**There is no separate MiDaS path.** `midas` appears only in `ClientSbsModelManifest` and the
-preference/UI classes; there is not one line of MiDaS-specific code in `com.limelight.sbs` or in
-either shader file. `createMidasStaticManifest` and `createDepthAnythingStaticManifest` differ only
-in tensor names and dimension constraints — both produce
-`directFullFrameResize=true, dynamicSpatialShape=false, AUTOMATIC_FP16`. Both feed the same
-`ClientSbsGpuDepthProcessor` and the same two warp programs, so any change here lands on both.
+At the 2026-07-25 audit snapshot, there was no separate MiDaS processing path. `midas` appeared only
+in `ClientSbsModelManifest` and preference/UI classes; the two families fed the same depth processor
+and warp programs. Their manifest factories differed only in tensor names and dimension
+constraints, and both used direct full-frame resize, static shapes, and automatic FP16 execution.
 
-Per-model geometry flows correctly: `Stereo3DRenderer` constructs the processor from
-`aiModel.getOutputWidth()/getOutputHeight()`, and `spatialThresholdScale` is derived from those, so
-MiDaS `352x192` resolves to 2.26 and DA-V2 `322x182` to 2.38 with no per-model constants.
+Per-model geometry also flowed correctly in that snapshot: `Stereo3DRenderer` constructed the
+processor from the selected output dimensions and derived `spatialThresholdScale` from them, so
+MiDaS `352x192` resolved to 2.26 and DA-V2 `322x182` to 2.38 without per-model constants.
 
-Everything above is model-independent — it operates on the *normalized* depth map, after
-`RESOLVE_RAW_RANGE` has mapped whatever the model emits into [0,1] via its own P2/P98 range. Two
-places where model identity does leak through:
+That historical analysis operated on the *normalized* depth map, after `RESOLVE_RAW_RANGE` mapped
+each model's output into [0,1] through its own P2/P98 range. It identified two model-dependent
+concerns:
 
-1. **Adaptive-pop edge-density calibration** (class 3 above). The parity implementation is closed,
-   but edge density remains a property of output sharpness. Measure weighted edge fraction per
-   model family before changing the current 0.04/0.20 calibration.
-2. **Depth polarity is an undocumented, untested assumption.** The client has no polarity transform
-   and no per-model flag, where Apollo has an explicit "transform model output into high-is-near
-   convention" pipeline step. It currently works because MiDaS v2 emits inverse depth and DA-V2's
-   output is disparity-like, so both are high-is-near — but nothing enforces or tests it. The
-   subject percentile scans from bin 255 as "near" and `bestv2RawShift` maps higher shaped depth to
-   larger positive shift, so an opposite-polarity model would render the whole scene inside-out with
-   nothing catching it. A one-off startup check (correlate a coarse depth statistic against a known
-   near/far test pattern, or simply assert the manifest declares a polarity) is cheap insurance
-   before a third model is ever added.
+1. **Adaptive-pop edge-density calibration.** This concern became obsolete when raw V2 fixed pop at
+   `1.75`; edge density remains useful for cut diagnostics only.
+2. **Depth polarity.** The old DA-V2/MiDaS selection relied on an implicit high-is-near assumption.
+   Current production removes that ambiguity: the sole ZipDepth manifest declares and asserts that
+   its nonnegative affine-invariant inverse-depth output is high-is-near. Per-graph raw V2 scales
+   handle coordinate magnitude; private P2/P98 analysis must not flip polarity. Any future model
+   family must declare, calibrate, and test this contract before it can enter production.
 
-## Search-radius/pop-ceiling coupling (closed)
+## Legacy search-radius/pop-ceiling coupling (historical; removed)
+
+The following coupling applied only to the removed cached/direct probe route. The current raw V2
+contractive path has no search radius or probe lattice.
 
 The probe radius must be sized from the adaptive-pop **maximum**, not the resolved ratio. When the
 band rose to 2.00, both warp templates therefore changed their radius multiplier from 1.30 to 2.00;
 otherwise a high-pop scene's displacement could leave the search window and the probe would miss
 crossings.
 
-That correctness coupling is closed. It is separate from the still-open radius-tightening work:
-the current 2.00-sized radius is deliberately safe but uses the historical over-wide formula. The
-probe budget is no longer a fixed 32/24/16; it now follows the `1.22 / depthWidth` rule described
-above. Replacing the radius with the frame's exact reach and moving those probes onto a global
-lattice remain the two warp follow-ups.
+That correctness coupling was closed before the path was removed. Radius tightening and a global
+probe lattice are not current follow-ups.
 
-## Current follow-up order
+## Historical follow-up order (superseded)
+
+This was the July audit's order. Use the current migration matrix at the top of this file for new
+work.
 
 1. Finish warp radius/lattice work (P2): frame-exact reach plus a global probe lattice.
 2. Decide whether the remaining depth-side cut thresholds need host parity given the richer client

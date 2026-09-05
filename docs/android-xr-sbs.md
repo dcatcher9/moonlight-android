@@ -47,6 +47,13 @@ virtual display. Apollo-3D-only controls (Host SBS AI, host depth telemetry/debu
 video-mode changes) must be capability-gated and must never be sent speculatively to a standard
 host.
 
+Client near-identical reuse is fully local and adds no `serverinfo`, launch, RTSP, or control
+message. It works unchanged with original Sunshine and Apollo. If host-assisted exact/damage reuse
+is pursued later, it must be a distinct versioned capability advertised by the host; support must
+never be inferred from `hostsessionid` or another unrelated extension. When that capability is
+absent, malformed, or stale, Client SBS must continue with local decoded-pixel arbitration or full
+inference without rejecting the session.
+
 Only Raw Full owns a distinct negotiated transport: its `2W x H` stream requires a reconnect when
 entering or leaving that transport, and changing Full/Half while Raw is live likewise reconnects.
 Raw Half is the ordinary `W x H`, `sbs_mode 0` wire stream, so entering or leaving Raw Half is a
@@ -92,226 +99,129 @@ Client SBS has one production inference path:
 MediaCodec
   -> external-OES SurfaceTexture
   -> SurfaceTexture crop/orientation transform
-       |-> GLES SDR model-input render + fused tensor-pack/color-cut pass (slot 0 or 1)
+       |-> GLES SDR exact-area model-input render + fused tensor-pack/color-cut pass (slot 0 or 1)
        |    (one stream-selected static depth-model aspect bucket)
-       |    -> GPU color-cut flag for that exact model input
-       |    -> input-ready fence -> native LiteRT 2.x / validated OpenCL precision
-       |    -> packed Float32 GL depth buffer (same slot)
+       |    -> GPU color-cut flag + client-local integrity-checked near-identical decision
+       |    -> input-ready fence -> native arbitration
+       |         |-> infer: LiteRT 2.x / validated OpenCL -> packed Float32 depth (same slot)
+       |         `-> reuse: skip LiteRT and retain the last real depth/profile/warp
        `-> full-resolution matched color texture (same slot)
-  -> adopt the completed exact color/depth pair and retain its color-slot lease
-  -> GLES depth statistics + temporal/profile processing
-  -> capture/enqueue the newest frame into the other slot
-  -> depth prefilter + 1x-depth RG16F shared two-eye inverse-warp map
-  -> full-resolution warp lookup + matched-color sample directly into the default framebuffer
-  -> one EGL swap for the newly adopted pair
-  -> SceneCore retains that submitted buffer until the next exact pair is adopted
+  -> adopt current color and retain its color-slot lease
+  -> infer only: GLES raw mean + private P2/P98 cut analysis + coherent history commit
+  -> reuse only: freeze every depth-derived and comparison-history field
+  -> infer only: source-aligned raw R32F ZipDepth -> per-graph coordinate
+  -> host V2 far/linear/near curve + fixed pop 1.75
+  -> exact +/-0.04 fourth-root container
+  -> vertical 2/W upper/lower envelopes with 0.75/0.25 share
+  -> horizontal 0.5/W least majorant
+  -> host-exact at-most-11-step fixed-point inverse in a 1x-depth RG16F two-eye seed map
+  -> one fixed-point correction in a 2x-horizontal x 1x-depth RG16F refined cache
+  -> full-resolution refined-warp lookup + matched-color sample directly into the default framebuffer
+  -> one EGL swap for the newly adopted result
+  -> SceneCore retains that submitted buffer until the next adoption
+
+Any invalid raw field or conditioner, seed-map, refinement, or compose failure presents current
+color flat; the live renderer has no seed-only or alternate Bestv2/probe geometry path.
 ```
 
-Production offers Depth Anything V2 Small and MiDaS v2.1 Small as explicit model families, plus
-explicitly labeled experimental DepthART S448 and original ZipDepth Base candidates. DA-V2, MiDaS,
-and ZipDepth each have three fixed-shape aspect buckets; DepthART currently has two short-384
-graphs. All use FP16-stored large weights and Float32 public tensors. When the renderer is
-constructed, it chooses the graph with the smallest multiplicative aspect error,
-`abs(log(bucketAspect / streamAspect))`, directly within the selected family. The selection is
-immutable until the next stream.
+Production uses original ZipDepth Base as the single Client SBS model family. It has three
+fixed-shape short-side-384 aspect graphs with FP16-stored large weights and Float32 public tensors.
+When the renderer is constructed, it chooses the graph with the smallest multiplicative aspect
+error, `abs(log(bucketAspect / streamAspect))`. The graph is immutable until the next stream; this
+is aspect routing within one model family, not a user-selectable model choice.
 
-| DA-V2 target aspect | Input/output size | Logical model | SHA-256 |
-| --- | --- | --- | --- |
-| 16:9 | `322 x 182` | `depth-anything-v2-small-static-322x182-fp16weights.tflite.model` | `82f8594f4ee615ab82f968aa461a3960c4cd680293fd087cb65d8631b18e4271` |
-| 21:9 | `350 x 154` | `depth-anything-v2-small-static-350x154-fp16weights.tflite.model` | `2739f306ce71b19a913cdc32c779226a620f7f81685a1946ac213fdbeeba67b0` |
-| 32:9 | `434 x 126` | `depth-anything-v2-small-static-434x126-fp16weights.tflite.model` | `353eb80fd6b9c6f97552a20b7bd29f79466a9b05287dcd4bfd93baaa4c1730f5` |
-
-| MiDaS target aspect | Input/output size | Asset | SHA-256 |
-| --- | --- | --- | --- |
-| 16:9 | `352 x 192` | `midas-v2-small-static-352x192-fp16weights.tflite.model` | `2a3ee0a1e818c4f785bcd0ceb10f5c81f08b3b91304f2f15d113c1089d3e524e` |
-| 21:9 | `384 x 160` | `midas-v2-small-static-384x160-fp16weights.tflite.model` | `5a66ab484a888c3c9e1642580ac3086c7d6d3175a860ca1e82f30d7a58c532bd` |
-| 32:9 | `448 x 128` | `midas-v2-small-static-448x128-fp16weights.tflite.model` | `060ec0e16fd4e20f2626d6ac51d80853a1bdf9b2f082c3d933099784cf9cabfb` |
-
-| Experimental DepthART target | Input/output size | Asset | SHA-256 |
-| --- | --- | --- | --- |
-| 16:9-nearest | `672 x 384` | `depthart-s448-static-672x384-fp16weights.tflite.model` | `3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b` |
-| 21:9-nearest | `928 x 384` | `depthart-s448-static-928x384-fp16weights.tflite.model` | `d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2` |
-
-| Experimental ZipDepth target | Input/output size | Asset | SHA-256 |
+| ZipDepth target | Input/output size | Asset | SHA-256 |
 | --- | --- | --- | --- |
 | 16:9-nearest | `672 x 384` | `zipdepth-base-static-672x384-fp16weights.tflite.model` | `6296d5c2e4f857fd551d854ebf4dd2ab2462c0d7372d526bf0a7463718b8b6d1` |
 | 21:9-nearest | `896 x 384` | `zipdepth-base-static-896x384-fp16weights.tflite.model` | `31467ab0cd187b74c65b3b20f4850973309d120519b587610e3dd3e27b72df4a` |
 | ultrawide-nearest | `928 x 384` | `zipdepth-base-static-928x384-fp16weights.tflite.model` | `169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc` |
 
-The non-root flavor packages the eleven fixed-shape graphs for the four selectable families in
-four standard solid family archives:
+The non-root flavor packages the three fixed-shape graphs in one standard solid family archive:
 
-- `app/src/nonRoot_game/assets/client-sbs-dav2-models.tar.xz`
-- `app/src/nonRoot_game/assets/client-sbs-midas-models.tar.xz`
-- `app/src/nonRoot_game/assets/client-sbs-depthart-models.tar.xz`
 - `app/src/nonRoot_game/assets/client-sbs-zipdepth-models.tar.xz`
 
-Each archive is a standard TAR containing its family's complete `.tflite.model` files under
-the exact logical filenames in the tables above. One XZ/LZMA2 stream compresses the complete TAR,
-so the compressor can exploit redundancy across the family's static graphs. There is no base/delta
-encoding, XOR transform, custom model representation, or model reconstruction step. The Java model
-manifest maps each logical model to its family archive and TAR entry and records its expected
-SHA-256.
+The archive is a standard TAR containing complete `.tflite.model` files under the exact logical
+filenames in the table above. One XZ/LZMA2 stream compresses the complete TAR so the compressor can
+exploit redundancy across the three static graphs. There is no base/delta encoding, XOR transform,
+custom model representation, or model reconstruction step. The Java manifest maps each graph to
+its TAR entry and records its expected SHA-256.
 
-The deterministic DA-V2 TAR/XZ is 44,429,612 bytes (42.37 MiB), SHA-256
-`3f9892624253e5d7301d6b0eb28acc7ef30ac2cf3131acbc7a8c1f59696ad148`. The MiDaS TAR/XZ is
-29,947,928 bytes (28.56 MiB), SHA-256
-`166be90ec3866dfeae61ce7163df49414840b6d054466d79dbe153ea3ebc8b94`. The experimental DepthART
-TAR/XZ is 10,991,860 bytes (10.48 MiB), SHA-256
-`1dccec4aa315288b5cc471a9d585d57e00d0e12a56870cb4712da5f20fb476a6`. The experimental ZipDepth
-TAR/XZ is 11,149,420 bytes (10.63 MiB), SHA-256
-`0b737e7ff7d6717c9b376e2e6d195eb5ff4a54d49d862e3415f155d137c78558`. All four total 96,518,820
-bytes (92.05 MiB). Android stores the already-compressed XZ assets directly rather than adding a
-second compression layer. Measure the current APK from the requested build output; its total size
-is intentionally not pinned here because application code and build metadata change it.
+The deterministic TAR/XZ is 11,149,420 bytes (10.63 MiB), SHA-256
+`0b737e7ff7d6717c9b376e2e6d195eb5ff4a54d49d862e3415f155d137c78558`. Android stores the
+already-compressed XZ asset directly rather than adding a second compression layer. Retired DA-V2,
+MiDaS, and DepthART archives remain outside Android source sets under
+`tools/model-sources/retired-client-sbs-archives/`; they are not packaged in any APK.
 
-On the first Client SBS activation in a stream session, the loader selects one model contract and
-scans the family TAR/XZ stream,
-writes only that complete TAR entry under `code_cache/client-sbs-model-assets`, verifies its
-SHA-256, and gives LiteRT the verified read-only file. XZ decompression is sequential: selecting a
-later TAR entry on a cold cache must decompress the preceding stream even though those earlier files
-are not materialized. The verified cache avoids that work on later use. The loader prunes other
-staged models, while a later stream may extract a different selection. The root flavor contains
-none of the family archives or the LiteRT runtime.
+As soon as the stream's renderer chooses its immutable aspect contract, a low-priority background
+thread begins a CPU-only pre-stage: it scans the ZipDepth TAR/XZ stream, writes only that complete
+TAR entry under `code_cache/client-sbs-model-assets`, and verifies its SHA-256. This helper is
+separate from the native engine and loads no JNI/LiteRT library, creates no EGL context, and submits
+no GPU work. Failure is nonfatal so the root flavor, which contains neither the ZipDepth archive nor
+the LiteRT runtime, keeps its normal direct modes unchanged. Speculative staging does not prune a
+different aspect bucket. Authoritative first-use initialization takes the same process lock,
+revalidates a speculatively staged file once before trusting it, prunes other staged graphs, and
+gives LiteRT the verified read-only file. Later authoritative reuse avoids repeating that digest.
+XZ decompression is sequential: selecting a later TAR entry on a cold cache must
+decompress the preceding stream even though those earlier files are not materialized. The verified
+cache avoids that work on later use.
 
 The selected LiteRT model and compiled GPU delegate remain resident for that stream session after
 the first Client SBS activation. Normal, Raw, and Host SBS submit no Client SBS inference work, but
 retain the idle engine so returning to Client SBS has no model reload or compilation stall. Full
-stream teardown closes it. A process-wide ownership guard permits at most one Client SBS model to
+stream teardown closes it. A process-wide ownership guard permits at most one Client SBS graph to
 be compiling or GPU-resident, including during context recovery and deferred native teardown.
 
-All eleven public contracts are packed Float32 NHWC RGB `[1, H, W, 3]` to packed Float32 BHWC depth
-`[1, H, W, 1]` in shared GL buffers. DA-V2 dimensions are divisible by its 14-pixel patch size and
-use 58,604, 53,900, and 54,684 pixels. Their patch grids are `23 x 13`, `25 x 11`, and `31 x 9`;
-including CLS, they produce 300, 276, and 280 exactly C4-aligned tokens. Static specialization folds
-the runtime shape graph, the transformer attention rewrite replaces rank-5 Q/K/V `GATHER` paths
-with rank-4 operations, and every graph replaces each private 24-operation expanded GELU chain with
-one builtin exact GELU. Each DA-V2 core contains 683 builtin-v1 operators; FP16 weight storage adds
-82 constant `DEQUANTIZE` operators for 765 serialized operations. None has dynamic tensors or
-Flex/custom operators.
-
-MiDaS v2.1 Small uses an EfficientNet-Lite3 encoder and a four-level decoder refinement pyramid,
-so both spatial dimensions must be divisible by 32 to keep every skip connection aligned. Its
-three graphs specialize the verified Qualcomm Float32 model's input, output, and five decoder
-resize targets, then use guarded FP16 storage for the large convolution weights. Small biases stay
-Float32. They deliberately use `352 x 192`, `384 x 160`, and `448 x 128` rather than DA-V2's
-14-aligned dimensions.
-
-DepthART uses one official relative-depth S448 checkpoint exported into two static graphs. Its five
-SelectiveScan sites are expressed as exact associative prefix scans using only builtin operators;
-ImageNet normalization is baked into each graph. The first scan block's LayerNorm is algebraically
-rescaled by four with epsilon rescaled by sixteen so low variance remains a normal binary16 value
-on Adreno. The other four LayerNorm blocks are untouched. The corrected graphs contain 2231 and
-2371 serialized operations. The exact pre-stabilization inputs, final hashes, and guarded
-reproduction commands are recorded in `tools/model-sources/README.md`.
-
-ZipDepth uses the original `base` checkpoint and learned convex upsampler, not `base_npu`. Its exact
-tail is lowered to standard operators, one grouped convolution is densified, and its global-context
+All three public contracts are packed Float32 NHWC RGB `[1, H, W, 3]` to packed Float32 BHWC depth
+`[1, H, W, 1]` in shared GL buffers. ZipDepth uses the original `base` checkpoint and learned
+convex upsampler, not `base_npu`. Its exact tail is lowered to standard operators, one grouped
+convolution is densified, and its global-context
 weighted reduction uses an algebraically equivalent 1024x/1024x scale to avoid Adreno FP16
 flush-to-zero. Every graph has 163 operations. Embedded ImageNet normalization consumes the shared
 raw `[0,1]` RGB input, and the output is nonnegative high-is-near relative inverse depth.
 
-After model selection, all four families use the identical native path: direct full-frame GLES resize
-for landscape sources (reflected aspect-fit for portrait), packed Float32 GL input, LiteRT OpenCL
-inference, packed Float32 GL depth output, and GLES depth/profile/reprojection. The packaged models
+All three aspect graphs use the same native path. Downsampling integrates the exact source-cell
+overlap of each model texel; when either axis is genuinely upscaled it uses pixel-center bilinear
+sampling instead. Portrait aspect-fit resolves reflected padding per source cell. HDR conversion is
+applied before spatial integration. The model-input render remains an RGBA8 staging texture before
+packed Float32 GL input, LiteRT OpenCL
+inference, packed Float32 GL depth output, and GLES depth/profile/reprojection. The packaged graphs
 insert `DEQUANTIZE` nodes between FP16-stored
 weights and the unchanged Float32 graph contract; the GPU delegate can fold those constants into
-its internal representation. All use `AUTOMATIC_FP16` compute and report
-`LITERT_OPENCL_FP16_GL_IO`. No family uses a CPU tensor copy or a separate inference backend.
-MiDaS similarly grows from a 138-operation core to 234 serialized operators through 96 constant
-dequantizations. Initialization still rejects any packaged graph that is not completely delegated.
+its internal representation. They use `AUTOMATIC_FP16` compute and report
+`LITERT_OPENCL_FP16_GL_IO`. There is no CPU tensor copy or alternate inference backend.
+Initialization rejects any packaged graph that is not completely delegated.
 
-This static path is the result of testing the intended single-model dynamic-shape design, not an
-assumption about LiteRT. The LiteRT runtime exposes `LiteRtCompiledModelResizeInputTensor()`, and
-CPU execution can resize the exact dynamic DA-V2 model. The current Android OpenCL and OpenGL GPU
-delegates, however, advertise static-tensor support only. The normal compiled-GPU path rejected the
-graph at its dynamic-tensor guard. Forcing the full-delegation hint past that guard delegated only
-64 of 1,366 nodes before failing on unsupported `CAST` from `INT64`, `FILL`, and rank-5 `GATHER`
-operations. Resizing and allocating before applying the classic GPU delegate failed for the same
-underlying reason. A runtime resize API therefore does not make this graph dynamically delegable
-on the current Galaxy XR GPU stack.
+The static aspect-bucket design is based on physical Galaxy XR testing: the current Android GPU
+delegates require static tensor shapes for complete acceleration. The earlier DA-V2, MiDaS, and
+DepthART model-selection work, including rejected dynamic-shape and half-resolution experiments,
+remains available as historical evidence in `docs/client-sbs-evaluation.md`,
+`docs/client-sbs-dav2-fp16-bisect.md`, and `tools/model-sources/README.md`. Their archived model
+families are not selectable, are not fallback backends, and are not present in the APK.
 
-The allowed static fallback condition was therefore satisfied on the physical Galaxy XR. The
-dynamic asset and the larger `350 x 196`, `392 x 168`, and `490 x 140` Quality graphs were removed
-from production. Legacy dynamic, static-350, and Quality model IDs migrate to the canonical
-three-bucket DA-V2 setting so an upgrade cannot remain pointed at a missing contract.
-
-Every canonical DA-V2 graph delegates its 683-operation core in one OpenCL partition, passes the
-edge-rich FP16-vs-FP32 full-output parity gate, and returns finite, non-flat depth. Idle-device,
-thermal-status-0 FP16 means were 16.416 ms at `322 x 182`, 15.664 ms at `350 x 154`, and 15.830 ms
-at `434 x 126`; corresponding transformed-FP32 means were 28.177 ms, 26.782 ms, and 26.920 ms.
-FP16-versus-FP32 NRMSE was 0.008812, 0.003951, and 0.007030 with cosine at least 0.999968471.
-Candidate FP32 versus its original FP32 graph had NRMSE 0.001675, 0.001440, and 0.000633 with
-cosine at least 0.999999754.
-
-The retired non-C4 Quality graphs remain historical bisect evidence: their original FP16 path
-worked on the old smooth gradient but collapsed to the final learned bias on a modest edge-rich
-input. The later tail-padding/GELU-corrected Quality graphs measured 18.724 ms at `350 x 196`,
-18.439 ms at `392 x 168`, and 18.558 ms at `490 x 140`, but are no longer selectable or stored in
-`client-sbs-dav2-models.tar.xz`. Their safe FP32 and scheduling/fence-tail measurements are not the
-production baseline. The loose historical assets are not retained in the working tree or APK.
-Their hashes and pinned
-reproduction inputs remain documented; stage any regenerated copies only under the ignored client
-`build/` tree or system temporary storage.
-
-The naturally aligned canonical graphs were 12.33%, 15.05%, and 14.70% faster than those retired
-16:9, 21:9, and 32:9 Quality baselines. Profiles recorded 438 model kernels for each graph:
-`322 x 182` used 14.715 ms model / 16.395 ms total delegate work, `350 x 154` used 14.073 ms model
-/ 0.946 ms upload/bind / 0.606 ms download / 15.625 ms total, and `434 x 126` used 14.118 ms model
-/ 1.018 ms upload/bind / 0.345 ms download / 15.481 ms total. Direct full-frame resize into
-`350 x 154` and `434 x 126` introduces -2.60% and -3.125% aspect distortion, respectively; these
-trade-offs remain part of live visual acceptance even though the graphs are now canonical.
-
-A decoder/head experiment kept the `350 x 196` input but produced exact `175 x 98` depth. The
-generated graph, SHA-256
-`1a0df67bd9d2b6524ae51649f7c332420f64fa4f9a8ebdb812c51eec9b553b26`, delegated 707/707 in one
-partition and measured 18.050 ms FP16, 33.194 ms FP32, 462 model kernels / 16.154 ms, and 17.516 ms
-total delegate work. FP16 versus FP32 was NRMSE 0.008534, maximum absolute error 0.056952, and
-cosine 0.999967916. Despite profiling about 9.8 ms across the decoder/head's 1x1 and 3x3
-convolutions, moving only the final full-resolution work saved about 0.67 ms. Edge-aware GLES
-reconstruction would likely consume that saving, so neither this graph nor an upscaling renderer
-path is promoted. More aggressive decoder pruning damaged depth quality and is rejected. Generated
-experiment models remain under this client checkout's `build` or temporary storage, never Apollo-3D.
-
-Recorded Galaxy XR validation also covers every rectangular MiDaS
-graph: each delegates 138/138 OpenCL nodes in one partition, reports complete acceleration and
-OpenCL/OpenGL interop, and returns finite, non-flat, repeatable output. LiteRT call-wall samples
-with automatic internal storage were 16.84–21.06 ms for `352 x 192`, 15.68–16.44 ms for
-`384 x 160`, and 15.31–16.27 ms for `448 x 128`. Corresponding invoke-to-output-ready ranges were
-17.17–21.55 ms, 15.94–16.81 ms, and 15.59–16.74 ms. The previous 10.79–18.37 ms measurement belongs
-only to the retired `256 x 256` graph and is historical.
-
-The corrected experimental DepthART graphs also pass isolated Galaxy XR validation: each is fully
-delegated in one OpenCL partition, retains CL/GL interop, and returns finite structured output.
-With 20 discarded warm-ups and 100 low-priority measured invocations at thermal status 0, the
-`672 x 384` graph measured 27.760 ms median / 28.028 ms p95 LiteRT wall and 28.385 / 28.740 ms
-invoke-to-output-ready; `928 x 384` measured 38.258 / 38.486 ms and 38.904 / 39.149 ms. This is
-isolated model evidence, not sustained live-stream qualification. DepthART remains experimental
-until decode, high-resolution depth postprocessing/reprojection, compositor responsiveness, and
-thermal behavior are measured together. It has no dedicated 32:9 graph; 32:9 currently selects
-`928 x 384` and incurs substantial direct-resize aspect compression.
-
-The corrected original-Base ZipDepth graphs also pass isolated Galaxy XR validation with 163/163
+The original-Base ZipDepth graphs pass isolated Galaxy XR validation with 163/163
 operations in one OpenCL partition, CL/GL interop, and finite structured output. Controlled
 low-priority LiteRT median/p95 times were 10.089/10.310 ms at `672 x 384`, 12.991/13.189 ms at `896 x 384`, and
 13.308/13.488 ms at `928 x 384`; output-ready medians were 10.670, 13.599, and 13.924 ms. These are
 isolated model results, not sustained decode/reprojection or thermal qualification.
 
-Native initialization extracts and SHA-verifies the selected complete archive entry, verifies its fixed
-tensor layouts, compiles it once, and allocates two GL input/output slot pairs from those layouts.
+Native initialization extracts and SHA-verifies the selected complete archive entry, verifies its
+fixed tensor layouts, compiles it once, and allocates two GL input/output slot pairs from those layouts.
 Per-frame code reuses that graph and those allocations; it must never extract, resize, or recompile
 in the render loop. LiteRT performs its packed-to-internal conversion on the GPU. Production keeps
 the public renderer contract packed
 NHWC: a debug-only half4 external-buffer probe was slightly faster but reproducibly left output
-pixels unwritten after a fresh refill, so it failed completeness/parity and remains rejected. All
-families use automatic internal OpenCL storage.
-Their execution policies are included in the compiler-cache namespace. The
+pixels unwritten after a fresh refill, so it failed completeness/parity and remains rejected.
+ZipDepth uses automatic internal OpenCL storage. Its execution policy is included in the
+compiler-cache namespace. The
 renderer and inference worker
 exchange GL fences
 across shared EGL contexts; model tensors are not mapped into Java or staged through CPU memory.
-Complete one-partition OpenCL delegation is mandatory; partial delegation or CPU execution is
-initialization failure. MiDaS v2.1 Small remains an explicit user-selected A/B family; DepthART and
-ZipDepth remain explicitly labeled experimental choices. None is an automatic failure fallback.
+Complete one-partition OpenCL delegation is mandatory; partial delegation or CPU execution is an
+initialization failure. There is no alternate model selection, inference backend, or live geometry
+fallback. The required raw-R32F V2 conditioner, exact 1x fixed-point seed, 2x-horizontal one-correction
+refinement, and packed compose initialize as one strict route. If any of them is unavailable or
+later fails, Client SBS duplicates current mono color instead of exposing the seed alone or an older
+or differently normalized geometry.
 
 There is no production managed Java LiteRT interpreter, QNN/HTP delegate, CPU inference path, PBO
 tensor readback, or Java depth-result worker. Native initialization requires full GPU delegation
@@ -323,11 +233,13 @@ The inference worker owns native LiteRT creation, invocation, and destruction. D
 engine from the renderer thread. Renderer-side failures must signal the owner thread to stop, while
 releasing every frame-slot lease, inference claim, and GL fence exactly once.
 
-## Matched color/depth scheduling
+## Color/depth scheduling and bounded reuse
 
-Client SBS deliberately behaves like Apollo's delayed host path: a depth result remains paired with
-the exact captured color slot that produced it. Presentation may be delayed by inference, but a new
-depth map must never warp a different color frame.
+Every real Client SBS inference remains paired with the exact captured color slot that produced
+it. The sole deliberate exception is Apollo-compatible near-identical reuse: after a GPU comparison
+accepts a new model input, the renderer presents that current color with the cached depth, profile,
+conditioned disparity, and warp derived from the last valid real inference. No other path may pair a color
+frame with older depth.
 
 Scheduling is readiness-driven rather than timer-driven:
 
@@ -336,32 +248,67 @@ Scheduling is readiness-driven rather than timer-driven:
 - Surface callbacks may coalesce to the newest decoded frame. The GL thread continues draining and
   latching pending `SurfaceTexture` frames while inference is busy so the decoder consumer does not
   back up.
+- A monotonic source-step approximation advances on every accepted decoder callback, including
+  callbacks coalesced before one `updateTexImage()` latch. The callback sequence assigned to a
+  latch is protected through `updateTexImage()`, so the four-step reuse bound cannot silently omit
+  coalesced frames.
 - A single-flight inference claim prevents the worker queue from growing.
 - There are exactly two native input/output tensor slots and exactly two matching full-resolution
   color slots. A capture, its public LiteRT tensors, and its eventual depth result always use the
   same slot index.
-- The two slots allow one exact color/depth pair to remain active while the newest uncaptured frame
-  is captured and inferred. LiteRT invocation itself remains single-flight.
+- The two slots allow one published color/depth state to remain active while the newest uncaptured
+  frame is arbitrated. LiteRT invocation itself remains single-flight.
 - The renderer submits the model-input fence before the full-resolution color copy. That lets the
-  worker start the same-slot inference while the renderer finishes capturing the matched color,
-  without weakening their shared lease/generation identity.
-- After result N becomes ready, the renderer makes color N active while explicitly invalidating
-  depth, releases the superseded active slot, and captures/enqueues frame N+1 into that slot before
-  submitting N's depth/profile work. Per-slot GPU scene-cut words preserve N's evidence while the
-  detector advances N+1. The renderer then publishes depth N and prefilters, warps, and submits the
-  exact pair. This overlaps OpenCL inference N+1 with both depth postprocessing and compose N
-  instead of creating a post-swap inference bubble or pairing color N with depth N-1.
+  worker begin waiting on the same-slot decision while the renderer finishes capturing the matched
+  color, without weakening their shared lease/generation identity.
+- The fused model-input pack compares the exact packed Float32 input with the last valid real
+  inference input on GPU. Apollo's bounds are literal: `16 x 16` tiles, medium absolute channel
+  delta `>= 1/64`, strong delta `>= 0.20`, at most 10% medium pixels globally, at most 2.5% strong
+  pixels globally, and no more than 75% strong pixels in any tile with at least 64 admitted pixels.
+  Every expected input pixel must be finite and admitted; malformed or incomplete evidence forces
+  inference.
+- A comparison is eligible only in the same renderer generation, with presentable depth, for a
+  cumulative callback-sequence gap of one through four and an owner age from zero through strictly
+  less than 100 ms. Reused frames never advance either bound; both remain relative to the last real
+  inference.
+- The worker waits on the input fence and reads only a client-local, integrity-checked 32-byte
+  decision record. Its final word classifies reuse, content rejection, owner frame-gap/age
+  rejection, or invalid evidence without adding another map or synchronization point. This record
+  never crosses the network.
+  Buffer identity/allocation/range changes and map/unmap failures disable further decision reads
+  for that engine lifetime and fail open to LiteRT. A stale token, malformed record, or explicit
+  infer decision affects only the current frame, so later valid records remain eligible. This tiny
+  CPU map is an Android implementation difference from Apollo's CUDA conditional graph and must be
+  measured for stalls on Galaxy XR; no image or tensor is read back to CPU.
+- On reuse, native skips LiteRT and returns a flushed fence through the normal per-slot ownership
+  protocol. The renderer activates the current color but freezes model-input history, scene-cut
+  history, normalization, temporal depth, profile, conditioned disparity, and cached warp at the last real
+  inference.
+- A real inference is adopted only after its output fence is ordered, depth/profile processing
+  succeeds, and its exact model-input and scene-cut histories are committed. Only then is the
+  single-flight claim released and the next callback-backed frame allowed to arbitrate. This makes
+  the reuse owner unambiguous across renderer and inference contexts.
 - Shared-context fences order input production, inference output, and GPU postprocessing without
   blocking the GL thread on normal operation.
-- Each newly adopted exact pair is processed and rendered directly into the EGL default framebuffer
+- Each adopted real pair or accepted reuse is rendered directly into the EGL default framebuffer
   once, followed by one swap. There is no packed SBS offscreen texture or repeated packed-frame
-  blit.
-- Once at least one matched output has been submitted, callback-driven drains that do not adopt a
-  newer pair perform no SBS draw and no EGL swap. SceneCore retains and presents its last submitted
-  buffer.
-- The active exact color-slot lease remains owned by the renderer until the next exact pair is
-  adopted. The newer pair takes ownership before the superseded lease is released; no offscreen SBS
-  cache takes ownership of the rendered pixels.
+  blit. Callback-driven drains with no adoption perform no draw or swap; SceneCore retains the last
+  submitted buffer.
+- That retention is presentation-bounded when inference stalls: because the decoded route has no
+  authenticated host content clock, any successfully latched newer buffer conservatively counts as
+  a changed source. The prior packed pair remains eligible through exactly 250 ms from its matched
+  color capture; after that strict boundary a single deadline draw swaps current OES color duplicated
+  flat, and later callbacks keep flat color live until a sufficiently fresh result is adopted. This
+  fallback does not release slots or change depth, profile, cut, normalization, or temporal history.
+- The active color-slot lease remains renderer-owned until the next adoption. The newer color takes
+  ownership before the superseded lease is released; no offscreen SBS cache owns rendered pixels.
+
+The client cannot reproduce Apollo's exact DDup admission because MediaCodec/SurfaceTexture does
+not expose Desktop Duplication present IDs, dirty/move rectangles, or host route authority. Its
+near-identical branch therefore authenticates decoded-pixel similarity plus strict callback-gap,
+age, generation, and depth-owner bounds. Host DDup exact-copy/idle/route decisions could be followed
+exactly only through the separately negotiated optional extension described above; legacy hosts
+remain on the local path.
 
 Busy claims, occupied mailboxes, or unavailable color slots drop capture opportunities while the
 last submitted output remains retained; they must not create an unbounded queue or detach depth
@@ -369,65 +316,118 @@ from color.
 
 Fence ownership is part of the slot contract:
 
-1. The renderer packs model input, then transfers a nonzero input-ready fence and any nonzero
-   previous output-consumed fence for the same slot to native code.
-2. Native GPU-waits and deletes each nonzero transferred fence, invokes LiteRT for that slot, and
-   returns a new output-ready fence owned by the caller.
-3. The renderer polls that fence without blocking. After it dispatches all reads of the output
-   buffer, it creates a new output-consumed fence for the slot. An unread/discarded output may reuse
-   the output-ready fence because no renderer read was submitted.
+1. The renderer packs model input and the client-local decision, then transfers a nonzero
+   input-ready fence and any nonzero previous output-consumed fence for the same slot to native.
+2. Native first waits on and deletes the current input-publication fence, then maps and authenticates
+   that exact decision record. It waits on and deletes the prior-output/slot-reuse dependency only
+   afterward; both dependencies must succeed before either bounded reuse or LiteRT inference. Native
+   returns a new ready fence owned by the caller.
+3. For real inference, the renderer orders the ready fence, dispatches output reads and history
+   commit, then creates a new output-consumed fence. Reuse and unread/discarded results retain the
+   ready fence itself because no renderer read of that output buffer was submitted.
 4. Slot reuse transfers that consumed fence back to native. Shutdown transfers the newest final
    consumer fence for both slots to the inference worker for bounded teardown.
 
 Never delete a transferred fence twice, reuse a slot without its consumer fence, or close the native
 engine from the renderer thread.
 
-## Fixed Client SBS profile
+## Fixed Client SBS Depth Coordinate V2
 
-Client SBS and Host SBS AI expose no manual depth-tuning parameters. Client normalization,
-convergence, and pop compensation are adaptive GPU state in `ClientSbsGpuDepthProcessor`.
-Reprojection mirrors the host's shot-latched median zero plane. The anchor is resolved through the
-same shaped-depth and Bestv2 shift path as the warp, stored as a source-pixel shift immediately on a
-cut, and resolved once more when the new shot settles. There is no subject-lock multiplier or
-separate convergence bias. Do not reintroduce the removed strength, convergence, balance,
-movie-mode, zero-plane, or legacy shader parameters.
+Client SBS and Host SBS AI expose no manual depth-tuning parameters. Client geometry consumes the
+original ZipDepth raw high-is-near field directly; the former per-frame normalization, normalized
+P2/P98 stretch, subject recentering, Bestv2 polynomial, shot-median anchor, and adaptive pop do not
+participate in reprojection. Fixed pop is `1.75`. Do not reintroduce strength, convergence, balance,
+movie-mode, zero-plane, or legacy geometry controls.
 
-Model output units are deliberately not part of this contract. The GPU derives outer-edge raw
-P2/P98 bounds per frame, resets or attack-fast/release-slow smooths the effective range across the
-scene, and maps it to `[0,1]` before temporal filtering and the profile's second normalized-depth
-P2/P98 stretch. That removes any fixed positive gain/offset difference between DA-V2, MiDaS,
-DepthART, and ZipDepth without per-model tuning. It does not correct reversed polarity or arbitrary
-nonlinear/time-varying remaps, so every manifest must explicitly qualify high-is-near output.
-ZipDepth passed that polarity check on all 192 evaluation frames and its tested raw range is well
-inside the Q16.16 histogram limits.
+Original ZipDepth Base does not share the host hybrid model's output units. Each immutable graph
+therefore carries one positive, offline-fitted raw-coordinate scale:
 
-The depth model never runs on the full decoded frame. DA-V2 directly bilinear-resizes the entire
-frame to the selected canonical rectangle (`322 x 182`, `350 x 154`, or `434 x 126`); MiDaS does the
-same for `352 x 192`, `384 x 160`, or `448 x 128`; experimental DepthART uses `672 x 384` or
-`928 x 384`; experimental ZipDepth uses `672 x 384`, `896 x 384`, or `928 x 384`. Landscape input
-uses direct resize without crop or square padding. Portrait input uses reflected side padding and
-crops it from model output. The matched color texture remains at the client-requested `W x H`
-output resolution for reprojection.
+| ZipDepth graph | V2 raw-coordinate scale `s` |
+|---|---:|
+| `672 x 384` | `0.04864449` |
+| `896 x 384` | `0.04707071` |
+| `928 x 384` | `0.05421491` |
 
-The preferred compose path solves the Bestv2 inverse field once per newly adopted depth/profile
-pair. The probe count is compiled once from the selected model grid. DA-V2 and MiDaS use 19 for
-16:9, 14 for 21:9, and 12 for 32:9; DepthART uses 36 with `672 x 384` and 33 with `928 x 384`;
-ZipDepth uses 36, 32, and 28 with `672 x 384`, `896 x 384`, and `928 x 384`.
-These counts apply Apollo's 1.22-depth-texel spacing rule to each canonical depth grid, without a
-per-frame branch. The pass stores small signed left- and right-eye source
-displacements in red and green of an `RG16F` map at the source-aligned depth resolution. Signed
-displacements retain more useful half-float precision than absolute normalized source coordinates,
-while linear sampling reconstructs the field at presentation resolution. Final output uses one
-full-width packed-SBS draw.
-The shader applies a half-open split at packed X `0.5`, derives an eye-local X without `fract()`
-wrapping, selects the matching RG channel, and performs one warp-map lookup plus one
-request-resolution matched-color sample per output pixel. The `RG16F` warp map is the only reusable
-compose intermediate; there is no reusable packed SBS image. If the driver cannot compile, render,
-or sample that RG16F target, the renderer may use the equivalent direct GLES shader with the same
-stream-fixed probe count and two half-width draws as a render-compatibility path. That path is not a
-model, managed-runtime, or CPU inference fallback. Logs and the `Stereo compose path` stats row
-identify `RG16F 1x-depth warp map, packed single draw (N-probe)` versus `Direct GLES N-probe` so
-performance comparisons are not mixed.
+The scales were fitted independently from 192 paired frames across eight clips. For each clip, the
+host hybrid prediction was exact-area resized to the ZipDepth graph, both producers were centered
+on their first-frame arithmetic means, and a through-origin least-squares fit matched
+`(zipRaw - zipMean) / s` to `(hostRaw - hostMean) / 2.25`. The manifest rejects a missing,
+non-finite, or non-positive scale. `tools/calibrate-zipdepth-v2-scale.py` reproduces the fit and
+rejects incomplete pairs, non-finite fields, unexpected shapes, or reversed polarity. These are
+model/graph calibration constants, not permission to copy the host's `2.25` raw scale onto original
+ZipDepth and not proof that the two model families produce identical depth.
+
+The camera center is the arithmetic mean of every raw output texel, latched on the first accepted
+depth of a shot. It remains fixed while objects move within that shot and is replaced only when a
+new shot is accepted. Consequently, a hand moving toward the viewer changes
+`rawDepth - shotMean`; it is not pulled back to the same plane by per-frame normalization. There is
+no runtime percentile gain, per-frame offset, or slow gauge correction. A background-only slow
+gauge correction is deferred unless whole-clip evidence later demonstrates that one is necessary.
+
+For a finite raw sample `d`, shot mean `m`, and selected graph scale `s`, the pointwise V2 mapping is:
+
+```text
+c = (d - m) / s
+
+curve(c) = 0.75 * expm1(c / 0.75)                    when c < 0
+           c                                         when 0 <= c <= 1
+           1 + 0.5 * log1p((c - 1) / 0.5)           when c > 1
+
+requested = 1.75 * 0.00375 * curve(c)
+p = requested / fourth_root(1 + (requested / 0.04)^4)
+```
+
+The last expression is evaluated in a stable odd form and remains strictly within `+/-0.04`.
+The source-aligned `R32F` ZipDepth output feeds the raw V2 conditioner directly. Four GLES 3.1
+serial-line compute passes produce a linearly sampled `R32F` signed-parallax field. There is no
+client-only spatial prefilter or half-float staging target before subtraction against the `R32F`
+shot mean and coordinate conversion, matching the host's raw-depth geometry contract.
+
+Vertical upper/lower envelopes use a step of `2/W` and combine as `0.75 * upper + 0.25 * lower`.
+The horizontal result is the least majorant `max_s(v(s) - 0.5 * |x-s| / W)`. This bound makes each
+eye mapping contractive. Starting from `x0 = u`, the map shader executes at most 11 updates: left
+`x[n+1] = u - p(x[n])`, right `x[n+1] = u + p(x[n])`. It mirrors the host's exact-settle exit when
+both paired-eye next coordinates equal their current coordinates; there is no epsilon convergence
+shortcut, and a non-settled sample still executes all 11 updates.
+
+The seed pass follows that exact host iteration schedule at one texel per source-aligned depth texel
+and stores small signed left- and right-eye source displacements in red and green of a linearly
+sampled `RG16F` map. A second `RG16F` target is 2x in the horizontal axis and 1x in the vertical
+axis. Each refined texel bilinearly samples the exact 1x seed, reconstructs both source positions,
+and performs one more paired-eye fixed-point correction against the conditioned `R32F` parallax
+field. The full-width packed-SBS draw then consumes the refined cache and request-resolution matched
+color. Its steady per-output cost remains one warp-map lookup plus one color lookup; refinement runs
+only when a new real depth is adopted, and near-identical reuse freezes both caches. The live
+renderer compiles no seed-only, Bestv2, or frontmost-probe geometry fallback. Direct/full-resolution
+`R32F` inversion and a blind 2x-by-2x 11-step map remain deferred experiments.
+
+For the `672x384` graph, the exact seed is 258,048 fragments, 0.98 MiB, and at most 5,677,056
+conditioned-parallax samples per changed depth. Its `1344x384` refined target is 516,096 fragments
+and 1.97 MiB. The one-correction pass adds 516,096 `RG16F` seed lookups plus 1,032,192 `R32F`
+parallax lookups, or 1,548,288 logical texture samples. Both maps together occupy 2.95 MiB, and the
+strict build performs at most 6,709,248 parallax samples plus those seed lookups. This is far below
+the 22,708,224 parallax samples of a blind 2x-by-2x 11-step solve, while halving the horizontal
+interpolation interval where warped knots cause serration. These are analytical shader costs, not a
+claim of proportional latency: the September 4 4K trace already reached thermal status 4 with
+69-98% GPU-busy windows, so the refined route still requires same-clip sustained device validation.
+`RG16F` itself is not the likely visible serration source: within the `+/-0.04` container its worst
+rounding error is below 0.06 source pixel at 3840-pixel eye width.
+
+Every raw output texel must be finite and nonnegative, the raw field's population standard deviation
+must exceed Apollo's `1e-6` collapse floor, the shot center and graph scale must be valid, and every
+conditioner/seed/refinement/compose stage must succeed. A violation publishes current mono color
+duplicated flat and never applies the 1x seed alone, old geometry to the failed frame, or a legacy
+mapping. A no-cut collapsed result retains the existing shot camera; a cut landing on a collapsed result clears it,
+and the next usable result reacquires it. The private normalized cut history can still advance on a
+finite collapsed result, matching the host's independent cut bridge. Near-identical reuse is the
+sole explicit current-color/cached-geometry exception and is bounded by the owner rules above. A
+collapsed result may update that private cut/color history, but explicitly invalidates the cached
+geometry owner so the next accepted candidate must run real inference again.
+
+Raw outer-edge P2/P98 bounds and their private normalized temporal field remain only for geometry
+change, cut analysis, and health diagnostics. They do not scale, center, stretch, or otherwise feed
+the V2 disparity field. Subtitle and foreground-ROI plane conditioning are deferred and absent from
+the client conditioner.
 
 ## Scene cuts and depth health
 
@@ -454,11 +454,10 @@ without growing the SSBO. The second accepted low-support update advances histor
 persistent-low state; later low-support updates stay there without a timer or repeated event.
 Concretely, state 0 has no accepted history, state 1 advances normally, state 2 holds one update,
 and state 3 advances accepted persistent-low history.
-The same exposure-like hold also retains the prior effective normalization range and geometry
-baseline and copies the prior reliable depth texture through the temporal pass. The second
-low-support update therefore measures against one coherent pre-flash depth tuple rather than a
-blended flash result encoded under a different range. Because its event-only word supersedes the
-pending exposure classification, that second update is not held and advances the tuple.
+Only that first structureless update holds the reliable comparison tuple and geometry baseline.
+The live P2/P98 range and immediate temporal depth still update on every complete valid inference,
+matching the host's separate ownership domains. The second low-support update is classified as
+persistent-low, advances the reliable tuple, and cannot inherit a stale exposure classification.
 
 The first supported frame after a one-update hold is exposure-like only for a strict endpoint
 match: quiet ordinal change, at most two average luma codes per block, and fewer than 1% moderate
@@ -473,71 +472,106 @@ next real scene. Preserved-structure monotone exposure remains vetoed.
 
 This scope deliberately excludes codec noise, color matrices, and local tone mapping. Histogram L1
 remains diagnostic, not cut authority: exposure can move a histogram, while real same-histogram
-edits exist. Across all six production DA-V2/MiDaS grids, the committed
-`scene_cut` pairs measure 0.433–0.571 and `flat_transition` measures 0.201–0.266; the largest
-adjacent non-cut is 0.062. The weakest cut therefore retains an 11-site margin on its 224-site grid
-at the 15% threshold. The nonlinear clipped-plaid adversary produces zero ordinal reversals.
+edits exist. Historical multi-model fixtures established the current structural policy:
+`scene_cut` pairs measured 0.433–0.571, `flat_transition` measured 0.201–0.266, and the largest
+adjacent non-cut was 0.062. Those retired-family measurements remain regression evidence rather
+than a claim that their graphs ship. The nonlinear clipped-plaid adversary produces zero ordinal
+reversals.
 The old brightness-only `uniformHardTransition` path is absent. Its grids and GL resources are
-derived once from the selected stream shape. It writes one uint32 structural-evidence word to an
-SSBO; the following depth/profile dispatch consumes that word directly on the same GL queue. No
-per-frame flag crosses through Java or CPU memory.
+derived once from the selected stream shape. It writes one 32-byte structural-evidence record to an
+SSBO: the published proposal, block count, raw-change count/sum, structural-change count, current
+and common structural support, and detector reason bits. The following depth/profile dispatch
+consumes that record directly on the same GL queue. No per-frame flag crosses through Java or CPU
+memory.
 
-The depth processor separately derives geometry evidence from depth change and range-distribution
-shift. Raw structural evidence may reset temporal filtering promptly, but it relatches the
-shot-owned zero plane, adaptive pop, subject state, and range only when moderate depth evidence
-corroborates it (`change >= 0.18`, or `>= 0.10` with range shift `>= 0.06`). Standalone strong
-depth evidence uses the same one-update shot pulse at `change >= 0.58`, or `>= 0.42` with range
-shift `>= 0.10`. On startup, both branches remain blocked through valid-depth-update age 8, and
-arming happens after that update's decision. After an accepted cut, the independent two-update
-rearm below can restore either absolute branch earlier; age 8 guards only the novel latched-geometry
-escape.
+The detector is an optional cut-quality/reuse component, not a depth-pipeline readiness gate. If
+it cannot be created or fails at runtime, Client SBS continues full inference and reprojection,
+disables near-identical reuse and color-based appearance/exposure authority, and uses bounded
+two-valid-observation depth-only confirmation. The stats pane identifies pending, accepted, and
+rejected fallback decisions explicitly.
+
+The depth processor separately derives geometry evidence from its private P2/P98-normalized
+analysis field. Immediate temporal depth resets only on the first valid field after processor reset;
+cut proposals and accepted cuts do not reset it. Only an accepted cut relatches the raw
+arithmetic-mean camera center used by V2 geometry. A qualified appearance
+proposal may cut immediately when moderate depth evidence corroborates it (`change >= 0.18`, or
+`>= 0.10` with range shift `>= 0.06`). Standalone ordinary geometry evidence starts a confirmation
+on its first qualifying update (`change >= 0.58`, or `>= 0.42` with range shift `>= 0.10`) and is
+accepted only if the next valid update still qualifies. Matching Apollo, every ordinary geometry
+candidate also requires independent ordinal structural change of at least `0.005`; a persistent
+structureless transition or a structureless history reference waives that test because such a
+reference has no reliable ordinal relation to reverse. A pending confirmation additionally requires
+reliable current structure. On startup, both branches remain blocked through source-frame age 8,
+and arming happens after that update's decision.
+
+The first update of an ordinary geometry-only candidate freezes the raw camera center, geometry
+baseline, reliable normalized depth, model-input owner, and scene-cut history as one coherent
+comparison tuple. Its live P2/P98 range and immediate temporal depth continue to update, and its
+finite noncollapsed current raw field still publishes geometry through the existing shot camera.
+Confirmation compares the second update with the unchanged reliable owner. A confirmed cut
+coherently advances the tuple and latches the new raw arithmetic mean; a failed confirmation clears
+the pending state without mixing reliable histories. On Android, the scalar decision is published
+at this final resolver and the exact normalized-depth texture is promoted at the beginning of the
+next actual inference, before that inference compares. Reuse dispatches nothing and cannot promote
+it. This preserves the host-visible dependency order without a seventh full-grid pass. Qualified
+appearance cuts remain immediate because the independent structural evidence already supplies the
+second authority.
 
 When color history enters accepted persistent-low state, a typed event sets the reserved
 `cutStateCounters.y` marker. The first later supported update gets exactly one absolute standalone
 geometry decision independent of normal arming and refractory state, then clears the marker whether
 or not it cuts. Persistent low-support updates do not retrigger it. The mailbox uses bit 0 for an
 appearance proposal, bit 1 for the exposure veto, bit 2 for persistent-low start, and bit 3 for
-supported return. An all-invalid inference stores the complete negated word in GPU state, so event
-bits survive alongside classifications until the next valid depth update.
+supported return. Evidence belongs to the exact color/depth transaction; an invalid inference is
+counted for health telemetry but its classification is not applied to a later valid field.
 
-Every accepted pulse latches both evidence sources, but they rearm independently: geometry needs
-two consecutive accepted depth updates below `0.08`, while appearance needs two consecutive
-updates without a qualified structural proposal. Persistent evidence therefore cannot repeatedly
-move shot state, and persistent appearance cannot starve a later standalone geometry cut. While
-geometry remains latched, a genuinely new spike may escape on or after valid-depth-update age 8:
+Every accepted cut latches both evidence sources, but they rearm independently: geometry needs two
+consecutive valid depth updates below `0.08`, while appearance needs two consecutive valid updates
+without a qualified structural proposal. Invalid results do not satisfy those counters. Ordinary
+preserved exposure and a strict same-scene return set a one-valid-update recovery bit; the next
+non-appearance update vetoes geometry and freezes only its novelty baseline, then clears the bit.
+A genuine appearance proposal bypasses that tail. Persistent evidence therefore cannot repeatedly
+move shot state, and persistent appearance cannot starve a later standalone geometry cut. While geometry
+remains latched, a genuinely new spike may start the same two-update confirmation on or after
+source-frame age 8:
 change must be at least `0.30` and exceed its per-update EMA by `0.20` or by `2x`. The EMA uses
 alpha `0.125` and resets to the current fraction on each accepted cut, so a sustained high fraction
 converges instead of pulsing repeatedly.
 
-Cut age and profile-settle age are intentionally separate. The cut counter advances exactly once
-for each accepted inference containing valid depth, never for an all-invalid result, and resets to
-zero on initialization or an accepted cut. Elapsed time and `referenceFrameAdvance` cannot skip its
-startup or refractory guard. The existing profile age remains reference-frame-scaled so adaptive
-pop and the second zero-plane resolution can still cross their wall-time settle boundary after a
-slow inference. In the 128-byte processor SSBO, the final 16 bytes are split into the existing
-two-float geometry-baseline state and a two-int cut-counter state; every preceding state and health
-offset is unchanged. The two cut-state integers are valid-depth-update age and the 0/1
-persistent-low marker. This matches Apollo's one increment per valid completed depth update while
-retaining the client's intentional wall-time normalization only where it belongs.
+Cut age follows the protected decoder callback/source-step delta attached to each complete valid
+inference, not wall time and not merely one increment per sparse depth result. It resets on
+initialization or an accepted cut. Reuse and invalid depth do not advance it. Reliable history is
+held only for the first structureless update and the first geometry-confirmation observation;
+ordinary exposure advances normally. This keeps source timing distinct from reliable
+model-input/scene-cut/depth ownership when callbacks coalesce while LiteRT is busy.
 
-These depth fractions are calibrated for the client's
-smaller model grid; they intentionally differ from Apollo's capture-grid thresholds. NaN, infinity,
-and finite negative model values are excluded from statistics, and invalid pixels retain the
-previous valid temporal depth rather than poisoning the profile.
+These depth fractions are calibrated for the client's model grid; they intentionally differ from
+Apollo's capture-grid thresholds. ZipDepth's complete raw field is the cut-analysis validity unit:
+if any output texel is NaN, infinite, or negative, the transaction does not advance reliable
+history. Raw V2 renderer validity additionally requires population standard deviation above
+`1e-6`; a finite collapsed result remains available to private cut analysis but presents current
+color flat and cannot acquire a shot camera.
 
-An accepted inference can exceptionally contain no valid depth samples after its exact color frame
-has already advanced the structural detector's committed history. In that case the GPU profile
-state carries the structural proposal—without its color texture—to exactly the next valid accepted
-depth update, where current geometry must still corroborate it. That first valid update consumes the
-proposal whether or not it produces a shot pulse. The carry uses the existing GPU state and
-per-inference-slot mailbox ordering; it adds no CPU readback, wait, or cross-frame color/depth pair.
+An invalid depth transaction has no cut authority. Its exact color classification may be retained
+only in asynchronous diagnostics; it is never carried onto a later valid depth field. It cannot
+authorize a new reliable owner, though its opening min/max pass may finish the deferred texture copy
+already authorized by the preceding valid result. Range, immediate temporal value, raw shot camera,
+cut baselines, recovery state, and cut FSM otherwise remain unchanged until a complete valid
+inference arrives.
 
-Depth-health stats are diagnostics, not part of inference or reprojection. A tiny asynchronous GPU
-profile copy continues at a 30-depth-frame background cadence even while Stats and explicit
-performance logging are off, and sharpens to every 5 depth frames while Stats is visible. Its poll
-is nonblocking. The lean health summary exposes valid-depth fraction, effective range width, pop
-strength, whether the range is collapsed, and recent pop/edge/change/cut/anchor histories. A
+Depth-health stats are diagnostics, not geometry inputs. A tiny asynchronous GPU state copy
+continues at a 30-real-inference background cadence even while Stats and explicit performance
+logging are off, and sharpens to every 5 real inferences while Stats is visible. Its poll is
+nonblocking. Append-only state fields preserve the prior byte offsets while exposing appearance
+proposal count; exclusive accepted appearance, geometry, and structureless-return cut counts; the
+latest raw/structural/support evidence; depth change/range shift; and causal reason bits. This uses
+the existing state copy, fence, and poll—no extra readback, dispatch, or synchronization. A
 temporarily missing health sample must not stall or disable depth.
+Accepted cuts, appearance proposals/vetoes, geometry triggers, and failed geometry confirmations
+retain their exact color/depth evidence plus a monotonic event sequence until a later notable
+decision replaces them. Ordinary frames do not erase this latch, so the sparse health-copy cadence
+cannot turn an intervening event into `reason=none`; repeated publications of the same sequence are
+the same event, not another cut.
 
 ## Surface and lifecycle ownership
 
@@ -550,6 +584,24 @@ The central contract is:
 Mode switches are guarded asynchronous surface handoffs. Keep the decoder target, SceneCore surface
 size/stereo mode, renderer generation, and entity visibility synchronized. A stale callback from a
 previous generation must not retarget the decoder or publish a depth result.
+
+On crossings into or out of Client SBS, keep SceneCore's last submitted picture and its current
+stereo/shape interpretation visible while MediaCodec crosses its recovery barrier, parks on the
+persistent dummy, and binds the replacement producer. A failed park therefore leaves the old
+picture visible. Entering Client SBS commits the new SceneCore interpretation only after a fresh
+decoder IDR has produced a packed EGL buffer that survives the renderer's swap proof; leaving
+Client SBS commits it at the fresh direct-output edge. Direct producer size changes retain their
+existing eager hide because they do not have the Client SBS producer-ownership gap.
+When an inactive Client mode's saved quality differs from the live stream, fuse that request into
+the entry: retain the old picture and interpretation, await the authoritative `0x3008` ACK, then
+perform exactly one decoder/surface handoff at the ACKed geometry and the same packed-swap proof.
+Publish the ACKed quality before the mode so the settings callback cannot start a second request.
+A Client tuple that cannot apply live reconnects before any presentation handoff, including on
+regular Sunshine/Apollo hosts.
+The Client-entry GL thread holds its mandatory initial draw until that fresh decoder callback, so
+GLSurfaceView cannot submit an empty first buffer over the retained SceneCore picture.
+The packed-swap watchdog starts only at that decoder-output edge; time spent waiting inside the
+decoder's own bounded fresh-IDR transaction does not consume the renderer's proof budget.
 
 Crossing Client SBS ownership or the live Host SBS AI packed-size boundary changes the decoder
 target or encoded dimensions. Before those transitions, close the compressed-frame gate and flush
@@ -618,8 +670,8 @@ when the Activity is recreated. A same-tuple switch remains live unless it enter
 Full's distinct `2W x H` transport. Raw Half uses the ordinary `W x H` mono transport, so entering
 or leaving it remains live; changing Raw's Full/Half choice while Raw is live still reconnects.
 **Apply & reconnect** remains the explicit action when no mode-quality or transport change already
-requires a restart. The Client SBS model is also mode-specific, and its aspect bucket is derived
-from the pending Client SBS resolution. Raw's Full/Half choice is likewise mode-specific, persists
+requires a restart. The Client SBS ZipDepth aspect graph is derived from the pending Client SBS
+resolution and is not an independent setting. Raw's Full/Half choice is mode-specific, persists
 with the current session, and inherits its default from Global Settings.
 
 The resolution ladder keeps its six established landscape choices first and then exposes one
@@ -642,8 +694,8 @@ shared set. Global Settings provide the cross-session defaults for both the shar
 quality baseline inherited independently by each mode.
 
 The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 200 Mbps, HEVC, HDR, Full
-range, and latency pacing**, with stereo audio, host audio off, MiDaS v2.1 Small as the Client SBS
-model, and Full as Raw SBS per-eye resolution. In-session **Use global defaults** inherits the
+range, and latency pacing**, with stereo audio, host audio off, and Full as Raw SBS per-eye
+resolution. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits the
 values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
 **Use session settings** discards staged edits and restores that mode's durable current-session
 values, falling back to its current global values where no session override exists.
@@ -668,15 +720,21 @@ on-wire rate and never lowers that durable ceiling. A missing application ACK pr
 tuple, even when a matching fresh-IDR proves the requested geometry: the final FPS/bitrate clamps
 remain unknown. The same fail-closed rule covers an unknown/future ACK status, `APPLIED` with an
 unusable tuple, failure to adopt the host-authoritative geometry on the client, or any client resize
-failure after the reliable host request was already queued. Every decoder output received before a
-resolution request's valid `APPLIED` ACK is provisional. After adopting the authoritative,
-possibly clamped geometry, the client discards that evidence, supersedes the old decoder
-generation, and starts exactly one post-ACK confirmation transition while the quad remains hidden.
+failure after the reliable host request was already queued. No decoder/surface resize transition
+begins before a resolution request's valid `APPLIED` ACK. After receiving the authoritative,
+possibly clamped geometry, the client starts exactly one post-ACK confirmation transition, adopts
+that geometry behind its closed decoder gate, and opens the gate for a fresh IDR. Client SBS keeps
+its previous packed SceneCore picture visible through this proof; direct producers retain their
+established hidden boundary.
 Its watchdog may issue bounded IDR retries, but only matching output from that generation may settle
 and reveal the new geometry. A failed rearm, timeout, or post-ACK output whose dimensions
 contradict the ACK follows the same hidden
 mandatory-resync path, not the generic decoder-failure dialog. None may publish the previous tuple
 as a rollback or settle the requested tuple as a live success.
+An explicit `NEEDS_RECONNECT` response to a user-origin Client SBS resolution request has no local
+surface rollback: the client keeps the old picture visible, commits the staged target through the
+normal guarded settings path, and reconnects immediately. `INVALID`, `FAILED`,
+automatic panel-follow, and non-Client-SBS refusals retain their established rollback handling.
 Client SBS bounds its local EGL detach and exact-attach stages independently. Its packed-output
 swap wait retains a longer fail-closed fallback while the reliable host outcome and decoder
 transition are outstanding. A matching post-ACK decoder output then re-arms a fresh short window
@@ -686,8 +744,16 @@ the candidate, its second render request is queued behind the current EGL-swap i
 in-draw dirty request cannot be coalesced before the first swap returns. When that authoritative
 host/decoder boundary arrives during first-use model verification or delegate compilation, the
 short proof watchdog polls while the backend remains explicitly `Initializing`, up to one
-30-second cold-start ceiling. Ready, unavailable, and ordinary warm paths retain the short
-watchdog, so the exception cannot hide a broken EGL/presentation transition.
+30-second initialization ceiling. Observing that cold backend become ready grants exactly one new
+2-second packed-presentation proof window and nudges the renderer again; the combined cold path is
+therefore bounded to 32 seconds. Already-ready, unavailable, and ordinary warm paths retain the
+short watchdog, so the exception cannot hide a broken EGL/presentation transition.
+Before a persistent Client SBS decoder `SurfaceTexture` crosses any live-resize generation, the GL
+thread unconditionally acquires and discards its latest queued image under the frame lock, clears
+the matching callback state, and only then advances the generation. Merely clearing the Java
+callback flag is forbidden because it can consume BufferQueue's notification edge without
+releasing the pending image, leaving MediaCodec apparently productive while Client SBS latching is
+starved.
 Fast user changes, automatic panel-follow changes, and resolution changes therefore all fail closed
 to reconnect. The client clears local transition ownership but neither claims success nor restores
 an unacknowledged previous tuple. Fast paths and a resolution path with matching decoder output may
@@ -713,8 +779,8 @@ unset so SceneCore consumes the decoded `HardwareBuffer` dataspace, HDR transfer
 
 Client SBS is a new RGB producer after OES sampling. Apply the `SurfaceTexture` transform matrix to
 all OES samples so crop/orientation metadata is identical for the model input and matched color.
-The rectangular model input is always SDR and tonemaps PQ before DA-V2, MiDaS, DepthART, or ZipDepth
-inference. That does not require the full-resolution presentation path to become SDR.
+The rectangular model input is always SDR and tonemaps PQ before ZipDepth inference. That does not
+require the full-resolution presentation path to become SDR.
 
 HDR presentation is negotiated and verified at runtime:
 
@@ -797,12 +863,13 @@ row identifies Global versus Current Session inheritance, shows the tuple curren
 live decoder, and offers the same atomic **Apply & reconnect** action whenever any scoped change
 requires it.
 
-Normal and Host SBS rows also show their presentation/source status. Client SBS adds only its model
-choice, resolution-derived fixed aspect bucket, and live GPU backend status; it has no strength,
-convergence, balance, movie-mode, or depth-inference cadence controls. Restoring values is scoped:
+Normal and Host SBS rows also show their presentation/source status. Client SBS adds only its fixed
+ZipDepth identity, resolution-derived aspect bucket, and live GPU backend status; it has no model
+selector, strength, convergence, balance, movie-mode, or depth-inference cadence controls. Restoring
+values is scoped:
 the shared pane's **Use global defaults** stages the currently saved global shared values, while a
-mode row's **Use session settings** restores only that mode's durable quality tuple (plus the Client
-SBS model or Raw Full/Half choice for its corresponding row).
+mode row's **Use session settings** restores only that mode's durable quality tuple (plus the Raw
+Full/Half choice for the Raw SBS row).
 
 The Settings tile opens the left side panel for values shared by every mode in the current PC
 session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
@@ -830,9 +897,9 @@ cannot fit, the entire control becomes a
 full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
 make the user scroll an enum sideways. Bitrate follows the same direct-manipulation rule with its
 six-rung connected segmented ladder; do not regress it to an inline slider or bandwidth meter.
-The Client SBS model is selected from the same kind of connected choice group inside its existing
-Options row, without opening another panel. Raw SBS uses an equivalent direct two-button **Full / Half**
-group labeled **Per-Eye Resolution**; it also shows the derived encoded-per-eye and packed-stream
+Client SBS has no model selector: its Options row configures stream quality while Stats reports the
+active ZipDepth aspect graph. Raw SBS uses a direct two-button **Full / Half** group labeled
+**Per-Eye Resolution**; it also shows the derived encoded-per-eye and packed-stream
 dimensions so the choice is visible rather than merely numeric. Tapping the running application card resumes it directly; a
 compact close button in its top-right corner ends the session. More stays in the bottom-right and is
 reserved for secondary actions such as details, hiding, and shortcut/export tools. The compact card
@@ -859,17 +926,24 @@ The visible pane is a lean optimization summary: negotiated codec/profile, exact
 component, whether that component is dedicated to low latency, whether low-latency format options
 were requested, the separate Artemis output-pacing policy, sender / receive FPS, decoder output /
 release / surface FPS, network and host/decode latency, app CPU as core-equivalent load, device GPU
-busy/clock, and Android thermal status. Client SBS adds the selected model/backend/input shape,
-latch/depth/output FPS, LiteRT call-wall average/maximum, matched depth-age average/maximum, and four
-separately labelled true GL GPU averages: model-input resize/color-cut/pack, matched-color copy,
-depth normalization/profile, and stereo prefilter/warp/draw. The device GPU percentage remains a
+busy/clock, and Android thermal status. Client SBS adds the model/backend/input shape,
+latch/inference/reuse/output FPS, reuse acceptance ratio and rejection reasons, 32-byte decision-read
+wall average/maximum, LiteRT call-wall average/maximum, real-inference result-age average/maximum,
+and four separately labelled true GL GPU averages: model-input resize/color-cut/pack, matched-color
+copy, raw-V2/cut-state processing, and stereo conditioner/inverse-map/packed draw. The last region is
+the only live V2 geometry route. The device GPU percentage remains a
 system-wide total: GL stages can overlap each other and OpenCL, so their durations must not be
 summed into a synthetic utilization percentage. Show XR composition as unavailable because
-SceneCore exposes no compositor timing. The only exceptional counters are occupied color slots
-(`color_busy`) and flat SBS outputs (`flat`). Depth health keeps the compact scalar summary and
-renders separately labelled recent trends for pop strength, edge fraction, changed-depth fraction,
-scene-cut events, and zero-plane anchor shift. The cut and anchor rows stay adjacent so repeated
-relatching can be distinguished from harmless classification changes.
+SceneCore exposes no compositor timing. The fault row keeps occupied color slots (`color_busy`), flat
+SBS outputs (`flat`), invalid raw transactions, and collapsed diagnostic cut ranges visible. Depth
+health is a compact scalar set:
+renderer-ready/current-field-valid/history-advance-or-hold, fixed pop with shot/current raw means,
+the last latched depth and appearance cut evidence, its causal decision, and accepted-cut counts. A valid held
+field must read `ready yes` with `history hold`; holding the reliable comparison-history tuple does
+not make its geometry unrenderable. Do not show the retired normalized
+stretch/recenter/subject/Bestv2 anchor or
+adaptive-pop classifier as live V2 state. Host SBS likewise labels current protocol data as raw V2,
+fixed pop, validity, cut evidence/events, and faults rather than as a median zero-plane profile.
 Trend plots use fixed oldest-left/newest-right sample-slot spacing. While a history is still short,
 its samples occupy only the newest slots at the right instead of stretching across the entire
 width; once full, each new sample scrolls the oldest point off the left edge. This is not a fixed
@@ -879,19 +953,20 @@ background 500 ms cadence; after opening Stats, the ring temporarily contains bo
 the older background points age out. Every distinct accepted host publication enters the history
 at delivery even though the stats table repaints more slowly. Repeated heartbeat publications
 refresh liveness without adding duplicate chart points. Client SBS sample spacing likewise follows
-its visible five-depth-frame and background 30-depth-frame health-copy cadences.
+its visible five-real-inference and background 30-real-inference health-copy cadences; reuse freezes
+depth-health history.
 
 The depth policy row must say `Uncapped | one in flight | newest frame when free`; Android thermal
 status is reported separately so it is not mistaken for a hidden throttle. Do not add expected
 latest-frame skips, callback coalescing, retained-output drains, or ordinary single-flight busy
 events as counters: those are normal scheduling behavior rather than faults.
 
-Surface callbacks and GL latches may follow the decoded stream while inference, exact-pair
-adoption, SBS composition, and EGL swaps run at the lower workload-limited depth cadence. This is
-not an FPS cap. After the first valid pair, that difference is expected: a drain with no adoption
-retains the SceneCore buffer instead of submitting duplicate pixels. New-pair composition and swap
-cadences should remain approximately one-to-one with adoption; repeated output blits or swaps at the
-latch rate are a regression.
+Surface callbacks and GL latches may follow the decoded stream while inference/reuse arbitration,
+adoption, SBS composition, and EGL swaps run at the lower workload-limited cadence. This is not an
+FPS cap. After the first valid pair, that difference is expected: a drain with no adoption retains
+the SceneCore buffer instead of submitting duplicate pixels. Composition and swap cadence should
+track real-inference plus reuse adoption; repeated output blits or swaps with no adoption are a
+regression.
 
 Do not show managed/PBO/free-CPU-buffer/result-worker stages, CPU command-submission/invoke/
 dependency timings, or custom CPU/GPU temperature probes. Android 14 has no trustworthy public
@@ -900,28 +975,40 @@ backend is the GPU; Android thermal status comes from the platform thermal API.
 
 Keep timing domains explicit. `LiteRT run call wall (not pure GPU)` brackets
 `LiteRtRunCompiledModel()` and includes runtime overhead plus any blocking visible to that API;
-LiteRT does not expose the OpenCL event needed to isolate accelerator execution. Matched depth age is
-an end-to-end freshness measurement, not a GPU timer.
+LiteRT does not expose the OpenCL event needed to isolate accelerator execution. Reuse is excluded
+from this timing. Depth result age is the real inference pair's capture-to-adoption latency, not a
+GPU timer; reused depth ownership is separately hard-bounded to less than 100 ms.
+`Decision read avg / max` measures CPU wall time around validation plus the authenticated 32-byte
+map/copy/unmap. Immutable object/allocation/range checks are cached after their first success, so
+steady-state time primarily exposes the cross-context synchronization cost on the device.
 
 Actual GLES completion timing is backed by nonblocking `GL_EXT_disjoint_timer_query` rings. It
-reports averages only for model render + color cut + pack, matched-color copy, depth
-normalization/profile, and depth blur + packed single-draw SBS warp. Poll availability rather than
+reports averages only for model render + color cut + pack, matched-color copy, raw-V2
+depth/cut-state publication, and raw V2 disparity conditioning followed by inverse-map and
+packed SBS draw. Poll availability rather than
 waiting, discard samples from disjoint clock intervals, and show the timers as unavailable when the
 driver cannot provide reliable queries. GLES queries cannot bracket LiteRT's OpenCL work, and
 SceneCore exposes no final compositor-present timestamp. Record the active warp path alongside these
-timings; full-resolution compatibility results are not comparable to the RG16F warp-map path.
+timings. Any path other than the strict exact-1x-seed plus 2x-horizontal one-correction `RG16F` V2
+cache is flat output, not a comparable geometry fallback.
 
 Performance logging is enabled by default and can be disabled in preferences. While enabled, the
 typed window is written to logcat at approximately the two-second stats cadence, never per frame.
 Normal and Host SBS write one
 `DecoderPerf` line with sender sequence, receive, decoder output, release, surface-presentation, and
 decode latency. Client SBS writes one consolidated `ClientSbsPerf` line with those same stream
-boundaries plus the selected model/backend/input, latch/depth/output FPS, LiteRT wall
-average/maximum, depth-age average/maximum, the four GLES completion averages, exceptional
-`color_busy`/`flat` counts, minimal depth health, app CPU core-equivalent load, GPU busy/clock, and
-Android thermal status. The former five-second renderer debug lines and separate depth line are
-intentionally omitted to avoid duplicate logging. Use these lines for repeatable A/B captures; they
-add no per-frame logging or GPU synchronization.
+boundaries plus the model/backend/input, latch/inference/reuse/output FPS, reuse acceptance
+ratio, content/frame-gap/owner-age/invalid reuse-rejection counts, decision-read wall
+average/maximum, LiteRT wall average/maximum, real-inference result-age
+average/maximum, the four GLES completion averages, exceptional `color_busy`/`flat` counts, and
+causal depth health. `proposals` counts appearance-detector proposals, not accepted cuts;
+`cuts_app`, `cuts_geom`, and `cuts_low` partition accepted cuts by reason; `cuts_low` specifically
+counts the two-observation transition into persistent low structure. The latest raw,
+structural/support, depth/range, detector-bit, and decision-bit fields explain the current sample.
+The line also includes app CPU core-equivalent load, GPU busy/clock, and Android thermal status. The former
+five-second renderer debug lines and separate depth line are intentionally omitted to avoid duplicate
+logging. Use these lines for repeatable A/B captures; they add no per-frame logging or additional GPU
+synchronization.
 When Stats is hidden and explicit performance logging is disabled, Client SBS disables timer
 queries, bypasses its detailed synchronized/atomic performance-counter updates, and skips typed
 stats-table/log formatting. The cheap 30-frame health-copy producer and nonblocking poller remain
@@ -987,54 +1074,61 @@ For every mode/surface change, test:
   reconnects. Any other staged edits must be
   committed in the same atomic record before that automatic Activity recreation.
 - Normal and Host SBS remain direct and work when Client SBS initialization fails.
-- Test all four selectable model families across all eleven fixed-shape graphs on Galaxy XR: the
-  three canonical DA-V2 entries from
-  `client-sbs-dav2-models.tar.xz` and the three MiDaS entries from
-  `client-sbs-midas-models.tar.xz`, plus the two experimental DepthART entries from
-  `client-sbs-depthart-models.tar.xz` and three original-Base ZipDepth entries from
-  `client-sbs-zipdepth-models.tar.xz`. All four
-  families must report
+- Test all three original-Base ZipDepth aspect graphs from
+  `client-sbs-zipdepth-models.tar.xz` on Galaxy XR. Every graph must report
   `LITERT_OPENCL_FP16_GL_IO`. The smoke test enforces
   `LiteRtCompiledModelIsFullyAccelerated() == true`; confirm exactly one OpenCL partition from the
   accompanying LiteRT delegate log, together with OpenCL/OpenGL interoperability, the expected
-  fixed tensor layouts, and finite non-flat depth. Every DA-V2 graph must retain 683/683 core
-  coverage; MiDaS must retain its complete 234-operation graph, and corrected DepthART must retain
-  2231/2231 at `672 x 384` and 2371/2371 at `928 x 384`; every ZipDepth graph must retain 163/163.
-  Record
-  archive extraction/SHA verification, compile/init, and warm invocation latency for every
-  logical model.
-- DA-V2 acceptance requires the edge-rich CPU-golden fixture; the old smooth gradient is not a
-  sufficient FP16 correctness gate. Current FP16-stored-weight isolated means are 16.552 ms at
-  `322 x 182`, 15.725 ms at `350 x 154`, and 15.864 ms at `434 x 126`; compare full output against
-  FP32, not just range or a few sampled pixels. Treat partial
-  delegation, another partition count, CPU execution, CPU-golden mismatch, zero/flat output, or
-  loss of CL/GL interop as failure.
-- All three rectangular FP16-stored MiDaS buckets have passed the physical-device graph gate as
-  complete 234-operation graphs in one OpenCL partition with CL/GL interop and repeatable non-flat
-  output. Controlled LiteRT median/p95 times are 10.293/10.473 ms for `352 x 192`,
-  9.703/9.872 ms for `384 x 160`, and 9.430/9.593 ms for `448 x 128`. These are not end-to-end
-  stream latencies; live visual and sustained-cadence testing remains required.
-- Both experimental DepthART graphs have passed the isolated physical-device graph gate in one
-  OpenCL partition with CL/GL interop and finite structured output. Controlled LiteRT median/p95
-  times are 27.760/28.028 ms for `672 x 384` and 38.258/38.486 ms for `928 x 384`. These are not
-  end-to-end stream or thermal results; sustained qualification remains pending.
+  fixed tensor layouts, finite non-flat depth, and 163/163-operation coverage. Record archive
+  extraction/SHA verification, compile/init, and warm invocation latency for every aspect graph.
 - All three original-Base ZipDepth graphs have passed the isolated physical-device graph gate in
   one OpenCL partition with CL/GL interop and finite structured output. Controlled low-priority
   LiteRT median/p95 times are 10.089/10.310 ms for `672 x 384`, 12.991/13.189 ms for `896 x 384`, and
   13.308/13.488 ms for `928 x 384`. These are not end-to-end stream or thermal results.
-- Exercise representative 16:9, 21:9, and 32:9 streams and bucket boundaries for all four model
-  families. Confirm the nearest bucket is selected directly within the active setting and that
-  LiteRT is not recreated during a stable stream.
-- A/B DA-V2, MiDaS, experimental DepthART, and experimental ZipDepth on the same moving 16:9, 21:9,
-  and 32:9 content.
-  Record exact-output cadence, thermals, depth-detail/pop, and visible geometry. DA-V2's 21:9 and
-  32:9 buckets carry -2.60% and -3.125% direct-resize aspect distortion; DepthART has no dedicated
-  32:9 graph and routes it to `928 x 384`. Both cases require live visual acceptance.
+- The SM-I610 disparity hardware gate has compiled and dispatched all three four-pass conditioner
+  shapes without a GL error. Mean repeated-dispatch wall time over 20 dispatches plus a final
+  `glFinish()` was 1.336, 1.579, and 1.620 ms for `672 x 384`, `896 x 384`, and `928 x 384`.
+  This excludes the inverse-map render, packed draw, LiteRT, decode, and XR
+  composition; it is a driver gate, not an end-to-end timing result.
+- The SM-I610 raw V2 state gate has verified arithmetic mean publication, first-shot latching,
+  ordinary current-mean motion without camera drift, and strict rejection of a field containing one
+  NaN. The rejected `32 x 32` field reported `1023 / 1024` valid samples and published neither
+  current geometry readiness nor a history advance.
+- The SM-I610 offscreen render gate must compile and execute the production exact 1x inverse seed,
+  2x-horizontal one-correction refinement, and packed-compose fragments through both `RG16F`
+  targets. Its synthetic draw must return the expected left/right gradient samples with no GL error.
+- Exercise representative 16:9, 21:9, and 32:9 streams and every bucket boundary. Confirm the
+  nearest ZipDepth graph is selected and LiteRT is not recreated during a stable stream. Record
+  exact-output cadence, reuse, thermals, depth detail/pop, and visible geometry.
+- On every graph, require `Client SBS contractive disparity: R32F WxH`, an initialization log with
+  `seed=WxH refined=2WxH`, distinct exact-seed and seeded-refinement validation logs, and the exact
+  active path `RG16F 1x 11-iteration seed + 2x-horizontal x1 refinement, packed single draw`.
+  Any conditioner, seed-map, refinement-target, correction, or packed-compose failure must draw
+  current color flat; a live seed-only, `legacy inverse probe`, cached-probe, or direct-probe path is
+  a regression. Before live
+  qualification, run
+  `com.limelight.sbs.ClientSbsGpuDepthProcessorInstrumentedTest`,
+  `com.limelight.sbs.ClientSbsGpuDisparityProcessorInstrumentedTest` and
+  `com.limelight.utils.ClientSbsContractiveRenderInstrumentedTest` on Galaxy XR; all conditioner
+  shapes and both production fragment stages must execute without a GL error. Exercise moving silhouettes,
+  hair/thin diagonals, and high-contrast object boundaries, then
+  run at least 15 minutes while recording compose time, output cadence, GPU clock, and thermal
+  status.
+- Validate that the graph-specific raw scales are exactly `0.04864449`, `0.04707071`, and
+  `0.05421491`; the first accepted frame and each accepted cut latch the arithmetic raw mean.
+  Ordinary geometry-only cuts require two qualifying updates with no intervening history advance,
+  while a qualified appearance cut is immediate. Inject one invalid raw texel and verify the
+  current frame is flat and every reliable history owner remains unchanged.
+- At 1080p and 4K, compare the exact-area model input against an offline area reference on thin
+  diagonals and one-pixel edges. Bilinear sampling is expected only when either source axis is
+  genuinely upscaled into the selected model grid.
+- Retired DA-V2, MiDaS, and DepthART comparisons remain offline historical evidence in
+  `docs/client-sbs-evaluation.md`; their archives must be absent from the assembled APK.
 - Left/right eyes are not swapped and the packed split is centered exactly.
 - HDR input shows either verified preserved HDR with a high-precision target or the explicit
   BT.709/sRGB tonemap path; SDR shows BT.709/SDR. Direct modes clear Client SBS metadata.
-- A hard edit resets temporal depth without a long-lived flat frame; ordinary motion does not
-  continuously trigger cuts.
+- A hard edit relatches the raw shot camera without resetting immediate temporal depth; ordinary
+  motion does not continuously trigger cuts.
 - The four GL GPU averages receive non-disjoint samples without stalling and remain distinct from
   LiteRT call-wall latency.
 - The glance strip remains passive; the level dock does not move when the upward-pitched mode pane,

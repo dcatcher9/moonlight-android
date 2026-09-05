@@ -47,7 +47,6 @@ import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
 import com.limelight.ui.XrStreamPresenter;
-import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
@@ -428,22 +427,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
         else {
-            SessionSettingsStore.SessionRecord existingRecord =
-                    sessionSettingsStore.getCurrentSession(sessionPc);
-            boolean reusedRecord = false;
-            if (existingRecord != null
-                    && existingRecord.getCurrentApp().isSameApplication(sessionApp)) {
-                reusedRecord = sessionSettingsStore.edit(sessionPc, sessionApp,
-                                existingRecord.getLocalSessionId())
-                        .setResumeMetadata(new SessionSettingsStore.ResumeMetadata(
-                                false, null, System.currentTimeMillis()))
-                        .commit();
-            }
-
-            if (!reusedRecord) {
-                sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
-                        System.currentTimeMillis());
-            }
+            // A non-resume launch is a genuinely new host session even when it starts the same
+            // application as the previous one. Reusing that record would also reuse its saved
+            // presentation mode and per-session quality, causing a fresh stream to restore Client
+            // SBS after frame 1. Apply/activity recreation and host-confirmed Resume both take the
+            // branch above, so they retain the exact record while a fresh launch starts Normal
+            // with inherited defaults.
+            sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
+                    System.currentTimeMillis());
         }
 
         SessionSettingsStore.Snapshot snapshot =
@@ -672,17 +663,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void onLiveStreamQualityResyncRequired(boolean commitStagedSettings) {
                 scheduleMandatoryReconnectForAmbiguousLiveVideoMode(commitStagedSettings);
-            }
-
-            @Override
-            public boolean onClientSbsModelSelected(String modelId,
-                                                    ClientSbsModeSettingsModel current) {
-                if (reconnectScheduled) {
-                    return false;
-                }
-                xrSessionSettingsController.selectClientSbsModel(modelId);
-                refreshXrSessionSettingsModels();
-                return true;
             }
 
             @Override
@@ -943,6 +923,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 return SessionSettingsStore.PresenterMode.CLIENT_SBS_AI;
             default:
                 return SessionSettingsStore.PresenterMode.NORMAL;
+        }
+    }
+
+    /** Authoritative saved mode paired with the startup preferences used for this connection. */
+    public XrStreamPresenter.PresenterMode getXrStartupPresenterMode() {
+        SessionSettingsStore.PresenterMode mode = xrSessionSettingsController != null
+                ? xrSessionSettingsController.getStartupMode()
+                : SessionSettingsStore.PresenterMode.NORMAL;
+        switch (mode) {
+            case HOST_SBS_RAW:
+                return XrStreamPresenter.PresenterMode.HOST_SBS_RAW;
+            case HOST_SBS_AI:
+                return XrStreamPresenter.PresenterMode.HOST_SBS_AI;
+            case CLIENT_SBS_AI:
+                return XrStreamPresenter.PresenterMode.CLIENT_SBS_AI;
+            default:
+                return XrStreamPresenter.PresenterMode.NORMAL;
         }
     }
 

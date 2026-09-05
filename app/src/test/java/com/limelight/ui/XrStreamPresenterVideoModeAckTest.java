@@ -37,6 +37,44 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
+    public void userClientSbsResolutionNeedsReconnectBypassesPresentationRollback() {
+        assertTrue(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.LiveQualityRequestOrigin.USER,
+                true));
+    }
+
+    @Test
+    public void onlyUserClientSbsResolutionNeedsReconnectBypassesPresentationRollback() {
+        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.LiveQualityRequestOrigin.USER,
+                true));
+        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
+                MoonBridge.VIDEO_MODE_ACK_FAILED,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.LiveQualityRequestOrigin.USER,
+                true));
+        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW,
+                true));
+        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                XrStreamPresenter.LiveQualityRequestOrigin.USER,
+                true));
+        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.LiveQualityRequestOrigin.USER,
+                false));
+    }
+
+    @Test
     public void rejectedInvalidRevertsWithoutRetry() {
         assertEquals(XrStreamPresenter.VideoModeAckOutcome.REJECTED_NO_RETRY,
                 XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,

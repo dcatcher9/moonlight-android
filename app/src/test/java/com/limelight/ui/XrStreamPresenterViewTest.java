@@ -1,14 +1,12 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.Context;
@@ -23,23 +21,19 @@ import android.widget.TableRow;
 import android.widget.TextView;
 
 import androidx.appcompat.widget.AppCompatButton;
-import androidx.xr.runtime.math.FloatSize2d;
-import androidx.xr.runtime.math.IntSize2d;
-import androidx.xr.scenecore.PanelEntity;
 
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrChoiceGroup;
+import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsMetricHistory;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
-import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrSparklineView;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.InOrder;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.android.controller.ActivityController;
@@ -47,7 +41,6 @@ import org.robolectric.annotation.Config;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Arrays;
 import java.util.Locale;
 
 @RunWith(RobolectricTestRunner.class)
@@ -118,7 +111,7 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void clientModePaneUsesWholePaneVerticalOverflowAtConstrainedHeight()
+    public void clientModePaneShowsFixedZipDepthWithoutSelectorAndCanScroll()
             throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
@@ -136,6 +129,11 @@ public final class XrStreamPresenterViewTest {
         Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
         render.invoke(presenter);
+
+        TextView modelName = (TextView) getField(presenter, "clientModelNameView");
+        assertEquals("ZipDepth Base FP16 · short 384", modelName.getText().toString());
+        assertThrows(NoSuchFieldException.class,
+                () -> XrStreamPresenter.class.getDeclaredField("clientModelChoiceGroup"));
 
         Button modeApply = (Button) getField(presenter, "modeApplyButton");
         assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -144,7 +142,8 @@ public final class XrStreamPresenterViewTest {
         assertTrue(host.getChildAt(0) instanceof ScrollView);
         ScrollView scroll = (ScrollView) host.getChildAt(0);
         assertTrue(scroll.isFillViewport());
-        // Force the same vertical choice layout used by the device for the four long labels.
+        // Keep the whole pane scrollable if its fixed model/status and quality rows exceed the
+        // constrained Galaxy XR panel height.
         int width = dp(activity, 600);
         int height = dp(activity, 260);
         host.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
@@ -152,95 +151,6 @@ public final class XrStreamPresenterViewTest {
         host.layout(0, 0, width, height);
 
         assertTrue(scroll.getChildAt(0).getMeasuredHeight() > scroll.getMeasuredHeight());
-        controller.destroy();
-    }
-
-    @Test
-    public void clientModePaneResizesItsRasterForEveryRealModelChoice()
-            throws Exception {
-        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
-        Activity activity = controller.get();
-        activity.setTheme(R.style.AppTheme);
-        controller.setup();
-
-        PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(activity);
-        XrStreamPresenter presenter = new XrStreamPresenter(
-                activity, prefs, surface -> { }, visible -> { });
-        presenter.setClientSbsModeSettingsModel(new ClientSbsModeSettingsModel(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
-                "ZipDepth Base FP16",
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
-                "ZipDepth Base FP16",
-                SessionSettingsModel.Source.GLOBAL,
-                "672 x 384", "GPU-only",
-                Arrays.asList(
-                        new SessionSettingsModel.Choice(
-                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                                "Depth Anything V2"),
-                        new SessionSettingsModel.Choice(
-                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                                "MiDaS 2.1"),
-                        new SessionSettingsModel.Choice(
-                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
-                                "DepthART S448 (Experimental)"),
-                        new SessionSettingsModel.Choice(
-                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
-                                "ZipDepth Base (Experimental · short 384)")),
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16));
-        FrameLayout host = new FrameLayout(activity);
-        setField(presenter, "modeOptionsHost", host);
-        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
-        state.toggleModeOptions(XrStreamPresenter.PresenterMode.CLIENT_SBS_AI.name());
-
-        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
-        render.setAccessible(true);
-        render.invoke(presenter);
-
-        XrChoiceGroup group = (XrChoiceGroup) getField(presenter, "clientModelChoiceGroup");
-        for (int i = 0; i < group.getChildCount(); i++) {
-            // Robolectric does not provide Android's real font metrics. Explicit minima reproduce
-            // the four tall segments produced by these long labels on the Galaxy XR raster.
-            group.getButtonAt(i).setMinimumWidth(dp(activity, 400));
-            group.getButtonAt(i).setMinimumHeight(dp(activity, 80));
-        }
-        int width = dp(activity, 600);
-        int height = dp(activity, 260);
-        host.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
-        host.layout(0, 0, width, height);
-
-        assertEquals(4, group.getChildCount());
-        assertTrue("The real model labels must stack at the constrained device column width: "
-                        + "group=" + group.getWidth() + "x" + group.getHeight()
-                        + " first=" + group.getButtonAt(0).getWidth() + "x"
-                        + group.getButtonAt(0).getHeight() + " secondTop="
-                        + group.getButtonAt(1).getTop(),
-                group.getButtonAt(1).getTop() > group.getButtonAt(0).getTop());
-        assertTrue(group.getButtonAt(3).getBottom() <= group.getHeight());
-        View modelColumn = (View) group.getParent();
-        assertTrue("The model column must contribute its natural height to the client row",
-                group.getBottom() <= modelColumn.getHeight());
-
-        PanelEntity panel = mock(PanelEntity.class);
-        when(panel.isDisposed()).thenReturn(false);
-        setField(presenter, "modeOptionsPanel", panel);
-        Method fit = XrStreamPresenter.class.getDeclaredMethod(
-                "fitModeOptionsPanelToContent");
-        fit.setAccessible(true);
-        fit.invoke(presenter);
-
-        int baseRasterHeight = (Integer) getField(
-                presenter, "modeOptionsBaseRasterHeightPixels");
-        int fittedRasterHeight = (Integer) getField(
-                presenter, "modeOptionsRasterHeightPixels");
-        assertEquals(height, baseRasterHeight);
-        assertTrue(fittedRasterHeight > baseRasterHeight);
-        assertTrue(fittedRasterHeight <=
-                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
-                        Integer.MAX_VALUE, baseRasterHeight, 0.52f, 0.90f));
-        InOrder resizeOrder = inOrder(panel);
-        resizeOrder.verify(panel).setSizeInPixels(any(IntSize2d.class));
-        resizeOrder.verify(panel).setSize(any(FloatSize2d.class));
         controller.destroy();
     }
 
@@ -363,11 +273,96 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void sceneCutStatusExposesArmingAndExternalAttribution() {
-        assertEquals("7 total | scene age 19 frames | geometry armed | external requests 2",
+    public void sceneCutStatusExposesArmingAndAppearanceProposalAttribution() {
+        assertEquals("7 total | scene age 19 frames | geometry armed | appearance proposals 2",
                 XrStreamPresenter.formatSceneCutStatus(7L, 19, true, 2L));
-        assertEquals("7 total | scene age 19 frames | geometry disarmed | external requests 0",
+        assertEquals("7 total | scene age 19 frames | geometry disarmed | appearance proposals 0",
                 XrStreamPresenter.formatSceneCutStatus(7L, 19, false, 0L));
+    }
+
+    @Test
+    public void clientCutReasonNamesSeparateAcceptedAndRejectedAppearanceEvidence() {
+        assertEquals("appearance", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_APPEARANCE));
+        assertEquals("geometry", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY));
+        assertEquals("structureless_entry", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY));
+        assertEquals("appearance_unarmed", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID));
+        assertEquals("appearance_depth_rejected", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_ARMED));
+    }
+
+    @Test
+    public void clientCutReasonNamesExposeLatchedGeometryDecisions() {
+        assertEquals("geometry_confirmation_rejected", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED));
+        assertEquals("geometry_depth_only_rejected", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK));
+        assertEquals("geometry_depth_only", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK));
+        assertEquals("geometry_structure_rejected", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER));
+        assertEquals("geometry_depth_only_pending", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK));
+        assertEquals("geometry_pending", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER
+                        | ClientSbsGpuDepthProcessor
+                        .CUT_DECISION_GEOMETRY_STRUCTURE_CORROBORATED
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE));
+        assertEquals("structureless_start", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_PERSISTENT_LOW_START));
+        assertEquals("structure_supported_return", XrStreamPresenter.clientCutReasonName(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_SUPPORTED_RETURN));
+    }
+
+    @Test
+    public void clientStatsDescribeOnlyCurrentRawV2State() {
+        String state = XrStreamPresenter.formatClientV2State(
+                true, true, false, 1.0f);
+        String coordinate = XrStreamPresenter.formatClientV2Coordinate(
+                1.75f, 0.123456f, 0.234567f);
+        String depthEvidence = XrStreamPresenter.formatClientCutDepthEvidence(
+                0.125f, Float.NaN, 0.75f, 0.2f, 1.25f, false);
+        String appearanceEvidence = XrStreamPresenter.formatClientCutAppearanceEvidence(
+                0.1f, 0.2f, 0.3f, 0.8f, 0.7f);
+        String decision = XrStreamPresenter.formatClientCutDecision(
+                ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY
+                        | ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID,
+                12L, true);
+
+        assertEquals("ready yes | current valid yes | history hold | valid 100.0%", state);
+        assertEquals("fixed pop 1.750 | shotMean 0.123456 | currentMean 0.234567",
+                coordinate);
+        assertEquals("change 0.125 | range shift n/a | internal 0.750 | baseline 0.200"
+                        + " | cut range 1.2500",
+                depthEvidence);
+        assertEquals("raw 0.100 | luma 0.200 | structure 0.300 | support 0.800/0.700",
+                appearanceEvidence);
+        assertEquals("geometry | event 12 | geometry armed yes | flags 0x00a00", decision);
+        assertEquals("total 7 | appearance 2 | geometry 3 | low 2 | proposals 9",
+                XrStreamPresenter.formatClientCutCounts(7L, 2L, 3L, 2L, 9L));
+        assertEquals("content 1 | gap 2 | age 3 | invalid 4",
+                XrStreamPresenter.formatClientReuseRejects(1L, 2L, 3L, 4L));
+        assertEquals("color_busy 0 | flat 0 | raw invalid 0 | cut range collapsed 0",
+                XrStreamPresenter.formatClientFaults(0L, 0L, true, 0L, 0L));
+
+        String visible = (state + coordinate + depthEvidence + appearanceEvidence + decision)
+                .toLowerCase(Locale.US);
+        for (String obsolete : new String[] {
+                "stretch", "recenter", "subject", "bestv2", "adaptive", "anchor", "profile"
+        }) {
+            assertFalse("obsolete Client SBS stats concept: " + obsolete,
+                    visible.contains(obsolete));
+        }
     }
 
     @Test
@@ -379,7 +374,7 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void clientGpuStageRowsIncludeDepthProfileTimer() throws Exception {
+    public void clientGpuStageRowsIncludeRawV2CutTimer() throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
         activity.setTheme(R.style.AppTheme);
@@ -406,16 +401,16 @@ public final class XrStreamPresenterViewTest {
         finish.invoke(presenter);
 
         assertEquals(4, table.getChildCount());
-        TableRow depthProfile = (TableRow) table.getChildAt(2);
-        assertEquals("Depth profile GL GPU",
-                ((TextView) depthProfile.getChildAt(0)).getText().toString());
-        assertEquals("0.33 ms | filter + adaptive profile",
-                ((TextView) depthProfile.getChildAt(1)).getText().toString());
+        TableRow depthCut = (TableRow) table.getChildAt(2);
+        assertEquals("Depth / cut GPU",
+                ((TextView) depthCut.getChildAt(0)).getText().toString());
+        assertEquals("0.33 ms | raw V2 + cut",
+                ((TextView) depthCut.getChildAt(1)).getText().toString());
         controller.destroy();
     }
 
     @Test
-    public void healthTrendRowsRenderEveryHistoryAndReuseTheirSparklines() throws Exception {
+    public void trendRowsRenderHistoriesAndReuseTheirSparklines() throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
         activity.setTheme(R.style.AppTheme);
@@ -437,11 +432,11 @@ public final class XrStreamPresenterViewTest {
         addTrend.setAccessible(true);
 
         String[] labels = {
-                "Pop strength",
-                "Edge fraction",
-                "Changed-depth fraction",
+                "Cut edge evidence",
+                "Cut depth change",
                 "Scene cuts",
-                "Zero-plane anchor shift"
+                "Frame age",
+                "Network jitter"
         };
         begin.invoke(presenter);
         for (int i = 0; i < labels.length; i++) {
@@ -520,14 +515,14 @@ public final class XrStreamPresenterViewTest {
         addTrend.setAccessible(true);
 
         begin.invoke(presenter);
-        addTrend.invoke(presenter, "Pop strength", "warming", 0xFFFFFFFF,
+        addTrend.invoke(presenter, "Cut depth change", "warming", 0xFFFFFFFF,
                 new float[] {1.0f}, false, 0.0f, 2.0f);
         finish.invoke(presenter);
         TableRow fallback = (TableRow) table.getChildAt(0);
         assertTrue(fallback.getChildAt(1) instanceof TextView);
 
         begin.invoke(presenter);
-        addTrend.invoke(presenter, "Pop strength", "live", 0xFFFFFFFF,
+        addTrend.invoke(presenter, "Cut depth change", "live", 0xFFFFFFFF,
                 new float[] {1.0f, 1.5f}, false, 0.0f, 2.0f);
         finish.invoke(presenter);
         TableRow trend = (TableRow) table.getChildAt(0);
@@ -535,7 +530,7 @@ public final class XrStreamPresenterViewTest {
         assertTrue(trend.getChildAt(1) instanceof LinearLayout);
 
         begin.invoke(presenter);
-        addTrend.invoke(presenter, "Pop strength", "reset", 0xFFFFFFFF,
+        addTrend.invoke(presenter, "Cut depth change", "reset", 0xFFFFFFFF,
                 new float[] {1.0f}, false, 0.0f, 2.0f);
         finish.invoke(presenter);
         TableRow resetFallback = (TableRow) table.getChildAt(0);

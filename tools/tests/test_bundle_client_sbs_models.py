@@ -13,6 +13,24 @@ import unittest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "bundle-client-sbs-models.py"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+RETIRED_ARCHIVE_DIRECTORY = (
+    REPOSITORY_ROOT / "tools" / "model-sources" / "retired-client-sbs-archives"
+)
+RETIRED_ARTIFACT_SHA256 = {
+    "client-sbs-dav2-models.tar.xz": (
+        "3f9892624253e5d7301d6b0eb28acc7ef30ac2cf3131acbc7a8c1f59696ad148"
+    ),
+    "client-sbs-midas-models.tar.xz": (
+        "166be90ec3866dfeae61ce7163df49414840b6d054466d79dbe153ea3ebc8b94"
+    ),
+    "client-sbs-depthart-models.tar.xz": (
+        "1dccec4aa315288b5cc471a9d585d57e00d0e12a56870cb4712da5f20fb476a6"
+    ),
+    "LICENSE-MIDAS-MIT.txt": (
+        "5a42e286153d7495b96f5c88b068b760ca1fa0717499f6356ea2ebfa90283e0a"
+    ),
+}
 SPEC = importlib.util.spec_from_file_location("client_sbs_model_bundler", SCRIPT_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Unable to load {SCRIPT_PATH}")
@@ -21,14 +39,6 @@ SPEC.loader.exec_module(TOOL)
 
 
 FIXTURES = {
-    TOOL.DEPTH_ANYTHING_MODELS[0]: b"shared-dav2-weights-" * 2048 + b"-322x182",
-    TOOL.DEPTH_ANYTHING_MODELS[1]: b"shared-dav2-weights-" * 2048 + b"-350x154",
-    TOOL.DEPTH_ANYTHING_MODELS[2]: b"shared-dav2-weights-" * 2048 + b"-434x126",
-    TOOL.MIDAS_MODELS[0]: b"shared-midas-weights-" * 2048 + b"-352x192",
-    TOOL.MIDAS_MODELS[1]: b"shared-midas-weights-" * 2048 + b"-384x160",
-    TOOL.MIDAS_MODELS[2]: b"shared-midas-weights-" * 2048 + b"-448x128",
-    TOOL.DEPTHART_MODELS[0]: b"shared-depthart-weights-" * 2048 + b"-672x384",
-    TOOL.DEPTHART_MODELS[1]: b"shared-depthart-weights-" * 2048 + b"-928x384",
     TOOL.ZIPDEPTH_MODELS[0]: b"shared-zipdepth-weights-" * 2048 + b"-672x384",
     TOOL.ZIPDEPTH_MODELS[1]: b"shared-zipdepth-weights-" * 2048 + b"-896x384",
     TOOL.ZIPDEPTH_MODELS[2]: b"shared-zipdepth-weights-" * 2048 + b"-928x384",
@@ -93,7 +103,7 @@ class BundleClientSbsModelsTest(unittest.TestCase):
                     self.assertEqual(len(model), record["size"])
                     self.assertEqual(hashlib.sha256(model).hexdigest(), record["sha256"])
 
-    def test_each_archive_contains_only_its_own_family(self) -> None:
+    def test_archive_contains_only_zipdepth_graphs(self) -> None:
         with tempfile.TemporaryDirectory(prefix="client-sbs-model-bundle-test-") as root:
             root_path = Path(root)
             input_directory = root_path / "input"
@@ -102,35 +112,24 @@ class BundleClientSbsModelsTest(unittest.TestCase):
 
             TOOL.bundle_models(input_directory, output_directory)
 
-            with tarfile.open(
-                output_directory / TOOL.DEPTH_ANYTHING_ARCHIVE_FILENAME, mode="r:xz"
-            ) as archive:
-                self.assertEqual(list(TOOL.DEPTH_ANYTHING_MODELS), archive.getnames())
-            with tarfile.open(
-                output_directory / TOOL.MIDAS_ARCHIVE_FILENAME, mode="r:xz"
-            ) as archive:
-                self.assertEqual(list(TOOL.MIDAS_MODELS), archive.getnames())
-            with tarfile.open(
-                output_directory / TOOL.DEPTHART_ARCHIVE_FILENAME, mode="r:xz"
-            ) as archive:
-                self.assertEqual(list(TOOL.DEPTHART_MODELS), archive.getnames())
+            self.assertEqual(
+                [TOOL.ZIPDEPTH_ARCHIVE_FILENAME],
+                [path.name for path in output_directory.iterdir()],
+            )
             with tarfile.open(
                 output_directory / TOOL.ZIPDEPTH_ARCHIVE_FILENAME, mode="r:xz"
             ) as archive:
                 self.assertEqual(list(TOOL.ZIPDEPTH_MODELS), archive.getnames())
 
-    def test_depthart_family_uses_the_short_384_static_buckets(self) -> None:
-        self.assertEqual(
-            "client-sbs-depthart-models.tar.xz",
-            TOOL.DEPTHART_ARCHIVE_FILENAME,
-        )
-        self.assertEqual(
-            (
-                "depthart-s448-static-672x384-fp16weights.tflite.model",
-                "depthart-s448-static-928x384-fp16weights.tflite.model",
-            ),
-            TOOL.DEPTHART_MODELS,
-        )
+    def test_retired_candidate_archives_remain_preserved_outside_android_assets(self) -> None:
+        for filename, expected_sha256 in RETIRED_ARTIFACT_SHA256.items():
+            artifact = RETIRED_ARCHIVE_DIRECTORY / filename
+            self.assertTrue(artifact.is_file(), f"Missing preserved artifact: {artifact}")
+            digest = hashlib.sha256()
+            with artifact.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            self.assertEqual(expected_sha256, digest.hexdigest(), filename)
 
     def test_zipdepth_family_uses_original_base_short_384_static_buckets(self) -> None:
         self.assertEqual(
@@ -151,7 +150,7 @@ class BundleClientSbsModelsTest(unittest.TestCase):
             root_path = Path(root)
             input_directory = root_path / "input"
             self._write_fixtures(input_directory)
-            (input_directory / TOOL.MIDAS_MODELS[-1]).unlink()
+            (input_directory / TOOL.ZIPDEPTH_MODELS[-1]).unlink()
 
             with self.assertRaisesRegex(TOOL.ModelBundleError, "Missing production"):
                 TOOL.bundle_models(input_directory, root_path / "output")

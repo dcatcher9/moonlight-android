@@ -11,6 +11,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
+import com.limelight.preferences.session.SessionSettingsStore;
 
 import java.io.File;
 import java.io.FileReader;
@@ -34,6 +35,8 @@ public final class LegacyProfileMigration {
     static final String FULL_RANGE_RECOVERY_COMPLETE_KEY = "xr_full_range_recovered_v2";
     static final String DEBUG_LOGGING_DEFAULT_COMPLETE_KEY =
             "debug_perf_logging_default_applied_v1";
+    static final String ZIPDEPTH_ONLY_MIGRATION_COMPLETE_KEY =
+            "client_sbs_zipdepth_only_migrated_v1";
     private static final String PROFILES_DIR = "profiles";
     private static final String PROFILES_FILE = "profiles.json";
 
@@ -41,7 +44,7 @@ public final class LegacyProfileMigration {
     private static final Set<String> RETAINED_XR_KEYS = new HashSet<>(Arrays.asList(
             "list_resolution", "list_fps", "seekbar_bitrate_kbps",
             "checkbox_enable_hdr", "checkbox_full_range", "video_format", "frame_pacing",
-            "list_client_sbs_depth_model", "list_raw_sbs_per_eye_resolution",
+            "list_raw_sbs_per_eye_resolution",
             "list_audio_config", "checkbox_host_audio",
             "seekbar_deadzone", "checkbox_enable_rumble", "checkbox_flip_face_buttons",
             "checkbox_gamepad_touchpad_as_mouse", "checkbox_mouse_emulation",
@@ -204,6 +207,37 @@ public final class LegacyProfileMigration {
                 .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true)
                 .putBoolean(DEBUG_LOGGING_DEFAULT_COMPLETE_KEY, true)
                 .apply();
+    }
+
+    /**
+     * Retires the old selectable Client SBS model setting after ZipDepth became the sole runtime
+     * model. The completion marker is committed only after both preference files are durable, so
+     * a partial I/O failure is retried on the next process start.
+     */
+    public static void retireClientSbsModelSelection(Context context) {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        if (preferences.getBoolean(ZIPDEPTH_ONLY_MIGRATION_COMPLETE_KEY, false)) {
+            return;
+        }
+
+        boolean globalCommitted = preferences.edit()
+                .remove(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING)
+                .commit();
+        boolean sessionsCommitted = new SessionSettingsStore(context)
+                .clearModeValueOverridesForAllCurrentSessions(
+                        SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING);
+        if (globalCommitted && sessionsCommitted) {
+            if (!preferences.edit()
+                    .putBoolean(ZIPDEPTH_ONLY_MIGRATION_COMPLETE_KEY, true)
+                    .commit()) {
+                LimeLog.warning("Unable to mark the Client SBS ZipDepth-only migration complete");
+            }
+        }
+        else {
+            LimeLog.warning("Unable to retire every saved Client SBS model selection; "
+                    + "the migration will retry next launch");
+        }
     }
 
     private static void markComplete(SharedPreferences preferences) {

@@ -5,9 +5,8 @@ import java.util.Objects;
 /**
  * Complete identity of the Client SBS pipeline state that is immutable for one renderer.
  *
- * <p>Model families do not share aspect-bucket boundaries, and the reprojection probe count is
- * compiled into shader source using its own bucket table. A live resize is safe only when both
- * identities, along with every manifest-derived target dimension, remain unchanged.</p>
+ * <p>A live resize is safe only when the ZipDepth graph identity and every manifest-derived target
+ * dimension remain unchanged.</p>
  */
 public final class ClientSbsPipelineContract {
     private final ClientSbsModelManifest modelManifest;
@@ -19,7 +18,6 @@ public final class ClientSbsPipelineContract {
     private final boolean directFullFrameResize;
     private final float modelContentAspect;
     private final int aspectIdentity;
-    private final int reprojectionProbeSteps;
 
     private ClientSbsPipelineContract(ClientSbsModelManifest modelManifest, float sourceAspect) {
         this.modelManifest = modelManifest;
@@ -42,21 +40,6 @@ public final class ClientSbsPipelineContract {
                 * Math.min(1.0f, 1.0f / modelContentAspect)));
         // A padded graph sizes processor state continuously from the effective content aspect.
         aspectIdentity = directFullFrameResize ? 0 : Float.floatToIntBits(modelContentAspect);
-        // Preserve the Galaxy-qualified DA-V2/MiDaS probe table. New short-384 families have
-        // different nearest-aspect boundaries, so size each from its own complete selection
-        // interval; otherwise crossing a DA-V2-only boundary would rebuild an identical target.
-        float dedicatedProbeMinimum =
-                ClientSbsModelManifest.minimumLandscapeAspectForDedicatedProbeBucket(
-                        modelManifest);
-        if (Float.isFinite(dedicatedProbeMinimum) && sourceAspect >= 1.0f) {
-            reprojectionProbeSteps = ClientSbsShaders.probeStepsForDepthOutput(
-                    sourceAspect, depthOutputWidth,
-                    dedicatedProbeMinimum);
-        }
-        else {
-            reprojectionProbeSteps = ClientSbsShaders.probeStepsForDepthOutput(
-                    sourceAspect, depthOutputWidth);
-        }
     }
 
     /** Resolves the exact immutable graph/target/shader contract for one stream aspect. */
@@ -87,11 +70,6 @@ public final class ClientSbsPipelineContract {
     /** Exact static model-input height selected for this stream. */
     public int getModelInputHeight() {
         return modelInputHeight;
-    }
-
-    /** Probe-loop bound compiled into both reprojection shader programs. */
-    public int getReprojectionProbeSteps() {
-        return reprojectionProbeSteps;
     }
 
     ClientSbsModelManifest getModelManifest() {
@@ -129,22 +107,19 @@ public final class ClientSbsPipelineContract {
                 && depthOutputHeight == that.depthOutputHeight
                 && directFullFrameResize == that.directFullFrameResize
                 && aspectIdentity == that.aspectIdentity
-                && reprojectionProbeSteps == that.reprojectionProbeSteps
                 && modelManifestId.equals(that.modelManifestId);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(modelManifestId, modelInputWidth, modelInputHeight,
-                depthOutputWidth, depthOutputHeight, directFullFrameResize, aspectIdentity,
-                reprojectionProbeSteps);
+                depthOutputWidth, depthOutputHeight, directFullFrameResize, aspectIdentity);
     }
 
     @Override
     public String toString() {
         return modelManifestId + " input=" + modelInputWidth + "x" + modelInputHeight
                 + " depth=" + depthOutputWidth + "x" + depthOutputHeight
-                + " inputResize=" + (directFullFrameResize ? "direct" : "aspect-fit")
-                + " probes=" + reprojectionProbeSteps;
+                + " inputResize=" + (directFullFrameResize ? "direct" : "aspect-fit");
     }
 }

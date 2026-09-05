@@ -9,6 +9,7 @@ public class ArtemisApplication extends Application {
     public void onCreate() {
         super.onCreate();
         LegacyProfileMigration.migrateActiveProfile(this);
+        LegacyProfileMigration.retireClientSbsModelSelection(this);
         LegacyProfileMigration.applyDebugBuildDefaults(this);
     }
 }

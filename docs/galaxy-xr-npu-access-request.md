@@ -4,6 +4,9 @@ Draft post for the Samsung Developer Forum (Galaxy XR category) and/or the Andro
 feedback channel. Written 2026-08-04; device facts verified on SM-I610, Android 14,
 platform `anorak`.
 
+> Historical draft. The production client now uses ZipDepth only; the NPU-access findings remain
+> relevant, but model names and performance figures below describe the investigation at that date.
+
 ---
 
 **Title:** Please provide a supported path for third-party NPU (Hexagon HTP) inference on

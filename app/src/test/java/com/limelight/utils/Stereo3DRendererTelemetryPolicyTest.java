@@ -41,7 +41,7 @@ public class Stereo3DRendererTelemetryPolicyTest {
     }
 
     @Test
-    public void localDepthValidityExcludesUninitializedProfileDefaults() {
+    public void localV2DepthValidityDoesNotClaimRetiredAdaptiveOrAnchorFields() {
         int waiting = Stereo3DRenderer.depthTelemetryValidFields(false, false);
         assertTrue((waiting & SbsDepthTelemetrySnapshot.VALID_EFFECTIVE) != 0);
         assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
@@ -50,10 +50,13 @@ public class Stereo3DRendererTelemetryPolicyTest {
         assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
 
         int classified = Stereo3DRenderer.depthTelemetryValidFields(false, true);
-        assertTrue((classified & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
+        assertFalse((classified & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
         assertFalse((classified & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
 
         int ready = Stereo3DRenderer.depthTelemetryValidFields(true, true);
-        assertEquals(SbsDepthTelemetrySnapshot.VALID_ALL, ready);
+        assertTrue((ready & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
+        assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
+        assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
+        assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_SUBJECT) != 0);
     }
 }

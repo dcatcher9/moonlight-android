@@ -18,8 +18,11 @@ import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.sbs.ClientSbsFrameSlots;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
+import com.limelight.sbs.ClientSbsGpuDisparityProcessor;
 import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
 import com.limelight.sbs.ClientSbsGpuTimer;
+import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
+import com.limelight.sbs.ClientSbsV2CoordinateContract;
 import com.limelight.sbs.SbsDepthTelemetryHistory;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 
@@ -53,11 +56,22 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private static final float[] TEXTURE_VERTICES = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
     private static final float[] OES_TEXTURE_VERTICES = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
     private static final long THERMAL_STATUS_POLL_INTERVAL_NS = 1_000_000_000L;
+    /** Mirrors Apollo's maximum changed-source packed-presentation hold. */
+    static final long MAX_STALE_DEPTH_PRESENTATION_AGE_NS = TimeUnit.MILLISECONDS.toNanos(250L);
     private static final long RENDERER_FINISH_ACK_TIMEOUT_MS = 1_500L;
+    /** Prevents GLSurfaceView's mandatory first draw from replacing the retained frame with black. */
+    // Cover MediaCodec's 2.5 s fresh-IDR watchdog plus the 2 s post-IDR packed-swap proof. Those
+    // state-machine watchdogs own failure; this final bound only prevents an orphaned GL wait.
+    private static final long MODE_ENTRY_FIRST_FRAME_WAIT_MS = 5_000L;
     private static final int GPU_CLOSE_ATTEMPTS_ON_OWNER_WORKER = 3;
-    /** One warp texel per depth texel avoids oversolving the already low-resolution depth field. */
-    private static final int WARP_MAP_SCALE = 1;
-    private final String clientSbsModelId;
+    /**
+     * Refine only along the horizontal inverse axis. The exact 1x map remains the seed, so this
+     * doubles destination-X sampling without multiplying its eleven-step solve across both axes.
+     */
+    static final int WARP_MAP_HORIZONTAL_SCALE = 2;
+    static final int WARP_MAP_VERTICAL_SCALE = 1;
+    private static final String CLIENT_SBS_MODEL_ID =
+            PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16;
     private final ClientSbsPipelineContract pipelineContract;
     private final ClientSbsModelManifest aiModel;
     private final int modelInputHeight;
@@ -70,16 +84,25 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     /** Renderer-owned source geometry; never aliases the presenter's optimistic preferences. */
     private int sourceWidth;
     private int sourceHeight;
-    /** Compiled once from its own static probe bucket. */
-    private final int reprojectionProbeSteps;
+    /**
+     * Monotonic decoder-callback identity. Unlike successful GL latches, this advances for every
+     * callback so latest-only SurfaceTexture coalescing cannot hide source-frame steps from the
+     * near-identical reuse bound. Access is guarded by {@link #frameLock}.
+     */
+    private long decoderFrameCallbackSequence;
+    /** Sequence attached to the newest coalesced callback; guarded by {@link #frameLock}. */
+    private long pendingFrameCallbackSequence;
+    /** Callback sequence of the buffer most recently latched by updateTexImage(). */
     private long latchedFrameSequence;
     private long lastCapturedFrameSequence;
     private boolean hasFrameForActiveGeneration;
     private int activeClientSbsGeneration;
+    /** Last actual depth observation; reuse never advances the cut detector's source-step age. */
+    private long lastDepthObservationFrameSequence;
 
     private volatile boolean clientSbs;
     /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
-     *  PQ frame to SDR before feeding the selected SDR depth model. Set by the presenter. */
+     *  PQ frame to SDR before feeding ZipDepth. Set by the presenter. */
     private volatile boolean hdrInput;
     private final HdrInputTransitionState hdrInputTransition =
             new HdrInputTransitionState();
@@ -87,6 +110,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private volatile Runnable hdrInputTransitionCompletion;
     private volatile int hdrInputTransitionCompletionGeneration;
     private volatile int hdrInputTransitionOutputGeneration;
+    /** Client-mode entry completes only after its first fresh packed output swap. */
+    private volatile Runnable clientSbsModeSwitchCompletion;
+    private volatile int clientSbsModeSwitchCompletionGeneration;
     /** Resize readiness is published only after one new-generation packed buffer is swapped. */
     private volatile Runnable liveStreamResizeCompletion;
     private volatile int liveStreamResizeCompletionGeneration;
@@ -123,6 +149,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
      */
     private final Object gpuBufferOwnershipLock = new Object();
     private final Object frameLock = new Object();
+    private final Object firstModeEntryFrameLock = new Object();
+    /** True only from a Client-entry attach until that generation receives its first decoder frame. */
+    private volatile boolean awaitingFirstModeEntryFrame;
     private final FloatBuffer quadVertexBuffer;
     private final FloatBuffer textureVertexBuffer;
     private final FloatBuffer oesTextureVertexBuffer;
@@ -139,6 +168,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final AtomicBoolean frameDrainQueued = new AtomicBoolean(false);
     /** Invalidates queued latch events across mode/surface generations. */
     private final AtomicLong frameDrainToken = new AtomicLong(0L);
+    /** Serializes the single presentation-age deadline callback across lifecycle generations. */
+    private final Object staleDepthWatchdogLock = new Object();
+    private final Runnable staleDepthWatchdogRunnable;
+    /** Guarded by staleDepthWatchdogLock. */
+    private boolean staleDepthWatchdogQueued;
+    /** Guarded by staleDepthWatchdogLock. */
+    private int staleDepthWatchdogGeneration;
     /** Prevents a callback race from counting the same latest-only buffer twice. */
     private long lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
@@ -164,11 +200,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final int depthMapHeight;
     private final int warpMapWidth;
     private final int warpMapHeight;
+    private final int refinedWarpMapWidth;
+    private final int refinedWarpMapHeight;
 
     // OpenGL Handles
-    private int bilateralBlurProgram;
     private int dibr3dProgram;
     private int warpMapProgram;
+    private int contractiveWarpMapProgram;
+    private int contractiveWarpMapRefinementProgram;
     private int warpedDibr3dProgram;
     private final int[] colorFrameTextures = new int[2];
     private final int[] colorFrameFbos = new int[2];
@@ -181,22 +220,22 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
     private int fboHandle;
     private int fboTextureId;
-    private int filterFboHandle;
-    private int filteredDepthMapTextureId;
-    private int intermediateFboHandle;
-    private int intermediateTextureId;
     private int warpMapFboHandle;
     private int warpMapTextureId;
+    private int refinedWarpMapFboHandle;
+    private int refinedWarpMapTextureId;
     private boolean warpMapValid;
     private boolean warpMapAvailable;
     /** The first optional RG16F render is checked once; steady-state avoids glGetError. */
     private boolean warpMapDrawValidated;
+    /** The conditioned fixed-point map is optional and validates independently from legacy. */
+    private boolean contractiveWarpMapDrawValidated;
+    /** The first seeded one-step refinement draw is checked once; steady state avoids glGetError. */
+    private boolean contractiveWarpMapRefinementDrawValidated;
     /** The first cheap full-resolution warp-map sample is likewise checked once. */
     private boolean warpedComposeValidated;
     /** True after the current exact color/depth pair has been submitted to SceneCore. */
     private boolean matchedOutputPresented;
-    private boolean filteredDepthValid;
-    private volatile boolean highPrecisionDepth;
     /** True only when the window and every presentation-color target retain at least 10 bits. */
     private volatile boolean hdrOutputCapable;
     private boolean hdrWindowCapable;
@@ -208,9 +247,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private QuadProgramBindings simpleProgramBindings;
     private QuadProgramBindings modelInputProgramBindings;
     private GpuPackProgramBindings gpuPackProgramBindings;
-    private BlurProgramBindings blurProgramBindings;
     private ReprojectionProgramBindings reprojectionProgramBindings;
     private WarpMapProgramBindings warpMapProgramBindings;
+    private ContractiveWarpMapProgramBindings contractiveWarpMapProgramBindings;
+    private ContractiveWarpMapRefinementProgramBindings
+            contractiveWarpMapRefinementProgramBindings;
     private WarpedReprojectionProgramBindings warpedReprojectionProgramBindings;
 
     // AI & LiteRT Variables
@@ -228,8 +269,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private boolean neverStartedCleanupSucceeded;
     /** GLES compute depth/profile pipeline owned exclusively by the renderer context. */
     private ClientSbsGpuDepthProcessor gpuDepthProcessor;
+    /** Optional host-style slope conditioner over the calibrated ZipDepth disparity candidate. */
+    private ClientSbsGpuDisparityProcessor gpuDisparityProcessor;
     /** GPU-only color discontinuity signal paired with the single in-flight model tensor. */
     private ClientSbsGpuSceneCutDetector gpuSceneCutDetector;
+    /**
+     * Generation reset deferred until native has finished mapping the detector's shared decision
+     * SSBO. Renderer-thread access alone is insufficient now that the inference context reads it.
+     */
+    private boolean gpuSceneCutResetPending;
     /** Optional, nonblocking EXT timer-query ring owned by the renderer context. */
     private volatile ClientSbsGpuTimer gpuTimer;
     private static final int GPU_TIMER_SAMPLE_STRIDE = 4;
@@ -269,15 +317,17 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             new AtomicLongArray(ClientSbsGpuInferenceEngine.BUFFER_SLOT_COUNT);
     private int gpuDepthTextureId;
     private int gpuProfileTextureId;
+    private int gpuParallaxTextureId;
+    private boolean contractiveDisparityValid;
     private boolean gpuDepthActive;
     private volatile String activeInferenceBackend = "Initializing";
     /** Configured LiteRT hint; the driver does not expose the effective Adreno scheduler priority. */
     private volatile String activeInferenceGpuPriorityHint = "Initializing";
     /** Observable compose implementation: cheap precomputed warp or full-resolution fallback. */
     private volatile String activeReprojectionPath = "Initializing";
-    // Non-zero from matched capture ownership through one synchronous LiteRT invocation and GPU
-    // depth dispatch. A unique token prevents a stale generation from releasing a newer claim.
-    // Result processing and presentation retain their color-slot lease but not this permit.
+    // Non-zero from matched capture through native infer/reuse arbitration and renderer adoption.
+    // A unique token prevents a stale generation from releasing a newer claim. Keeping the claim
+    // through history commit ensures N+1 cannot compare against an owner older than N.
     private final AtomicLong inferenceClaim = new AtomicLong(0L);
     private final AtomicLong nextInferenceClaimToken = new AtomicLong(1L);
 
@@ -290,19 +340,38 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final AtomicLong performanceWindowStartedNs = new AtomicLong(System.nanoTime());
     private final AtomicLong perfGlLatches = new AtomicLong();
     private final AtomicLong perfDepthAdopts = new AtomicLong();
+    private final AtomicLong perfNearIdenticalCandidates = new AtomicLong();
+    private final AtomicLong perfNearIdenticalReuses = new AtomicLong();
+    private final AtomicLong perfNearIdenticalContentRejects = new AtomicLong();
+    private final AtomicLong perfNearIdenticalOwnerFrameGapRejects = new AtomicLong();
+    private final AtomicLong perfNearIdenticalOwnerAgeRejects = new AtomicLong();
+    private final AtomicLong perfNearIdenticalInvalidRejects = new AtomicLong();
     private final AtomicLong perfGlOutputSubmits = new AtomicLong();
     private final AtomicLong perfColorSlotBusySkips = new AtomicLong();
     private final AtomicLong perfFlatSbsOutputs = new AtomicLong();
     private final AtomicLong perfNativeTimingSamples = new AtomicLong();
     private final AtomicLong perfNativeLiteRtRunWallNs = new AtomicLong();
     private final AtomicLong perfNativeLiteRtRunWallMaxNs = new AtomicLong();
+    private final AtomicLong perfNearIdenticalDecisionTimingSamples = new AtomicLong();
+    private final AtomicLong perfNearIdenticalDecisionReadWallNs = new AtomicLong();
+    private final AtomicLong perfNearIdenticalDecisionReadWallMaxNs = new AtomicLong();
     private final AtomicLong perfDepthResultAgeNs = new AtomicLong();
     private final AtomicLong perfDepthResultAgeMaxNs = new AtomicLong();
     private final AtomicLong[] performanceCounters = {
-            perfGlLatches, perfDepthAdopts, perfGlOutputSubmits,
+            perfGlLatches, perfDepthAdopts,
+            perfNearIdenticalCandidates, perfNearIdenticalReuses,
+            perfNearIdenticalContentRejects,
+            perfNearIdenticalOwnerFrameGapRejects,
+            perfNearIdenticalOwnerAgeRejects,
+            perfNearIdenticalInvalidRejects,
+            perfGlOutputSubmits,
             perfColorSlotBusySkips, perfFlatSbsOutputs,
             perfNativeTimingSamples, perfNativeLiteRtRunWallNs,
-            perfNativeLiteRtRunWallMaxNs, perfDepthResultAgeNs,
+            perfNativeLiteRtRunWallMaxNs,
+            perfNearIdenticalDecisionTimingSamples,
+            perfNearIdenticalDecisionReadWallNs,
+            perfNearIdenticalDecisionReadWallMaxNs,
+            perfDepthResultAgeNs,
             perfDepthResultAgeMaxNs,
     };
 
@@ -336,15 +405,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 | SbsDepthTelemetrySnapshot.VALID_RANGE
                 | SbsDepthTelemetrySnapshot.VALID_CUTS
                 | SbsDepthTelemetrySnapshot.VALID_FAULTS;
-        if (popClassified) {
-            validFields |= SbsDepthTelemetrySnapshot.VALID_EDGE;
-        }
         if (profileInitialized) {
-            // These values describe the shot-latched profile. Before initialization, their
-            // zero-valued storage defaults are not measurements and must not enter shared charts.
-            validFields |= SbsDepthTelemetrySnapshot.VALID_ANCHOR
-                    | SbsDepthTelemetrySnapshot.VALID_SUBJECT
-                    | SbsDepthTelemetrySnapshot.VALID_SCENE;
+            validFields |= SbsDepthTelemetrySnapshot.VALID_SCENE;
         }
         return validFields;
     }
@@ -356,16 +418,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                             ? SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED
                             : SbsDepthTelemetrySnapshot.Availability.WAITING);
         }
-        int runtimeFlags = SbsDepthTelemetrySnapshot.RUNTIME_ADAPTIVE
-                | SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY;
+        int runtimeFlags = health.currentGeometryReady
+                ? SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY : 0;
         if (health.profileInitialized) {
-            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED
-                    | SbsDepthTelemetrySnapshot.RUNTIME_ANCHOR_VALID;
+            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED;
         }
-        if (health.popClassified) {
-            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_CLASSIFIED;
-        }
-        if (health.cutArmed) {
+        if (health.geometryCutArmed) {
             runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_GEOMETRY_ARMED;
         }
         if (health.rangeCollapsed) {
@@ -375,13 +433,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 depthTelemetryValidFields(
                         health.profileInitialized, health.popClassified),
                 runtimeFlags,
-                depthMapWidth, depthMapHeight, 2,
-                ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR,
-                ClientSbsGpuDepthProcessor.ADAPTIVE_POP_CEILING,
+                depthMapWidth, depthMapHeight, 0,
+                ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
+                ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
                 health.popStrength, health.edgeFraction, health.changeFraction,
-                health.zeroAnchorShift, health.subjectDepth, health.validFraction,
+                Float.NaN, Float.NaN, health.validFraction,
                 health.effectiveRangeWidth, health.sceneAge, health.hardCutCount,
-                health.externalCutRequests, health.emptyRawFrames,
+                health.appearanceProposals, health.emptyRawFrames,
                 health.collapsedRawFrames, 0L);
     }
 
@@ -512,6 +570,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                             PreferenceConfiguration prefConfig,
                             boolean performanceSamplingEnabled) {
         this.glSurfaceView = view;
+        staleDepthWatchdogRunnable = () -> {
+            int scheduledGeneration;
+            synchronized (staleDepthWatchdogLock) {
+                if (!staleDepthWatchdogQueued) {
+                    return;
+                }
+                staleDepthWatchdogQueued = false;
+                scheduledGeneration = staleDepthWatchdogGeneration;
+                staleDepthWatchdogGeneration = 0;
+            }
+            if (!shuttingDown.get() && clientSbs
+                    && clientSbsGeneration.get() == scheduledGeneration) {
+                glSurfaceView.requestRender();
+            }
+        };
         this.onSurfaceReadyListener = listener;
         this.context = context;
         powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
@@ -521,23 +594,25 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         sourceWidth = prefConfig.width;
         sourceHeight = prefConfig.height;
         sourceAspect = (float) sourceWidth / Math.max(sourceHeight, 1);
-        clientSbsModelId = prefConfig.clientSbsDepthModelId;
-        pipelineContract = ClientSbsPipelineContract.forStream(clientSbsModelId, sourceAspect);
-        reprojectionProbeSteps = pipelineContract.getReprojectionProbeSteps();
+        pipelineContract = ClientSbsPipelineContract.forStream(CLIENT_SBS_MODEL_ID, sourceAspect);
         aiModel = pipelineContract.getModelManifest();
         aiModel.validateFloatGpuRendererContract();
         modelInputWidth = aiModel.getInputWidth();
         modelInputHeight = aiModel.getInputHeight();
         depthMapWidth = pipelineContract.getDepthOutputWidth();
         depthMapHeight = pipelineContract.getDepthOutputHeight();
-        warpMapWidth = depthMapWidth * WARP_MAP_SCALE;
-        warpMapHeight = depthMapHeight * WARP_MAP_SCALE;
-        LimeLog.info("Client SBS stream model selected once: " + aiModel.getId()
+        warpMapWidth = depthMapWidth;
+        warpMapHeight = depthMapHeight;
+        refinedWarpMapWidth = depthMapWidth * WARP_MAP_HORIZONTAL_SCALE;
+        refinedWarpMapHeight = depthMapHeight * WARP_MAP_VERTICAL_SCALE;
+        // This is intentionally a JNI-free CPU task. It can overlap stream startup, but it never
+        // creates LiteRT/EGL/GPU state and never prunes a different speculative aspect bucket.
+        ClientSbsModelAssetCache.prestageProductionModelAsync(context, aiModel);
+        LimeLog.info("Client SBS ZipDepth graph fixed for stream: " + aiModel.getId()
                 + " input=" + modelInputWidth + "x" + modelInputHeight
                 + " dynamic=" + aiModel.hasDynamicSpatialShape()
                 + " directFullFrame=" + pipelineContract.usesDirectFullFrameResize()
-                + " sourceAspect=" + sourceAspect
-                + " warpProbes=" + reprojectionProbeSteps);
+                + " sourceAspect=" + sourceAspect);
 
         quadVertexBuffer = ByteBuffer.allocateDirect(QUAD_VERTICES.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
         quadVertexBuffer.put(QUAD_VERTICES).position(0);
@@ -586,12 +661,33 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
          * Whether the cut detector can fire at all. Without it a flat cut count is ambiguous --
          * no cuts happened, or the detector has been disarmed and could not have reported them.
          */
-        final boolean cutArmed;
-        /** Cuts the host asked for, as opposed to ones this client detected. */
-        final long externalCutRequests;
+        final boolean geometryCutArmed;
+        /** Current-frame appearance proposals observed by the local color detector. */
+        final long appearanceProposals;
+        final long acceptedAppearanceCuts;
+        final long acceptedGeometryCuts;
+        final long acceptedStructurelessEntryCuts;
         /** Cumulative estimator faults; a climbing count is invisible in any instantaneous value. */
         final long emptyRawFrames;
         final long collapsedRawFrames;
+        final float shotRawMean;
+        final float currentRawMean;
+        final boolean currentDepthValid;
+        final boolean historyAdvanced;
+        final boolean currentGeometryReady;
+        final float appearanceRawChangeFraction;
+        final float appearanceMeanLumaDelta;
+        final float appearanceStructuralChangeFraction;
+        final float appearanceCurrentSupportFraction;
+        final float appearanceCommonSupportFraction;
+        final int appearanceDetectorFlags;
+        final int cutDecisionFlags;
+        /** Monotonic identity of the most recently latched notable cut decision. */
+        final long cutEventSequence;
+        final float latestDepthChangeFraction;
+        final float latestRangeShift;
+        final float latestInternalCutEvidence;
+        final float geometryChangeBaseline;
 
 
         private DepthHealthState(boolean readbackFailed) {
@@ -600,19 +696,39 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             validFraction = 0.0f;
             effectiveRangeWidth = 0.0f;
             rangeCollapsed = true;
-            popStrength = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_FLOOR;
-            edgeFraction = ClientSbsGpuDepthProcessor.ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+            popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
+            edgeFraction = Float.NaN;
             popClassified = false;
             changeFraction = 0.0f;
             sceneAge = 0;
             hardCutCount = 0L;
-            zeroAnchorShift = 0.0f;
-            subjectDepth = 0.0f;
+            zeroAnchorShift = Float.NaN;
+            subjectDepth = Float.NaN;
             profileInitialized = false;
-            cutArmed = false;
-            externalCutRequests = 0L;
+            geometryCutArmed = false;
+            appearanceProposals = 0L;
+            acceptedAppearanceCuts = 0L;
+            acceptedGeometryCuts = 0L;
+            acceptedStructurelessEntryCuts = 0L;
             emptyRawFrames = 0L;
             collapsedRawFrames = 0L;
+            shotRawMean = Float.NaN;
+            currentRawMean = Float.NaN;
+            currentDepthValid = false;
+            historyAdvanced = false;
+            currentGeometryReady = false;
+            appearanceRawChangeFraction = 0.0f;
+            appearanceMeanLumaDelta = 0.0f;
+            appearanceStructuralChangeFraction = 0.0f;
+            appearanceCurrentSupportFraction = 0.0f;
+            appearanceCommonSupportFraction = 0.0f;
+            appearanceDetectorFlags = 0;
+            cutDecisionFlags = 0;
+            cutEventSequence = 0L;
+            latestDepthChangeFraction = Float.NaN;
+            latestRangeShift = Float.NaN;
+            latestInternalCutEvidence = 0.0f;
+            geometryChangeBaseline = 0.0f;
         }
 
         DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
@@ -630,10 +746,34 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             zeroAnchorShift = snapshot.getZeroAnchorShift();
             subjectDepth = snapshot.getSubjectDepth();
             profileInitialized = snapshot.isStereoProfileInitialized();
-            cutArmed = snapshot.isDepthCutArmed();
-            externalCutRequests = snapshot.getExternalCutRequestCount();
+            geometryCutArmed = snapshot.isGeometryCutArmed();
+            appearanceProposals = snapshot.getAppearanceProposalCount();
+            acceptedAppearanceCuts = snapshot.getAcceptedAppearanceCutCount();
+            acceptedGeometryCuts = snapshot.getAcceptedGeometryCutCount();
+            acceptedStructurelessEntryCuts =
+                    snapshot.getAcceptedStructurelessEntryCutCount();
             emptyRawFrames = snapshot.getEmptyRawFrameCount();
             collapsedRawFrames = snapshot.getCollapsedRawFrameCount();
+            shotRawMean = snapshot.getShotRawMean();
+            currentRawMean = snapshot.getCurrentRawMean();
+            currentDepthValid = snapshot.isCurrentDepthValid();
+            historyAdvanced = snapshot.didHistoryAdvance();
+            currentGeometryReady = snapshot.isCurrentGeometryReady();
+            appearanceRawChangeFraction = snapshot.getAppearanceRawChangeFraction();
+            appearanceMeanLumaDelta = snapshot.getAppearanceMeanLumaDelta();
+            appearanceStructuralChangeFraction =
+                    snapshot.getAppearanceStructuralChangeFraction();
+            appearanceCurrentSupportFraction =
+                    snapshot.getAppearanceCurrentSupportFraction();
+            appearanceCommonSupportFraction =
+                    snapshot.getAppearanceCommonSupportFraction();
+            appearanceDetectorFlags = snapshot.getAppearanceDetectorFlags();
+            cutDecisionFlags = snapshot.getCutDecisionFlags();
+            cutEventSequence = snapshot.getCutEventSequence();
+            latestDepthChangeFraction = snapshot.getLatestDepthChangeFraction();
+            latestRangeShift = snapshot.getLatestRangeShift();
+            latestInternalCutEvidence = snapshot.getLatestInternalCutEvidence();
+            geometryChangeBaseline = snapshot.getGeometryChangeBaseline();
         }
     }
 
@@ -657,18 +797,30 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         public final float glLatchFps;
         public final float depthAdoptFps;
+        /** Current-color frames presented with the last actual-inference depth field. */
+        public final float depthReuseFps;
+        /** Reuses divided by all GPU near-identical candidate decisions in this window. */
+        public final float depthReuseRatio;
+        /** Candidate fallbacks classified by the already-mapped GPU decision record. */
+        public final long nearIdenticalContentRejects;
+        public final long nearIdenticalOwnerFrameGapRejects;
+        public final long nearIdenticalOwnerAgeRejects;
+        public final long nearIdenticalInvalidRejects;
         public final float glOutputSubmitFps;
 
         /** Android PowerManager thermal status (0 none through 6 shutdown). */
         public final int thermalStatus;
         /** Matched-color captures skipped because both exact-pair color slots were owned. */
         public final long colorSlotBusySkips;
-        /** GL outputs shown flat while no valid processed depth profile was ready. */
+        /** GL outputs shown flat while no valid current raw-V2 geometry was ready. */
         public final long flatSbsOutputs;
 
         /** CLOCK_MONOTONIC wall time inside LiteRtRunCompiledModel; not pure GPU time. */
         public final float averageNativeLiteRtRunWallMs;
         public final float maxNativeLiteRtRunWallMs;
+        /** CPU wall time to validate/read one candidate's authenticated 32-byte decision record. */
+        public final float averageNearIdenticalDecisionReadWallMs;
+        public final float maxNearIdenticalDecisionReadWallMs;
         /** Exact matched color capture through adoption of its processed depth by the GL thread. */
         public final float averageDepthResultAgeMs;
         public final float maxDepthResultAgeMs;
@@ -690,29 +842,40 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         public final boolean depthHealthReadbackFailed;
         public final float validDepthFraction;
         public final float effectiveDepthRangeWidth;
-        public final boolean rawDepthRangeCollapsed;
+        /** Whether the current diagnostic P2/P98 cut range is collapsed. */
+        public final boolean cutRangeCollapsed;
         public final float stereoPopStrength;
-        /** True when depthEdgeFraction selected stereoPopStrength at the settle crossing. */
-        public final boolean adaptivePopClassified;
-        public final float depthEdgeFraction;
-        public final float depthChangeFraction;
         public final int depthSceneAge;
         public final long depthHardCutCount;
-        public final float depthZeroAnchorShift;
-        public final float depthSubjectDepth;
-        public final boolean stereoProfileInitialized;
-        public final boolean depthCutArmed;
-        public final long depthExternalCutRequests;
-        public final long depthEmptyRawFrames;
-        public final long depthCollapsedRawFrames;
-        /** Source-neutral depth telemetry. Client SBS remains backed by local GPU readback. */
-        public final SbsDepthTelemetrySnapshot depthTelemetry;
-        /** Oldest-first history copies, taken under lock so a wrap cannot splice two eras. */
-        public final float[] popTrend;
-        public final float[] edgeTrend;
-        public final float[] changeTrend;
-        public final float[] cutTrend;
-        public final float[] anchorTrend;
+        public final boolean depthGeometryCutArmed;
+        public final long depthAppearanceProposalCount;
+        public final long depthAcceptedAppearanceCutCount;
+        public final long depthAcceptedGeometryCutCount;
+        public final long depthAcceptedStructurelessEntryCutCount;
+        /** Cumulative incomplete or otherwise invalid raw-depth transactions. */
+        public final long depthInvalidRawFrames;
+        /** Cumulative frames whose diagnostic P2/P98 cut range collapsed. */
+        public final long depthCutRangeCollapsedFrames;
+        public final float depthShotRawMean;
+        public final float depthCurrentRawMean;
+        /** Whether the complete current raw field passes both depth and V2 validity gates. */
+        public final boolean depthCurrentValid;
+        /** Whether this current field advanced the reliable comparison-history tuple. */
+        public final boolean depthHistoryAdvanced;
+        public final boolean depthCurrentGeometryReady;
+        public final float depthAppearanceRawChangeFraction;
+        public final float depthAppearanceMeanLumaDelta;
+        public final float depthAppearanceStructuralChangeFraction;
+        public final float depthAppearanceCurrentSupportFraction;
+        public final float depthAppearanceCommonSupportFraction;
+        public final int depthAppearanceDetectorFlags;
+        public final int depthCutDecisionFlags;
+        /** Monotonic identity of the latched cut event represented by the diagnostic fields. */
+        public final long depthCutEventSequence;
+        public final float depthLatestChangeFraction;
+        public final float depthLatestRangeShift;
+        public final float depthLatestInternalCutEvidence;
+        public final float depthGeometryChangeBaseline;
 
         private ClientSbsPerformanceSnapshot(Stereo3DRenderer owner, boolean active,
                                              String backend, long elapsedNs) {
@@ -726,7 +889,18 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
             long glLatches = owner.perfGlLatches.getAndSet(0L);
             long inferenceCompletes = owner.perfNativeTimingSamples.getAndSet(0L);
+            long decisionReads = owner.perfNearIdenticalDecisionTimingSamples.getAndSet(0L);
             long depthAdopts = owner.perfDepthAdopts.getAndSet(0L);
+            long reuseCandidates = owner.perfNearIdenticalCandidates.getAndSet(0L);
+            long depthReuses = owner.perfNearIdenticalReuses.getAndSet(0L);
+            this.nearIdenticalContentRejects =
+                    owner.perfNearIdenticalContentRejects.getAndSet(0L);
+            this.nearIdenticalOwnerFrameGapRejects =
+                    owner.perfNearIdenticalOwnerFrameGapRejects.getAndSet(0L);
+            this.nearIdenticalOwnerAgeRejects =
+                    owner.perfNearIdenticalOwnerAgeRejects.getAndSet(0L);
+            this.nearIdenticalInvalidRejects =
+                    owner.perfNearIdenticalInvalidRejects.getAndSet(0L);
             long glOutputSubmits = owner.perfGlOutputSubmits.getAndSet(0L);
             this.thermalStatus = owner.currentThermalStatus;
             this.colorSlotBusySkips = owner.perfColorSlotBusySkips.getAndSet(0L);
@@ -734,11 +908,18 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
             this.glLatchFps = rate(glLatches, elapsedNs);
             this.depthAdoptFps = rate(depthAdopts, elapsedNs);
+            this.depthReuseFps = rate(depthReuses, elapsedNs);
+            this.depthReuseRatio = reuseCandidates == 0L
+                    ? 0.0f : (float) depthReuses / reuseCandidates;
             this.glOutputSubmitFps = rate(glOutputSubmits, elapsedNs);
             this.averageNativeLiteRtRunWallMs = averageMs(
                     owner.perfNativeLiteRtRunWallNs.getAndSet(0L), inferenceCompletes);
             this.maxNativeLiteRtRunWallMs = nsToMs(
                     owner.perfNativeLiteRtRunWallMaxNs.getAndSet(0L));
+            this.averageNearIdenticalDecisionReadWallMs = averageMs(
+                    owner.perfNearIdenticalDecisionReadWallNs.getAndSet(0L), decisionReads);
+            this.maxNearIdenticalDecisionReadWallMs = nsToMs(
+                    owner.perfNearIdenticalDecisionReadWallMaxNs.getAndSet(0L));
             this.averageDepthResultAgeMs = averageMs(
                     owner.perfDepthResultAgeNs.getAndSet(0L), depthAdopts);
             this.maxDepthResultAgeMs = nsToMs(
@@ -764,7 +945,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.averageGpuSbsComposeMs = averageGpuMs(composeGpu);
 
             DepthHealthState health = owner.depthHealthState;
-            this.depthTelemetry = owner.depthTelemetryHistory.attach(
+            SbsDepthTelemetrySnapshot depthTelemetry = owner.depthTelemetryHistory.attach(
                     owner.toDepthTelemetry(health));
             this.depthHealthAvailable = depthTelemetry.isAvailable();
             this.depthHealthReadbackFailed =
@@ -772,25 +953,38 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                             == SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED;
             this.validDepthFraction = depthTelemetry.validDepthFraction;
             this.effectiveDepthRangeWidth = depthTelemetry.effectiveRangeWidth;
-            this.rawDepthRangeCollapsed = depthTelemetry.isRangeCollapsed();
+            this.cutRangeCollapsed = depthTelemetry.isRangeCollapsed();
             this.stereoPopStrength = depthTelemetry.effectivePop;
-            this.adaptivePopClassified = depthTelemetry.isAdaptivePopClassified();
-            this.depthEdgeFraction = depthTelemetry.classifiedEdgeFraction;
-            this.depthChangeFraction = depthTelemetry.changeFraction;
             this.depthSceneAge = (int)Math.min(Integer.MAX_VALUE, depthTelemetry.sceneAge);
             this.depthHardCutCount = depthTelemetry.hardCutCount;
-            this.depthZeroAnchorShift = depthTelemetry.zeroAnchorShiftPx;
-            this.depthSubjectDepth = depthTelemetry.subjectDepth;
-            this.stereoProfileInitialized = depthTelemetry.isInitialized();
-            this.depthCutArmed = depthTelemetry.isCutArmed();
-            this.depthExternalCutRequests = depthTelemetry.externalCutRequests;
-            this.depthEmptyRawFrames = depthTelemetry.emptyDepthFrames;
-            this.depthCollapsedRawFrames = depthTelemetry.collapsedDepthFrames;
-            this.popTrend = depthTelemetry.popTrend;
-            this.edgeTrend = depthTelemetry.edgeTrend;
-            this.changeTrend = depthTelemetry.changeTrend;
-            this.cutTrend = depthTelemetry.cutTrend;
-            this.anchorTrend = depthTelemetry.anchorTrend;
+            this.depthGeometryCutArmed = health.geometryCutArmed;
+            this.depthAppearanceProposalCount = health.appearanceProposals;
+            this.depthAcceptedAppearanceCutCount = health.acceptedAppearanceCuts;
+            this.depthAcceptedGeometryCutCount = health.acceptedGeometryCuts;
+            this.depthAcceptedStructurelessEntryCutCount =
+                    health.acceptedStructurelessEntryCuts;
+            this.depthInvalidRawFrames = depthTelemetry.emptyDepthFrames;
+            this.depthCutRangeCollapsedFrames = depthTelemetry.collapsedDepthFrames;
+            this.depthShotRawMean = health.shotRawMean;
+            this.depthCurrentRawMean = health.currentRawMean;
+            this.depthCurrentValid = health.currentDepthValid;
+            this.depthHistoryAdvanced = health.historyAdvanced;
+            this.depthCurrentGeometryReady = health.currentGeometryReady;
+            this.depthAppearanceRawChangeFraction = health.appearanceRawChangeFraction;
+            this.depthAppearanceMeanLumaDelta = health.appearanceMeanLumaDelta;
+            this.depthAppearanceStructuralChangeFraction =
+                    health.appearanceStructuralChangeFraction;
+            this.depthAppearanceCurrentSupportFraction =
+                    health.appearanceCurrentSupportFraction;
+            this.depthAppearanceCommonSupportFraction =
+                    health.appearanceCommonSupportFraction;
+            this.depthAppearanceDetectorFlags = health.appearanceDetectorFlags;
+            this.depthCutDecisionFlags = health.cutDecisionFlags;
+            this.depthCutEventSequence = health.cutEventSequence;
+            this.depthLatestChangeFraction = health.latestDepthChangeFraction;
+            this.depthLatestRangeShift = health.latestRangeShift;
+            this.depthLatestInternalCutEvidence = health.latestInternalCutEvidence;
+            this.depthGeometryChangeBaseline = health.geometryChangeBaseline;
         }
 
         private static float rate(long count, long elapsedNs) {
@@ -941,6 +1135,34 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         perfNativeTimingSamples.incrementAndGet();
         recordDuration(perfNativeLiteRtRunWallNs,
                 perfNativeLiteRtRunWallMaxNs, liteRtRunWallNs);
+    }
+
+    private void recordNearIdenticalDecisionReadTiming(long decisionReadWallNs,
+                                                       long expectedEpoch) {
+        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
+                performanceSamplingEpoch.get())) {
+            return;
+        }
+        perfNearIdenticalDecisionTimingSamples.incrementAndGet();
+        recordDuration(perfNearIdenticalDecisionReadWallNs,
+                perfNearIdenticalDecisionReadWallMaxNs, decisionReadWallNs);
+    }
+
+    private void recordNearIdenticalDecisionReason(int reason, long expectedEpoch) {
+        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
+                performanceSamplingEpoch.get())
+                || reason == ClientSbsNearIdenticalPolicy.REASON_REUSE) {
+            return;
+        }
+        if (ClientSbsNearIdenticalPolicy.isContentRejectionReason(reason)) {
+            perfNearIdenticalContentRejects.incrementAndGet();
+        } else if (reason == ClientSbsNearIdenticalPolicy.REASON_OWNER_FRAME_GAP) {
+            perfNearIdenticalOwnerFrameGapRejects.incrementAndGet();
+        } else if (reason == ClientSbsNearIdenticalPolicy.REASON_OWNER_AGE) {
+            perfNearIdenticalOwnerAgeRejects.incrementAndGet();
+        } else {
+            perfNearIdenticalInvalidRejects.incrementAndGet();
+        }
     }
 
     private void recordGlOutputSubmit(boolean flat, long expectedEpoch) {
@@ -1118,6 +1340,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             shuttingDown.set(true);
         }
         invalidateQueuedFrameDrain();
+        cancelStaleDepthWatchdog();
 
         if (!terminalTeardownStarted.compareAndSet(false, true)) {
             return;
@@ -1147,6 +1370,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private boolean awaitTerminalWorkerCleanup() {
         LimeLog.info("Quit called. Shutting down 3dRenderer.");
         invalidateQueuedFrameDrain();
+        cancelFirstModeEntryFrameWait();
 
         // A callback which passed its shutdown check before the terminal bit was published may
         // still own SurfaceTexture or shared-buffer state. Wait for it without preventing later
@@ -1191,10 +1415,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             gpuDepthProcessor.abandonAfterContextLoss();
             gpuDepthProcessor = null;
         }
+        if (gpuDisparityProcessor != null) {
+            gpuDisparityProcessor.abandonAfterContextLoss();
+            gpuDisparityProcessor = null;
+        }
         if (gpuSceneCutDetector != null) {
             gpuSceneCutDetector.abandonAfterContextLoss();
             gpuSceneCutDetector = null;
         }
+        gpuSceneCutResetPending = false;
         ClientSbsGpuTimer abandonedTimer = gpuTimer;
         gpuTimer = null;
         if (abandonedTimer != null) {
@@ -1203,15 +1432,20 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         resetDepthTelemetryEra();
         gpuDepthTextureId = 0;
         gpuProfileTextureId = 0;
+        gpuParallaxTextureId = 0;
+        contractiveDisparityValid = false;
         gpuDepthActive = false;
         clearGpuOutputConsumedFenceHandles(false);
         matchedOutputPresented = false;
-        filteredDepthValid = false;
         warpMapFboHandle = 0;
         warpMapTextureId = 0;
+        refinedWarpMapFboHandle = 0;
+        refinedWarpMapTextureId = 0;
         warpMapValid = false;
         warpMapAvailable = false;
         warpMapDrawValidated = false;
+        contractiveWarpMapDrawValidated = false;
+        contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
         hdrOutputCapable = false;
         hdrWindowCapable = false;
@@ -1247,10 +1481,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         hdrInputTransitionCompletion = null;
         hdrInputTransitionCompletionGeneration = 0;
         hdrInputTransitionOutputGeneration = 0;
+        clearClientSbsModeSwitchCompletion();
         invalidateQueuedFrameDrain();
         synchronized (frameLock) {
             frameAvailable.set(false);
             pendingFrameGeneration = -1;
+            pendingFrameCallbackSequence = 0L;
         }
         clearInferenceClaim();
         boolean cleanupPending;
@@ -1374,13 +1610,17 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 hdrInputTransitionCompletion = null;
                 hdrInputTransitionCompletionGeneration = 0;
                 hdrInputTransitionOutputGeneration = 0;
+                clearClientSbsModeSwitchCompletion();
                 // Clear on both edges. A delayed callback from the previous decoder attachment
                 // must never become the first frame of a later Client-SBS generation.
                 frameAvailable.set(false);
                 pendingFrameGeneration = -1;
+                pendingFrameCallbackSequence = 0L;
             }
             invalidateQueuedFrameDrain();
+            cancelStaleDepthWatchdog();
             if (!enabled) {
+                cancelFirstModeEntryFrameWait();
                 synchronized (liveStreamResizeLock) {
                     pendingLiveStreamResize = null;
                     liveStreamResizeCompletion = null;
@@ -1406,10 +1646,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         outputSurfaceValidated = false;
         requestedDecoderSurfaceGeneration = generation;
+        clearClientSbsModeSwitchCompletion();
+        awaitingFirstModeEntryFrame = true;
         invalidateQueuedFrameDrain();
+        cancelStaleDepthWatchdog();
         synchronized (frameLock) {
             frameAvailable.set(false);
             pendingFrameGeneration = -1;
+            pendingFrameCallbackSequence = 0L;
         }
     }
 
@@ -1458,6 +1702,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             synchronized (frameLock) {
                 frameAvailable.set(false);
                 pendingFrameGeneration = -1;
+                pendingFrameCallbackSequence = 0L;
             }
             glSurfaceView.requestRender();
             return transitionGeneration;
@@ -1471,7 +1716,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
      * <p>The binding constraint is the complete immutable pipeline identity, not a generic aspect
      * bucket. It includes:</p>
      * <ul>
-     *   <li>the model-family-specific manifest selected for the new aspect,</li>
+     *   <li>the ZipDepth aspect-bucket manifest for the new aspect,</li>
      *   <li>its model/depth/warp target dimensions, and</li>
      *   <li>the independently bucketed {@code PROBE_STEPS} literal compiled into both
      *       reprojection shader programs.</li>
@@ -1483,7 +1728,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         float newAspect = (float) width / Math.max(height, 1);
         return pipelineContract.equals(
-                ClientSbsPipelineContract.forStream(clientSbsModelId, newAspect));
+                ClientSbsPipelineContract.forStream(CLIENT_SBS_MODEL_ID, newAspect));
     }
 
     /**
@@ -1505,6 +1750,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             synchronized (frameLock) {
                 frameAvailable.set(false);
                 pendingFrameGeneration = -1;
+                pendingFrameCallbackSequence = 0L;
             }
             return true;
         }
@@ -1544,6 +1790,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         synchronized (frameLock) {
             frameAvailable.set(false);
             pendingFrameGeneration = -1;
+            pendingFrameCallbackSequence = 0L;
         }
         return true;
     }
@@ -1563,7 +1810,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
             float newAspect = (float) resize.width / Math.max(resize.height, 1);
             ClientSbsPipelineContract resizedContract =
-                    ClientSbsPipelineContract.forStream(clientSbsModelId, newAspect);
+                    ClientSbsPipelineContract.forStream(CLIENT_SBS_MODEL_ID, newAspect);
             if (!pipelineContract.equals(resizedContract)) {
                 LimeLog.severe("Client SBS refused live resize across immutable pipeline "
                         + "contract: " + pipelineContract + " -> " + resizedContract);
@@ -1571,9 +1818,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 return false;
             }
 
-            // Invalidate first so no in-flight result can be adopted into retired color slots,
-            // then drain every outstanding lease exactly like a same-context generation reset.
-            int resizedGeneration = clientSbsGeneration.incrementAndGet();
+            // The decoder keeps writing to the same SurfaceTexture across this output-only resize.
+            // Physically acquire its latest queued image before rolling the renderer generation;
+            // clearing only frameAvailable can leave BufferQueue's notification edge consumed and
+            // starve every callback after a rapid same-aspect resize/rollback pair.
+            int resizedGeneration = discardPendingFrameAndAdvanceLiveResizeGeneration();
+            if (resizedGeneration <= 0) {
+                pendingLiveStreamResize = null;
+                return false;
+            }
             liveStreamResizeCompletion = null;
             liveStreamResizeCompletionGeneration = 0;
             clearLiveStreamResizeSwapCandidate();
@@ -1602,6 +1855,55 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     + resizedContract + ")");
             return true;
         }
+    }
+
+    /**
+     * Discards the persistent decoder SurfaceTexture's latest image at a live resize boundary.
+     * Must run on the GL thread with this renderer's EGL context current.
+     */
+    private int discardPendingFrameAndAdvanceLiveResizeGeneration() {
+        synchronized (frameLock) {
+            SurfaceTexture texture = videoSurfaceTexture;
+            if (texture == null) {
+                LimeLog.severe("Client SBS live resize has no decoder SurfaceTexture to drain");
+                return 0;
+            }
+            try {
+                return advanceLiveResizeFrameBoundary(
+                        clientSbsGeneration,
+                        this::invalidateQueuedFrameDrain,
+                        () -> {
+                            // This is deliberately unconditional. UI-side resize staging has
+                            // already cleared frameAvailable, but BufferQueue may still own the
+                            // corresponding image and notification edge.
+                            texture.updateTexImage();
+                            lastLatchedSurfaceTimestampNs = texture.getTimestamp();
+                        },
+                        () -> {
+                            frameAvailable.set(false);
+                            pendingFrameGeneration = -1;
+                            pendingFrameCallbackSequence = 0L;
+                        });
+            } catch (RuntimeException error) {
+                Log.w("Stereo3DRenderer",
+                        "Unable to discard decoder frame at live resize boundary", error);
+                return 0;
+            }
+        }
+    }
+
+    /**
+     * Orders the non-GL state transition used by the live-resize frame boundary. The caller owns
+     * the frame lock; a failed physical discard deliberately leaves the generation unchanged.
+     */
+    static int advanceLiveResizeFrameBoundary(AtomicInteger generation,
+                                              Runnable invalidateQueuedDrain,
+                                              Runnable discardPendingImage,
+                                              Runnable clearPendingFrame) {
+        invalidateQueuedDrain.run();
+        discardPendingImage.run();
+        clearPendingFrame.run();
+        return generation.incrementAndGet();
     }
 
     /**
@@ -1636,6 +1938,33 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 }
             }
             LimeLog.warning("Unable to arm Client SBS packed-presentation proof: " + error);
+            return false;
+        }
+    }
+
+    /**
+     * Arms the Client-mode entry boundary after MediaCodec releases its fresh IDR. Completion is
+     * queued from the first draw containing a frame from this renderer generation, so it runs only
+     * after GLSurfaceView has returned through that draw's EGL swap.
+     */
+    public boolean completeClientSbsModeSwitchAfterSwap(Runnable completion) {
+        if (completion == null || shuttingDown.get() || !clientSbs
+                || !outputSurfaceValidated || pendingLiveStreamResize != null) {
+            return false;
+        }
+        int generation = clientSbsGeneration.get();
+        clientSbsModeSwitchCompletionGeneration = generation;
+        clientSbsModeSwitchCompletion = completion;
+        try {
+            glSurfaceView.requestRender();
+            return true;
+        } catch (RuntimeException error) {
+            if (clientSbsModeSwitchCompletion == completion
+                    && clientSbsModeSwitchCompletionGeneration == generation) {
+                clearClientSbsModeSwitchCompletion();
+            }
+            LimeLog.warning("Unable to arm Client SBS mode-entry swap acknowledgement: "
+                    + error);
             return false;
         }
     }
@@ -1722,6 +2051,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 // captured frame under the new transfer. The next decoder callback is authoritative.
                 frameAvailable.set(false);
                 pendingFrameGeneration = -1;
+                pendingFrameCallbackSequence = 0L;
             }
             hdrInputTransitionCompletion = completionAfterSwap;
             hdrInputTransitionCompletionGeneration = transitionGeneration;
@@ -1758,17 +2088,24 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (surfaceTexture != videoSurfaceTexture) {
             return;
         }
-        int callbackGeneration;
         synchronized (frameLock) {
             if (!clientSbs || shuttingDown.get()
                     || decoderSurfaceGeneration != requestedDecoderSurfaceGeneration) {
                 return;
             }
-            callbackGeneration = clientSbsGeneration.get();
+            int callbackGeneration = clientSbsGeneration.get();
+            decoderFrameCallbackSequence++;
             frameAvailable.set(true);
             pendingFrameGeneration = callbackGeneration;
+            pendingFrameCallbackSequence = decoderFrameCallbackSequence;
+            // Publish and enqueue under one lock. Otherwise an old-generation callback could
+            // enqueue after the resize invalidates drains, claim frameDrainQueued, and prevent the
+            // first new-generation callback from scheduling the event that would re-arm latching.
+            queueFrameDrain(surfaceTexture, callbackGeneration);
         }
-        queueFrameDrain(surfaceTexture, callbackGeneration);
+        synchronized (firstModeEntryFrameLock) {
+            firstModeEntryFrameLock.notifyAll();
+        }
     }
 
     /**
@@ -1778,6 +2115,89 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private void invalidateQueuedFrameDrain() {
         frameDrainToken.incrementAndGet();
         frameDrainQueued.set(false);
+    }
+
+    /**
+     * Apollo retains a matched packed image indefinitely only while its authenticated source clock
+     * is unchanged. The decoded Android stream has no equivalent content clock, so a successfully
+     * latched newer buffer is the conservative changed-source signal.
+     */
+    static boolean shouldPresentCurrentFlatForStaleDepth(long presentedFrameSequence,
+                                                         long latchedFrameSequence,
+                                                         long presentationAgeNs) {
+        return presentedFrameSequence > 0L
+                && latchedFrameSequence > presentedFrameSequence
+                && presentationAgeNs > MAX_STALE_DEPTH_PRESENTATION_AGE_NS;
+    }
+
+    /** Schedules strictly after the host's inclusive 250-ms presentation-retention boundary. */
+    static long staleDepthWatchdogDelayMillis(long presentationAgeNs) {
+        long safeAgeNs = Math.max(0L, presentationAgeNs);
+        long remainingNs = Math.max(0L,
+                MAX_STALE_DEPTH_PRESENTATION_AGE_NS - safeAgeNs);
+        return Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNs) + 1L);
+    }
+
+    static int decodedSourceFrameDelta(long previousObservationSequence,
+                                       long currentObservationSequence) {
+        if (previousObservationSequence <= 0L
+                || currentObservationSequence <= previousObservationSequence) {
+            return 1;
+        }
+        return (int) Math.min(currentObservationSequence - previousObservationSequence,
+                65535L);
+    }
+
+    private void scheduleStaleDepthWatchdog(int generation, long presentationAgeNs) {
+        if (generation <= 0 || shuttingDown.get() || !clientSbs) {
+            return;
+        }
+        synchronized (staleDepthWatchdogLock) {
+            if (staleDepthWatchdogQueued) {
+                return;
+            }
+            staleDepthWatchdogGeneration = generation;
+            staleDepthWatchdogQueued = glSurfaceView.postDelayed(
+                    staleDepthWatchdogRunnable,
+                    staleDepthWatchdogDelayMillis(presentationAgeNs));
+            if (!staleDepthWatchdogQueued) {
+                staleDepthWatchdogGeneration = 0;
+            }
+        }
+    }
+
+    private void cancelStaleDepthWatchdog() {
+        synchronized (staleDepthWatchdogLock) {
+            if (staleDepthWatchdogQueued) {
+                glSurfaceView.removeCallbacks(staleDepthWatchdogRunnable);
+            }
+            staleDepthWatchdogQueued = false;
+            staleDepthWatchdogGeneration = 0;
+        }
+    }
+
+    /**
+     * Returns true only when newer decoded color has outlived the bounded matched presentation.
+     * This changes presentation only: it never releases a slot or mutates depth/temporal history.
+     */
+    private boolean shouldPresentCurrentFlatForStaleDepth(long nowNs) {
+        ClientSbsFrameSlots.Lease presented = activeColorFrameLease;
+        if (presented == null || !hasDepthProfile()
+                || presented.getGeneration() != activeClientSbsGeneration
+                || latchedFrameSequence <= presented.getFrameSequence()) {
+            // A fresh adoption caught up before the deadline (or invalidated its owner). Remove
+            // the old timer so it cannot force a redundant swap of an already-current pair.
+            cancelStaleDepthWatchdog();
+            return false;
+        }
+        long capturedAtNs = presented.getCapturedAtNs();
+        long ageNs = nowNs >= capturedAtNs ? nowNs - capturedAtNs : 0L;
+        if (shouldPresentCurrentFlatForStaleDepth(
+                presented.getFrameSequence(), latchedFrameSequence, ageNs)) {
+            return true;
+        }
+        scheduleStaleDepthWatchdog(activeClientSbsGeneration, ageNs);
+        return false;
     }
 
     private void queueFrameDrain(SurfaceTexture expectedTexture, int expectedGeneration) {
@@ -1840,6 +2260,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             return;
         }
 
+        if (shouldPresentCurrentFlatForStaleDepth(System.nanoTime())) {
+            // A real draw/swap is required to replace SceneCore's retained packed image with the
+            // current decoded color duplicated flat. The in-flight inference remains untouched.
+            glSurfaceView.requestRender();
+            return;
+        }
+
         if (!matchedOutputPresented || !hasPresentableDepth()
                 || activeClientSbsGeneration != clientSbsGeneration.get()
                 || gpuShutdownRequested.get()) {
@@ -1852,13 +2279,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         captureLatestFrameIfReady();
     }
 
-    /** Starts one exact capture/inference transaction on the current GL thread, if ready. */
+    /** Starts one exact capture plus GPU inference/reuse arbitration on the GL thread, if ready. */
     private boolean captureLatestFrameIfReady() {
+        resetGpuSceneCutDetectorWhenIdle();
         ClientSbsGpuInferenceEngine engine = gpuInferenceEngine;
+        int currentGeneration = clientSbsGeneration.get();
         boolean hasUncapturedFrame = hasFrameForActiveGeneration
                 && latchedFrameSequence > lastCapturedFrameSequence;
         if (engine == null || !engine.isInitialized() || !hasUncapturedFrame
                 || shuttingDown.get() || gpuShutdownRequested.get() || !clientSbs
+                || activeClientSbsGeneration != currentGeneration
                 || hdrInputTransition.isBlockingFrames()) {
             return false;
         }
@@ -1906,34 +2336,41 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 return false;
             }
             int frameGeneration = pendingFrameGeneration;
+            long frameCallbackSequence = pendingFrameCallbackSequence;
             pendingFrameGeneration = -1;
+            pendingFrameCallbackSequence = 0L;
             if (!clientSbs || frameGeneration != clientSbsGeneration.get()) {
                 return false;
             }
-        }
 
-        SurfaceTexture texture = videoSurfaceTexture;
-        if (texture == null) {
-            return false;
-        }
-        try {
-            texture.updateTexImage();
-            long surfaceTimestampNs = texture.getTimestamp();
-            if (surfaceTimestampNs != 0L
-                    && surfaceTimestampNs == lastLatchedSurfaceTimestampNs) {
+            SurfaceTexture texture = videoSurfaceTexture;
+            if (texture == null) {
                 return false;
             }
-            lastLatchedSurfaceTimestampNs = surfaceTimestampNs;
-            // Must be sampled after updateTexImage(): codec crop/orientation can change with the
-            // newly latched buffer. Both matched-color and model-input shaders use this matrix.
-            texture.getTransformMatrix(videoTextureTransform);
-            latchedFrameSequence++;
-            hasFrameForActiveGeneration = true;
-            recordCounter(perfGlLatches);
-            return true;
-        } catch (RuntimeException error) {
-            Log.w("Stereo3DRenderer", "updateTexImage failed", error);
-            return false;
+            try {
+                // Keep callback publication under the same short lock through updateTexImage().
+                // A callback that arrives while this call is selecting the latest buffer waits
+                // and is therefore unambiguously assigned to the next latch, rather than being
+                // silently omitted from (or double-counted in) the cumulative four-step bound.
+                texture.updateTexImage();
+                long surfaceTimestampNs = texture.getTimestamp();
+                if (surfaceTimestampNs != 0L
+                        && surfaceTimestampNs == lastLatchedSurfaceTimestampNs) {
+                    return false;
+                }
+                lastLatchedSurfaceTimestampNs = surfaceTimestampNs;
+                // Must be sampled after updateTexImage(): codec crop/orientation can change with
+                // the newly latched buffer. Both matched-color and model-input shaders use this
+                // matrix.
+                texture.getTransformMatrix(videoTextureTransform);
+                latchedFrameSequence = frameCallbackSequence;
+                hasFrameForActiveGeneration = true;
+                recordCounter(perfGlLatches);
+                return true;
+            } catch (RuntimeException error) {
+                Log.w("Stereo3DRenderer", "updateTexImage failed", error);
+                return false;
+            }
         }
     }
 
@@ -2005,6 +2442,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private void onSurfaceCreatedLocked(GL10 gl, EGLConfig config) {
         surfaceLifecycleReady = false;
         outputSurfaceValidated = false;
+        cancelStaleDepthWatchdog();
         Surface decoderSurfaceBeforeContextLoss = videoSurface;
         int decoderGenerationBeforeContextLoss = decoderSurfaceGeneration;
         if (clientSbs && decoderSurfaceBeforeContextLoss != null
@@ -2035,10 +2473,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             gpuDepthProcessor.abandonAfterContextLoss();
             gpuDepthProcessor = null;
         }
+        if (gpuDisparityProcessor != null) {
+            gpuDisparityProcessor.abandonAfterContextLoss();
+            gpuDisparityProcessor = null;
+        }
         if (gpuSceneCutDetector != null) {
             gpuSceneCutDetector.abandonAfterContextLoss();
             gpuSceneCutDetector = null;
         }
+        gpuSceneCutResetPending = false;
         ClientSbsGpuTimer lostTimer = gpuTimer;
         gpuTimer = null;
         if (lostTimer != null) {
@@ -2058,19 +2501,23 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         pendingColorFrameLease = null;
         colorFrameSlots.reset();
         matchedOutputPresented = false;
-        filteredDepthValid = false;
         warpMapFboHandle = 0;
         warpMapTextureId = 0;
+        refinedWarpMapFboHandle = 0;
+        refinedWarpMapTextureId = 0;
         warpMapValid = false;
         warpMapAvailable = false;
         warpMapDrawValidated = false;
+        contractiveWarpMapDrawValidated = false;
+        contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
-        highPrecisionDepth = false;
         hdrOutputCapable = false;
         hdrWindowCapable = false;
         presentationColorFormat = ColorTargetFormat.RGBA8;
         gpuDepthTextureId = 0;
         gpuProfileTextureId = 0;
+        gpuParallaxTextureId = 0;
+        contractiveDisparityValid = false;
         gpuDepthActive = false;
         clearGpuOutputConsumedFenceHandles(false);
         RendererFinishRequest staleFinishRequest = rendererFinishRequest.getAndSet(null);
@@ -2084,7 +2531,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         gpuInferenceEngine = null;
         activeInferenceBackend = "Initializing";
         activeInferenceGpuPriorityHint = "Initializing";
-        activeReprojectionPath = directReprojectionPath();
+        activeReprojectionPath = "Flat (strict V2 initializing)";
         hasFrameForActiveGeneration = false;
         if (videoSurface != null) {
             videoSurface.release();
@@ -2119,14 +2566,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         modelInputPackProgram = createComputeProgram(
                 ClientSbsShaders.createModelInputPackCompute(
                         modelInputWidth, modelInputHeight));
-        bilateralBlurProgram = createProgram(
-                ShaderUtils.VERTEX_SHADER, ClientSbsShaders.DEPTH_PREFILTER_FRAGMENT);
-        dibr3dProgram = createProgram(
+        // Legacy Bestv2/frontmost-inverse shaders remain available to offline tests, but the live
+        // renderer must never compile or select an alternate geometry path after strict V2 fails.
+        dibr3dProgram = 0;
+        warpMapProgram = 0;
+        contractiveWarpMapProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER,
-                ClientSbsShaders.createReprojectionFragment(reprojectionProbeSteps));
-        warpMapProgram = createProgram(
+                ClientSbsShaders.CONTRACTIVE_WARP_MAP_FRAGMENT);
+        contractiveWarpMapRefinementProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER,
-                ClientSbsShaders.createWarpMapFragment(reprojectionProbeSteps));
+                ClientSbsShaders.CONTRACTIVE_WARP_MAP_REFINEMENT_FRAGMENT);
         warpedDibr3dProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER, ClientSbsShaders.WARPED_REPROJECTION_FRAGMENT);
         simpleProgramBindings = simple3dProgram != 0
@@ -2135,31 +2584,32 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 ? new QuadProgramBindings(modelInputProgram) : null;
         gpuPackProgramBindings = modelInputPackProgram != 0
                 ? new GpuPackProgramBindings(modelInputPackProgram) : null;
-        blurProgramBindings = bilateralBlurProgram != 0
-                ? new BlurProgramBindings(bilateralBlurProgram) : null;
-        reprojectionProgramBindings = dibr3dProgram != 0
-                ? new ReprojectionProgramBindings(dibr3dProgram) : null;
-        warpMapProgramBindings = warpMapProgram != 0
-                ? new WarpMapProgramBindings(warpMapProgram) : null;
+        reprojectionProgramBindings = null;
+        warpMapProgramBindings = null;
+        contractiveWarpMapProgramBindings = contractiveWarpMapProgram != 0
+                ? new ContractiveWarpMapProgramBindings(contractiveWarpMapProgram) : null;
+        contractiveWarpMapRefinementProgramBindings =
+                contractiveWarpMapRefinementProgram != 0
+                        ? new ContractiveWarpMapRefinementProgramBindings(
+                                contractiveWarpMapRefinementProgram) : null;
         warpedReprojectionProgramBindings = warpedDibr3dProgram != 0
                 ? new WarpedReprojectionProgramBindings(warpedDibr3dProgram) : null;
         boolean colorTargetsReady = initializeColorFrameSlots();
 
-        // These handles may contain names from a lost context. Never delete them from the new
-        // context because GL is allowed to reuse the same numeric names.
-        filteredDepthMapTextureId = 0;
-        intermediateTextureId = 0;
-        filterFboHandle = 0;
-        intermediateFboHandle = 0;
-        boolean depthTargetsReady = initializeDepthTargets();
         initializeWarpMapPipeline();
         boolean modelInputTargetReady = initializeFbo();
         boolean programsReady = simple3dProgram != 0 && modelInputProgram != 0
-                && bilateralBlurProgram != 0 && dibr3dProgram != 0
-                && reprojectionProgramBindings != null
-                && reprojectionProgramBindings.isComplete();
+                && contractiveWarpMapProgram != 0
+                && contractiveWarpMapRefinementProgram != 0
+                && warpedDibr3dProgram != 0
+                && contractiveWarpMapProgramBindings != null
+                && contractiveWarpMapProgramBindings.isComplete()
+                && contractiveWarpMapRefinementProgramBindings != null
+                && contractiveWarpMapRefinementProgramBindings.isComplete()
+                && warpedReprojectionProgramBindings != null
+                && warpedReprojectionProgramBindings.isComplete();
         boolean aiGlPipelineReady = programsReady && colorTargetsReady
-                && depthTargetsReady && modelInputTargetReady;
+                && modelInputTargetReady;
         boolean gpuComputeReady = modelInputPackProgram != 0
                 && gpuPackProgramBindings != null && gpuPackProgramBindings.isComplete();
         if (gpuComputeReady) {
@@ -2184,33 +2634,57 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         + error.getMessage());
             }
         }
+        if (gpuComputeReady && warpMapAvailable
+                && contractiveWarpMapProgramBindings != null
+                && contractiveWarpMapProgramBindings.isComplete()) {
+            try {
+                gpuDisparityProcessor = new ClientSbsGpuDisparityProcessor(
+                        depthMapWidth, depthMapHeight,
+                        aiModel.getV2RawCoordinateScale());
+                LimeLog.info("Client SBS disparity: raw ZipDepth V2 contractive field "
+                        + depthMapWidth + "x" + depthMapHeight
+                        + " scale=" + aiModel.getV2RawCoordinateScale());
+            } catch (Throwable error) {
+                gpuDisparityProcessor = null;
+                LimeLog.warning("Client SBS contractive disparity unavailable; depth will remain "
+                        + "flat: " + error.getMessage());
+            }
+        } else {
+            gpuDisparityProcessor = null;
+        }
+        gpuSceneCutResetPending = false;
         if (modelInputTargetReady) {
             try {
                 gpuSceneCutDetector = new ClientSbsGpuSceneCutDetector(
                         modelInputWidth, modelInputHeight);
             } catch (Throwable error) {
                 gpuSceneCutDetector = null;
-                LimeLog.warning("Client SBS GPU color-cut detector unavailable; "
-                        + "using depth-only cut evidence: " + error.getMessage());
+                LimeLog.warning("Client SBS GPU color-cut detector unavailable; using bounded "
+                        + "depth-only cut confirmation: " + error.getMessage());
             }
         } else {
             gpuSceneCutDetector = null;
         }
-        if (aiGlPipelineReady && gpuComputeReady) {
+        // Ordinal color evidence improves cut classification and enables near-identical reuse, but
+        // it is not a hard dependency of depth/reprojection. The depth resolver has a bounded
+        // two-observation fallback when this optional detector is unavailable.
+        boolean geometryReady = gpuComputeReady && warpMapAvailable
+                && gpuDisparityProcessor != null;
+        if (aiGlPipelineReady && geometryReady) {
             pendingGpuInferenceEngine = ClientSbsGpuInferenceEngine.createShared();
             if (pendingGpuInferenceEngine != null) {
                 aiTaskOwnership.set(0);
             }
         }
-        if (!aiGlPipelineReady || !gpuComputeReady || pendingGpuInferenceEngine == null) {
+        if (!aiGlPipelineReady || !geometryReady || pendingGpuInferenceEngine == null) {
             activeInferenceBackend = "Unavailable";
             LimeLog.severe("Client SBS native GPU pipeline unavailable; using flat duplicated output"
                     + " (programs=" + programsReady
                     + ", colorTargets=" + colorTargetsReady
-                    + ", depthTargets=" + depthTargetsReady
-                    + ", modelInputTarget=" + modelInputTargetReady
-                    + ", gpuCompute=" + gpuComputeReady
-                    + ", sharedContext=" + (pendingGpuInferenceEngine != null) + ")");
+                     + ", modelInputTarget=" + modelInputTargetReady
+                     + ", gpuCompute=" + gpuComputeReady
+                     + ", geometry=" + geometryReady
+                     + ", sharedContext=" + (pendingGpuInferenceEngine != null) + ")");
         }
         latchedFrameSequence = 0L;
         lastCapturedFrameSequence = 0L;
@@ -2255,69 +2729,23 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 + "; HDR window=" + (hdrWindowCapable ? "yes" : "no"));
     }
 
-    private void applyTwoPassGaussianBlur(int sourceDepthTexture) {
-        int blurProgram = bilateralBlurProgram;
-        BlurProgramBindings bindings = blurProgramBindings;
-        if (bindings == null) {
-            return;
-        }
-        boolean ditheringEnabled = GLES20.glIsEnabled(GLES20.GL_DITHER);
-        if (ditheringEnabled) {
-            GLES20.glDisable(GLES20.GL_DITHER);
-        }
-
-        GLES20.glUseProgram(blurProgram);
-        GLES20.glVertexAttribPointer(bindings.position, 2, GLES20.GL_FLOAT, false, 0,
-                quadVertexBuffer);
-        GLES20.glVertexAttribPointer(bindings.texCoord, 2, GLES20.GL_FLOAT, false, 0,
-                textureVertexBuffer);
-        GLES20.glEnableVertexAttribArray(bindings.position);
-        GLES20.glEnableVertexAttribArray(bindings.texCoord);
-
-        GLES20.glUniform2f(bindings.texelSize, 1.0f / depthMapWidth,
-                1.0f / depthMapHeight);
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, intermediateFboHandle);
-        GLES20.glViewport(0, 0, depthMapWidth, depthMapHeight);
-
-        GLES20.glUniform2f(bindings.direction, 1.0f, 0.0f);
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, sourceDepthTexture);
-        GLES20.glUniform1i(bindings.inputTexture, 0);
-
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, filterFboHandle);
-        GLES20.glViewport(0, 0, depthMapWidth, depthMapHeight);
-
-        GLES20.glUniform2f(bindings.direction, 0.0f, 1.0f);
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, intermediateTextureId);
-        GLES20.glUniform1i(bindings.inputTexture, 0);
-
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        if (ditheringEnabled) {
-            GLES20.glEnable(GLES20.GL_DITHER);
-        }
-    }
-
     /**
-     * Solves the two-eye Bestv2 inverse field once for the newly adopted depth/profile. The map is
-     * rendered with the same flipped texture coordinates as the direct output shader; the cheap
-     * compose shader compensates for that FBO storage orientation when sampling it.
+     * Solves the unique two-eye inverse at 1x, then refines its horizontal lattice once at 2x.
+     * Both stages form one strict geometry result; the coarse seed is never composed directly.
      */
-    private boolean renderWarpMap() {
-        WarpMapProgramBindings bindings = warpMapProgramBindings;
+    private boolean renderContractiveWarpMap() {
+        ContractiveWarpMapProgramBindings bindings = contractiveWarpMapProgramBindings;
+        ContractiveWarpMapRefinementProgramBindings refinementBindings =
+                contractiveWarpMapRefinementProgramBindings;
         if (!warpMapAvailable || bindings == null || !bindings.isComplete()
+                || refinementBindings == null || !refinementBindings.isComplete()
                 || warpMapFboHandle == 0 || warpMapTextureId == 0
-                || filteredDepthMapTextureId == 0 || gpuProfileTextureId == 0) {
+                || refinedWarpMapFboHandle == 0 || refinedWarpMapTextureId == 0
+                || gpuParallaxTextureId == 0) {
             return false;
         }
-        if (!warpMapDrawValidated) {
+        if (!contractiveWarpMapDrawValidated
+                || !contractiveWarpMapRefinementDrawValidated) {
             drainGlErrors();
         }
         boolean ditheringEnabled = GLES20.glIsEnabled(GLES20.GL_DITHER);
@@ -2327,7 +2755,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, warpMapFboHandle);
         GLES20.glViewport(0, 0, warpMapWidth, warpMapHeight);
-        GLES20.glUseProgram(warpMapProgram);
+        GLES20.glUseProgram(contractiveWarpMapProgram);
         GLES20.glVertexAttribPointer(bindings.position, 2, GLES20.GL_FLOAT, false, 0,
                 quadVertexBuffer);
         GLES20.glVertexAttribPointer(bindings.texCoord, 2, GLES20.GL_FLOAT, false, 0,
@@ -2336,28 +2764,59 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glEnableVertexAttribArray(bindings.texCoord);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, filteredDepthMapTextureId);
-        GLES20.glUniform1i(bindings.depthTexture, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, gpuParallaxTextureId);
+        GLES20.glUniform1i(bindings.parallaxTexture, 0);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+
+        if (!contractiveWarpMapDrawValidated) {
+            int error = GLES20.glGetError();
+            if (error != GLES20.GL_NO_ERROR) {
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                if (ditheringEnabled) {
+                    GLES20.glEnable(GLES20.GL_DITHER);
+                }
+                LimeLog.warning("Client SBS contractive warp-map render failed with GL error 0x"
+                        + Integer.toHexString(error));
+                return false;
+            }
+            contractiveWarpMapDrawValidated = true;
+            LimeLog.info("Client SBS exact 1x RG16F warp-seed render validated");
+        }
+
+        // The coarse map is stored upside down by TEXTURE_VERTICES. The refinement shader undoes
+        // that storage flip while seeding, and its output intentionally adopts the same storage
+        // convention consumed by the packed compose shader.
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, refinedWarpMapFboHandle);
+        GLES20.glViewport(0, 0, refinedWarpMapWidth, refinedWarpMapHeight);
+        GLES20.glUseProgram(contractiveWarpMapRefinementProgram);
+        GLES20.glVertexAttribPointer(refinementBindings.position, 2, GLES20.GL_FLOAT, false, 0,
+                quadVertexBuffer);
+        GLES20.glVertexAttribPointer(refinementBindings.texCoord, 2, GLES20.GL_FLOAT, false, 0,
+                textureVertexBuffer);
+        GLES20.glEnableVertexAttribArray(refinementBindings.position);
+        GLES20.glEnableVertexAttribArray(refinementBindings.texCoord);
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, warpMapTextureId);
+        GLES20.glUniform1i(refinementBindings.coarseWarpMapTexture, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, gpuProfileTextureId);
-        GLES20.glUniform1i(bindings.profileTexture, 1);
-        GLES20.glUniform2f(bindings.sourceSize, colorFrameWidth, colorFrameHeight);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, gpuParallaxTextureId);
+        GLES20.glUniform1i(refinementBindings.parallaxTexture, 1);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         if (ditheringEnabled) {
             GLES20.glEnable(GLES20.GL_DITHER);
         }
 
-        if (!warpMapDrawValidated) {
+        if (!contractiveWarpMapRefinementDrawValidated) {
             int error = GLES20.glGetError();
             if (error != GLES20.GL_NO_ERROR) {
-                LimeLog.warning("Client SBS RG16F warp-map render failed with GL error 0x"
-                        + Integer.toHexString(error) + "; using direct reprojection");
-                disableWarpMapPipeline();
+                LimeLog.warning("Client SBS seeded warp refinement failed with GL error 0x"
+                        + Integer.toHexString(error));
                 return false;
             }
-            warpMapDrawValidated = true;
-            LimeLog.info("Client SBS RG16F warp-map render validated");
+            contractiveWarpMapRefinementDrawValidated = true;
+            LimeLog.info("Client SBS seeded 2x-horizontal x1 RG16F warp refinement validated");
         }
         return true;
     }
@@ -2372,53 +2831,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 : (surfaceHeight > 0 ? surfaceHeight : glSurfaceView.getHeight());
     }
 
-    private void drawBothEyes(int program, int viewWidth, int viewHeight) {
+    private boolean drawBothEyes(int viewWidth, int viewHeight) {
         if (warpMapValid && drawBothEyesFromWarpMap(viewWidth, viewHeight)) {
-            return;
+            return true;
         }
-        drawBothEyesDirect(program, viewWidth, viewHeight);
+        disableContractiveDisparity("contractive warp-map composition failed");
+        return false;
     }
 
     static boolean packedSingleDrawFitsViewport(int packedWidth, int maxViewportWidth) {
         return packedWidth > 0 && maxViewportWidth > 0 && packedWidth <= maxViewportWidth;
-    }
-
-    /** Compatibility path retained for devices that cannot render/sample the RG16F warp map. */
-    private void drawBothEyesDirect(int program, int viewWidth, int viewHeight) {
-        ReprojectionProgramBindings bindings = reprojectionProgramBindings;
-        ClientSbsFrameSlots.Lease colorLease = activeColorFrameLease;
-        int colorSlot = colorLease != null ? colorLease.getSlot() : -1;
-        if (bindings == null || colorSlot < 0 || colorSlot >= colorFrameTextures.length) {
-            return;
-        }
-        GLES20.glUseProgram(program);
-        GLES20.glVertexAttribPointer(bindings.position, 2, GLES20.GL_FLOAT, false, 0,
-                quadVertexBuffer);
-        GLES20.glVertexAttribPointer(bindings.texCoord, 2, GLES20.GL_FLOAT, false, 0,
-                textureVertexBuffer);
-        GLES20.glEnableVertexAttribArray(bindings.position);
-        GLES20.glEnableVertexAttribArray(bindings.texCoord);
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, colorFrameTextures[colorSlot]);
-        GLES20.glUniform1i(bindings.colorTexture, 0);
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, filteredDepthMapTextureId);
-        GLES20.glUniform1i(bindings.depthTexture, 1);
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE2);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,
-                gpuDepthActive ? gpuProfileTextureId : 0);
-        GLES20.glUniform1i(bindings.profileTexture, 2);
-        GLES20.glUniform2f(bindings.sourceSize, colorFrameWidth, colorFrameHeight);
-
-        GLES20.glViewport(0, 0, viewWidth / 2, viewHeight);
-        GLES20.glUniform1f(bindings.eyeSign, -1.0f);
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-        GLES20.glViewport(viewWidth / 2, 0, viewWidth / 2, viewHeight);
-        GLES20.glUniform1f(bindings.eyeSign, 1.0f);
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
     }
 
     /**
@@ -2430,7 +2852,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (!packedSingleDrawFitsViewport(viewWidth, maximumViewportWidth)) {
             LimeLog.warning("Client SBS packed single-draw viewport " + viewWidth
                     + " exceeds GL_MAX_VIEWPORT_DIMS width " + maximumViewportWidth
-                    + "; using per-eye direct reprojection");
+                    + "; strict contractive output cannot be presented");
             disableWarpMapPipeline();
             return false;
         }
@@ -2439,7 +2861,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         int colorSlot = colorLease != null ? colorLease.getSlot() : -1;
         if (bindings == null || !bindings.isComplete()
                 || colorSlot < 0 || colorSlot >= colorFrameTextures.length
-                || warpMapTextureId == 0) {
+                || refinedWarpMapTextureId == 0) {
             return false;
         }
         if (!warpedComposeValidated) {
@@ -2458,7 +2880,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, colorFrameTextures[colorSlot]);
         GLES20.glUniform1i(bindings.colorTexture, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, warpMapTextureId);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, refinedWarpMapTextureId);
         GLES20.glUniform1i(bindings.warpMapTexture, 1);
 
         GLES20.glViewport(0, 0, viewWidth, viewHeight);
@@ -2468,7 +2890,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             int error = GLES20.glGetError();
             if (error != GLES20.GL_NO_ERROR) {
                 LimeLog.warning("Client SBS warp-map compose failed with GL error 0x"
-                        + Integer.toHexString(error) + "; using direct reprojection");
+                        + Integer.toHexString(error) + "; presenting flat output");
                 disableWarpMapPipeline();
                 return false;
             }
@@ -2479,12 +2901,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         return true;
     }
 
-    private void drawWithShader() {
+    private boolean drawWithShader() {
         if (prefConfig != null && hasPresentableDepth()) {
-            drawBothEyes(dibr3dProgram, getOutputWidth(), getOutputHeight());
-        } else {
-            drawFlatSbs();
+            return drawBothEyes(getOutputWidth(), getOutputHeight());
         }
+        return false;
     }
 
     private void drawFlatSbs() {
@@ -2519,6 +2940,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         if (shuttingDown.get() || !surfaceLifecycleReady || !outputSurfaceValidated) {
             return;
         }
+        if (!awaitFirstModeEntryFrameIfNeeded()) {
+            return;
+        }
         outputDrawSequence++;
 
         applyPerformanceSamplingStateOnGlThread();
@@ -2546,7 +2970,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
 
         adoptLatestGpuInferenceResult();
 
-        // Result adoption already tries to enqueue N+1 before N's depth postprocess. This second
+        // Result adoption already tries to enqueue N+1 after N's depth/history commit. This second
         // readiness check also covers draws with no result and a callback that raced adoption.
         // Slot leases and per-slot cut words keep color/depth identity exact in both cases.
         captureLatestFrameIfReady();
@@ -2554,8 +2978,89 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         // Presentation is deliberately independent of delegate availability. A backend failure or
         // transition must not throw away the last valid matched stereo pair.
         presentClientSbs();
+        scheduleClientSbsModeSwitchCompletionAfterSwap();
         scheduleHdrInputTransitionCompletionAfterSwap();
         scheduleLiveStreamResizeCompletionAfterSwap();
+    }
+
+    private void scheduleClientSbsModeSwitchCompletionAfterSwap() {
+        Runnable completion = clientSbsModeSwitchCompletion;
+        int generation = clientSbsModeSwitchCompletionGeneration;
+        if (completion == null || generation <= 0
+                || generation != activeClientSbsGeneration
+                || !clientSbs || !hasFrameForActiveGeneration) {
+            return;
+        }
+
+        clientSbsModeSwitchCompletion = null;
+        clientSbsModeSwitchCompletionGeneration = 0;
+        try {
+            // queueEvent() runs only after GLSurfaceView returns from this draw and swaps it.
+            glSurfaceView.queueEvent(completion);
+        } catch (RuntimeException error) {
+            LimeLog.warning("Unable to queue Client SBS mode-entry swap acknowledgement: "
+                    + error);
+        }
+    }
+
+    private void clearClientSbsModeSwitchCompletion() {
+        clientSbsModeSwitchCompletion = null;
+        clientSbsModeSwitchCompletionGeneration = 0;
+    }
+
+    /** Holds the initial EGL callback so it cannot submit an empty buffer over SceneCore's old one. */
+    private boolean awaitFirstModeEntryFrameIfNeeded() {
+        if (!awaitingFirstModeEntryFrame) {
+            return true;
+        }
+        long startedNs = System.nanoTime();
+        long deadlineNs = startedNs
+                + TimeUnit.MILLISECONDS.toNanos(MODE_ENTRY_FIRST_FRAME_WAIT_MS);
+        LimeLog.info("Client SBS holding initial EGL swap for a fresh decoder frame");
+        synchronized (firstModeEntryFrameLock) {
+            while (awaitingFirstModeEntryFrame && clientSbs && !shuttingDown.get()
+                    && !hasFreshModeEntryFrame(
+                    frameAvailable.get(), hasFrameForActiveGeneration,
+                    activeClientSbsGeneration, clientSbsGeneration.get())) {
+                long remainingNs = deadlineNs - System.nanoTime();
+                if (remainingNs <= 0L) {
+                    awaitingFirstModeEntryFrame = false;
+                    LimeLog.severe("Client SBS first-frame hold timed out before decoder output");
+                    return false;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(firstModeEntryFrameLock, remainingNs);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    awaitingFirstModeEntryFrame = false;
+                    return false;
+                }
+            }
+            boolean ready = clientSbs && !shuttingDown.get()
+                    && hasFreshModeEntryFrame(
+                    frameAvailable.get(), hasFrameForActiveGeneration,
+                    activeClientSbsGeneration, clientSbsGeneration.get());
+            awaitingFirstModeEntryFrame = false;
+            if (ready) {
+                LimeLog.info("Client SBS fresh decoder frame released initial EGL swap after "
+                        + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNs) + " ms");
+            }
+            return ready;
+        }
+    }
+
+    /** A queued no-swap drain may already have consumed the callback into this exact generation. */
+    static boolean hasFreshModeEntryFrame(boolean framePending, boolean frameLatched,
+                                          int activeGeneration, int currentGeneration) {
+        return framePending
+                || (frameLatched && activeGeneration == currentGeneration);
+    }
+
+    private void cancelFirstModeEntryFrameWait() {
+        synchronized (firstModeEntryFrameLock) {
+            awaitingFirstModeEntryFrame = false;
+            firstModeEntryFrameLock.notifyAll();
+        }
     }
 
     private void scheduleHdrInputTransitionCompletionAfterSwap() {
@@ -2671,7 +3176,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             matchedOutputPresented = false;
             return;
         }
-        if (!hasDepthProfile()) {
+        if (!hasDepthProfile()
+                || shouldPresentCurrentFlatForStaleDepth(System.nanoTime())) {
             long performanceEpoch = capturePerformanceSamplingEpoch();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             drawFlatSbs();
@@ -2686,28 +3192,83 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         long performanceEpoch = capturePerformanceSamplingEpoch();
         boolean composeGpuTimerStarted = beginGpuTimer(
                 ClientSbsGpuTimer.Stage.SBS_COMPOSE);
+        boolean stereoPresented = false;
         try {
-            prepareMatchedDepth();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-            drawWithShader();
+            if (prepareMatchedDepth()) {
+                stereoPresented = drawWithShader();
+            }
+            if (!stereoPresented) {
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                drawFlatSbs();
+            }
         } finally {
             endGpuTimer(composeGpuTimerStarted);
         }
-        matchedOutputPresented = true;
-        recordGlOutputSubmit(false, performanceEpoch);
+        matchedOutputPresented = stereoPresented;
+        recordGlOutputSubmit(!stereoPresented, performanceEpoch);
     }
 
-    private void prepareMatchedDepth() {
+    private boolean prepareMatchedDepth() {
         if (!hasDepthProfile()) {
-            return;
+            return false;
         }
-        if (!filteredDepthValid) {
-            applyTwoPassGaussianBlur(gpuDepthTextureId);
-            filteredDepthValid = true;
+
+        ClientSbsGpuDisparityProcessor disparityProcessor = gpuDisparityProcessor;
+        if (!warpMapAvailable || disparityProcessor == null) {
+            disableContractiveDisparity("required conditioner/inverse resources are unavailable");
+            return false;
         }
-        if (warpMapAvailable && !warpMapValid) {
-            warpMapValid = renderWarpMap();
+        if (!contractiveDisparityValid) {
+            try {
+                // Feed the source-aligned Float32 ZipDepth output straight into the host-parity
+                // raw V2 conditioner. A client-only prefilter changes silhouettes and rounds the
+                // model field to half precision before subtracting the R32F shot mean.
+                gpuParallaxTextureId = disparityProcessor.process(
+                        gpuDepthTextureId, gpuProfileTextureId,
+                        colorFrameWidth, colorFrameHeight);
+                contractiveDisparityValid = gpuParallaxTextureId != 0;
+                if (!contractiveDisparityValid) {
+                    disableContractiveDisparity("processor published an empty field");
+                    return false;
+                }
+            } catch (Throwable error) {
+                disableContractiveDisparity(error.getMessage());
+                return false;
+            }
         }
+
+        if (!warpMapValid) {
+            warpMapValid = renderContractiveWarpMap();
+            if (!warpMapValid) {
+                disableContractiveDisparity("contractive warp-map render failed");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void disableContractiveDisparity(String reason) {
+        ClientSbsGpuDisparityProcessor processor = gpuDisparityProcessor;
+        gpuDisparityProcessor = null;
+        gpuParallaxTextureId = 0;
+        contractiveDisparityValid = false;
+        gpuDepthActive = false;
+        warpMapValid = false;
+        contractiveWarpMapDrawValidated = false;
+        contractiveWarpMapRefinementDrawValidated = false;
+        warpedComposeValidated = false;
+        activeReprojectionPath = "Flat (strict V2 unavailable)";
+        if (processor != null) {
+            try {
+                processor.close();
+            } catch (Throwable closeError) {
+                LimeLog.warning("Client SBS contractive disparity cleanup failed: "
+                        + closeError.getMessage());
+            }
+        }
+        LimeLog.warning("Client SBS contractive disparity disabled; presenting flat output: "
+                + (reason != null ? reason : "unknown failure"));
     }
 
     private boolean hasPresentableDepth() {
@@ -2797,12 +3358,19 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final int generation;
         final long inferenceClaimToken;
         final boolean sceneCutAvailable;
+        final ClientSbsGpuSceneCutDetector sceneCutDetector;
+        final boolean nearIdenticalCandidate;
+        final int nearIdenticalDecisionBufferId;
+        final int nearIdenticalDecisionByteOffset;
         final long performanceEpoch;
         final boolean shutdownRequest;
 
         RenderResult(long inputReadyFence, long previousOutputConsumedFence, int bufferSlot,
                      ClientSbsFrameSlots.Lease colorFrameLease,
-                     long inferenceClaimToken, boolean sceneCutAvailable, long performanceEpoch) {
+                     long inferenceClaimToken, boolean sceneCutAvailable,
+                     ClientSbsGpuSceneCutDetector sceneCutDetector,
+                     boolean nearIdenticalCandidate, int nearIdenticalDecisionBufferId,
+                     int nearIdenticalDecisionByteOffset, long performanceEpoch) {
             this.inputReadyFence = inputReadyFence;
             this.previousOutputConsumedFence = previousOutputConsumedFence;
             this.bufferSlot = bufferSlot;
@@ -2810,6 +3378,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.generation = colorFrameLease.getGeneration();
             this.inferenceClaimToken = inferenceClaimToken;
             this.sceneCutAvailable = sceneCutAvailable;
+            this.sceneCutDetector = sceneCutDetector;
+            this.nearIdenticalCandidate = nearIdenticalCandidate;
+            this.nearIdenticalDecisionBufferId = nearIdenticalDecisionBufferId;
+            this.nearIdenticalDecisionByteOffset = nearIdenticalDecisionByteOffset;
             this.performanceEpoch = performanceEpoch;
             this.shutdownRequest = false;
         }
@@ -2822,6 +3394,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             this.generation = -1;
             this.inferenceClaimToken = 0L;
             this.sceneCutAvailable = false;
+            this.sceneCutDetector = null;
+            this.nearIdenticalCandidate = false;
+            this.nearIdenticalDecisionBufferId = 0;
+            this.nearIdenticalDecisionByteOffset = 0;
             this.performanceEpoch = 0L;
             this.shutdownRequest = true;
         }
@@ -2838,18 +3414,24 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         final int generation;
         final long inferenceClaimToken;
         final boolean sceneCutAvailable;
+        final ClientSbsGpuSceneCutDetector sceneCutDetector;
+        final boolean reusedDepth;
         final long performanceEpoch;
 
         GpuInferenceResult(long outputReadyFence, int bufferSlot,
                            ClientSbsFrameSlots.Lease colorFrameLease,
                            int generation, long inferenceClaimToken,
-                           boolean sceneCutAvailable, long performanceEpoch) {
+                           boolean sceneCutAvailable,
+                           ClientSbsGpuSceneCutDetector sceneCutDetector,
+                           boolean reusedDepth, long performanceEpoch) {
             this.outputReadyFence = outputReadyFence;
             this.bufferSlot = bufferSlot;
             this.colorFrameLease = colorFrameLease;
             this.generation = generation;
             this.inferenceClaimToken = inferenceClaimToken;
             this.sceneCutAvailable = sceneCutAvailable;
+            this.sceneCutDetector = sceneCutDetector;
+            this.reusedDepth = reusedDepth;
             this.performanceEpoch = performanceEpoch;
         }
     }
@@ -2862,24 +3444,33 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private boolean submitGpuInferenceCapture(ClientSbsGpuInferenceEngine engine,
                                               long inferenceClaimToken) {
         synchronized (gpuBufferOwnershipLock) {
-            // captureLatestFrameIfReady() checked these before acquiring the single-flight token,
-            // but terminal teardown may begin while the GL thread is waiting for this monitor.
-            // Never touch a shared buffer after closeGpuInferenceOnWorker() has snapshotted it.
+            // captureLatestFrameIfReady() checked lifecycle and generation before acquiring the
+            // single-flight token, but either may change while the GL thread waits for this monitor.
+            // Never touch a shared buffer after closeGpuInferenceOnWorker() has snapshotted it, or
+            // label an old active-generation latch as belonging to a newly requested generation.
             if (shuttingDown.get() || gpuShutdownRequested.get() || !clientSbs) {
                 return false;
             }
-            return submitGpuInferenceCaptureLocked(engine, inferenceClaimToken);
+            int captureGeneration = activeClientSbsGeneration;
+            if (captureGeneration != clientSbsGeneration.get()) {
+                return false;
+            }
+            return submitGpuInferenceCaptureLocked(
+                    engine, inferenceClaimToken, captureGeneration);
         }
     }
 
     private boolean submitGpuInferenceCaptureLocked(ClientSbsGpuInferenceEngine engine,
-                                                     long inferenceClaimToken) {
+                                                     long inferenceClaimToken,
+                                                     int captureGeneration) {
         if (engine == null || !engine.isInitialized() || gpuPackProgramBindings == null
-                || gpuDepthProcessor == null) {
+                || gpuDepthProcessor == null
+                || captureGeneration != activeClientSbsGeneration
+                || captureGeneration != clientSbsGeneration.get()) {
             return false;
         }
         long performanceEpoch = capturePerformanceSamplingEpoch();
-        if (!acquireMatchedColorFrame(performanceEpoch)) {
+        if (!acquireMatchedColorFrame(captureGeneration)) {
             return false;
         }
         ClientSbsFrameSlots.Lease colorFrameLease = pendingColorFrameLease;
@@ -2892,13 +3483,19 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             return false;
         }
 
+        ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
+        boolean nearIdenticalCandidate = sceneCutDetector != null
+                && sceneCutDetector.hasCommittedInferenceHistory()
+                && hasPresentableDepth();
+        int nearIdenticalDecisionBufferId = 0;
+        int nearIdenticalDecisionByteOffset = 0;
+
         // Produce and fence the small model tensor first. The inference context can begin waiting
         // at this boundary while the renderer queue performs the independent full-resolution
         // matched-color copy below.
         boolean modelGpuTimerStarted = beginGpuTimer(
                 ClientSbsGpuTimer.Stage.MODEL_INPUT);
         boolean tensorPackedWithSceneCut = false;
-        ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
         boolean sceneCutFramePending = false;
         try {
             try {
@@ -2914,9 +3511,18 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     try {
                         sceneCutDetector.processRendererOwnedAndPack(fboTextureId, inputBufferId,
                                 gpuDepthProcessor.getSceneCutMailboxBufferId(),
-                                gpuDepthProcessor.getSceneCutMailboxByteOffset(bufferSlot));
+                                gpuDepthProcessor.getSceneCutMailboxByteOffset(bufferSlot),
+                                nearIdenticalCandidate, inferenceClaimToken, bufferSlot,
+                                colorFrameLease.getFrameSequence(),
+                                colorFrameLease.getCapturedAtNs());
                         tensorPackedWithSceneCut = true;
                         sceneCutFramePending = true;
+                        if (nearIdenticalCandidate) {
+                            nearIdenticalDecisionBufferId =
+                                    sceneCutDetector.getNearIdenticalDecisionBufferId();
+                            nearIdenticalDecisionByteOffset =
+                                    sceneCutDetector.getNearIdenticalDecisionByteOffset(bufferSlot);
+                        }
                     } catch (Throwable error) {
                         LimeLog.warning("Client SBS GPU color-cut detector disabled: "
                                 + error.getMessage());
@@ -2962,6 +3568,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             int glError = GLES20.glGetError();
             pendingColorFrameLease = null;
             if (inputReadyFence == 0L || glError != GLES20.GL_NO_ERROR
+                    || !clientSbs || shuttingDown.get() || gpuShutdownRequested.get()
+                    || captureGeneration != clientSbsGeneration.get()
                     || colorFrameLease == null
                     || !colorFrameSlots.markInference(colorFrameLease)) {
                 if (inputReadyFence != 0L) {
@@ -2977,6 +3585,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             long previousOutputFence = gpuOutputConsumedFences.getAndSet(bufferSlot, 0L);
             RenderResult task = new RenderResult(inputReadyFence, previousOutputFence, bufferSlot,
                     colorFrameLease, inferenceClaimToken, tensorPackedWithSceneCut,
+                    tensorPackedWithSceneCut ? sceneCutDetector : null,
+                    tensorPackedWithSceneCut && nearIdenticalCandidate,
+                    tensorPackedWithSceneCut ? nearIdenticalDecisionBufferId : 0,
+                    tensorPackedWithSceneCut ? nearIdenticalDecisionByteOffset : 0,
                     performanceEpoch);
             if (!inferenceInputQueue.offer(task)) {
                 GLES30.glDeleteSync(inputReadyFence);
@@ -2987,27 +3599,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 return false;
             }
 
-            // Only an inference task that owns both fences may advance scene-cut history. If this
-            // optional commit fails after handoff, disable color evidence while allowing the
-            // already-owned depth task to finish normally.
-            if (sceneCutFramePending) {
-                try {
-                    sceneCutDetector.commitAcceptedFrame();
-                } catch (Throwable error) {
-                    LimeLog.warning("Client SBS GPU color-cut commit failed; using depth-only "
-                            + "cut evidence: " + error.getMessage());
-                    try {
-                        sceneCutDetector.close();
-                    } catch (Throwable ignored) {
-                        // Color-cut evidence is optional; the worker already owns the task.
-                    }
-                    if (gpuSceneCutDetector == sceneCutDetector) {
-                        gpuSceneCutDetector = null;
-                    }
-                } finally {
-                    sceneCutFramePending = false;
-                }
+            if (task.nearIdenticalCandidate) {
+                recordCounter(perfNearIdenticalCandidates);
             }
+
+            // The renderer keeps this transaction pending across native arbitration. Only a
+            // successfully postprocessed actual inference may advance either temporal history;
+            // a reuse discards it after publishing the current color.
+            sceneCutFramePending = false;
 
             // The worker now owns both fences for this tensor slot.
             lastCapturedFrameSequence = latchedFrameSequence;
@@ -3195,7 +3794,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         releaseInferenceClaimToken(inferenceClaim, token);
     }
 
-    /** Token-specific release used by the N/N+1 overlap; a stale owner cannot clear N+1. */
+    /** Token-specific release used by the N-to-N+1 handoff; a stale owner cannot clear N+1. */
     static boolean releaseInferenceClaimToken(AtomicLong claim, long token) {
         return token != 0L && claim.compareAndSet(token, 0L);
     }
@@ -3266,9 +3865,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     /**
-     * A successful native run always requires a consumed fence before that tensor slot is reused.
-     * If no renderer work reads the result, its ready-after-produce fence is itself a sufficient
-     * no-op consumption dependency.
+     * Every successful native transaction requires a consumed fence before that tensor slot is
+     * reused. If no renderer work reads an inferred output, or native skipped LiteRT entirely,
+     * its returned ready fence is itself a sufficient no-op consumption dependency.
      */
     private void preserveDiscardedGpuOutputFence(GpuInferenceResult result) {
         if (gpuShutdownRequested.get() || gpuInferenceEngine == null) {
@@ -3325,15 +3924,70 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         gpuDepthTextureId = 0;
         gpuProfileTextureId = 0;
+        gpuParallaxTextureId = 0;
+        contractiveDisparityValid = false;
         gpuDepthActive = false;
-        filteredDepthValid = false;
         warpMapValid = false;
         matchedOutputPresented = false;
+        resetSourceFrameAgeTracking();
+    }
+
+    private void resetSourceFrameAgeTracking() {
+        lastDepthObservationFrameSequence = 0L;
+    }
+
+    /** Lets the GPU advance only the histories authorized by this exact depth result. */
+    private boolean commitActualInferenceHistory(GpuInferenceResult result) {
+        ClientSbsGpuSceneCutDetector detector = result.sceneCutDetector;
+        if (detector == null || detector != gpuSceneCutDetector) {
+            return false;
+        }
+        try {
+            detector.commitAcceptedFrame(
+                    gpuDepthProcessor.getHistoryDecisionStateBufferId());
+            return true;
+        } catch (Throwable error) {
+            LimeLog.warning("Client SBS GPU inference-history commit failed; disabling "
+                    + "color cuts and near-identical reuse: " + error.getMessage());
+            try {
+                detector.close();
+            } catch (Throwable ignored) {
+                // Depth for this frame is already valid; only the optional detector is lost.
+            }
+            if (gpuSceneCutDetector == detector) {
+                gpuSceneCutDetector = null;
+            }
+            return false;
+        }
+    }
+
+    /** Reuse freezes model-input and scene-cut histories at the last actual inference. */
+    private void discardReusedInferenceHistory(GpuInferenceResult result) {
+        ClientSbsGpuSceneCutDetector detector = result.sceneCutDetector;
+        if (detector == null || detector != gpuSceneCutDetector) {
+            return;
+        }
+        try {
+            detector.discardPendingFrame();
+        } catch (Throwable error) {
+            LimeLog.warning("Client SBS GPU reused-frame history discard failed; disabling "
+                    + "color cuts and near-identical reuse: " + error.getMessage());
+            try {
+                detector.close();
+            } catch (Throwable ignored) {
+                // Cached depth remains valid; future frames simply force inference.
+            }
+            if (gpuSceneCutDetector == detector) {
+                gpuSceneCutDetector = null;
+            }
+        }
     }
 
     private void resetPresentationForGeneration(int generation) {
+        cancelStaleDepthWatchdog();
         activeClientSbsGeneration = generation;
         dropPendingCapture();
+        gpuSceneCutResetPending = true;
         clearPublishedPresentationState(true);
         colorFrameSlots.reset();
         if (gpuDepthProcessor != null) {
@@ -3343,24 +3997,40 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 requestGpuShutdown("depth-state reset failed: " + error.getMessage());
             }
         }
-        if (gpuSceneCutDetector != null) {
-            ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
-            try {
-                sceneCutDetector.reset();
-            } catch (Throwable error) {
-                LimeLog.warning("Client SBS GPU color-cut reset failed; using depth-only "
-                        + "cut evidence: " + error.getMessage());
-                try {
-                    sceneCutDetector.close();
-                } catch (Throwable ignored) {
-                    // Color-cut evidence is optional; keep the primary depth failure isolated.
-                }
-                gpuSceneCutDetector = null;
-            }
-        }
+        resetGpuSceneCutDetectorWhenIdle();
         resetDepthTelemetryEra();
         hasFrameForActiveGeneration = false;
         lastCapturedFrameSequence = latchedFrameSequence;
+    }
+
+    /**
+     * Resets detector/history storage only after the single-flight native transaction releases
+     * ownership. In particular, reset() clears the decision SSBO that native maps after the input
+     * fence, so writing it while a claim is live would be an unsynchronized cross-context race.
+     */
+    private void resetGpuSceneCutDetectorWhenIdle() {
+        if (!gpuSceneCutResetPending || inferenceClaim.get() != 0L) {
+            return;
+        }
+        gpuSceneCutResetPending = false;
+        ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
+        if (sceneCutDetector == null) {
+            return;
+        }
+        try {
+            sceneCutDetector.reset();
+        } catch (Throwable error) {
+            LimeLog.warning("Client SBS GPU color-cut reset failed; using depth-only "
+                    + "cut evidence: " + error.getMessage());
+            try {
+                sceneCutDetector.close();
+            } catch (Throwable ignored) {
+                // Color-cut evidence is optional; keep the primary depth failure isolated.
+            }
+            if (gpuSceneCutDetector == sceneCutDetector) {
+                gpuSceneCutDetector = null;
+            }
+        }
     }
 
     /** Consumes a shared-context LiteRT result through one GPU-side dependency and GL submission. */
@@ -3397,6 +4067,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             return false;
         }
 
+        if (result.reusedDepth) {
+            return adoptNearIdenticalReuseLocked(result);
+        }
+
         // Queue a server-side dependency instead of polling with glClientWaitSync and submitting
         // extra unchanged EGL buffers. Native flushes this cross-context fence before publishing
         // it, so all postprocess and presentation commands below execute after LiteRT output.
@@ -3430,6 +4104,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             int outputBufferId = engine.getOutputBufferId(result.bufferSlot);
             int outputPixelStrideBytes =
                     engine.getOutputPixelStrideBytes(result.bufferSlot);
+            long sourceFrameSequence = result.colorFrameLease.getFrameSequence();
+            int sourceFrameDelta = decodedSourceFrameDelta(
+                    lastDepthObservationFrameSequence, sourceFrameSequence);
+            lastDepthObservationFrameSequence = sourceFrameSequence;
 
             // Publish the completed result's exact color first, but explicitly invalidate depth
             // until this same result has finished postprocessing. That frees the superseded
@@ -3447,18 +4125,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             colorFrameSlots.release(oldColorLease, ClientSbsFrameSlots.State.ACTIVE);
             gpuDepthTextureId = 0;
             gpuProfileTextureId = 0;
-            gpuDepthActive = false;
-            filteredDepthValid = false;
-            warpMapValid = false;
+            gpuParallaxTextureId = 0;
+            contractiveDisparityValid = false;
+        gpuDepthActive = false;
+        warpMapValid = false;
             matchedOutputPresented = false;
             colorAdopted = true;
-
-            // The result claim covers inference N only. Its token-specific CAS cannot clear a
-            // newer claim, so release it before capturing into the slot just freed above. The
-            // per-slot scene-cut mailbox preserves N's cut word while capture N+1 advances color
-            // history and writes only N+1's word.
-            releaseInferenceClaim(result.inferenceClaimToken);
-            captureLatestFrameIfReady();
 
             boolean depthGpuTimerStarted = beginGpuTimer(
                     ClientSbsGpuTimer.Stage.DEPTH_PROFILE);
@@ -3468,10 +4140,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                     processed = processor.processRendererOwnedWithGpuSceneCut(
                             outputBufferId, 0, outputPixelStrideBytes,
                             processor.getSceneCutMailboxBufferId(),
-                            processor.getSceneCutMailboxByteOffset(result.bufferSlot));
+                            processor.getSceneCutMailboxByteOffset(result.bufferSlot),
+                            sourceFrameDelta);
                 } else {
                     processed = processor.processRendererOwned(
-                            outputBufferId, 0, outputPixelStrideBytes, false);
+                            outputBufferId, 0, outputPixelStrideBytes, false,
+                            sourceFrameDelta);
                 }
             } finally {
                 endGpuTimer(depthGpuTimerStarted);
@@ -3480,9 +4154,24 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 throw new IllegalStateException("GPU depth processor rejected the frame");
             }
 
-            // The depth processor's final barrier already publishes its SSBO reads and texture
-            // writes. This fence only transfers output-slot reuse to the inference context; GL
-            // command ordering makes an additional renderer-level memory barrier redundant.
+            gpuDepthTextureId = processed.getDepthTextureId();
+            gpuProfileTextureId = processed.getProfileTextureId();
+            gpuDepthActive = gpuDepthTextureId != 0 && gpuProfileTextureId != 0;
+            if (!gpuDepthActive) {
+                throw new IllegalStateException("GPU depth processor published empty textures");
+            }
+            gpuParallaxTextureId = 0;
+            contractiveDisparityValid = false;
+            warpMapValid = false;
+            matchedOutputPresented = false;
+
+            // This copy/commit is ordered after valid depth postprocessing and before the output
+            // consumer fence. The next candidate therefore compares only against an actual,
+            // usable inference owner. Reused frames never reach this path.
+            commitActualInferenceHistory(result);
+
+            // The depth processor and history commit have now submitted every read from this
+            // slot. Transfer that complete dependency back to the inference context.
             long outputConsumedFence = GLES30.glFenceSync(
                     GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             GLES20.glFlush();
@@ -3496,13 +4185,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         "Output-consumed fence collision for slot " + result.bufferSlot);
             }
 
-            gpuDepthTextureId = processed.getDepthTextureId();
-            gpuProfileTextureId = processed.getProfileTextureId();
-            gpuDepthActive = gpuDepthTextureId != 0 && gpuProfileTextureId != 0;
-            filteredDepthValid = false;
-            warpMapValid = false;
-            matchedOutputPresented = false;
-
             if (samplePerformance && isPerformanceSamplingEpochCurrent(
                     performanceSamplingEnabled, result.performanceEpoch,
                     performanceSamplingEpoch.get())) {
@@ -3511,6 +4193,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         - result.colorFrameLease.getCapturedAtNs());
                 recordDepthAdopt(pairAgeNs, result.performanceEpoch);
             }
+
+            // Keep the single-flight claim until history is committed. Otherwise N+1 could pack
+            // against the previous owner while N's copy is still absent from the renderer queue.
+            releaseInferenceClaim(result.inferenceClaimToken);
+            captureLatestFrameIfReady();
             return true;
         } catch (Throwable error) {
             LimeLog.severe("Client SBS GPU postprocess failed: " + error.getMessage());
@@ -3520,16 +4207,87 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 // A failed N must remain flat; never expose its color with N-1's depth/profile.
                 gpuDepthTextureId = 0;
                 gpuProfileTextureId = 0;
-                gpuDepthActive = false;
-                filteredDepthValid = false;
-                warpMapValid = false;
+                gpuParallaxTextureId = 0;
+                contractiveDisparityValid = false;
+        gpuDepthActive = false;
+        warpMapValid = false;
                 matchedOutputPresented = false;
             }
+            resetSourceFrameAgeTracking();
             requestGpuShutdown(error.getMessage());
             return false;
         } finally {
-            // This is deliberately token-specific. If the early capture above acquired N+1,
-            // comparing against N's token leaves the newer single-flight claim untouched.
+            // Token-specific release cannot clear N+1 if the successful path captured it above.
+            releaseInferenceClaim(result.inferenceClaimToken);
+        }
+    }
+
+    /** Publishes current color while retaining every field derived from the last real inference. */
+    private boolean adoptNearIdenticalReuseLocked(GpuInferenceResult result) {
+        boolean completionFenceRetained = false;
+        boolean colorAdopted = false;
+        try {
+            if (!hasDepthProfile() || result.sceneCutDetector == null
+                    || result.sceneCutDetector != gpuSceneCutDetector) {
+                throw new IllegalStateException(
+                        "Near-identical reuse lost its GPU-authenticated inference owner");
+            }
+
+            // Native deliberately marks a reuse transaction as requiring this returned fence on
+            // the slot's next invocation. No renderer work reads the untouched LiteRT output, so
+            // the ready fence itself is the correct no-op consumer dependency.
+            if (!gpuOutputConsumedFences.compareAndSet(
+                    result.bufferSlot, 0L, result.outputReadyFence)) {
+                throw new IllegalStateException(
+                        "Reused output fence collision for slot " + result.bufferSlot);
+            }
+            completionFenceRetained = true;
+
+            if (!colorFrameSlots.markPublished(result.colorFrameLease)) {
+                throw new IllegalStateException("Reused color lease could not be published");
+            }
+            if (!colorFrameSlots.markActive(result.colorFrameLease)) {
+                colorFrameSlots.release(result.colorFrameLease,
+                        ClientSbsFrameSlots.State.PUBLISHED);
+                throw new IllegalStateException("Reused color lease could not become active");
+            }
+            ClientSbsFrameSlots.Lease oldColorLease = activeColorFrameLease;
+            activeColorFrameLease = result.colorFrameLease;
+            colorFrameSlots.release(oldColorLease, ClientSbsFrameSlots.State.ACTIVE);
+            colorAdopted = true;
+
+            // Freeze normalization, cut, profile, conditioned disparity, and the cached warp. Only this
+            // current exact color and presentation-dirty bit change on reuse.
+            discardReusedInferenceHistory(result);
+            matchedOutputPresented = false;
+            if (isPerformanceSamplingEpochCurrent(performanceSamplingEnabled,
+                    result.performanceEpoch, performanceSamplingEpoch.get())) {
+                perfNearIdenticalReuses.incrementAndGet();
+            }
+
+            releaseInferenceClaim(result.inferenceClaimToken);
+            captureLatestFrameIfReady();
+            return true;
+        } catch (Throwable error) {
+            LimeLog.severe("Client SBS near-identical reuse failed: " + error.getMessage());
+            if (!completionFenceRetained) {
+                preserveDiscardedGpuOutputFence(result);
+            }
+            if (!colorAdopted) {
+                colorFrameSlots.release(result.colorFrameLease);
+            } else {
+                gpuDepthTextureId = 0;
+                gpuProfileTextureId = 0;
+                gpuParallaxTextureId = 0;
+                contractiveDisparityValid = false;
+        gpuDepthActive = false;
+        warpMapValid = false;
+                matchedOutputPresented = false;
+            }
+            resetSourceFrameAgeTracking();
+            requestGpuShutdown(error.getMessage());
+            return false;
+        } finally {
             releaseInferenceClaim(result.inferenceClaimToken);
         }
     }
@@ -3749,6 +4507,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             synchronized (frameLock) {
                 frameAvailable.set(false);
                 pendingFrameGeneration = -1;
+                pendingFrameCallbackSequence = 0L;
             }
             if (videoSurface != null) {
                 videoSurface.release();
@@ -3903,13 +4662,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 || extensions.contains("GL_EXT_color_buffer_float"));
     }
 
-    private boolean acquireMatchedColorFrame(long performanceEpoch) {
+    private boolean acquireMatchedColorFrame(int captureGeneration) {
         if (pendingColorFrameLease != null || prefConfig == null) {
             return false;
         }
         ClientSbsFrameSlots.Lease lease = colorFrameSlots.tryAcquireForCapture(
-                clientSbsGeneration.get(), latchedFrameSequence,
-                performanceEpoch != 0L ? System.nanoTime() : 0L);
+                captureGeneration, latchedFrameSequence,
+                System.nanoTime());
         if (lease == null) {
             recordCounter(perfColorSlotBusySkips);
             return false;
@@ -3930,40 +4689,112 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
-    /** Initializes the optional 1x-depth RG16F inverse-warp cache. Failure is non-fatal. */
+    /**
+     * Initializes the exact 1x RG16F seed and required 2x-horizontal RG16F refinement target.
+     * Either target being unavailable keeps the strict route flat; the seed is not a fallback.
+     */
     private boolean initializeWarpMapPipeline() {
         warpMapValid = false;
         warpMapAvailable = false;
         warpMapDrawValidated = false;
+        contractiveWarpMapDrawValidated = false;
+        contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
-        if (warpMapProgram == 0 || warpedDibr3dProgram == 0
-                || warpMapProgramBindings == null || !warpMapProgramBindings.isComplete()
+        if (contractiveWarpMapProgram == 0 || contractiveWarpMapRefinementProgram == 0
+                || warpedDibr3dProgram == 0
+                || contractiveWarpMapProgramBindings == null
+                || !contractiveWarpMapProgramBindings.isComplete()
+                || contractiveWarpMapRefinementProgramBindings == null
+                || !contractiveWarpMapRefinementProgramBindings.isComplete()
                 || warpedReprojectionProgramBindings == null
                 || !warpedReprojectionProgramBindings.isComplete()) {
-            LimeLog.warning("Client SBS warp-map shaders unavailable; using direct reprojection");
+            LimeLog.warning("Client SBS strict warp-map/refinement shaders unavailable; "
+                    + "depth remains flat");
             return false;
         }
         if (!supportsHalfFloatColorTargets()) {
-            LimeLog.warning("Client SBS RG16F warp map unsupported; using direct reprojection");
+            LimeLog.warning("Client SBS RG16F warp maps unsupported; depth remains flat");
             return false;
         }
 
         int[] maxTextureSize = new int[1];
+        int[] maxViewportDimensions = new int[2];
+        drainGlErrors();
         GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0);
-        if (warpMapWidth > maxTextureSize[0] || warpMapHeight > maxTextureSize[0]) {
-            LimeLog.warning("Client SBS warp map " + warpMapWidth + "x" + warpMapHeight
-                    + " exceeds GL_MAX_TEXTURE_SIZE " + maxTextureSize[0]
-                    + "; using direct reprojection");
+        GLES20.glGetIntegerv(GLES20.GL_MAX_VIEWPORT_DIMS, maxViewportDimensions, 0);
+        int limitError = GLES20.glGetError();
+        if (limitError != GLES20.GL_NO_ERROR || maxTextureSize[0] <= 0
+                || maxViewportDimensions[0] <= 0 || maxViewportDimensions[1] <= 0) {
+            LimeLog.warning("Client SBS warp-map GL limits unavailable (GL=0x"
+                    + Integer.toHexString(limitError) + "); depth remains flat");
+            return false;
+        }
+        boolean textureSizeFits = warpMapWidth <= maxTextureSize[0]
+                && warpMapHeight <= maxTextureSize[0]
+                && refinedWarpMapWidth <= maxTextureSize[0]
+                && refinedWarpMapHeight <= maxTextureSize[0];
+        boolean viewportFits = warpMapWidth <= maxViewportDimensions[0]
+                && warpMapHeight <= maxViewportDimensions[1]
+                && refinedWarpMapWidth <= maxViewportDimensions[0]
+                && refinedWarpMapHeight <= maxViewportDimensions[1];
+        if (!textureSizeFits || !viewportFits) {
+            LimeLog.warning("Client SBS inverse warp maps seed=" + warpMapWidth + "x"
+                    + warpMapHeight + " refined=" + refinedWarpMapWidth + "x"
+                    + refinedWarpMapHeight + " exceed GL limits maxTexture="
+                    + maxTextureSize[0] + " maxViewport=" + maxViewportDimensions[0] + "x"
+                    + maxViewportDimensions[1]
+                    + "; depth remains flat");
             return false;
         }
 
         drainGlErrors();
-        int[] textures = new int[1];
-        GLES20.glGenTextures(1, textures, 0);
+        int[] textures = new int[2];
+        GLES20.glGenTextures(2, textures, 0);
         warpMapTextureId = textures[0];
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, warpMapTextureId);
+        refinedWarpMapTextureId = textures[1];
+        initializeRg16fWarpMapTexture(warpMapTextureId, warpMapWidth, warpMapHeight);
+        initializeRg16fWarpMapTexture(
+                refinedWarpMapTextureId, refinedWarpMapWidth, refinedWarpMapHeight);
+
+        int[] fbos = new int[2];
+        GLES20.glGenFramebuffers(2, fbos, 0);
+        warpMapFboHandle = fbos[0];
+        refinedWarpMapFboHandle = fbos[1];
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, warpMapFboHandle);
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, warpMapTextureId, 0);
+        int seedStatus = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, refinedWarpMapFboHandle);
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
+                GLES20.GL_TEXTURE_2D, refinedWarpMapTextureId, 0);
+        int refinedStatus = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+        int error = GLES20.glGetError();
+        if (warpMapFboHandle == 0 || warpMapTextureId == 0
+                || refinedWarpMapFboHandle == 0 || refinedWarpMapTextureId == 0
+                || seedStatus != GLES20.GL_FRAMEBUFFER_COMPLETE
+                || refinedStatus != GLES20.GL_FRAMEBUFFER_COMPLETE
+                || error != GLES20.GL_NO_ERROR) {
+            LimeLog.warning("Client SBS RG16F warp-map targets unavailable (seedFBO=0x"
+                    + Integer.toHexString(seedStatus) + ", refinedFBO=0x"
+                    + Integer.toHexString(refinedStatus) + ", GL=0x"
+                    + Integer.toHexString(error) + "); depth remains flat");
+            releaseWarpMapTarget();
+            return false;
+        }
+
+        warpMapAvailable = true;
+        LimeLog.info("Client SBS inverse warp caches: RG16F seed=" + warpMapWidth + "x"
+                + warpMapHeight + " refined=" + refinedWarpMapWidth + "x"
+                + refinedWarpMapHeight + " (1x seed, 2x-horizontal/1x-vertical)");
+        return true;
+    }
+
+    private void initializeRg16fWarpMapTexture(int textureId, int width, int height) {
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId);
         GLES30.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES30.GL_RG16F,
-                warpMapWidth, warpMapHeight, 0, GLES30.GL_RG,
+                width, height, 0, GLES30.GL_RG,
                 GLES30.GL_HALF_FLOAT, null);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S,
                 GLES20.GL_CLAMP_TO_EDGE);
@@ -3973,143 +4804,53 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER,
                 GLES20.GL_LINEAR);
-
-        int[] fbos = new int[1];
-        GLES20.glGenFramebuffers(1, fbos, 0);
-        warpMapFboHandle = fbos[0];
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, warpMapFboHandle);
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                GLES20.GL_TEXTURE_2D, warpMapTextureId, 0);
-        int status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        int error = GLES20.glGetError();
-        if (warpMapFboHandle == 0 || warpMapTextureId == 0
-                || status != GLES20.GL_FRAMEBUFFER_COMPLETE
-                || error != GLES20.GL_NO_ERROR) {
-            LimeLog.warning("Client SBS RG16F warp-map target unavailable (FBO=0x"
-                    + Integer.toHexString(status) + ", GL=0x"
-                    + Integer.toHexString(error) + "); using direct reprojection");
-            releaseWarpMapTarget();
-            return false;
-        }
-
-        warpMapAvailable = true;
-        LimeLog.info("Client SBS inverse warp cache: RG16F " + warpMapWidth + "x"
-                + warpMapHeight + " (" + WARP_MAP_SCALE + "x depth)");
-        return true;
     }
 
     private void disableWarpMapPipeline() {
+        ClientSbsGpuDisparityProcessor disparityProcessor = gpuDisparityProcessor;
+        gpuDisparityProcessor = null;
+        gpuParallaxTextureId = 0;
+        contractiveDisparityValid = false;
+        contractiveWarpMapDrawValidated = false;
+        if (disparityProcessor != null) {
+            try {
+                disparityProcessor.close();
+            } catch (Throwable error) {
+                LimeLog.warning("Client SBS disparity cleanup after warp-map failure failed: "
+                        + error.getMessage());
+            }
+        }
         releaseWarpMapTarget();
         warpMapAvailable = false;
-        activeReprojectionPath = directReprojectionPath();
-    }
-
-    private String directReprojectionPath() {
-        return "Direct GLES " + reprojectionProbeSteps + "-probe";
+        activeReprojectionPath = "Flat (strict V2 unavailable)";
     }
 
     private String warpMapReprojectionPath() {
-        return "RG16F 1x-depth warp map, packed single draw ("
-                + reprojectionProbeSteps + "-probe)";
+        return "RG16F 1x 11-iteration seed + 2x-horizontal x1 refinement, "
+                + "packed single draw";
     }
 
     private void releaseWarpMapTarget() {
-        // Callers have already unbound this target. Do not change the current draw framebuffer:
-        // a first-use fast-compose failure must be able to redraw the same destination through
-        // the direct shader in the current frame.
-        if (warpMapFboHandle != 0) {
-            GLES20.glDeleteFramebuffers(1, new int[] {warpMapFboHandle}, 0);
+        // Callers have already unbound this target. Do not change the current draw framebuffer;
+        // the caller may still replace a failed strict stereo draw with flat SBS in this frame.
+        if (warpMapFboHandle != 0 || refinedWarpMapFboHandle != 0) {
+            GLES20.glDeleteFramebuffers(2,
+                    new int[] {warpMapFboHandle, refinedWarpMapFboHandle}, 0);
         }
-        if (warpMapTextureId != 0) {
-            GLES20.glDeleteTextures(1, new int[] {warpMapTextureId}, 0);
+        if (warpMapTextureId != 0 || refinedWarpMapTextureId != 0) {
+            GLES20.glDeleteTextures(2,
+                    new int[] {warpMapTextureId, refinedWarpMapTextureId}, 0);
         }
         warpMapFboHandle = 0;
         warpMapTextureId = 0;
+        refinedWarpMapFboHandle = 0;
+        refinedWarpMapTextureId = 0;
         warpMapValid = false;
         warpMapAvailable = false;
         warpMapDrawValidated = false;
+        contractiveWarpMapDrawValidated = false;
+        contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
-    }
-
-    private boolean initializeDepthTargets() {
-        String extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS);
-        boolean supportsHalfFloatColor = extensions != null
-                && (extensions.contains("GL_EXT_color_buffer_half_float")
-                || extensions.contains("GL_EXT_color_buffer_float"));
-
-        if (supportsHalfFloatColor && createDepthTargets(GLES30.GL_R16F, GLES20.GL_FLOAT)) {
-            highPrecisionDepth = true;
-            LimeLog.info("Client SBS depth targets: R16F");
-            return true;
-        }
-
-        releaseDepthTargets();
-        if (!createDepthTargets(GLES30.GL_R8, GLES20.GL_UNSIGNED_BYTE)) {
-            releaseDepthTargets();
-            highPrecisionDepth = false;
-            LimeLog.severe("Unable to create client SBS depth framebuffers");
-            return false;
-        }
-        highPrecisionDepth = false;
-        LimeLog.info("Client SBS depth targets: R8 fallback");
-        return true;
-    }
-
-    private boolean createDepthTargets(int internalFormat, int allocationType) {
-        intermediateTextureId = createDepthTexture(internalFormat, allocationType);
-        filteredDepthMapTextureId = createDepthTexture(internalFormat, allocationType);
-
-        int[] fbos = new int[2];
-        GLES20.glGenFramebuffers(fbos.length, fbos, 0);
-        intermediateFboHandle = fbos[0];
-        filterFboHandle = fbos[1];
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, intermediateFboHandle);
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                GLES20.GL_TEXTURE_2D, intermediateTextureId, 0);
-        int intermediateStatus = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, filterFboHandle);
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                GLES20.GL_TEXTURE_2D, filteredDepthMapTextureId, 0);
-        int filterStatus = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-
-        return intermediateFboHandle != 0 && filterFboHandle != 0
-                && intermediateTextureId != 0 && filteredDepthMapTextureId != 0
-                && intermediateStatus == GLES20.GL_FRAMEBUFFER_COMPLETE
-                && filterStatus == GLES20.GL_FRAMEBUFFER_COMPLETE;
-    }
-
-    private int createDepthTexture(int internalFormat, int allocationType) {
-        int[] textures = new int[1];
-        GLES20.glGenTextures(1, textures, 0);
-        int textureId = textures[0];
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId);
-        GLES30.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, internalFormat,
-                depthMapWidth, depthMapHeight, 0, GLES30.GL_RED, allocationType, null);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S,
-                GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T,
-                GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER,
-                GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER,
-                GLES20.GL_LINEAR);
-        return textureId;
-    }
-
-    private void releaseDepthTargets() {
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        int[] fbos = {intermediateFboHandle, filterFboHandle};
-        GLES20.glDeleteFramebuffers(fbos.length, fbos, 0);
-        int[] textures = {intermediateTextureId, filteredDepthMapTextureId};
-        GLES20.glDeleteTextures(textures.length, textures, 0);
-        intermediateFboHandle = 0;
-        filterFboHandle = 0;
-        intermediateTextureId = 0;
-        filteredDepthMapTextureId = 0;
     }
 
     private int createExternalOESTexture() {
@@ -4252,22 +4993,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    private static final class BlurProgramBindings {
-        final int position;
-        final int texCoord;
-        final int inputTexture;
-        final int texelSize;
-        final int direction;
-
-        BlurProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            inputTexture = GLES20.glGetUniformLocation(program, "s_InputTexture");
-            texelSize = GLES20.glGetUniformLocation(program, "u_texelSize");
-            direction = GLES20.glGetUniformLocation(program, "u_blurDirection");
-        }
-    }
-
     private static final class WarpMapProgramBindings {
         final int position;
         final int texCoord;
@@ -4286,6 +5011,42 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         boolean isComplete() {
             return position >= 0 && texCoord >= 0 && depthTexture >= 0
                     && profileTexture >= 0 && sourceSize >= 0;
+        }
+    }
+
+    private static final class ContractiveWarpMapProgramBindings {
+        final int position;
+        final int texCoord;
+        final int parallaxTexture;
+
+        ContractiveWarpMapProgramBindings(int program) {
+            position = GLES20.glGetAttribLocation(program, "a_Position");
+            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
+            parallaxTexture = GLES20.glGetUniformLocation(program, "s_ParallaxTexture");
+        }
+
+        boolean isComplete() {
+            return position >= 0 && texCoord >= 0 && parallaxTexture >= 0;
+        }
+    }
+
+    private static final class ContractiveWarpMapRefinementProgramBindings {
+        final int position;
+        final int texCoord;
+        final int coarseWarpMapTexture;
+        final int parallaxTexture;
+
+        ContractiveWarpMapRefinementProgramBindings(int program) {
+            position = GLES20.glGetAttribLocation(program, "a_Position");
+            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
+            coarseWarpMapTexture = GLES20.glGetUniformLocation(
+                    program, "s_CoarseWarpMapTexture");
+            parallaxTexture = GLES20.glGetUniformLocation(program, "s_ParallaxTexture");
+        }
+
+        boolean isComplete() {
+            return position >= 0 && texCoord >= 0 && coarseWarpMapTexture >= 0
+                    && parallaxTexture >= 0;
         }
     }
 
@@ -4382,8 +5143,26 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         fencesTransferredToNative = true;
                         long outputReadyFence = gpuEngine.run(renderResult.bufferSlot,
                                 renderResult.inputReadyFence,
-                                renderResult.previousOutputConsumedFence);
-                        if (samplePerformance) {
+                                renderResult.previousOutputConsumedFence,
+                                renderResult.nearIdenticalCandidate,
+                                renderResult.nearIdenticalDecisionBufferId,
+                                renderResult.nearIdenticalDecisionByteOffset,
+                                renderResult.inferenceClaimToken);
+                        ClientSbsGpuInferenceEngine.RunDisposition disposition =
+                                gpuEngine.getLastRunDisposition(renderResult.bufferSlot);
+                        if (samplePerformance && renderResult.nearIdenticalCandidate) {
+                            recordNearIdenticalDecisionReason(
+                                    gpuEngine.getLastNearIdenticalDecisionReason(
+                                            renderResult.bufferSlot),
+                                    renderResult.performanceEpoch);
+                            recordNearIdenticalDecisionReadTiming(
+                                    gpuEngine.getLastNearIdenticalDecisionReadWallNanos(
+                                            renderResult.bufferSlot),
+                                    renderResult.performanceEpoch);
+                        }
+                        if (samplePerformance
+                                && disposition
+                                == ClientSbsGpuInferenceEngine.RunDisposition.INFER) {
                             recordNativeInferenceTiming(
                                     gpuEngine.getLastLiteRtRunWallNanos(
                                             renderResult.bufferSlot),
@@ -4411,6 +5190,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                                 renderResult.generation,
                                 renderResult.inferenceClaimToken,
                                 renderResult.sceneCutAvailable,
+                                renderResult.sceneCutDetector,
+                                disposition == ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
                                 renderResult.performanceEpoch);
                         if (!latestGpuInferenceResult.compareAndSet(null, gpuResult)) {
                             replaceGpuFinalFence(renderResult.bufferSlot, outputReadyFence);

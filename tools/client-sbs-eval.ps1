@@ -34,8 +34,10 @@ try {
         ":app:testNonRoot_gameDebugUnitTest" `
         "--tests" "com.limelight.sbs.ClientSbsFrameSlotsTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuDepthShadersTest" `
+        "--tests" "com.limelight.sbs.ClientSbsGpuDisparityShadersTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuSceneCutDetectorTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuSceneCutShadersTest" `
+        "--tests" "com.limelight.sbs.ClientSbsNearIdenticalPolicyTest" `
         "--tests" "com.limelight.sbs.ClientSbsShotCutPolicyTest" `
         "--tests" "com.limelight.sbs.ClientSbsGpuTimerTest" `
         "--tests" "com.limelight.sbs.ClientSbsTemporalTuningTest" `

@@ -10,42 +10,9 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-/** Physical-device benchmarks for the FP16-stored production Client-SBS models. */
+/** Physical-device benchmarks for the sole FP16-stored production Client-SBS model. */
 @RunWith(AndroidJUnit4.class)
-public final class ClientSbsMidasGpuBenchmarkInstrumentedTest {
-    @Test
-    public void productionMidas352x192() throws Exception {
-        runProductionModel(ClientSbsModelManifest.MIDAS_V2_STATIC_16_9);
-    }
-
-    @Test
-    public void productionMidas384x160() throws Exception {
-        runProductionModel(ClientSbsModelManifest.MIDAS_V2_STATIC_21_9);
-    }
-
-    @Test
-    public void productionMidas448x128() throws Exception {
-        runProductionModel(ClientSbsModelManifest.MIDAS_V2_STATIC_32_9);
-    }
-
-    @Test
-    public void productionDav2322x182() throws Exception {
-        runProductionModel(
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_16_9);
-    }
-
-    @Test
-    public void productionDav2350x154() throws Exception {
-        runProductionModel(
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_21_9);
-    }
-
-    @Test
-    public void productionDav2434x126() throws Exception {
-        runProductionModel(
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_32_9);
-    }
-
+public final class ClientSbsProductionGpuBenchmarkInstrumentedTest {
     @Test
     public void productionZipDepthBase672x384() throws Exception {
         runProductionModel(ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9);
@@ -76,5 +43,4 @@ public final class ClientSbsMidasGpuBenchmarkInstrumentedTest {
                     ClientSbsGpuInferenceEngine.clearBenchmarkCaches(targetContext));
         }
     }
-
 }

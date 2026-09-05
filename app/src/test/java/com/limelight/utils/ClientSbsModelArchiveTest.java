@@ -25,7 +25,7 @@ public class ClientSbsModelArchiveTest {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
-        ClientSbsGpuInferenceEngine.extractArchivedModel(
+        ClientSbsModelAssetCache.extractArchivedModel(
                 new ByteArrayInputStream(createArchive(entries)),
                 "target.model", output, digest);
 
@@ -38,7 +38,7 @@ public class ClientSbsModelArchiveTest {
         LinkedHashMap<String, byte[]> entries = new LinkedHashMap<>();
         entries.put("other.model", new byte[] {1});
 
-        ClientSbsGpuInferenceEngine.extractArchivedModel(
+        ClientSbsModelAssetCache.extractArchivedModel(
                 new ByteArrayInputStream(createArchive(entries)),
                 "target.model", new ByteArrayOutputStream(),
                 MessageDigest.getInstance("SHA-256"));

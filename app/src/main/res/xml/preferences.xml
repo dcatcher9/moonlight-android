@@ -81,15 +81,6 @@
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
 
-        <com.limelight.preferences.InlineListPreference
-            android:defaultValue="midas-v2-float"
-            android:entries="@array/xr_client_sbs_depth_model_names"
-            android:entryValues="@array/xr_client_sbs_depth_model_values"
-            android:key="list_client_sbs_depth_model"
-        android:icon="@drawable/ic_xr_depth_model"
-            android:summary="@string/summary_client_sbs_depth_model"
-            android:title="@string/title_client_sbs_depth_model"
-            app:iconSpaceReserved="false" />
     </PreferenceCategory>
 
     <PreferenceCategory

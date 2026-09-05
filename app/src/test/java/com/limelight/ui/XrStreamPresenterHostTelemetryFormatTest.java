@@ -20,18 +20,27 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
     }
 
     @Test
-    public void formatsLiveGridAndZeroPlane() {
+    public void formatsLiveRawV2WithoutLegacyZeroPlane() {
         SbsDepthTelemetrySnapshot telemetry = SbsDepthTelemetrySnapshot.available(
                 SbsDepthTelemetrySnapshot.VALID_ALL,
-                SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED,
+                SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED
+                        | SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY,
                 1036, 584, 2, 1.2f, 2.0f, 1.7f,
                 0.1f, 0.2f, -2.0f, 0.5f, 1.0f, 0.4f,
                 8, 1, 0, 0, 0, 10);
-        assertEquals("Live | 1036x584 | median zero plane",
+        assertEquals("Live | 1036x584 | raw V2",
                 XrStreamPresenter.formatHostSbsTelemetryStatus(telemetry));
-        assertEquals("subject", XrStreamPresenter.zeroPlaneModeName(1));
-        assertEquals("background", XrStreamPresenter.zeroPlaneModeName(3));
-        assertEquals("unknown", XrStreamPresenter.zeroPlaneModeName(99));
+        assertEquals("ready | valid 100.0% | fixed pop 1.700 | cut range 0.4000",
+                XrStreamPresenter.formatHostV2Field(telemetry));
+
+        SbsDepthTelemetrySnapshot initializedOnly = SbsDepthTelemetrySnapshot.available(
+                SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION,
+                SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED,
+                1036, 584, 0, Float.NaN, Float.NaN, Float.NaN,
+                Float.NaN, Float.NaN, Float.NaN, Float.NaN, 1.0f, Float.NaN,
+                8, 1, 0, 0, 0, 10);
+        assertEquals("state initialized | valid 100.0% | fixed pop n/a",
+                XrStreamPresenter.formatHostV2Field(initializedOnly));
     }
 
     @Test

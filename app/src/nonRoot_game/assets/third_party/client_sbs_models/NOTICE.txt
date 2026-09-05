@@ -1,60 +1,9 @@
 Client SBS model third-party notice
 
-This non-root Artemis APK contains converted and optimized TFLite depth models in:
+This non-root Moonlight 3D APK contains converted and optimized ZipDepth
+TFLite depth models in:
 
-  client-sbs-dav2-models.tar.xz
-  client-sbs-midas-models.tar.xz
-  client-sbs-depthart-models.tar.xz
   client-sbs-zipdepth-models.tar.xz
-
-Depth Anything V2 Small
------------------------
-Upstream project: https://github.com/DepthAnything/Depth-Anything-V2
-Upstream model card: https://huggingface.co/depth-anything/Depth-Anything-V2-Small
-The upstream project designates the Small model as Apache-2.0. A verbatim copy
-of that license is bundled beside this notice as LICENSE-APACHE-2.0.txt.
-
-Artemis ships modified TFLite conversions, not verbatim upstream checkpoint
-files. The shipped graphs use fixed rectangular input/output contracts,
-guarded attention and GELU graph rewrites, and FP16 storage for selected
-weights. The source distribution records hashes for the immediate Float32
-TFLite inputs and final packaged entries. It does not currently record a
-pinned upstream checkpoint revision and digest, exporter revision, dependency
-lock, or exact original export command, so it does not claim a complete
-upstream-checkpoint-to-TFLite reproduction chain.
-
-MiDaS v2.1 Small
-----------------
-Upstream project: https://github.com/isl-org/MiDaS
-The shipped conversions derive from the pinned Qualcomm AI Hub MiDaS-V2
-Float32 graph whose release, download revision, and hashes are recorded in the
-Artemis source distribution. MiDaS is licensed under the MIT License. A
-verbatim copy, including its copyright notice, is bundled beside this notice
-as LICENSE-MIDAS-MIT.txt.
-
-Artemis modifies that graph with fixed rectangular input/output and decoder
-resize contracts and FP16 storage for selected weights. The source model card
-also attributes its EfficientNet-Lite3 encoder under Apache-2.0; the bundled
-LICENSE-APACHE-2.0.txt supplies that license text as well.
-
-DepthART S448 relative depth
-----------------------------
-Upstream project: https://github.com/xuefeng-cvr/DepthART
-Upstream model repository: https://huggingface.co/Fengxue93/DepthART
-The model repository metadata designates the released checkpoints as
-Apache-2.0. A verbatim copy of that license is bundled beside this notice as
-LICENSE-APACHE-2.0.txt.
-
-Artemis ships modified TFLite conversions of the official relative-depth S448
-checkpoint, SHA-256
-e17adf70a87b4d2b7665bf0546aad68f8c5b8b63866cbca604602a7859fadebe.
-The conversion replaces the five SelectiveScan operators with exact associative
-prefix scans, bakes ImageNet input normalization into fixed rectangular graphs,
-stores selected weights as FP16, and retains Float32 public tensors. It does not
-prune, retrain, approximate the scan recurrence, or substitute the S224 weights.
-For Adreno FP16 execution, the first scan block's LayerNorm is algebraically
-rescaled by four, with its epsilon rescaled by sixteen, so those intermediates
-remain normal binary16 values. The other four LayerNorm blocks are unchanged.
 
 ZipDepth original base relative depth
 -------------------------------------
@@ -64,8 +13,8 @@ The upstream repository's source code is distributed under the MIT License. A
 verbatim copy, including its copyright notice, is bundled beside this notice as
 LICENSE-ZIPDEPTH-MIT.txt.
 
-Artemis ships modified TFLite conversions of the original zipdepth_base.pth
-checkpoint, SHA-256
+Moonlight 3D ships modified TFLite conversions of the original
+zipdepth_base.pth checkpoint, SHA-256
 a55910bb0b99c8c5e641cb9206e810b269690ad94e8a2ef08c827c4679391a65.
 These are the standard convex-unfold-tail base model, not the separately trained
 base_npu checkpoint. The static graphs retain the learned convex upsampling,

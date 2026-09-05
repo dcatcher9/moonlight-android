@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Bundle Client SBS models into deterministic solid per-family tar.xz files.
+"""Bundle the ZipDepth Client SBS graphs into one deterministic solid tar.xz file.
 
-Each family is one ordinary USTAR stream compressed as a single XZ/LZMA2 stream.
-Consequently, the 64 MiB preset-9 dictionary can reuse data across complete models.
+The family is one ordinary USTAR stream compressed as a single XZ/LZMA2 stream.
+Consequently, the 64 MiB preset-9 dictionary can reuse data across complete graphs.
 There is no custom manifest, delta encoding, or cross-model reconstruction format.
 """
 
@@ -16,28 +16,11 @@ import tarfile
 import tempfile
 
 
-DEPTH_ANYTHING_ARCHIVE_FILENAME = "client-sbs-dav2-models.tar.xz"
-MIDAS_ARCHIVE_FILENAME = "client-sbs-midas-models.tar.xz"
-DEPTHART_ARCHIVE_FILENAME = "client-sbs-depthart-models.tar.xz"
 ZIPDEPTH_ARCHIVE_FILENAME = "client-sbs-zipdepth-models.tar.xz"
 COPY_CHUNK_BYTES = 1024 * 1024
 XZ_PRESET = 9
 XZ_DICTIONARY_BYTES = 64 * 1024 * 1024
 
-DEPTH_ANYTHING_MODELS = (
-    "depth-anything-v2-small-static-322x182-fp16weights.tflite.model",
-    "depth-anything-v2-small-static-350x154-fp16weights.tflite.model",
-    "depth-anything-v2-small-static-434x126-fp16weights.tflite.model",
-)
-MIDAS_MODELS = (
-    "midas-v2-small-static-352x192-fp16weights.tflite.model",
-    "midas-v2-small-static-384x160-fp16weights.tflite.model",
-    "midas-v2-small-static-448x128-fp16weights.tflite.model",
-)
-DEPTHART_MODELS = (
-    "depthart-s448-static-672x384-fp16weights.tflite.model",
-    "depthart-s448-static-928x384-fp16weights.tflite.model",
-)
 ZIPDEPTH_MODELS = (
     "zipdepth-base-static-672x384-fp16weights.tflite.model",
     "zipdepth-base-static-896x384-fp16weights.tflite.model",
@@ -46,9 +29,6 @@ ZIPDEPTH_MODELS = (
 
 # Tuple order defines both archive publication order and USTAR entry order.
 MODEL_FAMILIES = (
-    (DEPTH_ANYTHING_ARCHIVE_FILENAME, DEPTH_ANYTHING_MODELS),
-    (MIDAS_ARCHIVE_FILENAME, MIDAS_MODELS),
-    (DEPTHART_ARCHIVE_FILENAME, DEPTHART_MODELS),
     (ZIPDEPTH_ARCHIVE_FILENAME, ZIPDEPTH_MODELS),
 )
 
@@ -183,13 +163,13 @@ def parse_args() -> argparse.Namespace:
         "--input-dir",
         required=True,
         type=Path,
-        help="directory containing the eleven packaged model files",
+        help="directory containing the three packaged ZipDepth graph files",
     )
     parser.add_argument(
         "--output-dir",
         required=True,
         type=Path,
-        help="directory that will receive the four solid model-family tar.xz archives",
+        help="directory that will receive the solid ZipDepth model-family tar.xz archive",
     )
     return parser.parse_args()
 

@@ -8,11 +8,16 @@ import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
+import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class XrStreamPresenterTransitionTest {
@@ -233,6 +238,93 @@ public class XrStreamPresenterTransitionTest {
     }
 
     @Test
+    public void onlyClientRendererCrossingsRetainTheOldPictureUntilFreshTargetFrame() {
+        assertTrue(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertTrue(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+        assertFalse(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+        assertFalse(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
+                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                XrStreamPresenter.PresenterMode.NORMAL));
+    }
+
+    @Test
+    public void clientRendererRemainsActiveUntilSurfaceSwitchOutcome() {
+        // Enter pre-stages the renderer before EGL resumes; exit retains the previous packed frame
+        // until MediaCodec has parked and the asynchronous detach completes.
+        assertTrue(XrStreamPresenter.clientSbsActiveDuringSurfaceSwitch(false, true));
+        assertTrue(XrStreamPresenter.clientSbsActiveDuringSurfaceSwitch(true, false));
+
+        assertTrue(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(false, true, true));
+        assertFalse(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(false, true, false));
+        assertFalse(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(true, false, true));
+        assertTrue(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(true, false, false));
+    }
+
+    @Test
+    public void onlyClientEntryWaitsForAPackedEglSwap() {
+        assertTrue(XrStreamPresenter.requiresClientPackedSwapProof(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertTrue(XrStreamPresenter.requiresClientPackedSwapProof(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertFalse(XrStreamPresenter.requiresClientPackedSwapProof(
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.PresenterMode.NORMAL));
+        assertFalse(XrStreamPresenter.requiresClientPackedSwapProof(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+    }
+
+    @Test
+    public void inactiveClientSavedQualityFusesIntoOneAckFirstModeSwitch() {
+        ModeStreamQualityModel liveTarget = targetQuality(false);
+
+        assertTrue(XrStreamPresenter.shouldFuseClientModeEntryQuality(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                true, false, liveTarget));
+        assertFalse(XrStreamPresenter.shouldReconnectBeforeClientModeEntry(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                false, liveTarget));
+
+        // No fusion for a same-mode update, a standard host, or unrelated staged reconnect work.
+        assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                true, false, liveTarget));
+        assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                false, false, liveTarget));
+        assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                true, true, liveTarget));
+    }
+
+    @Test
+    public void incompatibleOrLegacyClientSavedQualityReconnectsBeforeHandoff() {
+        ModeStreamQualityModel reconnectTarget = targetQuality(true);
+
+        assertTrue(XrStreamPresenter.shouldReconnectBeforeClientModeEntry(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                false, reconnectTarget));
+        assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                true, false, reconnectTarget));
+    }
+
+    @Test
     public void restoredHostAiRefreshesSurfaceWhenActualCodecChangesPackedGeometry() {
         assertTrue(XrStreamPresenter.hostSbsFormatChangeRequiresResize(
                 XrStreamPresenter.PresenterMode.HOST_SBS_AI,
@@ -318,13 +410,14 @@ public class XrStreamPresenterTransitionTest {
     }
 
     @Test
-    public void postAckModeGenerationSupersedesPreAckCompletionAndTimeout() {
+    public void solePostAckModeGenerationRejectsOlderCallbacks() {
         XrStreamPresenter.DecoderTransitionGenerationGate gate =
                 new XrStreamPresenter.DecoderTransitionGenerationGate();
         AtomicInteger completions = new AtomicInteger();
         AtomicInteger terminations = new AtomicInteger();
 
-        assertTrue(gate.beginMode(319));
+        // ACK-first flow creates no speculative generation 319. The one generation created after
+        // ACK owns both decoder output and the Client packed-swap proof.
         assertTrue(gate.beginMode(320));
         assertFalse(gate.dispatchModeIfCurrent(319, completions::incrementAndGet));
         assertFalse(gate.dispatchAnyIfCurrent(319, terminations::incrementAndGet));
@@ -333,5 +426,61 @@ public class XrStreamPresenterTransitionTest {
 
         assertTrue(gate.dispatchModeIfCurrent(320, completions::incrementAndGet));
         assertEquals(1, completions.get());
+    }
+
+    @Test
+    public void ackFirstClientGatePrecedesGeometryAndIsReusedBySurfaceHandoff() {
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        AtomicInteger decoderBegins = new AtomicInteger();
+        List<String> order = new ArrayList<>();
+
+        int ackGeneration =
+                XrStreamPresenter.beginAckFirstClientDecoderTransitionBeforeGeometry(
+                        gate,
+                        () -> {
+                            decoderBegins.incrementAndGet();
+                            order.add("decoder-gate");
+                            return 320;
+                        },
+                        () -> {
+                            order.add("geometry");
+                            return true;
+                        });
+        int surfaceGeneration = XrStreamPresenter.reuseOrBeginModeDecoderTransition(
+                gate, true,
+                () -> {
+                    decoderBegins.incrementAndGet();
+                    order.add("second-decoder-gate");
+                    return 321;
+                });
+
+        assertEquals(Arrays.asList("decoder-gate", "geometry"), order);
+        assertEquals(1, decoderBegins.get());
+        assertEquals(320, ackGeneration);
+        assertEquals(ackGeneration, surfaceGeneration);
+    }
+
+    @Test
+    public void failedAckFirstGeometryStillLeavesGateOwnedForReconnectCleanup() {
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                new XrStreamPresenter.DecoderTransitionGenerationGate();
+
+        assertEquals(0, XrStreamPresenter.beginAckFirstClientDecoderTransitionBeforeGeometry(
+                gate, () -> 77, () -> false));
+        assertEquals(77, gate.currentModeGeneration());
+    }
+
+    private static ModeStreamQualityModel targetQuality(boolean reconnectRequired) {
+        StreamQualityTuple live = new StreamQualityTuple("3840x2160", "90", 200000);
+        StreamQualityTuple target = new StreamQualityTuple("1920x1080", "30", 100000);
+        SessionSettingsModel.Value value = new SessionSettingsModel.Value(
+                "live", "target", SessionSettingsModel.Source.CURRENT_SESSION, true);
+        return ModeStreamQualityModel.builder(target, target, live, false)
+                .setQualityDeltaRequiresReconnect(reconnectRequired)
+                .put(SessionSettingsModel.Key.RESOLUTION, value)
+                .put(SessionSettingsModel.Key.FRAME_RATE, value)
+                .put(SessionSettingsModel.Key.BITRATE, value)
+                .build();
     }
 }

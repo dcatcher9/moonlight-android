@@ -178,8 +178,7 @@ public final class XrSessionSettingsControllerTest {
                 client.get(SessionSettingsModel.Key.BITRATE).pendingValue);
 
         ClientSbsModeSettingsModel clientModel = controller.getClientSbsModel();
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                clientModel.pendingModelId);
+        assertEquals("672 x 384", clientModel.bucket);
 
         ModeStreamQualityModel normal = controller.getModeStreamQualityModel(
                 SessionSettingsStore.PresenterMode.NORMAL);
@@ -219,58 +218,11 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void clientModelPersistsOnlyInClientMode() {
+    public void fixedZipDepthModelUsesItsThreeShort384Buckets() {
         XrSessionSettingsController controller = controller();
-        controller.selectClientSbsModel(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC);
-        ClientSbsModeSettingsModel model = controller.getClientSbsModel();
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                model.selectedChoiceId);
-        assertEquals("Depth Anything", model.pendingModelName);
-        assertEquals("Depth Anything", model.choices.get(0).label);
-        assertEquals("MiDaS", model.choices.get(1).label);
-        assertTrue(controller.commitPending());
-
-        SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                snapshot.preferencesForMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI)
-                        .getString(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                                null));
-        assertFalse(snapshot.sharedPreferences().contains(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
-    }
-
-    @Test
-    public void depthArtS448ChoiceUsesItsResolutionDerivedQualityBucket() {
-        XrSessionSettingsController controller = controller();
-        controller.selectClientSbsModel(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16);
 
         ClientSbsModeSettingsModel model = controller.getClientSbsModel();
-        assertEquals("DepthART S448 (Experimental)", model.pendingModelName);
         assertEquals("672 x 384", model.bucket);
-        assertEquals(4, model.choices.size());
-        assertEquals("DepthART S448 (Experimental)", model.choices.get(2).label);
-        assertEquals("ZipDepth Base (Experimental · short 384)",
-                model.choices.get(3).label);
-
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                SessionSettingsModel.Key.RESOLUTION, "3440x1440");
-        assertEquals("928 x 384", controller.getClientSbsModel().bucket);
-    }
-
-    @Test
-    public void zipDepthBaseChoiceUsesItsThreeShort384Buckets() {
-        XrSessionSettingsController controller = controller();
-        controller.selectClientSbsModel(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16);
-
-        ClientSbsModeSettingsModel model = controller.getClientSbsModel();
-        assertEquals("ZipDepth Base (Experimental · short 384)", model.pendingModelName);
-        assertEquals("672 x 384", model.bucket);
-        assertEquals(4, model.choices.size());
-        assertEquals("ZipDepth Base (Experimental · short 384)",
-                model.choices.get(3).label);
 
         controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3440x1440");
@@ -282,22 +234,7 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void clientModelToggleIncludesZipDepthAndWrapsToDepthAnything() {
-        XrSessionSettingsController controller = controller();
-        controller.selectClientSbsModel(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16);
-
-        controller.toggleClientSbsModel();
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
-                controller.getClientSbsModel().pendingModelId);
-
-        controller.toggleClientSbsModel();
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                controller.getClientSbsModel().pendingModelId);
-    }
-
-    @Test
-    public void unknownStoredClientModelUsesTheRendererFallbackDuringResizeClassification() {
+    public void retiredStoredClientModelCannotChangeTheFixedZipDepthPipeline() {
         assertTrue(store.edit(pc, app)
                 .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
@@ -306,38 +243,14 @@ public final class XrSessionSettingsControllerTest {
                 .commit());
 
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        String rendererModel = PreferenceConfiguration.readPreferences(
-                context, controller.getStartupPreferences()).clientSbsDepthModelId;
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2, rendererModel);
-        assertEquals(rendererModel, controller.getClientSbsModel().pendingModelId);
+        assertEquals("672 x 384", controller.getClientSbsModel().bucket);
 
         controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
         controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
-        // This invokes ClientSbsPipelineContract. An unnormalized stored id used to throw here,
-        // even though the live renderer had already fallen back to MiDaS.
         assertFalse(controller.selectedModeRequiresReconnect());
         assertTrue(controller.selectedModeHasLiveApplicableChange());
-    }
-
-    @Test
-    public void malformedClientModelPreferenceTypeAlsoUsesTheRendererFallback() {
-        assertTrue(globals.edit()
-                .putInt(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING, 42)
-                .commit());
-
-        XrSessionSettingsController controller = withFullEnvelope(controller());
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                controller.getClientSbsModel().pendingModelId);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                PreferenceConfiguration.readPreferences(
-                        context, globals).clientSbsDepthModelId);
-
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                SessionSettingsModel.Key.RESOLUTION, "3840x2160");
-        assertFalse(controller.selectedModeRequiresReconnect());
     }
 
     @Test
@@ -705,14 +618,11 @@ public final class XrSessionSettingsControllerTest {
 
         assertThrows(IllegalArgumentException.class, () -> controller.selectSharedSetting(
                 SessionSettingsModel.Key.CODEC, "vp9"));
-        assertThrows(IllegalArgumentException.class, () ->
-                controller.selectClientSbsModel("unknown-model"));
 
         assertFalse(controller.hasPendingChanges());
         assertEquals("auto", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                controller.getClientSbsModel().selectedChoiceId);
+        assertEquals("672 x 384", controller.getClientSbsModel().bucket);
     }
 
     @Test
@@ -1046,7 +956,7 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void startupUsesLastModeQualityButStillLoadsClientModelAndBucket() {
+    public void startupUsesLastModeQualityAndFixedZipDepthBucket() {
         assertTrue(store.edit(pc, app)
                 .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
@@ -1056,10 +966,6 @@ public final class XrSessionSettingsControllerTest {
                 .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3440x1440", "1920x1080")
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
                 .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI)
                 .commit());
 
@@ -1071,10 +977,46 @@ public final class XrSessionSettingsControllerTest {
                 PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
         assertEquals(40000, startup.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING, 0));
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                startup.getString(
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING, null));
-        assertEquals("384 x 160", controller.getClientSbsModel().bucket);
+        assertFalse(startup.contains(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
+        assertEquals("928 x 384", controller.getClientSbsModel().bucket);
+    }
+
+    @Test
+    public void clientSbsSyntheticDefaultsDriveTheFirstStartupConnection() {
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "3840x2160")
+                .putString(PreferenceConfiguration.FPS_PREF_STRING, "90")
+                .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 200000)
+                .commit());
+        assertTrue(store.edit(pc, app)
+                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI)
+                .commit());
+
+        XrSessionSettingsController controller = controller();
+        StreamQualityTuple live = controller.getLiveStreamQuality();
+        SharedPreferences startup = controller.getStartupPreferences();
+
+        assertEquals(new StreamQualityTuple("1920x1080", "30", 200000), live);
+        assertEquals(live.resolution, startup.getString(
+                PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
+        assertEquals(live.frameRate, startup.getString(
+                PreferenceConfiguration.FPS_PREF_STRING, null));
+        assertEquals(live.bitrateKbps, startup.getInt(
+                PreferenceConfiguration.BITRATE_PREF_STRING, 0));
+
+        PreferenceConfiguration parsed = PreferenceConfiguration.readPreferences(
+                context, startup);
+        assertEquals(1920, parsed.width);
+        assertEquals(1080, parsed.height);
+        assertEquals(30.0f, parsed.fps, 0.0f);
+
+        SessionSettingsStore.Snapshot unchanged = store.snapshot(pc, globals);
+        assertFalse(unchanged.isModeOverridden(
+                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PreferenceConfiguration.RESOLUTION_PREF_STRING));
+        assertFalse(unchanged.isModeOverridden(
+                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PreferenceConfiguration.FPS_PREF_STRING));
     }
 
     @Test
@@ -1177,10 +1119,6 @@ public final class XrSessionSettingsControllerTest {
                 .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3840x2160", "1920x1080")
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
                 .setSharedValue(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING,
                         "forceh265", "auto")
                 .commit());
@@ -1195,8 +1133,6 @@ public final class XrSessionSettingsControllerTest {
                 .get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("HEVC", controller.getSharedSessionModel()
                 .get(SessionSettingsModel.Key.CODEC).pendingValue);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                controller.getClientSbsModel().pendingModelId);
         assertTrue(controller.commitPending());
 
         SessionSettingsStore.Snapshot afterModeReset = store.snapshot(pc, globals);
@@ -1218,19 +1154,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(afterSharedReset.isModeOverridden(
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
-        assertEquals(null,
-                afterSharedReset.preferencesForMode(
-                        SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).getString(
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING, null));
-
-        controller = controller();
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        assertTrue(controller.commitPending());
-        SessionSettingsStore.Snapshot afterClientReset = store.snapshot(pc, globals);
-        assertFalse(afterClientReset.isModeOverridden(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
-        assertTrue(afterClientReset.isModeOverridden(
+        assertTrue(afterSharedReset.isModeOverridden(
                 SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
     }
@@ -1329,7 +1253,7 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void useSessionModeDefaultsRestoresSessionClientModelAndRawPacking() {
+    public void useSessionModeDefaultsIgnoresRetiredClientModelAndRestoresRawPacking() {
         assertTrue(store.edit(pc, app)
                 .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
@@ -1340,15 +1264,12 @@ public final class XrSessionSettingsControllerTest {
                         RawSbsModeSettingsModel.HALF_ID, RawSbsModeSettingsModel.FULL_ID)
                 .commit());
         XrSessionSettingsController controller = controller();
-        controller.selectClientSbsModel(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2);
         controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.FULL_ID);
 
         controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
         controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
 
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                controller.getClientSbsModel().pendingModelId);
+        assertEquals("672 x 384", controller.getClientSbsModel().bucket);
         assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
                 controller.getRawSbsModel().pendingResolution);
         assertFalse(controller.hasPendingChanges());
@@ -1513,36 +1434,24 @@ public final class XrSessionSettingsControllerTest {
 
     @Test
     public void clientSbsCrossBucketResolutionDeltaRequiresReconnect() {
-        // 1920x1080 (16:9) -> 2560x1080 (21:9) re-stages a different depth model and regenerates
+        // 1920x1080 (16:9) -> 2560x1080 (21:9) selects a different ZipDepth graph and regenerates
         // the reprojection shader source, so it cannot be applied live.
         assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1440}, new int[] {1920, 1080}));
         assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1080}, new int[] {1920, 1080}));
     }
 
     @Test
-    public void clientSbsResizeUsesTheSelectedModelFamilyContract() {
+    public void clientSbsResizeUsesTheFixedZipDepthContract() {
         int[] aspect205 = {2050, 1000};
         int[] aspect237 = {2370, 1000};
 
-        // Both aspects select DA-V2's 350x154 graph and its 14-probe shader.
-        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                aspect205, aspect237));
-        // MiDaS crosses from 352x192 to 384x160 between the same two aspects.
-        assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                aspect205, aspect237));
         // ZipDepth's 896x384 bucket spans both and owns its shader probe interval.
         assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
                 aspect205, aspect237));
         // Its first boundary sits between 2.01 and 2.03.
         assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
                 new int[] {2010, 1000}, new int[] {2030, 1000}));
     }
 
@@ -1932,35 +1841,28 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void clientSbsPortraitContractReconnectsOnOrientationButNotSameAspectResize() {
         assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {1920, 1080}, new int[] {1080, 1920}));
         assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {1080, 1920}, new int[] {1440, 2560}));
     }
 
     @Test
-    public void clientSbsStaysLiveWithinTheUltrawideFamily() {
-        // 2560x1080, 3440x1440 and 5120x2160 all select ASPECT_21_9.
+    public void clientSbsStaysLiveWithinEachZipDepthUltrawideBucket() {
+        // 2560x1080 and 5120x2160 select the short-384 21:9 graph.
         assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                 new int[] {2560, 1080}, new int[] {5120, 2160}));
+        // 3440x1440 and 3840x1600 select the widest short-384 graph.
         assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                new int[] {3440, 1440}, new int[] {5120, 2160}));
-        assertTrue(XrSessionSettingsController.sameClientSbsPipelineContract(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                new int[] {2560, 1080}, new int[] {3440, 1440}));
+                new int[] {3440, 1440}, new int[] {3840, 1600}));
     }
 
     @Test
-    public void clientSbsCrossesABucketBetweenTheTwoFamilies() {
+    public void clientSbsCrossesABucketBetweenWidescreenAndUltrawide() {
         for (int[] widescreen : new int[][] {{1920, 1080}, {2560, 1440}, {3840, 2160}}) {
-            for (int[] ultrawide : new int[][] {{2560, 1080}, {3440, 1440}, {5120, 2160}}) {
+            for (int[] ultrawide : new int[][] {{2560, 1080}, {5120, 2160}}) {
                 assertFalse(widescreen[0] + "x" + widescreen[1] + " vs "
                                 + ultrawide[0] + "x" + ultrawide[1],
                         XrSessionSettingsController.sameClientSbsPipelineContract(
-                                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                                 widescreen, ultrawide));
             }
         }

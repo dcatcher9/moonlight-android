@@ -10,6 +10,8 @@ import android.content.SharedPreferences;
 import androidx.preference.PreferenceManager;
 import androidx.test.core.app.ApplicationProvider;
 
+import com.limelight.preferences.session.SessionSettingsStore;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -35,6 +37,9 @@ public final class LegacyProfileMigrationTest {
         context = ApplicationProvider.getApplicationContext();
         preferences = PreferenceManager.getDefaultSharedPreferences(context);
         assertTrue(preferences.edit().clear().commit());
+        assertTrue(context.getSharedPreferences(
+                SessionSettingsStore.PREFERENCES_NAME, Context.MODE_PRIVATE)
+                .edit().clear().commit());
         File directory = new File(context.getFilesDir(), "profiles");
         assertTrue(directory.exists() || directory.mkdirs());
         profileFile = new File(directory, "profiles.json");
@@ -51,6 +56,7 @@ public final class LegacyProfileMigrationTest {
                     + "{\"uuid\":\"active\",\"options\":{"
                     + "\"list_resolution\":\"2560x1440\","
                     + "\"list_fps\":\"90\",\"checkbox_enable_hdr\":true,"
+                    + "\"list_client_sbs_depth_model\":\"midas-v2-float\","
                     + "\"checkbox_full_range\":true,"
                     + "\"checkbox_show_onscreen_controls\":true}}]}");
         }
@@ -61,6 +67,7 @@ public final class LegacyProfileMigrationTest {
                 .commit());
 
         LegacyProfileMigration.migrateActiveProfile(context);
+        LegacyProfileMigration.retireClientSbsModelSelection(context);
 
         assertEquals("2560x1440", preferences.getString(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
@@ -77,13 +84,76 @@ public final class LegacyProfileMigrationTest {
         assertFalse(preferences.contains("checkbox_show_onscreen_controls"));
         assertFalse(preferences.contains("checkbox_use_virtual_display"));
         assertFalse(preferences.contains("checkbox_enable_perf_overlay"));
+        assertFalse(preferences.contains(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
+        assertTrue(preferences.getBoolean(
+                LegacyProfileMigration.ZIPDEPTH_ONLY_MIGRATION_COMPLETE_KEY, false));
 
         assertTrue(preferences.edit()
                 .putString(PreferenceConfiguration.FPS_PREF_STRING, "120")
                 .commit());
         LegacyProfileMigration.migrateActiveProfile(context);
+        LegacyProfileMigration.retireClientSbsModelSelection(context);
         assertEquals("120", preferences.getString(
                 PreferenceConfiguration.FPS_PREF_STRING, null));
+    }
+
+    @Test
+    public void zipDepthOnlyCleanupRemovesGlobalAndSessionModelSelectorsOnUpdateInstall() {
+        String modelKey = PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING;
+        assertTrue(preferences.edit()
+                // Simulate an update install that already completed every older migration.
+                .putBoolean(LegacyProfileMigration.MIGRATION_COMPLETE_KEY, true)
+                .putBoolean(LegacyProfileMigration.RETIRED_SETTINGS_CLEANED_KEY, true)
+                .putString(modelKey,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                .commit());
+
+        SessionSettingsStore store = new SessionSettingsStore(context);
+        SessionSettingsStore.PcIdentity firstPc = new SessionSettingsStore.PcIdentity(
+                "first-pc", "192.0.2.1");
+        SessionSettingsStore.PcIdentity secondPc = new SessionSettingsStore.PcIdentity(
+                "second-pc", "192.0.2.2");
+        SessionSettingsStore.AppIdentity firstApp = new SessionSettingsStore.AppIdentity(
+                "1", "first-app", "First");
+        SessionSettingsStore.AppIdentity secondApp = new SessionSettingsStore.AppIdentity(
+                "2", "second-app", "Second");
+        assertTrue(store.startNewSession(firstPc, firstApp, "host-1", 1L));
+        assertTrue(store.startNewSession(secondPc, secondApp, "host-2", 2L));
+        assertTrue(store.edit(firstPc, firstApp)
+                .setSharedValue(modelKey,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI, modelKey,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                        PreferenceConfiguration.FPS_PREF_STRING, "30", "60")
+                .commit());
+        assertTrue(store.edit(secondPc, secondApp)
+                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI, modelKey,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                .commit());
+
+        LegacyProfileMigration.retireClientSbsModelSelection(context);
+
+        assertFalse(preferences.contains(modelKey));
+        for (SessionSettingsStore.PcIdentity pc :
+                new SessionSettingsStore.PcIdentity[] {firstPc, secondPc}) {
+            SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
+            assertFalse(record.getSharedOverrides().containsKey(modelKey));
+            assertFalse(record.getModeOverrides(
+                    SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).containsKey(modelKey));
+        }
+        assertEquals("30", store.getCurrentSession(firstPc).getModeOverrides(
+                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).get(
+                PreferenceConfiguration.FPS_PREF_STRING));
+
+        // The cleanup is idempotent and must not erase unrelated session state on later starts.
+        LegacyProfileMigration.retireClientSbsModelSelection(context);
+        assertEquals("host-1", store.getCurrentSession(firstPc)
+                .getResumeMetadata().getHostSessionId());
     }
 
     @Test

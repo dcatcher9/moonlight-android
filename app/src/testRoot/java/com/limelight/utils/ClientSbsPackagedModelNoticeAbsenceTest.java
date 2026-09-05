@@ -24,6 +24,7 @@ public class ClientSbsPackagedModelNoticeAbsenceTest {
                 "third_party/client_sbs_models/NOTICE.txt",
                 "third_party/client_sbs_models/LICENSE-APACHE-2.0.txt",
                 "third_party/client_sbs_models/LICENSE-MIDAS-MIT.txt",
+                "third_party/client_sbs_models/LICENSE-ZIPDEPTH-MIT.txt",
         };
 
         for (String assetName : noticeAssets) {

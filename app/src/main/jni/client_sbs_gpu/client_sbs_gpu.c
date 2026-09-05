@@ -38,6 +38,26 @@
 #define CLIENT_SBS_GPU_ASYNC_PROBE_PROPERTY "debug.artemis.sbs_gpu_async_probe"
 #define CLIENT_SBS_GPU_PRIORITY_LOW 1
 #define CLIENT_SBS_GPU_PRIORITY_NORMAL 2
+#define CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN 0
+#define CLIENT_SBS_GPU_RUN_DISPOSITION_INFER 1
+#define CLIENT_SBS_GPU_RUN_DISPOSITION_REUSE 2
+#define CLIENT_SBS_NEAR_IDENTICAL_RECORD_BYTES 32
+#define CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE 0u
+#define CLIENT_SBS_NEAR_IDENTICAL_DECISION_INFER 1u
+#define CLIENT_SBS_NEAR_IDENTICAL_DECISION_COOKIE 0xD1EC15A5u
+#define CLIENT_SBS_NEAR_IDENTICAL_TOKEN_LOW_COOKIE 0xA3756C91u
+#define CLIENT_SBS_NEAR_IDENTICAL_TOKEN_HIGH_COOKIE 0x5C8A936Eu
+#define CLIENT_SBS_NEAR_IDENTICAL_PROPOSAL_MAGIC 0x504F5250u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_REUSE 0u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE 1u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_INVALID 2u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_FRAME_GAP 3u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_AGE 4u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_MEDIUM 5u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_STRONG 6u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_LOCAL 7u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_EVIDENCE_INVALID 8u
+#define CLIENT_SBS_NEAR_IDENTICAL_REASON_RECORD_INVALID 9u
 
 typedef struct ClientSbsGpuEngine {
     EGLDisplay display;
@@ -62,7 +82,21 @@ typedef struct ClientSbsGpuEngine {
     size_t input_pixel_stride;
     size_t output_pixel_stride;
     uint64_t last_litert_run_wall_ns[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    uint64_t last_near_identical_decision_read_wall_ns[
+            CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    uint32_t last_near_identical_decision_reason[
+            CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    int last_run_disposition[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
     bool output_requires_consumed_fence[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    // The detector owns one immutable, shared two-record SSBO for this engine lifetime. Validate
+    // its GL object and allocation once, then cache each slot's immutable byte range so the hot
+    // path performs only the unavoidable 32-byte map/copy/unmap.
+    GLuint near_identical_decision_buffer;
+    GLint near_identical_decision_buffer_size;
+    GLint near_identical_decision_byte_offsets[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    bool near_identical_decision_ranges_validated[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    bool near_identical_record_reads_disabled;
+    bool near_identical_auth_error_logged;
 
     // nativeDestroy() may time out while the renderer's final consumer fence is still pending.
     // Keep every transferred fence and the engine itself reachable so a later inference worker
@@ -185,8 +219,22 @@ static void release_litert_resources(ClientSbsGpuEngine* engine) {
     memset(engine->output_buffers, 0, sizeof(engine->output_buffers));
     memset(engine->last_litert_run_wall_ns, 0,
            sizeof(engine->last_litert_run_wall_ns));
+    memset(engine->last_near_identical_decision_read_wall_ns, 0,
+           sizeof(engine->last_near_identical_decision_read_wall_ns));
+    memset(engine->last_near_identical_decision_reason, 0,
+           sizeof(engine->last_near_identical_decision_reason));
+    memset(engine->last_run_disposition, 0,
+           sizeof(engine->last_run_disposition));
     memset(engine->output_requires_consumed_fence, 0,
            sizeof(engine->output_requires_consumed_fence));
+    engine->near_identical_decision_buffer = 0;
+    engine->near_identical_decision_buffer_size = 0;
+    memset(engine->near_identical_decision_byte_offsets, 0,
+           sizeof(engine->near_identical_decision_byte_offsets));
+    memset(engine->near_identical_decision_ranges_validated, 0,
+           sizeof(engine->near_identical_decision_ranges_validated));
+    engine->near_identical_record_reads_disabled = false;
+    engine->near_identical_auth_error_logged = false;
     if (engine->native_library_dir != NULL) {
         free(engine->native_library_dir);
         engine->native_library_dir = NULL;
@@ -325,8 +373,8 @@ static bool add_gpu_options(ClientSbsGpuEngine* engine, bool allow_debug_overrid
     // the small packed<->PHWC4 conversion on the GPU and executes the delegated graph at the
     // precision selected by the immutable model policy.
     // Models use automatic storage so ML Drift can select the fastest Adreno layout. Precision is
-    // an immutable, model-validated policy: the aligned DA-V2 and MiDaS graphs use FP16, while a
-    // diagnostic or future model can still explicitly require FP32.
+    // an immutable, model-validated policy: production ZipDepth graphs use FP16, while a diagnostic
+    // or future benchmark graph can still explicitly require FP32.
     // Do not set hint_fully_delegated_to_single_delegate here. It is an advanced allocation-
     // elision hint, not a delegation requirement; Artemis verifies full acceleration after
     // compilation instead. The Galaxy XR path must retain every intermediate allocation.
@@ -1438,6 +1486,166 @@ static jlong fail_native_run(ClientSbsGpuEngine* engine) {
     return 0;
 }
 
+static bool disable_near_identical_record_reads(ClientSbsGpuEngine* engine,
+                                                const char* reason) {
+    if (engine != NULL && !engine->near_identical_record_reads_disabled) {
+        engine->near_identical_record_reads_disabled = true;
+        LOGW("Near-identical decision reads disabled (%s); forcing LiteRT inference", reason);
+    }
+    return false;
+}
+
+static void log_near_identical_auth_error_once(ClientSbsGpuEngine* engine) {
+    if (engine == NULL || engine->near_identical_auth_error_logged) {
+        return;
+    }
+    engine->near_identical_auth_error_logged = true;
+    LOGW("Near-identical decision authentication failed; forcing LiteRT inference for this frame");
+}
+
+/**
+ * Validates the renderer-owned decision SSBO once per immutable engine lifetime. Each tensor slot
+ * also keeps its first accepted byte offset, so a caller cannot silently retarget a later map.
+ * Object, allocation, or range failures cannot recover without rebuilding the renderer/engine and
+ * permanently disable decision reads here to avoid repeating expensive GL validation calls.
+ */
+static bool validate_near_identical_record_range(ClientSbsGpuEngine* engine,
+                                                  int slot_index,
+                                                  GLuint decision_buffer,
+                                                  GLint decision_byte_offset) {
+    if (engine->near_identical_record_reads_disabled) {
+        return false;
+    }
+    if (decision_buffer == 0 || decision_byte_offset < 0
+            || (decision_byte_offset & (GLint) (sizeof(uint32_t) - 1u)) != 0) {
+        return disable_near_identical_record_reads(engine, "invalid JNI buffer/range");
+    }
+
+    if (engine->near_identical_decision_buffer == 0) {
+        // This inference context is dedicated to the engine. Clear stale initialization errors so
+        // the one-time inspection result describes only this shared decision object.
+        for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
+        }
+        if (glIsBuffer(decision_buffer) != GL_TRUE) {
+            return disable_near_identical_record_reads(
+                    engine, "buffer name is not shared");
+        }
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, decision_buffer);
+        GLint buffer_size = 0;
+        glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &buffer_size);
+        GLenum inspect_error = glGetError();
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        GLenum inspect_unbind_error = glGetError();
+        if (inspect_error != GL_NO_ERROR || inspect_unbind_error != GL_NO_ERROR
+                || buffer_size < CLIENT_SBS_NEAR_IDENTICAL_RECORD_BYTES) {
+            return disable_near_identical_record_reads(
+                    engine, "decision buffer allocation is invalid");
+        }
+        engine->near_identical_decision_buffer = decision_buffer;
+        engine->near_identical_decision_buffer_size = buffer_size;
+    } else if (decision_buffer != engine->near_identical_decision_buffer) {
+        return disable_near_identical_record_reads(
+                engine, "decision buffer changed after validation");
+    }
+
+    const int64_t required_bytes = (int64_t) decision_byte_offset
+            + CLIENT_SBS_NEAR_IDENTICAL_RECORD_BYTES;
+    if (required_bytes > engine->near_identical_decision_buffer_size) {
+        return disable_near_identical_record_reads(engine, "record range is invalid");
+    }
+    if (engine->near_identical_decision_ranges_validated[slot_index]) {
+        if (decision_byte_offset
+                != engine->near_identical_decision_byte_offsets[slot_index]) {
+            return disable_near_identical_record_reads(
+                    engine, "record range changed after validation");
+        }
+    } else {
+        engine->near_identical_decision_byte_offsets[slot_index] = decision_byte_offset;
+        engine->near_identical_decision_ranges_validated[slot_index] = true;
+    }
+    return true;
+}
+
+/**
+ * Reads only the authenticated 32-byte proposal after the renderer input fence. Any malformed,
+ * unavailable, or explicitly infer record fails open to the ordinary LiteRT path.
+ */
+static bool near_identical_record_requests_reuse(ClientSbsGpuEngine* engine,
+                                                  int slot_index,
+                                                  GLuint decision_buffer,
+                                                  GLint decision_byte_offset,
+                                                  uint64_t expected_token) {
+    if (expected_token == 0) {
+        return disable_near_identical_record_reads(engine, "invalid JNI token");
+    }
+    if (!validate_near_identical_record_range(
+            engine, slot_index, decision_buffer, decision_byte_offset)) {
+        return false;
+    }
+
+    // Attribute every checked error below to this map transaction, rather than to a preceding
+    // LiteRT/interop operation in the dedicated worker context.
+    for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, decision_buffer);
+    void* mapped = glMapBufferRange(GL_SHADER_STORAGE_BUFFER,
+                                    decision_byte_offset,
+                                    CLIENT_SBS_NEAR_IDENTICAL_RECORD_BYTES,
+                                    GL_MAP_READ_BIT);
+    if (mapped == NULL) {
+        GLenum map_error = glGetError();
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        char reason[96];
+        snprintf(reason, sizeof(reason), "map failed: 0x%x", map_error);
+        return disable_near_identical_record_reads(engine, reason);
+    }
+
+    uint32_t record[CLIENT_SBS_NEAR_IDENTICAL_RECORD_BYTES / sizeof(uint32_t)];
+    memcpy(record, mapped, sizeof(record));
+    GLboolean unmapped = glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+    GLenum unmap_error = glGetError();
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    GLenum unbind_error = glGetError();
+    if (unmapped != GL_TRUE || unmap_error != GL_NO_ERROR
+            || unbind_error != GL_NO_ERROR) {
+        char reason[96];
+        snprintf(reason, sizeof(reason),
+                 "unmap/unbind failed: result=%u unmap=0x%x unbind=0x%x",
+                 (unsigned int) unmapped, unmap_error, unbind_error);
+        return disable_near_identical_record_reads(engine, reason);
+    }
+
+    const uint32_t expected_low = (uint32_t) expected_token;
+    const uint32_t expected_high = (uint32_t) (expected_token >> 32u);
+    const uint32_t decision = record[0];
+    const uint32_t reason = record[7];
+    const bool reason_matches_decision =
+            (decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE
+                    && reason == CLIENT_SBS_NEAR_IDENTICAL_REASON_REUSE)
+            || (decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_INFER
+                    && reason >= CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE
+                    && reason <= CLIENT_SBS_NEAR_IDENTICAL_REASON_EVIDENCE_INVALID);
+    const bool valid =
+            (decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE
+                    || decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_INFER)
+            && record[1] == (decision ^ CLIENT_SBS_NEAR_IDENTICAL_DECISION_COOKIE)
+            && record[2] == expected_low
+            && record[3] == expected_high
+            && record[4] == (expected_low ^ CLIENT_SBS_NEAR_IDENTICAL_TOKEN_LOW_COOKIE)
+            && record[5] == (expected_high ^ CLIENT_SBS_NEAR_IDENTICAL_TOKEN_HIGH_COOKIE)
+            && record[6] == CLIENT_SBS_NEAR_IDENTICAL_PROPOSAL_MAGIC
+            && reason_matches_decision;
+    if (!valid) {
+        // A malformed record can be a one-frame synchronization or publication failure. It is
+        // deliberately retryable: only the current frame fails open to inference.
+        log_near_identical_auth_error_once(engine);
+        return false;
+    }
+    engine->last_near_identical_decision_reason[slot_index] = reason;
+    return decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeStartDiagnosticProfiler(
         JNIEnv* env, jclass clazz, jlong handle) {
@@ -1590,7 +1798,11 @@ JNIEXPORT jlong JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         JNIEnv* env, jclass clazz, jlong handle, jint slot_index,
         jlong input_ready_fence,
-        jlong previous_output_consumed_fence) {
+        jlong previous_output_consumed_fence,
+        jboolean near_identical_candidate,
+        jint decision_buffer_id,
+        jint decision_byte_offset,
+        jlong decision_token) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
@@ -1613,33 +1825,102 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
     const bool requires_consumed_fence =
             engine->output_requires_consumed_fence[slot_index];
     const bool has_consumed_fence = previous_output_consumed_fence != 0;
-    // Always consume both ownership fences. Short-circuiting after the first failure would leak
-    // the second shared GLsync and leave its producer believing ownership had transferred.
-    bool input_fence_ok = false;
-    bool output_fence_ok = false;
-    bool fences_distinct_and_valid = consume_run_fences(
-            engine, input_ready_fence, previous_output_consumed_fence,
-            "input", "output-consumed", &input_fence_ok, &output_fence_ok);
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     engine->last_litert_run_wall_ns[slot_index] = 0;
-    if (!fences_distinct_and_valid || !input_fence_ok || !output_fence_ok) {
+    engine->last_near_identical_decision_read_wall_ns[slot_index] = 0;
+    engine->last_near_identical_decision_reason[slot_index] =
+            near_identical_candidate == JNI_TRUE
+                    ? CLIENT_SBS_NEAR_IDENTICAL_REASON_RECORD_INVALID
+                    : CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE;
+    engine->last_run_disposition[slot_index] =
+            CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN;
+
+    const bool fences_alias = input_ready_fence != 0
+            && input_ready_fence == previous_output_consumed_fence;
+    const bool output_fence_contract_matches =
+            requires_consumed_fence == has_consumed_fence;
+    if (input_ready_fence == 0 || fences_alias
+            || !output_fence_contract_matches) {
+        // Contract failures still transfer both handles to native. Consume distinct handles once,
+        // and let consume_run_fences() retire an alias exactly once, before rejecting the run.
+        bool input_fence_ok = false;
+        bool output_fence_ok = false;
+        bool fences_distinct_and_valid = consume_run_fences(
+                engine, input_ready_fence, previous_output_consumed_fence,
+                "invalid-contract-input", "invalid-contract-output-consumed",
+                &input_fence_ok, &output_fence_ok);
+        if (!fences_distinct_and_valid || !input_fence_ok || !output_fence_ok) {
+            return fail_native_run(engine);
+        }
+        // An alias is always rejected inside consume_run_fences(), so only the two non-alias
+        // contract failures can reach these diagnostics.
+        if (input_ready_fence == 0) {
+            set_error(engine, "Input-ready fence is required for shared GL input slot %d",
+                      slot_index);
+        } else {
+            set_error(engine,
+                      "Output-consumed fence contract mismatch for slot %d: expected=%s got=%s",
+                      slot_index, requires_consumed_fence ? "yes" : "no",
+                      has_consumed_fence ? "yes" : "no");
+        }
         return fail_native_run(engine);
     }
-    if (input_ready_fence == 0) {
-        set_error(engine, "Input-ready fence is required for shared GL input slot %d",
-                  slot_index);
+
+    // Consume only the exact input dependency before resolving the proposal. Waiting on the
+    // unrelated previous-output consumer first can make the tiny CPU map inherit renderer work
+    // that has no bearing on the current input/decision transaction.
+    bool input_ownership_consumed = false;
+    bool input_fence_ok = consume_fence(
+            engine, input_ready_fence, "input", &input_ownership_consumed);
+    if (!input_ownership_consumed) {
+        retain_failed_run_fence(engine, input_ready_fence);
+    }
+
+    bool reuse = false;
+    if (input_fence_ok && near_identical_candidate == JNI_TRUE) {
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+        const uint64_t decision_read_started_ns = monotonic_time_ns();
+        reuse = near_identical_record_requests_reuse(
+                engine, slot_index, (GLuint) decision_buffer_id,
+                (GLint) decision_byte_offset, (uint64_t) decision_token);
+        engine->last_near_identical_decision_read_wall_ns[slot_index] = elapsed_ns(
+                decision_read_started_ns, monotonic_time_ns());
+    }
+
+    // The output handle also transferred at entry, so consume or retain it even when the input
+    // wait failed. No reuse fence or LiteRT work may be submitted until this dependency succeeds.
+    bool output_ownership_consumed = false;
+    bool output_fence_ok = consume_fence(
+            engine, previous_output_consumed_fence, "output-consumed",
+            &output_ownership_consumed);
+    if (!output_ownership_consumed) {
+        retain_failed_run_fence(engine, previous_output_consumed_fence);
+    }
+    if (!input_fence_ok || !output_fence_ok) {
         return fail_native_run(engine);
     }
-    if (requires_consumed_fence != has_consumed_fence) {
-        set_error(engine,
-                  "Output-consumed fence contract mismatch for slot %d: expected=%s got=%s",
-                  slot_index, requires_consumed_fence ? "yes" : "no",
-                  has_consumed_fence ? "yes" : "no");
-        return fail_native_run(engine);
-    }
+
+    // Preserve the original visibility point after both dependencies. Candidate frames use the
+    // earlier barrier solely so their authenticated decision can be read before this output wait.
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+
     // A successfully consumed fence makes the old output storage reusable. If this invocation
     // fails, no new renderer-owned output exists for this slot.
     engine->output_requires_consumed_fence[slot_index] = false;
+    if (reuse) {
+        // The worker has synchronously consumed the tiny proposal after the input dependency. A
+        // fence keeps this no-output transaction inside the same per-slot ownership protocol as
+        // inference, so stale-generation and teardown paths remain identical.
+        GLsync reuse_ready = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        if (reuse_ready == NULL) {
+            set_error(engine, "glFenceSync(reuse) failed: 0x%x", glGetError());
+            return fail_native_run(engine);
+        }
+        glFlush();
+        engine->last_run_disposition[slot_index] =
+                CLIENT_SBS_GPU_RUN_DISPOSITION_REUSE;
+        engine->output_requires_consumed_fence[slot_index] = true;
+        return (jlong) (uintptr_t) reuse_ready;
+    }
 
     LiteRtTensorBuffer inputs[] = {engine->input_tensor_buffers[slot_index]};
     LiteRtTensorBuffer outputs[] = {engine->output_tensor_buffers[slot_index]};
@@ -1707,6 +1988,8 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         return fail_native_run(engine);
     }
     glFlush();
+    engine->last_run_disposition[slot_index] =
+            CLIENT_SBS_GPU_RUN_DISPOSITION_INFER;
     engine->output_requires_consumed_fence[slot_index] = true;
     return (jlong) (uintptr_t) output_ready;
 }
@@ -1791,6 +2074,38 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastLiteRtRunWallN
     ClientSbsGpuEngine* engine = from_handle(handle);
     return engine == NULL || !valid_slot(slot_index)
             ? 0 : (jlong) engine->last_litert_run_wall_ns[slot_index];
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastNearIdenticalDecisionReadWallNanos(
+        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+    (void) env;
+    (void) clazz;
+    ClientSbsGpuEngine* engine = from_handle(handle);
+    return engine == NULL || !valid_slot(slot_index)
+            ? 0 : (jlong) engine->last_near_identical_decision_read_wall_ns[slot_index];
+}
+
+JNIEXPORT jint JNICALL
+Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastNearIdenticalDecisionReason(
+        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+    (void) env;
+    (void) clazz;
+    ClientSbsGpuEngine* engine = from_handle(handle);
+    return engine == NULL || !valid_slot(slot_index)
+            ? CLIENT_SBS_NEAR_IDENTICAL_REASON_RECORD_INVALID
+            : (jint) engine->last_near_identical_decision_reason[slot_index];
+}
+
+JNIEXPORT jint JNICALL
+Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastRunDisposition(
+        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+    (void) env;
+    (void) clazz;
+    ClientSbsGpuEngine* engine = from_handle(handle);
+    return engine == NULL || !valid_slot(slot_index)
+            ? CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN
+            : (jint) engine->last_run_disposition[slot_index];
 }
 
 JNIEXPORT jint JNICALL

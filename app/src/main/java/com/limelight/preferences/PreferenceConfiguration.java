@@ -87,6 +87,7 @@ public class PreferenceConfiguration {
     public static final String AUDIO_BOOST_PREF_STRING = "list_audio_boost_db";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     public static final String VIDEO_FORMAT_PREF_STRING = "video_format";
+    /** Retired selector key retained only so the one-time migration can remove old values. */
     public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
             "list_client_sbs_depth_model";
     public static final String RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING =
@@ -185,42 +186,25 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     static final String DEFAULT_VIDEO_FORMAT = "forceh265";
+    /** Historical model ids retained for offline evaluation; production always uses ZipDepth. */
     public static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC =
             "depth-anything-v2-small-static-performance";
-    private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY =
-            "depth-anything-v2-small-static-buckets";
-    private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC =
-            "depth-anything-v2-small-dynamic";
-    private static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350 =
-            "depth-anything-v2-small-static-350";
     public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
     public static final String CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16 =
             "depthart-s448-fp16";
     public static final String CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16 =
             "zipdepth-base-fp16";
-    private static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
-            CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
+    public static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
+            CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16;
 
     /**
-     * Returns the renderer-supported model family for a stored Client SBS model id.
+     * Compatibility boundary for retired Client SBS model preferences.
      *
-     * <p>Keep every settings/controller caller on this same fallback path: legacy DA-V2 ids map
-     * to the current DA-V2 family, while null, corrupt, or future/unknown ids fail closed to the
-     * renderer default.</p>
+     * <p>ZipDepth Base is the sole production model. Historical, corrupt, and future values all
+     * resolve to it; the one-time startup migration removes the retired persisted selector.</p>
      */
     public static String normalizeClientSbsDepthModelId(String modelId) {
-        if (CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY.equals(modelId)
-                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(modelId)
-                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350.equals(modelId)) {
-            return CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC;
-        }
-        if (CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC.equals(modelId)
-                || CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(modelId)
-                || CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(modelId)
-                || CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(modelId)) {
-            return modelId;
-        }
-        return DEFAULT_CLIENT_SBS_DEPTH_MODEL;
+        return CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16;
     }
 
     public static int normalizeAudioBoostDb(String storedValue) {
@@ -399,8 +383,6 @@ public class PreferenceConfiguration {
     public String customRefreshRate;
     public int meteredBitrate;
     public FormatOption videoFormat;
-    /** Experimental categorical A/B choice, captured once when a stream starts. */
-    public String clientSbsDepthModelId;
     /** Raw SBS packing choice, captured once when the stream starts. */
     public RawSbsPerEyeResolution rawSbsPerEyeResolution =
             RawSbsPerEyeResolution.FULL;
@@ -955,26 +937,6 @@ public class PreferenceConfiguration {
         config.videoScaleMode = getVideoScaleMode(prefs);
 
         config.videoFormat = getVideoFormatValue(prefs);
-        String storedClientSbsDepthModel;
-        try {
-            storedClientSbsDepthModel = prefs.getString(
-                    CLIENT_SBS_DEPTH_MODEL_PREF_STRING, DEFAULT_CLIENT_SBS_DEPTH_MODEL);
-        } catch (ClassCastException invalidStoredType) {
-            storedClientSbsDepthModel = null;
-        }
-        String clientSbsDepthModel =
-                normalizeClientSbsDepthModelId(storedClientSbsDepthModel);
-        if (!clientSbsDepthModel.equals(storedClientSbsDepthModel)
-                && (CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_QUALITY.equals(
-                        storedClientSbsDepthModel)
-                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_DYNAMIC.equals(
-                        storedClientSbsDepthModel)
-                || CLIENT_SBS_DEPTH_MODEL_DA_V2_LEGACY_STATIC_350.equals(
-                        storedClientSbsDepthModel))) {
-            prefs.edit().putString(CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                    clientSbsDepthModel).apply();
-        }
-        config.clientSbsDepthModelId = clientSbsDepthModel;
         String rawSbsPerEyeResolution;
         try {
             rawSbsPerEyeResolution = prefs.getString(

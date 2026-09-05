@@ -47,6 +47,26 @@ public class ClientSbsGpuSceneCutDetectorTest {
     }
 
     @Test
+    public void nearIdenticalDecisionRecordsUseTwoAlignedThirtyTwoByteSlots() {
+        assertEquals(32, ClientSbsGpuSceneCutDetector.NEAR_IDENTICAL_DECISION_RECORD_BYTES);
+        assertEquals(2, ClientSbsGpuSceneCutDetector.NEAR_IDENTICAL_DECISION_SLOT_COUNT);
+        assertEquals(0,
+                ClientSbsGpuSceneCutDetector.nearIdenticalDecisionByteOffsetForSlot(0));
+        assertEquals(32,
+                ClientSbsGpuSceneCutDetector.nearIdenticalDecisionByteOffsetForSlot(1));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void nearIdenticalDecisionRejectsNegativeSlot() {
+        ClientSbsGpuSceneCutDetector.nearIdenticalDecisionByteOffsetForSlot(-1);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void nearIdenticalDecisionRejectsThirdSlot() {
+        ClientSbsGpuSceneCutDetector.nearIdenticalDecisionByteOffsetForSlot(2);
+    }
+
+    @Test
     public void discardedFrameDoesNotAdvanceAcceptedHistory() {
         ClientSbsGpuSceneCutDetector.FrameTransaction transaction =
                 new ClientSbsGpuSceneCutDetector.FrameTransaction();
@@ -86,6 +106,24 @@ public class ClientSbsGpuSceneCutDetectorTest {
         transaction.commitAcceptedFrame();
         assertEquals(0, transaction.getPreviousLumaIndex());
         assertEquals(2L, transaction.getFrameSequence());
+    }
+
+    @Test
+    public void discardedReuseKeepsLastCommittedInferenceHistory() {
+        ClientSbsGpuSceneCutDetector.FrameTransaction transaction =
+                new ClientSbsGpuSceneCutDetector.FrameTransaction();
+
+        transaction.beginPendingFrame();
+        transaction.commitAcceptedFrame();
+        int committedLuma = transaction.getPreviousLumaIndex();
+
+        transaction.beginPendingFrame();
+        transaction.discardPendingFrame();
+
+        assertTrue(transaction.hasHistory());
+        assertFalse(transaction.hasPendingFrame());
+        assertEquals(committedLuma, transaction.getPreviousLumaIndex());
+        assertEquals(1L, transaction.getFrameSequence());
     }
 
     @Test(expected = IllegalStateException.class)

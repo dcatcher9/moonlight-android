@@ -11,6 +11,9 @@ final class ClientSbsResizePolicy {
      * renderer still fails closed.
      */
     static final long COLD_BACKEND_MAX_WAIT_MS = 30_000L;
+    /** Cold initialization plus exactly one fresh packed-presentation proof window. */
+    static final long COLD_BACKEND_TOTAL_MAX_WAIT_MS =
+            COLD_BACKEND_MAX_WAIT_MS + POST_ACK_SWAP_TIMEOUT_MS;
 
     enum Stage {
         IDLE,
@@ -71,16 +74,42 @@ final class ClientSbsResizePolicy {
      */
     static boolean shouldContinueWaitingForColdBackend(
             Stage stage, boolean postAckDecoderOutputReady,
-            boolean backendInitializing, long postAckElapsedMillis) {
+            boolean backendInitializing, boolean readyProofWindowStarted,
+            long postAckElapsedMillis) {
         return stage == Stage.WAITING_FOR_SWAP
                 && postAckDecoderOutputReady
                 && backendInitializing
+                && !readyProofWindowStarted
                 && postAckElapsedMillis >= 0L
                 && postAckElapsedMillis < COLD_BACKEND_MAX_WAIT_MS;
     }
 
     static long boundedColdBackendPollMillis(long postAckElapsedMillis) {
         long remaining = COLD_BACKEND_MAX_WAIT_MS
+                - Math.max(0L, postAckElapsedMillis);
+        return Math.max(0L, Math.min(POST_ACK_SWAP_TIMEOUT_MS, remaining));
+    }
+
+    /**
+     * Leaving the initializing state does not itself prove that the new packed output was drawn.
+     * Grant one new proof window after observing that transition, but never allow repeated status
+     * checks to restart it.
+     */
+    static boolean shouldStartColdBackendReadyProofWindow(
+            Stage stage, boolean postAckDecoderOutputReady,
+            boolean backendInitializationObserved, boolean backendInitializing,
+            boolean readyProofWindowStarted, long postAckElapsedMillis) {
+        return stage == Stage.WAITING_FOR_SWAP
+                && postAckDecoderOutputReady
+                && backendInitializationObserved
+                && !backendInitializing
+                && !readyProofWindowStarted
+                && postAckElapsedMillis >= 0L
+                && postAckElapsedMillis < COLD_BACKEND_TOTAL_MAX_WAIT_MS;
+    }
+
+    static long boundedColdBackendReadyProofMillis(long postAckElapsedMillis) {
+        long remaining = COLD_BACKEND_TOTAL_MAX_WAIT_MS
                 - Math.max(0L, postAckElapsedMillis);
         return Math.max(0L, Math.min(POST_ACK_SWAP_TIMEOUT_MS, remaining));
     }

@@ -121,19 +121,6 @@
         <item>neverh265</item>
     </string-array>
 
-    <string-array name="client_sbs_depth_model_names">
-        <item>@string/client_sbs_depth_model_da_v2_static</item>
-        <item>@string/client_sbs_depth_model_midas_v2</item>
-        <item>@string/client_sbs_depth_model_depthart_s448</item>
-        <item>@string/client_sbs_depth_model_zipdepth_base</item>
-    </string-array>
-    <string-array name="client_sbs_depth_model_values" translatable="false">
-        <item>depth-anything-v2-small-static-performance</item>
-        <item>midas-v2-float</item>
-        <item>depthart-s448-fp16</item>
-        <item>zipdepth-base-fp16</item>
-    </string-array>
-
     <string-array name="video_frame_pacing_names">
         <item>@string/pacing_warp2</item>
         <item>@string/pacing_warp</item>
@@ -207,19 +194,6 @@
         <item>forceav1</item>
         <item>forceh265</item>
         <item>neverh265</item>
-    </string-array>
-
-    <string-array name="xr_client_sbs_depth_model_names">
-        <item>@string/xr_depth_model_da_v2</item>
-        <item>@string/xr_depth_model_midas</item>
-        <item>@string/xr_depth_model_depthart_s448</item>
-        <item>@string/xr_depth_model_zipdepth_base</item>
-    </string-array>
-    <string-array name="xr_client_sbs_depth_model_values" translatable="false">
-        <item>depth-anything-v2-small-static-performance</item>
-        <item>midas-v2-float</item>
-        <item>depthart-s448-fp16</item>
-        <item>zipdepth-base-fp16</item>
     </string-array>
 
     <string-array name="xr_raw_sbs_per_eye_resolution_names">

@@ -59,6 +59,7 @@ import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
+import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsMetricHistory;
 import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.sbs.HostSbsTelemetryTracker;
@@ -78,6 +79,8 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 
 /**
  * Presentation owner for the single XR route ({@code MODE_XR}). Fresh host connections start in
@@ -191,11 +194,6 @@ public class XrStreamPresenter {
 
         default void onUseSessionModeDefaultsRequested(PresenterMode mode,
                                                         ModeStreamQualityModel current) {
-        }
-
-        default boolean onClientSbsModelSelected(String modelId,
-                                                 ClientSbsModeSettingsModel current) {
-            return false;
         }
 
         default boolean onRawSbsPerEyeResolutionSelected(
@@ -357,6 +355,9 @@ public class XrStreamPresenter {
     private LiveQualityRequestOrigin pendingLiveQualityOrigin;
     /** User-authored tuple retained separately when the panel caps the effective wire FPS. */
     private StreamQualityTuple pendingDurableUserQuality;
+    /** Client entry held on the old SceneCore picture until its saved quality is ACKed. */
+    private BarItem pendingAckFirstClientModeItem;
+    private PresenterMode pendingAckFirstClientPreviousMode;
     /** Opaque u16 correlation token for the outstanding 0x3007 request; -1 when there is none. */
     private int pendingVideoModeRequestId = -1;
     private int videoModeRequestCounter;
@@ -387,9 +388,7 @@ public class XrStreamPresenter {
     private TextView modeQualityCueView;
     private Button modeDefaultsButton;
     private Button modeApplyButton;
-    private XrChoiceGroup clientModelChoiceGroup;
-    private TextView clientModelSourceView;
-    private TextView clientModelPendingView;
+    private TextView clientModelNameView;
     private TextView clientAspectBucketView;
     private TextView clientRuntimeStatusView;
     private XrChoiceGroup rawSbsPerEyeResolutionChoiceGroup;
@@ -659,9 +658,55 @@ public class XrStreamPresenter {
 
     /** True only when the decoder target or encoded dimensions change across the transition. */
     static boolean requiresDecoderTransition(PresenterMode previousMode, PresenterMode nextMode) {
-        boolean crossesClientRenderer = (previousMode == PresenterMode.CLIENT_SBS_AI)
-                != (nextMode == PresenterMode.CLIENT_SBS_AI);
+        boolean crossesClientRenderer = retainsOldPictureUntilFreshTargetFrame(
+                previousMode, nextMode);
         return crossesClientRenderer || requiresHostSurfaceResize(previousMode, nextMode);
+    }
+
+    /** Client-renderer crossings retain the old SceneCore buffer until the target presents. */
+    static boolean retainsOldPictureUntilFreshTargetFrame(
+            PresenterMode previousMode, PresenterMode nextMode) {
+        return (previousMode == PresenterMode.CLIENT_SBS_AI)
+                != (nextMode == PresenterMode.CLIENT_SBS_AI);
+    }
+
+    /** Keep the renderer's last picture alive throughout either direction of a surface crossing. */
+    static boolean clientSbsActiveDuringSurfaceSwitch(
+            boolean wasClientSbs, boolean isClientSbs) {
+        return wasClientSbs || isClientSbs;
+    }
+
+    /** Commit the requested renderer state only after the surface switch result is known. */
+    static boolean clientSbsActiveAfterSurfaceSwitch(
+            boolean wasClientSbs, boolean isClientSbs, boolean surfaceSwitchSucceeded) {
+        return surfaceSwitchSucceeded ? isClientSbs : wasClientSbs;
+    }
+
+    /** An inactive Client mode with a live-applicable saved tuple is one fused ACK-first switch. */
+    static boolean shouldFuseClientModeEntryQuality(
+            PresenterMode previousMode, PresenterMode nextMode,
+            boolean hostControlExtensionsSupported,
+            boolean otherStagedChangesRequireReconnect,
+            ModeStreamQualityModel targetQuality) {
+        return previousMode != nextMode
+                && nextMode == PresenterMode.CLIENT_SBS_AI
+                && hostControlExtensionsSupported
+                && !otherStagedChangesRequireReconnect
+                && targetQuality != null
+                && targetQuality.appliesLiveIfSelected();
+    }
+
+    /** Reconnect before touching Client presentation when its target tuple cannot change live. */
+    static boolean shouldReconnectBeforeClientModeEntry(
+            PresenterMode previousMode, PresenterMode nextMode,
+            boolean otherStagedChangesRequireReconnect,
+            ModeStreamQualityModel targetQuality) {
+        return previousMode != nextMode
+                && nextMode == PresenterMode.CLIENT_SBS_AI
+                && targetQuality != null
+                && targetQuality.requiresApplyIfSelected()
+                && (otherStagedChangesRequireReconnect
+                || targetQuality.requiresReconnectIfSelected());
     }
 
     static boolean canSynchronizeClientSbsHdrTransition(
@@ -748,6 +793,44 @@ public class XrStreamPresenter {
             modeGeneration = 0;
             hdrGeneration = 0;
         }
+
+        int currentModeGeneration() {
+            return modeGeneration;
+        }
+    }
+
+    /**
+     * Closes the sole ACK-first decoder gate before publishing any host-authoritative geometry.
+     * Keeping this sequence in one helper makes it impossible for a concurrent codec recovery to
+     * replay the replacement format onto the producer that is still presenting the old picture.
+     */
+    static int beginAckFirstClientDecoderTransitionBeforeGeometry(
+            DecoderTransitionGenerationGate generations,
+            IntSupplier beginTransition,
+            BooleanSupplier stageGeometry) {
+        if (generations == null || beginTransition == null || stageGeometry == null) {
+            return 0;
+        }
+        int generation = beginTransition.getAsInt();
+        if (!generations.beginMode(generation)) {
+            return 0;
+        }
+        return stageGeometry.getAsBoolean() ? generation : 0;
+    }
+
+    /** Reuses the ACK-first gate at surface handoff; ordinary switches start their gate here. */
+    static int reuseOrBeginModeDecoderTransition(
+            DecoderTransitionGenerationGate generations,
+            boolean ackFirstTransitionAlreadyStarted,
+            IntSupplier beginTransition) {
+        if (generations == null || beginTransition == null) {
+            return 0;
+        }
+        if (ackFirstTransitionAlreadyStarted) {
+            return generations.currentModeGeneration();
+        }
+        int generation = beginTransition.getAsInt();
+        return generations.beginMode(generation) ? generation : 0;
     }
 
     /**
@@ -914,6 +997,15 @@ public class XrStreamPresenter {
         return outcome != VideoModeAckOutcome.REJECTED_NO_RETRY
                 && outcome != VideoModeAckOutcome.FAILED_RETRYABLE
                 && shouldCommitStagedSettingsForResync(origin);
+    }
+
+    static boolean shouldReconnectUserClientSbsWithoutRollback(
+            int status, PresenterMode requestMode, LiveQualityRequestOrigin requestOrigin,
+            boolean resolutionChangeInProgress) {
+        return status == MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
+                && requestMode == PresenterMode.CLIENT_SBS_AI
+                && requestOrigin == LiveQualityRequestOrigin.USER
+                && resolutionChangeInProgress;
     }
 
     /**
@@ -1114,7 +1206,7 @@ public class XrStreamPresenter {
     private long lastCinemaTileTapMs;
     private long lastDockExpansionTapMs;
     private boolean modeSwitchInProgress;
-    /** Successful surface handoff awaiting the fresh-IDR output before it may be persisted/shown. */
+    /** Surface handoff awaiting its fresh direct output or packed Client-SBS swap proof. */
     private PresenterMode pendingDecoderTransitionMode;
     /** Client-SBS transfer flip awaiting a fresh decoder IDR and first new-format EGL swap. */
     private boolean clientSbsHdrTransitionInProgress;
@@ -1153,7 +1245,9 @@ public class XrStreamPresenter {
         this.clientSbsModeSettingsModel = initialClientSbsModeSettingsModel(prefConfig);
         this.rawSbsModeSettingsModel = initialRawSbsModeSettingsModel(prefConfig);
         this.viewStateStore = new XrViewStateStore(activity, activity.getIntent());
-        restoreViewState();
+        restoreViewState(activity instanceof com.limelight.Game
+                ? ((com.limelight.Game) activity).getXrStartupPresenterMode()
+                : null);
         this.reconnectViewState = XrReconnectViewState.consumeFrom(activity.getIntent());
         if (reconnectViewState != null) {
             panelHeightMeters = reconnectViewState.panelHeightMeters;
@@ -1216,7 +1310,7 @@ public class XrStreamPresenter {
         }
     }
 
-    /** Replace Client SBS model/status data and refresh its open reusable subpane. */
+    /** Replace Client SBS bucket/status data and refresh its open reusable subpane. */
     public void setClientSbsModeSettingsModel(ClientSbsModeSettingsModel model) {
         clientSbsModeSettingsModel = java.util.Objects.requireNonNull(model, "model");
         if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.MODE_OPTIONS
@@ -1278,9 +1372,6 @@ public class XrStreamPresenter {
         }
         if (sessionDefaultsButton != null) {
             sessionDefaultsButton.setEnabled(enabled);
-        }
-        if (clientModelChoiceGroup != null) {
-            clientModelChoiceGroup.setEnabled(enabled);
         }
         if (rawSbsPerEyeResolutionChoiceGroup != null) {
             rawSbsPerEyeResolutionChoiceGroup.setEnabled(enabled);
@@ -1411,26 +1502,8 @@ public class XrStreamPresenter {
 
     private static ClientSbsModeSettingsModel initialClientSbsModeSettingsModel(
             PreferenceConfiguration prefConfig) {
-        String id = prefConfig.clientSbsDepthModelId != null
-                ? prefConfig.clientSbsDepthModelId
-                : PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2;
-        String name;
-        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id)) {
-            name = "MiDaS 2.1 Small";
-        }
-        else if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(id)) {
-            name = "DepthART S448 FP16 (Experimental)";
-        }
-        else if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(id)) {
-            name = "ZipDepth Base FP16 (Experimental · short 384)";
-        }
-        else {
-            name = "Depth Anything V2 Small";
-        }
-        return new ClientSbsModeSettingsModel(id, name, id, name,
-                SessionSettingsModel.Source.GLOBAL,
-                ClientSbsModeSettingsModel.selectBucket(
-                        id, prefConfig.width, prefConfig.height),
+        return new ClientSbsModeSettingsModel(
+                ClientSbsModeSettingsModel.selectBucket(prefConfig.width, prefConfig.height),
                 "GPU-only · initializes on first use");
     }
 
@@ -2204,6 +2277,17 @@ public class XrStreamPresenter {
             if (liveQualityTransactionBusy()) {
                 return;
             }
+            ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(
+                    item.selectsMode);
+            if (shouldReconnectBeforeClientModeEntry(
+                    currentPresenterMode, item.selectsMode,
+                    applyRequiresReconnect, targetQuality)) {
+                // The target Client tuple cannot be adopted by the running decoder. Select and
+                // reconnect while the old producer/picture is still completely untouched.
+                LimeLog.info("XR: reconnecting directly into Client SBS saved quality");
+                controlActionListener.onPresentationModeCommitted(item.selectsMode);
+                return;
+            }
             if (requiresReconnectBeforeModeSwitch(
                     currentPresenterMode, item.selectsMode,
                     prefConfig.rawSbsPerEyeResolution)) {
@@ -2785,37 +2869,11 @@ public class XrStreamPresenter {
 
     private void addClientSbsModeOptions(LinearLayout row) {
         ClientSbsModeSettingsModel model = clientSbsModeSettingsModel;
-        LinearLayout modelColumn = new LinearLayout(activity);
-        modelColumn.setOrientation(LinearLayout.VERTICAL);
-        modelColumn.setGravity(Gravity.CENTER_VERTICAL);
-        modelColumn.setPadding(0, 0, dimen(R.dimen.xr_space_md), 0);
-        String source = model.source == SessionSettingsModel.Source.GLOBAL
-                ? activity.getString(R.string.xr_setting_source_global)
-                : activity.getString(R.string.xr_setting_source_session);
-        clientModelSourceView = controlText(
-                activity.getString(R.string.xr_client_model) + " \u00b7 " + source,
-                R.dimen.xr_text_title, paletteColor(R.color.xr_text_secondary));
-        modelColumn.addView(clientModelSourceView);
-
-        clientModelChoiceGroup = buildChoiceGroup(model.choices, model.selectedChoiceId,
-                model.pendingModelName, choiceId -> {
-                    return controlActionListener.onClientSbsModelSelected(
-                            choiceId, clientSbsModeSettingsModel);
-                });
-        clientModelChoiceGroup.setEnabled(sessionControlsEnabled);
-        LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dimen(R.dimen.xr_space_xs);
-        modelColumn.addView(clientModelChoiceGroup, choiceParams);
-
-        clientModelPendingView = controlText("", SESSION_META_TEXT_DIMEN,
-                paletteColor(R.color.xr_text_secondary));
-        clientModelPendingView.setPadding(0, dimen(R.dimen.xr_space_xs), 0, 0);
-        modelColumn.addView(clientModelPendingView);
-        updateClientModelPendingView(model);
-        // The long four-model group stacks on the headset. Let this weighted column contribute
-        // that natural height instead of constraining it to the two short status columns.
+        LinearLayout modelColumn = labeledValue(
+                activity.getString(R.string.xr_client_model),
+                activity.getString(R.string.xr_depth_model_zipdepth_base),
+                paletteColor(R.color.xr_text_primary));
+        clientModelNameView = (TextView) modelColumn.getChildAt(1);
         row.addView(modelColumn, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 2.2f));
 
@@ -2945,9 +3003,7 @@ public class XrStreamPresenter {
         modeQualityCueView = null;
         modeDefaultsButton = null;
         modeApplyButton = null;
-        clientModelChoiceGroup = null;
-        clientModelSourceView = null;
-        clientModelPendingView = null;
+        clientModelNameView = null;
         clientAspectBucketView = null;
         clientRuntimeStatusView = null;
         rawSbsPerEyeResolutionChoiceGroup = null;
@@ -3027,37 +3083,14 @@ public class XrStreamPresenter {
     }
 
     private void updateClientSbsOptionsView() {
-        if (clientModelChoiceGroup == null) {
-            return;
-        }
         ClientSbsModeSettingsModel model = clientSbsModeSettingsModel;
-        if (!clientModelChoiceGroup.setSelectedValue(model.selectedChoiceId)) {
-            configureChoiceGroup(clientModelChoiceGroup, model.choices,
-                    model.selectedChoiceId, model.pendingModelName, choiceId ->
-                            controlActionListener.onClientSbsModelSelected(
-                                    choiceId, clientSbsModeSettingsModel));
+        if (clientModelNameView != null) {
+            clientModelNameView.setText(R.string.xr_depth_model_zipdepth_base);
         }
-        clientModelChoiceGroup.setEnabled(sessionControlsEnabled);
-        String source = model.source == SessionSettingsModel.Source.GLOBAL
-                ? activity.getString(R.string.xr_setting_source_global)
-                : activity.getString(R.string.xr_setting_source_session);
-        clientModelSourceView.setText(
-                activity.getString(R.string.xr_client_model) + " \u00b7 " + source);
-        updateClientModelPendingView(model);
-        clientAspectBucketView.setText(model.bucket);
+        if (clientAspectBucketView != null) {
+            clientAspectBucketView.setText(model.bucket);
+        }
         updateClientSbsRuntimeStatusView();
-    }
-
-    private void updateClientModelPendingView(ClientSbsModeSettingsModel model) {
-        if (clientModelPendingView == null) {
-            return;
-        }
-        clientModelPendingView.setVisibility(
-                model.hasPendingModelChange() ? View.VISIBLE : View.GONE);
-        if (model.hasPendingModelChange()) {
-            clientModelPendingView.setText(activity.getString(
-                    R.string.xr_setting_pending_active, model.appliedModelName));
-        }
     }
 
     private void updateClientSbsRuntimeStatusView() {
@@ -3863,15 +3896,24 @@ public class XrStreamPresenter {
 
     int sendHostVideoModeControl(int logicalWidth, int logicalHeight, int framerateX100,
                                  int requestId, int bitrateKbps) {
+        return sendHostVideoModeControl(
+                currentPresenterMode, logicalWidth, logicalHeight,
+                framerateX100, requestId, bitrateKbps);
+    }
+
+    private int sendHostVideoModeControl(
+            PresenterMode requestMode,
+            int logicalWidth, int logicalHeight, int framerateX100,
+            int requestId, int bitrateKbps) {
         if (!controlTransportOpen() || !hostControlExtensionsSupported) {
             return 0;
         }
         int[] wireDimensions = liveVideoModeWireDimensions(
-                currentPresenterMode, logicalWidth, logicalHeight,
+                requestMode, logicalWidth, logicalHeight,
                 prefConfig.rawSbsPerEyeResolution);
         if (wireDimensions == null) {
             LimeLog.severe("XR: refusing invalid live video-mode geometry "
-                    + logicalWidth + "x" + logicalHeight + " for " + currentPresenterMode);
+                    + logicalWidth + "x" + logicalHeight + " for " + requestMode);
             return 0;
         }
         return MoonBridge.sendSetVideoMode(
@@ -4012,6 +4054,8 @@ public class XrStreamPresenter {
         pendingLiveQualityMode = null;
         pendingLiveQualityOrigin = null;
         pendingDurableUserQuality = null;
+        pendingAckFirstClientModeItem = null;
+        pendingAckFirstClientPreviousMode = null;
         pendingDecoderTransitionMode = null;
         clientSbsHdrTransitionInProgress = false;
         modeSwitchInProgress = false;
@@ -4051,10 +4095,7 @@ public class XrStreamPresenter {
         final boolean clientSbsStatsActive = currentPresenterMode == PresenterMode.CLIENT_SBS_AI
                 && clientSbs != null && clientSbs.active;
         final SbsDepthTelemetrySnapshot depthTelemetry;
-        if (currentPresenterMode == PresenterMode.CLIENT_SBS_AI && clientSbsStatsActive) {
-            // Client SBS remains authoritative from its local GPU readback.
-            depthTelemetry = clientSbs.depthTelemetry;
-        } else if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
+        if (currentPresenterMode == PresenterMode.HOST_SBS_AI) {
             // Host histories already include every distinct accepted publication. This slower
             // stats tick only takes a coherent view for table/layout work.
             depthTelemetry = hostSbsTelemetryTracker.sampleAtStatsTick(
@@ -4076,29 +4117,51 @@ public class XrStreamPresenter {
                 depthHealth = clientSbs.depthHealthReadbackFailed
                         ? "readback_failed_retrying" : "unavailable";
             } else {
-                String classifiedEdge = clientSbs.adaptivePopClassified
-                        ? String.format(Locale.US, "%.4f", clientSbs.depthEdgeFraction)
-                        : "unsettled";
                 depthHealth = String.format(Locale.US,
-                        "valid=%.1f%% range=%.4f edge=%s pop=%.3f change=%.3f age=%d"
-                                + " cuts=%d armed=%s ext=%d anchor=%.1fpx subject=%.3f"
-                                + " faults=%d/%d profile=%s"
-                                + " collapsed=%s",
+                        "valid=%.1f%% ready=%s current_valid=%s history=%s"
+                                + " cutRange=%.4f fixed_pop=%.3f"
+                                + " event_change=%.3f event_range_shift=%.3f age=%d"
+                                + " cuts=%d cuts_app=%d cuts_geom=%d cuts_low=%d"
+                                + " geometry_armed=%s proposals=%d"
+                                + " event_appearance_raw=%.3f event_appearance_mean=%.3f"
+                                + " event_appearance_struct=%.3f event_support=%.3f/%.3f"
+                                + " event_detector=0x%02x event_decision=0x%05x"
+                                + " event_sequence=%d event_reason=%s"
+                                + " shotMean=%.6f currentMean=%.6f"
+                                + " event_baseline=%.3f event_cut_score=%.3f"
+                                + " raw_invalid=%d cut_range_collapsed_count=%d"
+                                + " cut_range_collapsed_now=%s",
                         clientSbs.validDepthFraction * 100.0f,
+                        clientSbs.depthCurrentGeometryReady,
+                        clientSbs.depthCurrentValid,
+                        clientSbs.depthHistoryAdvanced ? "advance" : "hold",
                         clientSbs.effectiveDepthRangeWidth,
-                        classifiedEdge,
                         clientSbs.stereoPopStrength,
-                        clientSbs.depthChangeFraction,
+                        clientSbs.depthLatestChangeFraction,
+                        clientSbs.depthLatestRangeShift,
                         clientSbs.depthSceneAge,
                         clientSbs.depthHardCutCount,
-                        clientSbs.depthCutArmed,
-                        clientSbs.depthExternalCutRequests,
-                        clientSbs.depthZeroAnchorShift,
-                        clientSbs.depthSubjectDepth,
-                        clientSbs.depthEmptyRawFrames,
-                        clientSbs.depthCollapsedRawFrames,
-                        clientSbs.stereoProfileInitialized,
-                        clientSbs.rawDepthRangeCollapsed);
+                        clientSbs.depthAcceptedAppearanceCutCount,
+                        clientSbs.depthAcceptedGeometryCutCount,
+                        clientSbs.depthAcceptedStructurelessEntryCutCount,
+                        clientSbs.depthGeometryCutArmed,
+                        clientSbs.depthAppearanceProposalCount,
+                        clientSbs.depthAppearanceRawChangeFraction,
+                        clientSbs.depthAppearanceMeanLumaDelta,
+                        clientSbs.depthAppearanceStructuralChangeFraction,
+                        clientSbs.depthAppearanceCurrentSupportFraction,
+                        clientSbs.depthAppearanceCommonSupportFraction,
+                        clientSbs.depthAppearanceDetectorFlags,
+                        clientSbs.depthCutDecisionFlags,
+                        clientSbs.depthCutEventSequence,
+                        clientCutReasonName(clientSbs.depthCutDecisionFlags),
+                        clientSbs.depthShotRawMean,
+                        clientSbs.depthCurrentRawMean,
+                        clientSbs.depthGeometryChangeBaseline,
+                        clientSbs.depthLatestInternalCutEvidence,
+                        clientSbs.depthInvalidRawFrames,
+                        clientSbs.depthCutRangeCollapsedFrames,
+                        clientSbs.cutRangeCollapsed);
             }
             // Machine-readable A/B output is intentionally separate from the visible panel. Log
             // formatting and logcat I/O are enabled only by the explicit performance-log switch.
@@ -4110,9 +4173,11 @@ public class XrStreamPresenter {
                             + " output=%.1f release=%.1f presented=%.1f"
                             + " decode_ms=%.2f/%.2f queue_ms_avg_p95_max=%.2f/%.2f/%.2f"
                             + " queue_depth_max=%d"
-                            + " | client_fps latch=%.1f depth=%.1f output=%.1f"
-                            + " | litert_ms=%.2f/%.2f depth_age_ms=%.2f/%.2f"
-                            + " | gl_gpu_ms pack=%.2f color=%.2f profile=%.2f compose=%.2f"
+                            + " | client_fps latch=%.1f infer=%.1f reuse=%.1f(%.1f%%) output=%.1f"
+                            + " | reuse_reject content=%d gap=%d age=%d invalid=%d"
+                            + " | decision_read_ms=%.3f/%.3f litert_ms=%.2f/%.2f"
+                            + " depth_age_ms=%.2f/%.2f"
+                            + " | gl_gpu_ms pack=%.2f color=%.2f depth_cut=%.2f compose=%.2f"
                             + " | faults color_busy=%d flat=%d"
                             + " | depth %s | thermal=%d gpu_busy=%s gpu_clock_mhz=%s",
                     clientSbs.windowSeconds,
@@ -4141,7 +4206,15 @@ public class XrStreamPresenter {
                     stream != null ? stream.getDecoderQueueMaxDepth() : 0,
                     clientSbs.glLatchFps,
                     clientSbs.depthAdoptFps,
+                    clientSbs.depthReuseFps,
+                    clientSbs.depthReuseRatio * 100.0f,
                     clientSbs.glOutputSubmitFps,
+                    clientSbs.nearIdenticalContentRejects,
+                    clientSbs.nearIdenticalOwnerFrameGapRejects,
+                    clientSbs.nearIdenticalOwnerAgeRejects,
+                    clientSbs.nearIdenticalInvalidRejects,
+                    clientSbs.averageNearIdenticalDecisionReadWallMs,
+                    clientSbs.maxNearIdenticalDecisionReadWallMs,
                     clientSbs.averageNativeLiteRtRunWallMs,
                     clientSbs.maxNativeLiteRtRunWallMs,
                     clientSbs.averageDepthResultAgeMs,
@@ -4300,17 +4373,34 @@ public class XrStreamPresenter {
                                 + clientSbs.modelInputHeight + " | "
                                 + depthBackendName(clientSbs.backend),
                         backendColor(clientSbs.backend));
-                addStatsRow("Latch / depth / output FPS",
-                        String.format(Locale.US, "%.1f / %.1f / %.1f",
+                addStatsRow("Latch / infer / reuse / output FPS",
+                        String.format(Locale.US, "%.1f / %.1f / %.1f / %.1f",
                                 clientSbs.glLatchFps, clientSbs.depthAdoptFps,
+                                clientSbs.depthReuseFps,
                                 clientSbs.glOutputSubmitFps),
                         paletteColor(R.color.xr_text_primary));
-                addStatsRow("Depth inference call avg / max",
-                        String.format(Locale.US, "%.2f / %.2f ms | OpenCL + sync",
+                addStatsRow("Near-identical reuse",
+                        String.format(Locale.US, "%.1f%% of eligible decisions",
+                                clientSbs.depthReuseRatio * 100.0f),
+                        paletteColor(R.color.xr_text_primary));
+                addStatsRow("Reuse rejects",
+                        formatClientReuseRejects(
+                                clientSbs.nearIdenticalContentRejects,
+                                clientSbs.nearIdenticalOwnerFrameGapRejects,
+                                clientSbs.nearIdenticalOwnerAgeRejects,
+                                clientSbs.nearIdenticalInvalidRejects),
+                        paletteColor(R.color.xr_text_primary));
+                addStatsRow("Decision read avg / max",
+                        String.format(Locale.US, "%.3f / %.3f ms | 32 B map",
+                                clientSbs.averageNearIdenticalDecisionReadWallMs,
+                                clientSbs.maxNearIdenticalDecisionReadWallMs),
+                        paletteColor(R.color.xr_text_primary));
+                addStatsRow("LiteRT wall avg / max",
+                        String.format(Locale.US, "%.2f / %.2f ms | not pure GPU",
                                 clientSbs.averageNativeLiteRtRunWallMs,
                                 clientSbs.maxNativeLiteRtRunWallMs),
                         paletteColor(R.color.xr_text_primary));
-                addStatsRow("Depth age avg / max",
+                addStatsRow("Depth result age avg / max",
                         String.format(Locale.US, "%.2f / %.2f ms",
                                 clientSbs.averageDepthResultAgeMs,
                                 clientSbs.maxDepthResultAgeMs),
@@ -4330,16 +4420,7 @@ public class XrStreamPresenter {
                                 clientSbs.gpuSbsComposeSamples
                         });
 
-                long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs;
-                if (faults > 0L) {
-                    addStatsRow("Faults",
-                            String.format(Locale.US, "color busy %d | flat %d",
-                                    clientSbs.colorSlotBusySkips,
-                                    clientSbs.flatSbsOutputs),
-                            paletteColor(R.color.xr_status_warn));
-                }
-
-                addDepthTelemetryRows(depthTelemetry, false);
+                addClientDepthTelemetryRows(clientSbs);
             }
         }
 
@@ -4351,7 +4432,7 @@ public class XrStreamPresenter {
                             ? paletteColor(R.color.xr_status_ok)
                             : telemetryUnavailableColor(depthTelemetry));
             if (depthTelemetry != null && depthTelemetry.isAvailable()) {
-                addDepthTelemetryRows(depthTelemetry, true);
+                addHostDepthTelemetryRows(depthTelemetry);
             }
         }
 
@@ -4359,16 +4440,16 @@ public class XrStreamPresenter {
     }
 
     private static final String[] CLIENT_GPU_STAGE_LABELS = {
-            "Model input GL GPU",
-            "Matched color GL GPU",
-            "Depth profile GL GPU",
-            "Stereo render GL GPU"
+            "Model input GPU",
+            "Matched color GPU",
+            "Depth / cut GPU",
+            "SBS compose GPU"
     };
     private static final String[] CLIENT_GPU_STAGE_DETAILS = {
-            "resize + pack + color cut",
-            "full-size capture",
-            "filter + adaptive profile",
-            "prefilter + warp + draw"
+            "resize + pack + cut",
+            "full-res capture",
+            "raw V2 + cut",
+            "condition + map + draw"
     };
 
     /**
@@ -4394,115 +4475,100 @@ public class XrStreamPresenter {
         }
     }
 
-    private void addDepthTelemetryRows(
-            SbsDepthTelemetrySnapshot telemetry, boolean hostSource) {
-        if (telemetry == null || !telemetry.isAvailable()) {
-            String status;
-            if (telemetry == null
-                    || telemetry.availability == SbsDepthTelemetrySnapshot.Availability.WAITING) {
-                status = formatDepthHealthUnavailable(false);
-            } else if (telemetry.availability
-                    == SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED) {
-                status = formatDepthHealthUnavailable(true);
-            } else {
-                status = telemetry.availability.description;
-            }
-            addStatsRow("Depth health", status, telemetryUnavailableColor(telemetry));
+    private void addClientDepthTelemetryRows(
+            Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbs) {
+        long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs
+                + clientSbs.depthInvalidRawFrames
+                + clientSbs.depthCutRangeCollapsedFrames;
+        addStatsRow("Faults",
+                formatClientFaults(clientSbs.colorSlotBusySkips, clientSbs.flatSbsOutputs,
+                        clientSbs.depthHealthAvailable, clientSbs.depthInvalidRawFrames,
+                        clientSbs.depthCutRangeCollapsedFrames),
+                faults > 0L ? paletteColor(R.color.xr_status_warn)
+                        : paletteColor(R.color.xr_text_primary));
+
+        if (!clientSbs.depthHealthAvailable) {
+            addStatsRow("Depth health",
+                    formatDepthHealthUnavailable(clientSbs.depthHealthReadbackFailed),
+                    clientSbs.depthHealthReadbackFailed
+                            ? paletteColor(R.color.xr_status_warn)
+                            : paletteColor(R.color.xr_text_disabled));
             return;
         }
 
-        String valid = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION)
-                ? String.format(Locale.US, "%.1f%%", telemetry.validDepthFraction * 100.0f)
-                : "n/a";
-        String range = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_RANGE)
-                ? String.format(Locale.US, "%.4f", telemetry.effectiveRangeWidth)
-                : "n/a";
-        String pop;
-        if (!telemetry.isInitialized()) {
-            pop = "no profile";
-        } else if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_EFFECTIVE)
-                && Float.isFinite(telemetry.effectivePop)) {
-            // effectivePop is absolute for both sources. Host values must not be normalized again.
-            pop = String.format(Locale.US, "%.3f", telemetry.effectivePop);
-        } else {
-            pop = "n/a";
+        addStatsRow("V2 state",
+                formatClientV2State(clientSbs.depthCurrentGeometryReady,
+                        clientSbs.depthCurrentValid, clientSbs.depthHistoryAdvanced,
+                        clientSbs.validDepthFraction),
+                clientSbs.depthCurrentGeometryReady
+                        ? paletteColor(R.color.xr_status_ok)
+                        : paletteColor(R.color.xr_status_warn));
+        addStatsRow("V2 coordinate",
+                formatClientV2Coordinate(clientSbs.stereoPopStrength,
+                        clientSbs.depthShotRawMean, clientSbs.depthCurrentRawMean),
+                clientSbs.depthCurrentGeometryReady
+                        ? paletteColor(R.color.xr_status_ok)
+                        : paletteColor(R.color.xr_text_disabled));
+        addStatsRow("Last cut depth evidence",
+                formatClientCutDepthEvidence(clientSbs.depthLatestChangeFraction,
+                        clientSbs.depthLatestRangeShift,
+                        clientSbs.depthLatestInternalCutEvidence,
+                        clientSbs.depthGeometryChangeBaseline,
+                        clientSbs.effectiveDepthRangeWidth,
+                        clientSbs.cutRangeCollapsed),
+                paletteColor(R.color.xr_text_primary));
+        addStatsRow("Last cut appearance evidence",
+                formatClientCutAppearanceEvidence(
+                        clientSbs.depthAppearanceRawChangeFraction,
+                        clientSbs.depthAppearanceMeanLumaDelta,
+                        clientSbs.depthAppearanceStructuralChangeFraction,
+                        clientSbs.depthAppearanceCurrentSupportFraction,
+                        clientSbs.depthAppearanceCommonSupportFraction),
+                paletteColor(R.color.xr_text_primary));
+        addStatsRow("Last cut decision",
+                formatClientCutDecision(clientSbs.depthCutDecisionFlags,
+                        clientSbs.depthCutEventSequence,
+                        clientSbs.depthGeometryCutArmed),
+                paletteColor(R.color.xr_text_secondary));
+        addStatsRow("Cut counts",
+                formatClientCutCounts(clientSbs.depthHardCutCount,
+                        clientSbs.depthAcceptedAppearanceCutCount,
+                        clientSbs.depthAcceptedGeometryCutCount,
+                        clientSbs.depthAcceptedStructurelessEntryCutCount,
+                        clientSbs.depthAppearanceProposalCount),
+                paletteColor(R.color.xr_text_secondary));
+    }
+
+    private void addHostDepthTelemetryRows(SbsDepthTelemetrySnapshot telemetry) {
+        addStatsRow("V2 field", formatHostV2Field(telemetry),
+                telemetry.hasRuntime(SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY)
+                        ? paletteColor(R.color.xr_status_ok)
+                        : paletteColor(R.color.xr_text_disabled));
+
+        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)) {
+            addTrendStatsRow("Cut depth change",
+                    formatStatsFloat(telemetry.changeFraction, 4),
+                    paletteColor(R.color.xr_text_primary), telemetry.changeTrend,
+                    false, 0.0f, 1.0f);
         }
-        String subject = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_SUBJECT)
-                ? String.format(Locale.US, "%.3f", telemetry.subjectDepth)
-                : "n/a";
-        float popFloor = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)
-                && Float.isFinite(telemetry.popFloor) ? telemetry.popFloor : Float.NaN;
-        float popCeiling = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)
-                && Float.isFinite(telemetry.popCeiling) ? telemetry.popCeiling : Float.NaN;
-        addTrendStatsRow("Pop strength",
-                "valid " + valid + " | range " + range + " | pop " + pop
-                        + " | subject " + subject + " | collapsed "
-                        + (telemetry.isRangeCollapsed() ? "yes" : "no"),
-                telemetry.isRangeCollapsed()
-                        ? paletteColor(R.color.xr_status_warn)
-                        : paletteColor(R.color.xr_status_ok),
-                telemetry.popTrend, false, popFloor, popCeiling);
-
-        boolean classified = telemetry.isAdaptivePopClassified();
-        addTrendStatsRow("Edge fraction",
-                classified
-                        ? String.format(Locale.US, "%.4f",
-                                telemetry.classifiedEdgeFraction)
-                        : "unsettled",
-                classified
-                        ? paletteColor(R.color.xr_text_primary)
-                        : paletteColor(R.color.xr_text_disabled),
-                telemetry.edgeTrend, false, Float.NaN, Float.NaN);
-
-        addTrendStatsRow("Changed-depth fraction",
-                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)
-                        ? String.format(Locale.US, "%.4f", telemetry.changeFraction)
-                        : "n/a",
-                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)
-                        ? paletteColor(R.color.xr_text_primary)
-                        : paletteColor(R.color.xr_text_disabled),
-                telemetry.changeTrend, false, 0.0f, 1.0f);
-
-        String cutStatus = "n/a";
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CUTS)
                 && telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_SCENE)) {
             int sceneAge = (int)Math.min(Integer.MAX_VALUE, telemetry.sceneAge);
-            cutStatus = hostSource
-                    ? formatHostSceneCutStatus(
-                            telemetry.hardCutCount, sceneAge,
+            addTrendStatsRow("Scene cuts",
+                    formatHostSceneCutStatus(telemetry.hardCutCount, sceneAge,
                             telemetry.isGeometryArmed(), telemetry.isAppearanceArmed(),
-                            telemetry.externalCutRequests)
-                    : formatSceneCutStatus(
-                            telemetry.hardCutCount, sceneAge,
-                            // Client currently reports one local geometry-armed bit explicitly.
-                            telemetry.isGeometryArmed(),
-                            telemetry.externalCutRequests);
+                            telemetry.externalCutRequests),
+                    paletteColor(R.color.xr_text_secondary), telemetry.cutTrend,
+                    true, Float.NaN, Float.NaN);
         }
-        addTrendStatsRow("Scene cuts", cutStatus,
-                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CUTS)
-                        ? paletteColor(R.color.xr_text_secondary)
-                        : paletteColor(R.color.xr_text_disabled),
-                telemetry.cutTrend, true, Float.NaN, Float.NaN);
-
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_FAULTS)
                 && (telemetry.emptyDepthFrames > 0L
                 || telemetry.collapsedDepthFrames > 0L)) {
             addStatsRow("Depth faults",
                     String.format(Locale.US, "empty %d | collapsed %d",
-                            telemetry.emptyDepthFrames,
-                            telemetry.collapsedDepthFrames),
+                            telemetry.emptyDepthFrames, telemetry.collapsedDepthFrames),
                     paletteColor(R.color.xr_status_warn));
         }
-
-        addTrendStatsRow("Zero-plane anchor shift",
-                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_ANCHOR)
-                        ? String.format(Locale.US, "%.1f px",
-                                telemetry.zeroAnchorShiftPx)
-                        : "n/a",
-                telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_ANCHOR)
-                        ? paletteColor(R.color.xr_text_secondary)
-                        : paletteColor(R.color.xr_text_disabled),
-                telemetry.anchorTrend, false, Float.NaN, Float.NaN);
     }
 
     static String formatHostSbsTelemetryStatus(SbsDepthTelemetrySnapshot telemetry) {
@@ -4513,24 +4579,106 @@ public class XrStreamPresenter {
             return telemetry.availability.description;
         }
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)) {
-            return String.format(Locale.US, "Live | %dx%d | %s zero plane",
-                    telemetry.depthWidth, telemetry.depthHeight,
-                    zeroPlaneModeName(telemetry.zeroPlaneMode));
+            return String.format(Locale.US, "Live | %dx%d | raw V2",
+                    telemetry.depthWidth, telemetry.depthHeight);
         }
         return "Live | configuration unavailable";
     }
 
-    static String zeroPlaneModeName(int mode) {
-        switch (mode) {
-            case 1:
-                return "subject";
-            case 2:
-                return "median";
-            case 3:
-                return "background";
-            default:
-                return "unknown";
+    static String formatClientReuseRejects(long content, long frameGap,
+                                           long ownerAge, long invalid) {
+        return String.format(Locale.US, "content %d | gap %d | age %d | invalid %d",
+                content, frameGap, ownerAge, invalid);
+    }
+
+    static String formatClientV2State(boolean ready, boolean currentValid,
+                                      boolean historyAdvanced, float validFraction) {
+        return "ready " + yesNo(ready)
+                + " | current valid " + yesNo(currentValid)
+                + " | history " + (historyAdvanced ? "advance" : "hold")
+                + " | valid " + (Float.isFinite(validFraction)
+                ? String.format(Locale.US, "%.1f%%", validFraction * 100.0f) : "n/a");
+    }
+
+    static String formatClientV2Coordinate(float fixedPop, float shotRawMean,
+                                           float currentRawMean) {
+        return "fixed pop " + formatStatsFloat(fixedPop, 3)
+                + " | shotMean " + formatStatsFloat(shotRawMean, 6)
+                + " | currentMean " + formatStatsFloat(currentRawMean, 6);
+    }
+
+    static String formatClientCutDepthEvidence(float changeFraction, float rangeShift,
+                                                float internalEvidence, float baseline,
+                                                float cutRangeWidth,
+                                                boolean cutRangeCollapsed) {
+        return "change " + formatStatsFloat(changeFraction, 3)
+                + " | range shift " + formatStatsFloat(rangeShift, 3)
+                + " | internal " + formatStatsFloat(internalEvidence, 3)
+                + " | baseline " + formatStatsFloat(baseline, 3)
+                + " | cut range " + formatStatsFloat(cutRangeWidth, 4)
+                + (cutRangeCollapsed ? " collapsed" : "");
+    }
+
+    static String formatClientCutAppearanceEvidence(float rawChange, float meanLumaDelta,
+                                                     float structuralChange,
+                                                     float currentSupport,
+                                                     float commonSupport) {
+        return "raw " + formatStatsFloat(rawChange, 3)
+                + " | luma " + formatStatsFloat(meanLumaDelta, 3)
+                + " | structure " + formatStatsFloat(structuralChange, 3)
+                + " | support " + formatStatsFloat(currentSupport, 3)
+                + "/" + formatStatsFloat(commonSupport, 3);
+    }
+
+    static String formatClientCutDecision(int flags, long eventSequence,
+                                          boolean geometryArmed) {
+        return clientCutReasonName(flags).replace('_', ' ')
+                + " | event " + eventSequence
+                + " | geometry armed " + yesNo(geometryArmed)
+                + String.format(Locale.US, " | flags 0x%05x", flags);
+    }
+
+    static String formatClientCutCounts(long total, long appearance, long geometry,
+                                        long structureless, long proposals) {
+        return String.format(Locale.US,
+                "total %d | appearance %d | geometry %d | low %d | proposals %d",
+                total, appearance, geometry, structureless, proposals);
+    }
+
+    static String formatClientFaults(long colorBusy, long flat, boolean depthHealthAvailable,
+                                     long invalidRaw, long collapsedCutRange) {
+        String result = String.format(Locale.US, "color_busy %d | flat %d",
+                colorBusy, flat);
+        if (!depthHealthAvailable) {
+            return result + " | raw n/a";
         }
+        return result + String.format(Locale.US,
+                " | raw invalid %d | cut range collapsed %d",
+                invalidRaw, collapsedCutRange);
+    }
+
+    static String formatHostV2Field(SbsDepthTelemetrySnapshot telemetry) {
+        String ready = telemetry.hasRuntime(SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY)
+                ? "ready" : (telemetry.isInitialized() ? "state initialized" : "warming");
+        String valid = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION)
+                ? String.format(Locale.US, "%.1f%%", telemetry.validDepthFraction * 100.0f)
+                : "n/a";
+        String pop = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_EFFECTIVE)
+                ? formatStatsFloat(telemetry.effectivePop, 3) : "n/a";
+        String result = ready + " | valid " + valid + " | fixed pop " + pop;
+        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_RANGE)) {
+            result += " | cut range " + formatStatsFloat(telemetry.effectiveRangeWidth, 4);
+        }
+        return result;
+    }
+
+    private static String formatStatsFloat(float value, int decimalPlaces) {
+        return Float.isFinite(value)
+                ? String.format(Locale.US, "%." + decimalPlaces + "f", value) : "n/a";
+    }
+
+    private static String yesNo(boolean value) {
+        return value ? "yes" : "no";
     }
 
     private int telemetryUnavailableColor(SbsDepthTelemetrySnapshot telemetry) {
@@ -4559,11 +4707,64 @@ public class XrStreamPresenter {
     }
 
     static String formatSceneCutStatus(long totalCuts, int sceneAgeFrames,
-                                       boolean cutArmed, long externalCutRequests) {
+                                       boolean geometryArmed, long appearanceProposals) {
         return String.format(Locale.US,
-                "%d total | scene age %d frames | geometry %s | external requests %d",
-                totalCuts, sceneAgeFrames, cutArmed ? "armed" : "disarmed",
-                externalCutRequests);
+                "%d total | scene age %d frames | geometry %s | appearance proposals %d",
+                totalCuts, sceneAgeFrames, geometryArmed ? "armed" : "disarmed",
+                appearanceProposals);
+    }
+
+    static String clientCutReasonName(int flags) {
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_APPEARANCE) != 0) {
+            return "appearance";
+        }
+        if ((flags
+                & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY) != 0) {
+            return "structureless_entry";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY) != 0) {
+            return (flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0
+                    ? "geometry_depth_only" : "geometry";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE) != 0) {
+            if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID) == 0) {
+                return "appearance_pending_depth";
+            }
+            if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_ARMED) == 0) {
+                return "appearance_unarmed";
+            }
+            if ((flags
+                    & ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_DEPTH_CORROBORATED) == 0) {
+                return "appearance_depth_rejected";
+            }
+            return "appearance_not_accepted";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_EXPOSURE_LIKE) != 0) {
+            return "exposure_veto";
+        }
+        if ((flags
+                & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED) != 0) {
+            return (flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0
+                    ? "geometry_depth_only_rejected" : "geometry_confirmation_rejected";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0) {
+            return "geometry_depth_only_pending";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER) != 0
+                && (flags
+                & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_STRUCTURE_CORROBORATED) == 0) {
+            return "geometry_structure_rejected";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE) != 0) {
+            return "geometry_pending";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_PERSISTENT_LOW_START) != 0) {
+            return "structureless_start";
+        }
+        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_SUPPORTED_RETURN) != 0) {
+            return "structure_supported_return";
+        }
+        return "none";
     }
 
     static String formatHostSceneCutStatus(
@@ -5114,22 +5315,14 @@ public class XrStreamPresenter {
         modeOptionsHeightMeters = targetHeightMeters;
         // The two dimensions are independent in SceneCore. setSize() alone stretches the
         // physical quad but leaves the hosted View/ScrollView raster at its old height, clipping
-        // the additional model choices. Resize the Android raster first, then the physical panel.
+        // taller option content. Resize the Android raster first, then the physical panel.
         modeOptionsPanel.setSizeInPixels(new IntSize2d(hostWidth, targetHeightPixels));
         modeOptionsPanel.setSize(new FloatSize2d(layout.widthMeters, targetHeightMeters));
         modeOptionsPanel.setPose(modeOptionsPose(panelHeightMeters));
         modeOptionsHost.requestLayout();
-        int modelChoiceCount = clientModelChoiceGroup != null
-                ? clientModelChoiceGroup.getChildCount() : 0;
-        int modelGroupHeight = clientModelChoiceGroup != null
-                ? clientModelChoiceGroup.getMeasuredHeight() : 0;
-        int lastModelBottom = modelChoiceCount > 0
-                ? clientModelChoiceGroup.getChildAt(modelChoiceCount - 1).getBottom() : 0;
         LimeLog.info(String.format(Locale.US,
-                "XR mode options fit: raster=%dx%d contentHeight=%d physicalHeight=%.3fm "
-                        + "modelChoices=%d modelGroupHeight=%d lastModelBottom=%d",
-                hostWidth, targetHeightPixels, contentHeightPx, targetHeightMeters,
-                modelChoiceCount, modelGroupHeight, lastModelBottom));
+                "XR mode options fit: raster=%dx%d contentHeight=%d physicalHeight=%.3fm",
+                hostWidth, targetHeightPixels, contentHeightPx, targetHeightMeters));
     }
 
     /** Local pose of the unchanged, level mode-button panel. */
@@ -5409,6 +5602,93 @@ public class XrStreamPresenter {
         revealDockTemporarily();
         PresenterMode previousMode = currentPresenterMode;
         PresenterMode nextMode = item.selectsMode;
+
+        ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(nextMode);
+        if (shouldFuseClientModeEntryQuality(
+                previousMode, nextMode, hostControlExtensionsSupported,
+                applyRequiresReconnect, targetQuality)) {
+            beginAckFirstClientModeEntry(item, previousMode, targetQuality);
+            return;
+        }
+
+        continueModeSurfaceSwitch(item, previousMode, nextMode);
+    }
+
+    /**
+     * Requests an inactive Client mode's saved tuple while SceneCore keeps presenting the old
+     * producer. No decoder recovery, Surface handoff, EGL resize, or interpretation change starts
+     * until the correlated host ACK supplies the authoritative tuple.
+     */
+    private void beginAckFirstClientModeEntry(
+            BarItem item, PresenterMode previousMode,
+            ModeStreamQualityModel targetQuality) {
+        StreamQualityTuple durableTarget = targetQuality.pendingQuality;
+        float requestedCeiling = parseFrameRate(durableTarget.frameRate, prefConfig.fps);
+        int effectiveFps = panelRefreshRateState.capUserTarget(
+                Math.max(1, Math.round(requestedCeiling)));
+        StreamQualityTuple target = effectiveFps == Math.round(requestedCeiling)
+                ? durableTarget
+                : new StreamQualityTuple(
+                        durableTarget.resolution, String.valueOf(effectiveFps),
+                        durableTarget.bitrateKbps);
+        int[] size = parseResolutionSize(target.resolution);
+        float fps = parseFrameRate(target.frameRate, prefConfig.fps);
+        int fpsX100 = frameRateX100(target.frameRate, prefConfig.fps);
+        if (size == null || fps <= 0 || fpsX100 <= 0) {
+            abortPendingModeStart();
+            reportLiveQualityStartFailure(
+                    LiveQualityRequestOrigin.USER,
+                    "the saved Client SBS quality is invalid");
+            return;
+        }
+
+        int requestId = nextVideoModeRequestId();
+        pendingAckFirstClientModeItem = item;
+        pendingAckFirstClientPreviousMode = previousMode;
+        pendingVideoModeRequestId = requestId;
+        pendingLiveQuality = target;
+        previousLiveQuality = new StreamQualityTuple(
+                prefConfig.width + "x" + prefConfig.height,
+                formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        acknowledgedLiveQuality = null;
+        pendingLiveQualityMode = PresenterMode.CLIENT_SBS_AI;
+        pendingLiveQualityOrigin = LiveQualityRequestOrigin.USER;
+        pendingDurableUserQuality = durableTarget;
+        // The mode crossing supplies the one post-ACK decoder/presentation proof even if the
+        // quality delta itself is only FPS or bitrate.
+        liveQualityChangeInProgress = true;
+        liveQualityConfirmations.begin(true, true);
+
+        if (sendHostVideoModeControl(
+                PresenterMode.CLIENT_SBS_AI,
+                size[0], size[1], fpsX100, requestId, target.bitrateKbps) <= 0) {
+            clearLiveQualityChange();
+            reportLiveQualityStartFailure(
+                    LiveQualityRequestOrigin.USER,
+                    "host request could not be queued");
+            return;
+        }
+
+        armLiveQualityAckTimeout();
+        updateGlancePanel();
+        revealDockTemporarily();
+        LimeLog.info("XR: retaining " + previousMode
+                + " while awaiting Client SBS saved-quality ack for " + target
+                + " (request " + requestId + ")");
+    }
+
+    private void continueModeSurfaceSwitch(
+            BarItem item, PresenterMode previousMode, PresenterMode nextMode) {
+        if (!controlTransportOpen() || !modeSwitchInProgress
+                || surfaceEntity == null || surfaceEntity.isDisposed()
+                || item == null || item.selectsMode != nextMode
+                || currentPresenterMode != previousMode) {
+            if (isAckFirstClientModeEntryPending()) {
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin), false);
+            }
+            return;
+        }
         // A ready push belongs to one host-depth generation. Clear it before asking Apollo to
         // enter Host SBS AI so an old session cannot briefly authorize Dump 3D while the
         // replacement pipeline is still loading. A new phase-2 push may then arrive at any point
@@ -5423,9 +5703,19 @@ public class XrStreamPresenter {
                 ? (com.limelight.Game) activity : null;
         boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode);
         if (decoderTransitionRequired) {
-            int transitionGeneration = game != null
-                    ? game.beginDecoderPresentationModeTransition() : 0;
-            if (!decoderTransitionGenerations.beginMode(transitionGeneration)) {
+            boolean reuseAckFirstTransition = isAckFirstClientModeEntryPending();
+            int transitionGeneration = reuseOrBeginModeDecoderTransition(
+                    decoderTransitionGenerations, reuseAckFirstTransition,
+                    () -> game != null ? game.beginDecoderPresentationModeTransition() : 0);
+            if (transitionGeneration <= 0) {
+                if (isAckFirstClientModeEntryPending()) {
+                    LimeLog.severe("XR: decoder could not prepare the ACKed Client SBS entry; "
+                            + "forcing authoritative reconnect");
+                    requireMandatoryLiveQualityResync(
+                            shouldCommitStagedSettingsForResync(
+                                    pendingLiveQualityOrigin), false);
+                    return;
+                }
                 lastModeSwitchMs = 0;
                 modeSwitchInProgress = false;
                 updateGlancePanel();
@@ -5442,6 +5732,17 @@ public class XrStreamPresenter {
         int nextWireMode = wireModeFor(nextMode);
         if (prefConfig.isHostDoubledWidthMode() && nextWireMode != previousWireMode
                 && sendHostSbsModeControl(nextWireMode) <= 0) {
+            if (isAckFirstClientModeEntryPending()) {
+                if (decoderTransitionRequired && game != null) {
+                    game.cancelDecoderPresentationModeTransition();
+                }
+                LimeLog.severe("XR: host quality was ACKed but the Client SBS mode request "
+                        + "could not be queued; forcing authoritative reconnect");
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(
+                                pendingLiveQualityOrigin), false);
+                return;
+            }
             // No surface changed, so the existing target is immediately safe for the replacement
             // IDR that completes the decoder flush.
             if (decoderTransitionRequired) {
@@ -5456,15 +5757,24 @@ public class XrStreamPresenter {
             return;
         }
 
-        // SceneCore cannot synchronize StereoMode/Shape changes with producer buffers. Hide only
-        // the video quad while the decoder is parked and the surface is resized/rebound, then
-        // reveal it after the new mode owns the target surface. Controls and stats stay fixed.
-        surfaceEntity.setAlpha(0.0f);
+        // SceneCore cannot synchronize StereoMode/Shape changes with producer buffers. A Client
+        // SBS crossing therefore retains both the old buffer and its old interpretation through
+        // decoder parking/rebinding. The target interpretation is committed only at its fresh
+        // presentation proof. Direct-producer size changes retain their established eager hide.
+        boolean retainOldPictureUntilTargetFrame = retainsOldPictureUntilFreshTargetFrame(
+                previousMode, nextMode);
+        if (!retainOldPictureUntilTargetFrame) {
+            surfaceEntity.setAlpha(0.0f);
+        }
 
         StreamContainer streamContainer = activity instanceof com.limelight.Game
                 ? ((com.limelight.Game) activity).getStreamContainer() : null;
-        if (streamContainer != null) {
-            streamContainer.setClientSbsActive(isClientSbs);
+        if (streamContainer != null && wasClientSbs != isClientSbs) {
+            // Entering must activate before the GL surface resumes. Leaving must remain active
+            // until MediaCodec has parked and the detach callback succeeds; disabling here queues
+            // a black clear while SceneCore still presents the retained picture at alpha 1.
+            streamContainer.setClientSbsActive(
+                    clientSbsActiveDuringSurfaceSwitch(wasClientSbs, isClientSbs));
         }
         if (wasClientSbs != isClientSbs) {
             if (streamContainer == null) {
@@ -5489,10 +5799,9 @@ public class XrStreamPresenter {
      * Applies a stream-quality tuple to the running stream with no reconnect.
      *
      * <p>Bitrate-only and frame-rate-only deltas take the fast path: one reliable control message,
-     * no surface transaction and no IDR gate. A resolution delta reuses the proven mode-switch
-     * transaction verbatim — close the frame gate, hide the quad, ask the host, re-pin the
-     * SceneCore surface through the dummy-surface handoff, then reveal once the fresh transition
-     * IDR reaches the new target.</p>
+     * no surface transaction and no IDR gate. A resolution delta retains the current presentation
+     * until the reliable ACK, then performs one decoder/surface transaction at the authoritative
+     * geometry and settles only after its fresh-IDR/presentation proof.</p>
      *
      * <p>Main-thread only: every SceneCore call below is Activity-bound.</p>
      */
@@ -5687,22 +5996,11 @@ public class XrStreamPresenter {
         updateGlancePanel();
         revealDockTemporarily();
 
-        int transitionGeneration = game.beginDecoderPresentationModeTransition();
-        if (!decoderTransitionGenerations.beginMode(transitionGeneration)) {
-            clearLiveQualityChange();
-            reportLiveQualityStartFailure(
-                    origin, "decoder could not prepare for the transition");
-            return false;
-        }
-
-        // Honor the native send result before touching any client geometry, exactly as the SBS
-        // mode switch does. A failed reliable send leaves the stream untouched.
+        // The reliable ACK is the authority for the geometry to allocate. Until it arrives, do
+        // not flush MediaCodec, resize either producer, or hide/replace SceneCore's old picture.
         int sendResult = sendHostVideoModeControl(
                 size[0], size[1], fpsX100, requestId, target.bitrateKbps);
         if (sendResult <= 0) {
-            // No surface changed, so the existing target is immediately safe for the replacement
-            // IDR that completes the decoder flush.
-            game.completeDecoderPresentationModeTransition();
             clearLiveQualityChange();
             reportLiveQualityStartFailure(
                     origin, "host request could not be queued");
@@ -5711,30 +6009,9 @@ public class XrStreamPresenter {
         pendingVideoModeRequestId = requestId;
         pendingLiveQualityOrigin = origin;
         pendingDurableUserQuality = durableUserTarget;
-
-        surfaceEntity.setAlpha(0.0f);
-        // Size the client for what we asked. If the ack later reports a clamped apply, the
-        // geometry is re-pinned to the applied values before the quad is revealed.
-        if (!applyLiveStreamGeometry(game, size[0], size[1], fps, target.bitrateKbps)) {
-            game.completeDecoderPresentationModeTransition();
-            if (postSendGeometryFailureRequiresMandatoryResync(sendResult)) {
-                LimeLog.severe("XR: host video-mode request was queued, but the client could "
-                        + "not prepare its presentation geometry; forcing resynchronization");
-                requireMandatoryLiveQualityResync(
-                        shouldCommitStagedSettingsForResync(origin), false);
-                // The queued transaction is owned by mandatory reconnect now. Returning true
-                // prevents an automatic caller from treating it as a locally retryable send.
-                return true;
-            }
-            clearLiveQualityChange();
-            reportLiveQualityStartFailure(origin, "the XR surface could not be resized");
-            return false;
-        }
-
-        game.completeDecoderPresentationModeTransition();
         armLiveQualityAckTimeout();
-        LimeLog.info("XR: awaiting ack/fresh-IDR output for live quality " + target
-                + " (request " + requestId + ")");
+        LimeLog.info("XR: retaining current presentation while awaiting authoritative ack for "
+                + "live quality " + target + " (request " + requestId + ")");
         return true;
     }
 
@@ -5870,6 +6147,40 @@ public class XrStreamPresenter {
                 + " Kbps, effective encoder bitrate " + effectiveEncoderBitrateKbps
                 + " Kbps)");
         acknowledgedLiveQuality = appliedTuple;
+        liveQualityConfirmations.onAppliedAck();
+
+        if (isAckFirstClientModeEntryPending()) {
+            if (!liveQualityConfirmations.beginPostAckDecoderConfirmation()) {
+                LimeLog.severe("XR: host applied the Client SBS entry quality, but the client "
+                        + "could not arm its one post-ACK confirmation");
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(
+                                pendingLiveQualityOrigin), false);
+                return;
+            }
+            int transitionGeneration = beginAckFirstClientDecoderTransitionBeforeGeometry(
+                    decoderTransitionGenerations,
+                    game::beginDecoderPresentationModeTransition,
+                    () -> stageAcknowledgedClientModeEntryQuality(game, appliedTuple));
+            if (transitionGeneration <= 0) {
+                LimeLog.severe("XR: host applied the Client SBS entry quality, but the client "
+                        + "could not gate and stage its one authoritative handoff");
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(
+                                pendingLiveQualityOrigin), false);
+                return;
+            }
+            continueModeSurfaceSwitch(
+                    pendingAckFirstClientModeItem,
+                    pendingAckFirstClientPreviousMode,
+                    PresenterMode.CLIENT_SBS_AI);
+            return;
+        }
+
+        if (liveQualityChangeInProgress) {
+            beginPostAckLiveQualityDecoderConfirmation(game, appliedTuple);
+            return;
+        }
         if (!applyAcknowledgedQuality(game, appliedTuple)) {
             LimeLog.severe("XR: host applied " + appliedTuple
                     + " but the client could not adopt its presentation geometry");
@@ -5878,24 +6189,18 @@ public class XrStreamPresenter {
                     false);
             return;
         }
-        liveQualityConfirmations.onAppliedAck();
-
-        if (liveQualityChangeInProgress) {
-            beginPostAckLiveQualityDecoderConfirmation(game);
-            return;
-        }
         finishConfirmedLiveQualityChange(game);
     }
 
     /**
      * Establishes a causal decoder boundary after Apollo has acknowledged the applied resolution.
      *
-     * <p>The first transition protects the local Surface resize while the host request is in
-     * flight, but its IDR may still come from the previous encoder. Superseding it here makes every
-     * accepted completion newer than the APPLIED ACK. The decoder watchdog bounds a lost IDR; this
-     * method never starts a second post-ACK attempt.</p>
+     * <p>No speculative decoder/surface transition exists before the ACK. This method starts the
+     * request's sole transition, adopts the authoritative geometry behind its closed frame gate,
+     * and only then requests the fresh IDR that may settle it.</p>
      */
-    private void beginPostAckLiveQualityDecoderConfirmation(com.limelight.Game game) {
+    private void beginPostAckLiveQualityDecoderConfirmation(
+            com.limelight.Game game, StreamQualityTuple appliedTuple) {
         if (!liveQualityConfirmations.beginPostAckDecoderConfirmation()) {
             LimeLog.severe("XR: could not arm the post-ack decoder confirmation exactly once; "
                     + "forcing authoritative reconnect");
@@ -5915,9 +6220,42 @@ public class XrStreamPresenter {
             return;
         }
 
+        // Client SBS can retain its previous packed SceneCore buffer through the resize. Direct
+        // producer changes retain their established hidden boundary.
+        if (currentPresenterMode != PresenterMode.CLIENT_SBS_AI) {
+            surfaceEntity.setAlpha(0.0f);
+        }
+        if (!applyAcknowledgedQuality(game, appliedTuple)) {
+            LimeLog.severe("XR: host applied " + appliedTuple
+                    + " but the client could not adopt its presentation geometry");
+            requireMandatoryLiveQualityResync(
+                    shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin),
+                    false);
+            return;
+        }
+
         game.completeDecoderPresentationModeTransition();
-        LimeLog.info("XR: host resolution is authoritative; awaiting one post-ack fresh-IDR "
-                + "output before revealing the surface");
+        LimeLog.info("XR: host resolution is authoritative; awaiting the sole post-ack "
+                + "fresh-IDR output before presentation commit");
+    }
+
+    /** Stages an ACKed inactive Client tuple without resizing the still-visible old producer. */
+    private boolean stageAcknowledgedClientModeEntryQuality(
+            com.limelight.Game game, StreamQualityTuple applied) {
+        int[] size = parseResolutionSize(applied.resolution);
+        float fps = parseFrameRate(applied.frameRate, prefConfig.fps);
+        if (size == null || fps <= 0) {
+            return false;
+        }
+        prefConfig.width = size[0];
+        prefConfig.height = size[1];
+        prefConfig.fps = fps;
+        prefConfig.bitrate = applied.bitrateKbps;
+        fullAspect = (float) size[0] / size[1];
+        updateDecoderStreamGeometry(
+                game, PresenterMode.CLIENT_SBS_AI,
+                size[0], size[1], Math.round(fps));
+        return true;
     }
 
     /**
@@ -5957,12 +6295,40 @@ public class XrStreamPresenter {
 
     private void handleVideoModeRefusal(com.limelight.Game game, int status,
                                         StreamQualityTuple stillInEffect) {
+        PresenterMode requestMode = liveQualityRequestMode();
+        LiveQualityRequestOrigin requestOrigin = pendingLiveQualityOrigin;
+        if (isAckFirstClientModeEntryPending()
+                && status == MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
+                && requestOrigin == LiveQualityRequestOrigin.USER) {
+            // Stage the requested mode while the fused transaction guard is still raised. Game's
+            // normal mode callback can then select it, but its attempted live apply is rejected by
+            // this guard; the following reconnect callback commits the complete target record.
+            stagePendingAckFirstClientModeForReconnect();
+            decoderTransitionGenerations.clearMode();
+            clearLiveQualityChange();
+            panelRefreshRateState.otherTransactionSettled();
+            LimeLog.info("XR: host requires reconnect for ACK-first Client SBS entry");
+            controlActionListener.onLiveStreamQualityNeedsReconnect();
+            return;
+        }
+        if (shouldReconnectUserClientSbsWithoutRollback(
+                status, requestMode, requestOrigin, liveQualityChangeInProgress)) {
+            // This status proves the requested tuple is valid, but not reachable on the running
+            // stream. No pre-ACK resize exists to roll back; reconnect the still-staged target
+            // while the retained old picture remains visible.
+            decoderTransitionGenerations.clearMode();
+            clearLiveQualityChange();
+            panelRefreshRateState.otherTransactionSettled();
+            LimeLog.info("XR: host reports the requested Client SBS mode needs a reconnect; "
+                    + "bypassing live surface rollback");
+            controlActionListener.onLiveStreamQualityNeedsReconnect();
+            return;
+        }
+
         // On a refusal the applied* values describe the mode that remains in effect, so
         // resynchronize the client to them rather than to what was optimistically staged.
         StreamQualityTuple durableStillInEffect =
                 stillInEffect != null ? stillInEffect : previousLiveQuality;
-        PresenterMode requestMode = liveQualityRequestMode();
-        LiveQualityRequestOrigin requestOrigin = pendingLiveQualityOrigin;
         int[] rollbackSize = durableStillInEffect != null
                 ? parseResolutionSize(durableStillInEffect.resolution) : null;
         boolean asynchronousClientRollback = liveQualityChangeInProgress
@@ -6434,6 +6800,9 @@ public class XrStreamPresenter {
     private void requireMandatoryLiveQualityResync(
             boolean commitStagedSettings, boolean allowConfirmedSurfaceReveal) {
         boolean wasResolutionTransaction = liveQualityChangeInProgress;
+        if (commitStagedSettings && isAckFirstClientModeEntryPending()) {
+            stagePendingAckFirstClientModeForReconnect();
+        }
         LiveQualityAckTimeoutDisposition disposition =
                 liveQualityAckTimeoutDisposition(
                         liveQualityChangeInProgress, pendingLiveQualityOrigin);
@@ -6451,6 +6820,7 @@ public class XrStreamPresenter {
             ((com.limelight.Game) activity).cancelDecoderPresentationModeTransition();
         }
         decoderTransitionGenerations.clearMode();
+        pendingDecoderTransitionMode = null;
         panelRefreshRateState.requestAbandonedForReconnect();
         clearLiveQualityChange();
         controlActionListener.onLiveStreamQualityResyncRequired(
@@ -6478,8 +6848,35 @@ public class XrStreamPresenter {
         pendingLiveQualityMode = null;
         pendingLiveQualityOrigin = null;
         pendingDurableUserQuality = null;
+        abortPendingModeStart();
         updateGlancePanel();
         revealDockTemporarily();
+    }
+
+    private boolean isAckFirstClientModeEntryPending() {
+        return pendingAckFirstClientModeItem != null
+                && pendingAckFirstClientPreviousMode != null;
+    }
+
+    private void stagePendingAckFirstClientModeForReconnect() {
+        BarItem pendingItem = pendingAckFirstClientModeItem;
+        if (pendingItem != null) {
+            controlActionListener.onPresentationModeCommitted(
+                    PresenterMode.CLIENT_SBS_AI);
+        }
+    }
+
+    /** Releases a mode start that never reached a durable presentation commit. */
+    private void abortPendingModeStart() {
+        if (!isAckFirstClientModeEntryPending()) {
+            return;
+        }
+        pendingAckFirstClientModeItem = null;
+        pendingAckFirstClientPreviousMode = null;
+        modeSwitchInProgress = false;
+        lastModeSwitchMs = 0L;
+        decoderTransitionGenerations.clearMode();
+        pendingDecoderTransitionMode = null;
     }
 
     private void reportLiveQualityStartFailure(
@@ -6580,7 +6977,24 @@ public class XrStreamPresenter {
         }
 
         boolean surfaceUsable = surfaceEntity != null && !surfaceEntity.isDisposed();
+        if (streamContainer != null && wasClientSbs != isClientSbs) {
+            streamContainer.setClientSbsActive(clientSbsActiveAfterSurfaceSwitch(
+                    wasClientSbs, isClientSbs, surfaceSwitchSucceeded && surfaceUsable));
+        }
         if (!surfaceSwitchSucceeded || !surfaceUsable) {
+            if (isAckFirstClientModeEntryPending()) {
+                pendingDecoderTransitionMode = null;
+                if (activity instanceof com.limelight.Game) {
+                    ((com.limelight.Game) activity)
+                            .cancelDecoderPresentationModeTransition();
+                }
+                LimeLog.severe("XR: ACKed Client SBS entry could not complete its sole surface "
+                        + "handoff; forcing authoritative reconnect");
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(
+                                pendingLiveQualityOrigin), false);
+                return;
+            }
             modeSwitchInProgress = false;
             decoderTransitionGenerations.clearMode();
             updateGlancePanel();
@@ -6588,9 +7002,6 @@ public class XrStreamPresenter {
             schedulePanelRateReconcile();
             if (activity instanceof com.limelight.Game) {
                 ((com.limelight.Game) activity).cancelDecoderPresentationModeTransition();
-            }
-            if (streamContainer != null) {
-                streamContainer.setClientSbsActive(wasClientSbs);
             }
             if (prefConfig.isHostDoubledWidthMode() && nextWireMode != previousWireMode
                     && sendHostSbsModeControl(previousWireMode) <= 0) {
@@ -6606,6 +7017,43 @@ public class XrStreamPresenter {
             return;
         }
 
+        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode);
+        boolean retainOldPictureUntilTargetFrame =
+                retainsOldPictureUntilFreshTargetFrame(previousMode, nextMode);
+        if (!retainOldPictureUntilTargetFrame) {
+            applyPresenterModeInterpretation(previousMode, nextMode, item.label);
+        }
+        if (decoderTransitionRequired) {
+            // Client-SBS crossings retain the previous interpretation as well as its last buffer.
+            // Entry commits only after a packed EGL swap; exit commits when MediaCodec accepts the
+            // fresh direct target frame. A lost proof terminates instead of persisting a partial
+            // transition. Direct-producer resize transitions keep their established hidden gate.
+            pendingDecoderTransitionMode = nextMode;
+            if (retainOldPictureUntilTargetFrame && isClientSbs
+                    && !armClientSbsModeSwap(
+                            decoderTransitionGenerations.currentModeGeneration(), nextMode)) {
+                return;
+            }
+            ((com.limelight.Game) activity).completeDecoderPresentationModeTransition();
+            LimeLog.info("XR: awaiting fresh-IDR output before completing mode " + nextMode);
+        } else {
+            if (retainOldPictureUntilTargetFrame) {
+                applyPresenterModeInterpretation(previousMode, nextMode, item.label);
+            }
+            surfaceEntity.setAlpha(1.0f);
+            modeSwitchInProgress = false;
+            persistPresentationState();
+            controlActionListener.onPresentationModeCommitted(currentPresenterMode);
+            updateGlancePanel();
+            revealDockTemporarily();
+            schedulePanelRateReconcile();
+        }
+    }
+
+    /** Commits SceneCore's interpretation only at the visibility boundary chosen by the caller. */
+    private void applyPresenterModeInterpretation(PresenterMode previousMode,
+                                                  PresenterMode nextMode,
+                                                  String label) {
         if (resetsHostDepthStatusAtTransitionCommit(previousMode, nextMode)) {
             resetHostDepthStatus();
         }
@@ -6613,7 +7061,7 @@ public class XrStreamPresenter {
         reconcileHostSbsTelemetrySubscription();
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         applyContentColorMetadata();
-        LimeLog.info("XR: stereo mode -> " + item.label);
+        LimeLog.info("XR: stereo mode -> " + label);
 
         float aspect = aspectFor(currentPresenterMode);
         SurfaceEntity.Shape shape = surfaceEntity.getShape();
@@ -6625,28 +7073,61 @@ public class XrStreamPresenter {
         applyResizeBounds(aspect);
         repositionControlBar(height);
         updateModeSelection();
-        if (requiresDecoderTransition(previousMode, nextMode)) {
-            // Do not expose or persist the new interpretation until MediaCodec confirms that the
-            // fresh transition IDR reached the new Surface. A lost IDR is retried and eventually
-            // terminates the stream instead of leaving a durable black/half-switched mode.
-            pendingDecoderTransitionMode = nextMode;
-            ((com.limelight.Game) activity).completeDecoderPresentationModeTransition();
-            LimeLog.info("XR: awaiting fresh-IDR output before completing mode " + nextMode);
-        } else {
-            surfaceEntity.setAlpha(1.0f);
-            modeSwitchInProgress = false;
-            persistPresentationState();
-            controlActionListener.onPresentationModeCommitted(currentPresenterMode);
-            updateGlancePanel();
-            revealDockTemporarily();
-            schedulePanelRateReconcile();
+    }
+
+    private String labelForPresenterMode(PresenterMode mode) {
+        for (BarItem item : barItems) {
+            if (item.selectsMode == mode) {
+                return item.label;
+            }
         }
+        return mode.name();
     }
 
     /** Decoder callback: the fresh transition IDR is now being released to the target Surface. */
     public void onDecoderPresentationModeTransitionOpened(int transitionGeneration) {
         PresenterMode pendingMode = pendingDecoderTransitionMode;
         if (pendingMode != null) {
+            if (requiresClientPackedSwapProof(currentPresenterMode, pendingMode)) {
+                if (!decoderTransitionGenerations.dispatchModeIfCurrent(
+                        transitionGeneration,
+                        () -> {
+                            if (isAckFirstClientModeEntryPending()) {
+                                int[] expected = expectedLiveQualityDecoderDimensions();
+                                int[] actual = ((com.limelight.Game) activity)
+                                        .getDecoderOutputDimensions();
+                                int actualWidth = actual != null ? actual[0] : 0;
+                                int actualHeight = actual != null ? actual[1] : 0;
+                                liveQualityConfirmations.onDecoderOutput(
+                                        actualWidth, actualHeight,
+                                        expected[0], expected[1]);
+                                if (decoderMismatchRequiresMandatoryResync(
+                                        true, liveQualityConfirmations)) {
+                                    LimeLog.severe("XR: ACK-first Client SBS entry received "
+                                            + actualWidth + "x" + actualHeight
+                                            + " instead of authoritative "
+                                            + expected[0] + "x" + expected[1]
+                                            + "; forcing reconnect");
+                                    pendingDecoderTransitionMode = null;
+                                    requireMandatoryLiveQualityResync(
+                                            shouldCommitStagedSettingsForResync(
+                                                    pendingLiveQualityOrigin), false);
+                                    return;
+                                }
+                                if (liveQualityConfirmations.canSettle()) {
+                                    finishPendingModeTransition(pendingMode);
+                                    return;
+                                }
+                            }
+                            LimeLog.info("XR: fresh Client SBS decoder input reached; awaiting "
+                                    + "first packed swap");
+                            armClientSbsModeSwapTimeout(transitionGeneration);
+                        })) {
+                    LimeLog.warning("XR: ignoring superseded decoder completion generation "
+                            + transitionGeneration + " for mode " + pendingMode);
+                }
+                return;
+            }
             if (!decoderTransitionGenerations.dispatchModeIfCurrent(
                     transitionGeneration, () -> finishPendingModeTransition(pendingMode))) {
                 LimeLog.warning("XR: ignoring superseded decoder completion generation "
@@ -6684,22 +7165,105 @@ public class XrStreamPresenter {
         }
     }
 
+    /** Client entry needs the renderer's packed output, not merely its decoded input frame. */
+    static boolean requiresClientPackedSwapProof(PresenterMode currentMode,
+                                                 PresenterMode pendingMode) {
+        return currentMode != PresenterMode.CLIENT_SBS_AI
+                && pendingMode == PresenterMode.CLIENT_SBS_AI;
+    }
+
+    private boolean armClientSbsModeSwap(int transitionGeneration, PresenterMode pendingMode) {
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        StreamContainer streamContainer = game != null ? game.getStreamContainer() : null;
+        boolean armed = streamContainer != null
+                && streamContainer.completeClientSbsModeSwitchAfterSwap(() -> {
+                    if (!decoderTransitionGenerations.dispatchModeIfCurrent(
+                            transitionGeneration,
+                            () -> {
+                                if (isAckFirstClientModeEntryPending()) {
+                                    liveQualityConfirmations.onPresentationReady();
+                                    if (!liveQualityConfirmations.canSettle()) {
+                                        LimeLog.info("XR: Client SBS packed swap is waiting for "
+                                                + "the ACKed decoder boundary");
+                                        return;
+                                    }
+                                }
+                                finishPendingModeTransition(pendingMode);
+                            })) {
+                        LimeLog.warning("XR: ignoring superseded Client SBS packed-swap proof "
+                                + transitionGeneration);
+                    }
+                });
+        if (!armed) {
+            failPendingClientSbsModeSwap(transitionGeneration,
+                    "could not arm the packed-swap proof");
+            return false;
+        }
+
+        LimeLog.info("XR: retaining previous presentation until first Client SBS packed swap");
+        return true;
+    }
+
+    /** The packed-swap budget begins at fresh decoder output, not while waiting for its IDR. */
+    private void armClientSbsModeSwapTimeout(int transitionGeneration) {
+        liveQualityHandler.postDelayed(
+                () -> failPendingClientSbsModeSwap(
+                        transitionGeneration, "timed out before the first packed swap"),
+                2000L);
+    }
+
+    private void failPendingClientSbsModeSwap(int transitionGeneration, String reason) {
+        decoderTransitionGenerations.dispatchModeIfCurrent(transitionGeneration, () -> {
+            decoderTransitionGenerations.clearMode();
+            LimeLog.severe("XR: Client SBS mode " + reason);
+            if (isAckFirstClientModeEntryPending()) {
+                pendingDecoderTransitionMode = null;
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(
+                                pendingLiveQualityOrigin), false);
+                return;
+            }
+            if (activity instanceof com.limelight.Game) {
+                ((com.limelight.Game) activity).handleDecoderSurfaceSwitchFailure();
+            }
+        });
+    }
+
     private void finishPendingModeTransition(PresenterMode pendingMode) {
         if (surfaceEntity == null || surfaceEntity.isDisposed()
-                || currentPresenterMode != pendingMode) {
+                || pendingDecoderTransitionMode != pendingMode) {
             LimeLog.warning("XR: ignoring stale decoder transition completion for " + pendingMode);
             return;
+        }
+        PresenterMode previousMode = currentPresenterMode;
+        boolean completedPackedClientEntry =
+                requiresClientPackedSwapProof(previousMode, pendingMode);
+        if (previousMode != pendingMode) {
+            applyPresenterModeInterpretation(
+                    previousMode, pendingMode, labelForPresenterMode(pendingMode));
         }
         pendingDecoderTransitionMode = null;
         decoderTransitionGenerations.clearMode();
         surfaceEntity.setAlpha(1.0f);
+        if (isAckFirstClientModeEntryPending()) {
+            StreamQualityTuple applied = acknowledgedLiveQuality;
+            // Clear only the fused-mode record first. settleSuccessfulLiveQuality() clears the
+            // live-quality record and publishes the ACKed target while modeSwitchInProgress still
+            // blocks any reentrant request from Game.
+            pendingAckFirstClientModeItem = null;
+            pendingAckFirstClientPreviousMode = null;
+            settleSuccessfulLiveQuality(PresenterMode.CLIENT_SBS_AI, applied);
+        }
         modeSwitchInProgress = false;
         persistPresentationState();
         controlActionListener.onPresentationModeCommitted(currentPresenterMode);
         updateGlancePanel();
         revealDockTemporarily();
         schedulePanelRateReconcile();
-        LimeLog.info("XR: fresh-IDR output completed mode " + pendingMode);
+        LimeLog.info(completedPackedClientEntry
+                ? "XR: first fresh packed swap completed mode " + pendingMode
+                : "XR: fresh-IDR output completed mode " + pendingMode);
     }
 
     private void openClientSbsHdrTransition() {
@@ -6879,10 +7443,15 @@ public class XrStreamPresenter {
         cinemaViewExpanded = false;
     }
 
-    private void restoreViewState() {
+    private void restoreViewState(PresenterMode authoritativeStartupMode) {
         XrViewStateStore.State state = viewStateStore.restore();
         panelHeightMeters = state.panelHeightMeters;
-        PresenterMode savedMode = PresenterMode.valueOf(state.presentationMode.name());
+        // SessionSettingsStore owns the successfully applied mode and already supplied the
+        // matching PreferenceConfiguration used to launch this connection. XrViewStateStore owns
+        // geometry only; its legacy mode value is a fallback for non-Game/test construction.
+        PresenterMode savedMode = authoritativeStartupMode != null
+                ? authoritativeStartupMode
+                : PresenterMode.valueOf(state.presentationMode.name());
         if (savedMode == PresenterMode.HOST_SBS_AI || savedMode == PresenterMode.HOST_SBS_RAW) {
             // These direct-decoder modes can be correct from frame 1. Host AI is also carried in
             // StreamConfiguration/NvHTTP so Apollo begins packed output before transport starts.
@@ -7102,7 +7671,7 @@ public class XrStreamPresenter {
                 ? (com.limelight.Game) activity : null;
         boolean hdr = game != null && game.isStreamHdrActive();
         StreamContainer streamContainer = game != null ? game.getStreamContainer() : null;
-        // Tell the AI-input shader to tonemap PQ->SDR for MiDaS when the stream is HDR.
+        // Tell the AI-input shader to tonemap PQ->SDR for ZipDepth when the stream is HDR.
         if (streamContainer != null) {
             streamContainer.setHdrInput(hdr);
         }

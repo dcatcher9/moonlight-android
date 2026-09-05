@@ -339,7 +339,7 @@ public final class SessionSettingsStore {
         /**
          * Returns one mode's immutable effective settings with a small explicit overlay.
          * This is intended for stream-start values that are owned by another mode but must be
-         * available while parsing the selected startup mode (for example the Client SBS model).
+         * available while parsing the selected startup mode.
          */
         public SharedPreferences preferencesForModeWithOverrides(PresenterMode mode,
                                                                   Map<String, ?> overrides) {
@@ -560,10 +560,10 @@ public final class SessionSettingsStore {
      * Removes one effective mode override from every current-session record.
      *
      * <p>This is intentionally narrower than clearing a mode or session. It is used by explicit
-     * device A/B helpers after changing a global default, so an existing per-PC session cannot
-     * silently keep the old value. The matching legacy shared override is removed too because it
-     * participates in the same effective mode preference overlay. Unrelated settings, resume
-     * metadata, unknown JSON fields, malformed records, and other schema versions are preserved.</p>
+     * setting migrations and device A/B helpers, so an existing per-PC session cannot silently
+     * keep the old value. The matching legacy shared override is removed too because it participates
+     * in the same effective mode preference overlay. Unrelated settings, resume metadata, unknown
+     * JSON fields, malformed records, and other schema versions are preserved.</p>
      */
     public boolean clearModeValueOverridesForAllCurrentSessions(PresenterMode mode, String key) {
         Objects.requireNonNull(mode, "mode");

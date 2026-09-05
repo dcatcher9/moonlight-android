@@ -16,8 +16,8 @@ import java.nio.ByteOrder;
  * GLES 3.1 implementation of the client SBS temporal depth/profile pipeline.
  *
  * <p>The processor consumes LiteRT GPU's packed Float32 model-output SSBO. All per-pixel work
- * remains on the GPU and the result is exposed as a source-aligned depth texture. A four-texel RGBA32F
- * texture publishes the small profile used by reprojection, so the production renderer need not
+ * remains on the GPU and the result is exposed as a source-aligned raw-depth texture. A four-texel
+ * RGBA32F texture publishes the shot-latched camera used by reprojection, so production need not
  * map a buffer or wait for the CPU. {@link #pollHealthSnapshot()} provides low-frequency,
  * asynchronous health telemetry without waiting for the GPU.</p>
  *
@@ -35,27 +35,51 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     /**
      * Renderer profile texture layout. Each entry is one RGBA32F texel:
      * <ol>
-     *     <li>stretch low, stretch high, stretch inverse range, subject depth</li>
-     *     <li>recenter delta, zero-plane anchor shift, pop ratio, profile-ready flag</li>
-     *     <li>raw P2, raw P98, settle-latched edge fraction, change fraction</li>
-     *     <li>subject candidate, pop strength, hard-cut flag, scene age</li>
+     *     <li>shot-latched raw mean, current raw mean, reserved, profile-ready flag</li>
+     *     <li>current P2/P98 and effective P2/P98 (cut diagnostics only)</li>
+     *     <li>change fraction, cut evidence, geometry baseline, scene age</li>
+     *     <li>valid count, hard-cut pulse, current-valid bit, history-advance bit</li>
      * </ol>
      */
-    /**
-     * Adaptive-pop band. The resolve pass latches a strength in [FLOOR, CEILING] and publishes
-     * {@code strength / FLOOR} as the ratio; the warp multiplies FLOOR by that ratio, and sizes its
-     * inverse-search radius from CEILING. All three must move together — a radius built from a
-     * smaller ceiling than the band can actually latch leaves the frame's displacement outside the
-     * search window and the probe silently misses crossings.
-     */
-    public static final float ADAPTIVE_POP_FLOOR = 1.20f;
-    public static final float ADAPTIVE_POP_CEILING = 2.00f;
-    /** Diagnostic sentinel used until a settled edge field has classified the current shot. */
-    public static final float ADAPTIVE_POP_UNCLASSIFIED_EDGE = -1.0f;
-    /** Wall-time/reference-frame age used only for adaptive-pop and anchor settling. */
+    // Retained solely by offline legacy shader utilities. Production V2 uses fixed pop 1.75.
+    static final float LEGACY_ADAPTIVE_POP_FLOOR = 1.20f;
+    static final float LEGACY_ADAPTIVE_POP_CEILING = 2.00f;
+    static final float LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE = -1.0f;
+    @Deprecated public static final float ADAPTIVE_POP_FLOOR = LEGACY_ADAPTIVE_POP_FLOOR;
+    @Deprecated public static final float ADAPTIVE_POP_CEILING = LEGACY_ADAPTIVE_POP_CEILING;
+    @Deprecated public static final float ADAPTIVE_POP_UNCLASSIFIED_EDGE =
+            LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+    /** Retained by the offline legacy profile shader only. */
     static final int PROFILE_SETTLE_REFERENCE_FRAMES = 8;
 
     public static final int PROFILE_TEXEL_COUNT = 4;
+
+    /** Last notable cut-event diagnostic bits copied with the existing health snapshot. */
+    public static final int CUT_DECISION_CURRENT_APPEARANCE_PROPOSAL = 1 << 0;
+    public static final int CUT_DECISION_SELECTED_APPEARANCE = 1 << 1;
+    public static final int CUT_DECISION_APPEARANCE_ARMED = 1 << 2;
+    public static final int CUT_DECISION_APPEARANCE_DEPTH_CORROBORATED = 1 << 3;
+    public static final int CUT_DECISION_EXPOSURE_LIKE = 1 << 4;
+    public static final int CUT_DECISION_GEOMETRY_CANDIDATE = 1 << 5;
+    public static final int CUT_DECISION_GEOMETRY_CONFIRMATION_PENDING = 1 << 6;
+    public static final int CUT_DECISION_HISTORY_ADVANCED = 1 << 7;
+    public static final int CUT_DECISION_ACCEPTED_APPEARANCE = 1 << 8;
+    public static final int CUT_DECISION_ACCEPTED_GEOMETRY = 1 << 9;
+    public static final int CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY = 1 << 10;
+    public static final int CUT_DECISION_CURRENT_DEPTH_VALID = 1 << 11;
+    /** Depth alone reached a geometry-cut entry threshold before structural corroboration. */
+    public static final int CUT_DECISION_GEOMETRY_DEPTH_TRIGGER = 1 << 12;
+    /** Apollo-equivalent independent ordinal structure corroborated the geometry trigger. */
+    public static final int CUT_DECISION_GEOMETRY_STRUCTURE_CORROBORATED = 1 << 13;
+    /** A pending two-observation geometry confirmation failed on its next valid update. */
+    public static final int CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED = 1 << 14;
+    public static final int CUT_DECISION_PERSISTENT_LOW_START = 1 << 15;
+    public static final int CUT_DECISION_SUPPORTED_RETURN = 1 << 16;
+    /** Ordinal color evidence was unavailable, so bounded two-update depth confirmation is active. */
+    public static final int CUT_DECISION_DEPTH_ONLY_FALLBACK = 1 << 17;
+    public static final int CUT_DECISION_ACCEPTED_MASK = CUT_DECISION_ACCEPTED_APPEARANCE
+            | CUT_DECISION_ACCEPTED_GEOMETRY
+            | CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY;
     public static final int PROFILE_TEXEL_STRETCH = 0;
     public static final int PROFILE_TEXEL_STEREO = 1;
     public static final int PROFILE_TEXEL_DIAGNOSTICS = 2;
@@ -63,26 +87,34 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private static final int RAW_SSBO_BINDING = 0;
     private static final int RAW_STATS_SSBO_BINDING = 1;
-    private static final int PROFILE_STATS_SSBO_BINDING = 2;
     private static final int STATE_SSBO_BINDING = 3;
-    // Resolve temporarily moves raw stats to binding zero so the scene-cut word can occupy one.
+    // Resolve temporarily moves raw stats to binding zero so the scene-cut record can occupy one.
     private static final int EXTERNAL_SCENE_CUT_SSBO_BINDING = RAW_STATS_SSBO_BINDING;
     private static final int DEPTH_IMAGE_BINDING = 0;
     private static final int PROFILE_IMAGE_BINDING = 1;
+    private static final int RAW_DEPTH_IMAGE_BINDING = 2;
+    private static final int RELIABLE_DEPTH_IMAGE_BINDING = 3;
 
-    private static final int RAW_STATS_BYTES = 4 * (4 + 256);
-    private static final int PROFILE_STATS_BYTES = 4 * (256 + 256 + 4);
-    // Seven full vectors followed by one vec2 and one ivec2. Splitting the final 16 bytes gives
-    // the cut detector an exact valid-depth-update counter without moving existing health fields.
+    private static final int RAW_STATS_HEADER_BYTES = 4 * (4 + 256);
+    private static final int RAW_GROUP_MOMENT_BYTES = 4 * Float.BYTES;
+    // The original seven vectors plus cut auxiliary fields occupy 128 bytes; the V2 camera starts
+    // at 128. Causal cut telemetry is append-only from byte 144, preserving every existing offset.
+    static final int CUT_REASON_COUNTERS_BYTE_OFFSET = 144;
+    static final int CUT_APPEARANCE_STATS_BYTE_OFFSET = 160;
+    static final int CUT_APPEARANCE_META_BYTE_OFFSET = 176;
+    static final int CUT_DEPTH_DIAGNOSTICS_BYTE_OFFSET = 192;
+    static final int CUT_EVENT_META_BYTE_OFFSET = 208;
     static final int STATE_BYTES = 7 * 4 * Float.BYTES
-            + 2 * Float.BYTES + 2 * Integer.BYTES;
+            + 2 * Float.BYTES + 2 * Integer.BYTES + 4 * Float.BYTES
+            + 5 * 4 * Integer.BYTES;
     private static final int SCENE_CUT_MAILBOX_SLOT_COUNT = 2;
     private static final int SCENE_CUT_MAILBOX_BYTES =
-            SCENE_CUT_MAILBOX_SLOT_COUNT * Integer.BYTES;
+            SCENE_CUT_MAILBOX_SLOT_COUNT
+                    * ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES;
     private static final int HEALTH_READBACK_SLOT_COUNT = 3;
     /**
      * Background cadence: enough to keep a HUD current at negligible cost (~2.4 Hz at 72 fps),
-     * since each sample is a 128-byte copy plus a fence.
+     * since each sample is one tiny state copy plus a fence.
      */
     private static final int HEALTH_SAMPLE_INTERVAL_FRAMES = 30;
     /**
@@ -106,6 +138,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private final float temporalReferenceHz;
     private final boolean removeReflectedPadding;
     private final int tensorPixelCount;
+    private final int rawGroupCount;
     private final EGLContext ownerContext;
     private final Result result = new Result();
     private final HealthSnapshot healthSnapshot = new HealthSnapshot();
@@ -119,8 +152,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int depthInternalFormat;
     private boolean linearDepthFiltering;
     private int profileTexture;
+    private int rawDepthTexture;
+    private int reliableDepthTexture;
     private int rawStatsBuffer;
-    private int profileStatsBuffer;
     private int stateBuffer;
     private int zeroExternalSceneCutBuffer;
     private int sceneCutMailboxBuffer;
@@ -130,28 +164,23 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int rawHistogramProgram;
     private int resolveRawProgram;
     private int temporalProgram;
-    private int accumulateProfileProgram;
     private int resolveProfileProgram;
     private int resetStateProgram;
 
     private RawUniforms rawMinMaxUniforms;
     private RawUniforms rawHistogramUniforms;
     private RawUniforms temporalRawUniforms;
-    private ExternalSceneCutUniforms resolveRawExternalCutUniforms;
-    private ExternalSceneCutUniforms temporalExternalCutUniforms;
     private ExternalSceneCutUniforms resolveExternalCutUniforms;
-    private int rawHistogramPreviousUniform;
+    private int rawMinMaxPreviousUniform;
     private int resolveRawRangeAlphaUniform;
+    private int resolveRawExpectedPixelCountUniform;
+    private int resolveRawGroupCountUniform;
+    private int resolveProfileSourceFrameDeltaUniform;
     private int temporalPreviousUniform;
+    private int temporalReliableUniform;
     private int temporalDepthAlphaUniform;
     private int temporalMovingDepthAlphaUniform;
     private int temporalSpatialScaleUniform;
-    private int accumulateCurrentUniform;
-    private int accumulateOutputSizeUniform;
-    private int accumulateSpatialScaleUniform;
-    private int resolvePixelCountUniform;
-    private int resolveSubjectAlphaUniform;
-    private int resolveBandAlphaUniform;
     private int resolveReferenceFrameAdvanceUniform;
 
     private int currentDepthIndex;
@@ -228,6 +257,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         spatialThresholdScale = ClientSbsTemporalTuning.spatialThresholdScale(
                 outputWidth, outputHeight);
         tensorPixelCount = Math.multiplyExact(tensorWidth, tensorHeight);
+        rawGroupCount = Math.multiplyExact(groups(outputWidth), groups(outputHeight));
         ownerContext = currentContext;
 
         try {
@@ -239,7 +269,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                     + " output=" + outputWidth + "x" + outputHeight
                     + " texture=R32F"
                     + " filtering=" + (linearDepthFiltering ? "linear" : "nearest")
-                    + " postprocess=7-dispatch-fused-cut"
+                    + " postprocess=6-dispatch-raw-v2"
                     + " temporalReference=" + temporalReferenceHz
                     + "Hz spatialThresholdScale=" + spatialThresholdScale);
         } catch (RuntimeException error) {
@@ -255,26 +285,63 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      */
     public Result processRendererOwned(int packedFloatSsbo, int rawByteOffset,
                                        int rawPixelStrideBytes, boolean externalSceneCut) {
-        return processInternal(packedFloatSsbo, rawByteOffset, rawPixelStrideBytes,
-                externalSceneCut, 0, 0);
+        return processRendererOwned(packedFloatSsbo, rawByteOffset, rawPixelStrideBytes,
+                externalSceneCut, 1);
     }
 
-    /** Renderer-owned hot path with a GPU-produced uint32 scene-cut flag. */
+    public Result processRendererOwned(int packedFloatSsbo, int rawByteOffset,
+                                       int rawPixelStrideBytes, boolean externalSceneCut,
+                                       int sourceFrameDelta) {
+        return processInternal(packedFloatSsbo, rawByteOffset, rawPixelStrideBytes,
+                externalSceneCut, 0, 0, sourceFrameDelta);
+    }
+
+    /** Renderer-owned hot path with a GPU-produced appearance-evidence record. */
     public Result processRendererOwnedWithGpuSceneCut(int packedFloatSsbo, int rawByteOffset,
                                                        int rawPixelStrideBytes,
                                                        int externalSceneCutSsbo,
                                                        int externalSceneCutByteOffset) {
-        return processInternal(packedFloatSsbo, rawByteOffset, rawPixelStrideBytes,
-                false, externalSceneCutSsbo, externalSceneCutByteOffset);
+        return processRendererOwnedWithGpuSceneCut(packedFloatSsbo, rawByteOffset,
+                rawPixelStrideBytes, externalSceneCutSsbo, externalSceneCutByteOffset, 1);
     }
 
-    /** Stable GPU mailbox shared with the color-cut detector, one word per tensor slot. */
+    public Result processRendererOwnedWithGpuSceneCut(int packedFloatSsbo, int rawByteOffset,
+                                                       int rawPixelStrideBytes,
+                                                       int externalSceneCutSsbo,
+                                                       int externalSceneCutByteOffset,
+                                                       int sourceFrameDelta) {
+        return processInternal(packedFloatSsbo, rawByteOffset, rawPixelStrideBytes,
+                false, externalSceneCutSsbo, externalSceneCutByteOffset, sourceFrameDelta);
+    }
+
+    /** Stable GPU mailbox shared with the color-cut detector, one record per tensor slot. */
     public int getSceneCutMailboxBufferId() {
         assertOwnerContext();
         return sceneCutMailboxBuffer;
     }
 
-    /** Returns the word-aligned byte offset paired with one native tensor/color slot. */
+    /** GPU state containing the current result's authoritative history-advance bit. */
+    public int getHistoryDecisionStateBufferId() {
+        assertOwnerContext();
+        return stateBuffer;
+    }
+
+    /**
+     * Dedicated normalized cut reference. A held result never authorizes its own promotion, though
+     * the preceding advancing result may be installed at this actual-inference boundary.
+     */
+    public int getReliableDepthTextureId() {
+        assertOwnerContext();
+        return reliableDepthTexture;
+    }
+
+    /** Immediate normalized temporal depth, primarily exposed for on-device parity diagnostics. */
+    public int getTemporalDepthTextureId() {
+        assertOwnerContext();
+        return depthTextures[currentDepthIndex];
+    }
+
+    /** Returns the record-aligned byte offset paired with one native tensor/color slot. */
     public int getSceneCutMailboxByteOffset(int slot) {
         assertOwnerContext();
         return sceneCutMailboxByteOffsetForSlot(slot);
@@ -284,12 +351,13 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         if (slot < 0 || slot >= SCENE_CUT_MAILBOX_SLOT_COUNT) {
             throw new IllegalArgumentException("invalid scene-cut mailbox slot " + slot);
         }
-        return slot * Integer.BYTES;
+        return slot * ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES;
     }
 
     private Result processInternal(int packedFloatSsbo, int rawByteOffset,
                                    int rawPixelStrideBytes, boolean externalSceneCut,
-                                   int externalSceneCutSsbo, int externalSceneCutByteOffset) {
+                                   int externalSceneCutSsbo, int externalSceneCutByteOffset,
+                                   int sourceFrameDelta) {
         assertOwnerContext();
         if (packedFloatSsbo == 0) {
             throw new IllegalArgumentException("packedFloatSsbo must be a valid GL buffer");
@@ -321,12 +389,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         // preference, which is one effective alpha of 0.625 per reference update.
         float movingDepthAlpha = ClientSbsTemporalTuning.alphaForInterval(
                 0.625f, processIntervalNs, temporalReferenceHz);
-        float subjectAlpha = ClientSbsTemporalTuning.alphaForInterval(
-                0.20f, processIntervalNs, temporalReferenceHz);
-        // Only the RELEASE side of the band envelope has a time constant; the attack side is a
-        // min/max and is instantaneous by construction.
-        float bandAlpha = ClientSbsTemporalTuning.alphaForInterval(
-                0.18f, processIntervalNs, temporalReferenceHz);
         int referenceFrameAdvance = ClientSbsTemporalTuning.referenceFrameAdvance(
                 processIntervalNs, temporalReferenceHz);
         try {
@@ -337,7 +399,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             }
             bindSsbo(RAW_SSBO_BINDING, packedFloatSsbo);
             bindSsbo(RAW_STATS_SSBO_BINDING, rawStatsBuffer);
-            bindSsbo(PROFILE_STATS_SSBO_BINDING, profileStatsBuffer);
             bindSsbo(STATE_SSBO_BINDING, stateBuffer);
 
             dispatch(resetStatsProgram, 1, 1, 1, "reset depth scratch stats");
@@ -345,43 +406,51 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
             GLES20.glUseProgram(rawMinMaxProgram);
             applyRawUniforms(rawMinMaxUniforms, rawByteOffset, rawPixelStrideBytes);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextures[currentDepthIndex]);
+            GLES20.glUniform1i(rawMinMaxPreviousUniform, 0);
+            GLES31.glBindImageTexture(RELIABLE_DEPTH_IMAGE_BINDING, reliableDepthTexture, 0,
+                    false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F);
             dispatchCurrent(groups(outputWidth), groups(outputHeight), 1, "raw min/max");
-            shaderStorageBarrier();
+            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT
+                    | GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
+                    | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
+            GLES31.glBindImageTexture(RELIABLE_DEPTH_IMAGE_BINDING, 0, 0,
+                    false, 0, GLES31.GL_READ_ONLY, GLES30.GL_R32F);
 
             GLES20.glUseProgram(rawHistogramProgram);
             applyRawUniforms(rawHistogramUniforms, rawByteOffset, rawPixelStrideBytes);
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextures[currentDepthIndex]);
-            GLES20.glUniform1i(rawHistogramPreviousUniform, 0);
             dispatchCurrent(groups(outputWidth), groups(outputHeight), 1, "raw histogram");
             shaderStorageBarrier();
 
-            // The resolve phase does not read the model tensor. Move raw scratch onto binding
-            // zero and the GPU cut flag onto binding one so range resolution and same-frame cut
-            // application remain one globally ordered dispatch within the four-binding minimum.
+            // Range must be current before temporal mapping. Move raw scratch onto binding zero;
+            // the later temporal pass moves it back to one for its change-count reduction.
             bindSsbo(RAW_SSBO_BINDING, rawStatsBuffer);
-            bindSsbo(EXTERNAL_SCENE_CUT_SSBO_BINDING, externalSceneCutSsbo != 0
-                    ? externalSceneCutSsbo : zeroExternalSceneCutBuffer);
             GLES20.glUseProgram(resolveRawProgram);
             GLES20.glUniform1f(resolveRawRangeAlphaUniform, rangeAlpha);
-            applyExternalSceneCutUniforms(resolveRawExternalCutUniforms, externalSceneCut,
-                    externalSceneCutByteOffset);
+            GLES20.glUniform1i(resolveRawExpectedPixelCountUniform,
+                    outputWidth * outputHeight);
+            GLES20.glUniform1i(resolveRawGroupCountUniform, rawGroupCount);
             dispatchCurrent(1, 1, 1, "resolve raw range");
             shaderStorageBarrier();
 
             bindSsbo(RAW_SSBO_BINDING, packedFloatSsbo);
+            bindSsbo(RAW_STATS_SSBO_BINDING, rawStatsBuffer);
             GLES20.glUseProgram(temporalProgram);
             applyRawUniforms(temporalRawUniforms, rawByteOffset, rawPixelStrideBytes);
-            applyExternalSceneCutUniforms(temporalExternalCutUniforms, externalSceneCut,
-                    externalSceneCutByteOffset);
             GLES20.glUniform1f(temporalDepthAlphaUniform, depthAlpha);
             GLES20.glUniform1f(temporalMovingDepthAlphaUniform, movingDepthAlpha);
             GLES20.glUniform1f(temporalSpatialScaleUniform, spatialThresholdScale);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextures[currentDepthIndex]);
             GLES20.glUniform1i(temporalPreviousUniform, 0);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, reliableDepthTexture);
+            GLES20.glUniform1i(temporalReliableUniform, 1);
             GLES31.glBindImageTexture(DEPTH_IMAGE_BINDING, depthTextures[nextDepthIndex], 0,
                     false, 0, GLES31.GL_WRITE_ONLY, depthInternalFormat);
+            GLES31.glBindImageTexture(RAW_DEPTH_IMAGE_BINDING, rawDepthTexture, 0,
+                    false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F);
             dispatchCurrent(groups(outputWidth), groups(outputHeight), 1, "temporal depth");
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
                     | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
@@ -390,22 +459,16 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 checkGlError("temporal barrier");
             }
 
-            GLES20.glUseProgram(accumulateProfileProgram);
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextures[nextDepthIndex]);
-            GLES20.glUniform1i(accumulateCurrentUniform, 0);
-            GLES20.glUniform2i(accumulateOutputSizeUniform, outputWidth, outputHeight);
-            GLES20.glUniform1f(accumulateSpatialScaleUniform, spatialThresholdScale);
-            dispatchCurrent(groups(outputWidth), groups(outputHeight), 1,
-                    "accumulate depth profile");
-            shaderStorageBarrier();
-
+            // Cut resolution consumes the freshly filtered temporal comparison. Raw scratch and
+            // the optional scene record occupy bindings zero and one; state remains binding three.
+            bindSsbo(RAW_SSBO_BINDING, rawStatsBuffer);
+            bindSsbo(EXTERNAL_SCENE_CUT_SSBO_BINDING, externalSceneCutSsbo != 0
+                    ? externalSceneCutSsbo : zeroExternalSceneCutBuffer);
             GLES20.glUseProgram(resolveProfileProgram);
             applyExternalSceneCutUniforms(resolveExternalCutUniforms, externalSceneCut,
-                    externalSceneCutByteOffset);
-            GLES20.glUniform1i(resolvePixelCountUniform, outputWidth * outputHeight);
-            GLES20.glUniform1f(resolveSubjectAlphaUniform, subjectAlpha);
-            GLES20.glUniform1f(resolveBandAlphaUniform, bandAlpha);
+                    externalSceneCutSsbo != 0, externalSceneCutByteOffset);
+            GLES20.glUniform1i(resolveProfileSourceFrameDeltaUniform,
+                    clampSourceFrameDelta(sourceFrameDelta));
             GLES20.glUniform1i(resolveReferenceFrameAdvanceUniform, referenceFrameAdvance);
             GLES31.glBindImageTexture(PROFILE_IMAGE_BINDING, profileTexture, 0, false, 0,
                     GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F);
@@ -413,14 +476,14 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT
                     | GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
                     | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
-            // Steady state performs one driver error query for the complete seven-dispatch
+            // Steady state performs one driver error query for the complete six-dispatch
             // pipeline. The first frame after every reset retains stage-specific diagnostics.
             checkGlError("profile publication barrier");
             validateDispatchesIndividually = false;
 
             currentDepthIndex = nextDepthIndex;
             frameSequence++;
-            result.depthTexture = depthTextures[currentDepthIndex];
+            result.depthTexture = rawDepthTexture;
             result.profileTexture = profileTexture;
             result.frameSequence = frameSequence;
             result.validFrame = true;
@@ -586,9 +649,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 ClientSbsGpuDepthShaders.rawHistogram(removeReflectedPadding));
         resolveRawProgram = createComputeProgram("resolve raw range",
                 ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE);
-        accumulateProfileProgram = createComputeProgram("accumulate depth profile",
-                ClientSbsGpuDepthShaders.accumulateProfile(removeReflectedPadding));
-        resolveProfileProgram = createComputeProgram("resolve depth profile",
+        resolveProfileProgram = createComputeProgram("publish V2 shot camera",
                 ClientSbsGpuDepthShaders.RESOLVE_PROFILE);
         resetStateProgram = createComputeProgram("reset depth state",
                 ClientSbsGpuDepthShaders.RESET_STATE);
@@ -607,10 +668,11 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     }
 
     private void initializeStorage() {
-        rawStatsBuffer = createBuffer(RAW_STATS_BYTES);
-        profileStatsBuffer = createBuffer(PROFILE_STATS_BYTES);
+        rawStatsBuffer = createBuffer(Math.addExact(RAW_STATS_HEADER_BYTES,
+                Math.multiplyExact(rawGroupCount, RAW_GROUP_MOMENT_BYTES)));
         stateBuffer = createBuffer(STATE_BYTES);
-        zeroExternalSceneCutBuffer = createBuffer(Integer.BYTES);
+        zeroExternalSceneCutBuffer = createBuffer(
+                ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES);
         sceneCutMailboxBuffer = createBuffer(SCENE_CUT_MAILBOX_BYTES);
         ByteBuffer zeroWord = ByteBuffer.allocateDirect(SCENE_CUT_MAILBOX_BYTES)
                 .order(ByteOrder.nativeOrder());
@@ -619,7 +681,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
         zeroWord.flip();
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, zeroExternalSceneCutBuffer);
-        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, Integer.BYTES,
+        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0,
+                ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES,
                 zeroWord.duplicate());
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, sceneCutMailboxBuffer);
         GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0,
@@ -631,6 +694,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 linearDepthFiltering ? GLES20.GL_LINEAR : GLES20.GL_NEAREST);
         depthTextures[1] = createTexture(outputWidth, outputHeight, depthInternalFormat,
                 linearDepthFiltering ? GLES20.GL_LINEAR : GLES20.GL_NEAREST);
+        rawDepthTexture = createTexture(outputWidth, outputHeight, GLES30.GL_R32F,
+                linearDepthFiltering ? GLES20.GL_LINEAR : GLES20.GL_NEAREST);
+        reliableDepthTexture = createTexture(outputWidth, outputHeight, GLES30.GL_R32F,
+                linearDepthFiltering ? GLES20.GL_LINEAR : GLES20.GL_NEAREST);
         profileTexture = createTexture(PROFILE_TEXEL_COUNT, 1, GLES30.GL_RGBA32F,
                 GLES20.GL_NEAREST);
         checkGlError("create GPU depth storage");
@@ -640,24 +707,22 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         rawMinMaxUniforms = new RawUniforms(rawMinMaxProgram, removeReflectedPadding);
         rawHistogramUniforms = new RawUniforms(rawHistogramProgram, removeReflectedPadding);
         temporalRawUniforms = new RawUniforms(temporalProgram, removeReflectedPadding);
-        resolveRawExternalCutUniforms = new ExternalSceneCutUniforms(resolveRawProgram);
-        temporalExternalCutUniforms = new ExternalSceneCutUniforms(temporalProgram);
         resolveExternalCutUniforms = new ExternalSceneCutUniforms(resolveProfileProgram);
-        rawHistogramPreviousUniform = requiredUniform(rawHistogramProgram, "uPreviousDepth");
+        rawMinMaxPreviousUniform = requiredUniform(
+                rawMinMaxProgram, "uPreviousTemporalDepth");
         resolveRawRangeAlphaUniform = requiredUniform(resolveRawProgram, "uRangeAlpha");
+        resolveRawExpectedPixelCountUniform = requiredUniform(
+                resolveRawProgram, "uExpectedPixelCount");
+        resolveRawGroupCountUniform = requiredUniform(resolveRawProgram, "uRawGroupCount");
+        resolveProfileSourceFrameDeltaUniform = requiredUniform(
+                resolveProfileProgram, "uSourceFrameDelta");
         temporalPreviousUniform = requiredUniform(temporalProgram, "uPreviousDepth");
+        temporalReliableUniform = requiredUniform(temporalProgram, "uReliableDepth");
         temporalDepthAlphaUniform = requiredUniform(temporalProgram, "uDepthAlpha");
         temporalMovingDepthAlphaUniform = requiredUniform(
                 temporalProgram, "uMovingDepthAlpha");
         temporalSpatialScaleUniform = requiredUniform(
                 temporalProgram, "uSpatialThresholdScale");
-        accumulateCurrentUniform = requiredUniform(accumulateProfileProgram, "uCurrentDepth");
-        accumulateOutputSizeUniform = requiredUniform(accumulateProfileProgram, "uOutputSize");
-        accumulateSpatialScaleUniform = requiredUniform(
-                accumulateProfileProgram, "uSpatialThresholdScale");
-        resolvePixelCountUniform = requiredUniform(resolveProfileProgram, "uPixelCount");
-        resolveSubjectAlphaUniform = requiredUniform(resolveProfileProgram, "uSubjectAlpha");
-        resolveBandAlphaUniform = requiredUniform(resolveProfileProgram, "uBandAlpha");
         resolveReferenceFrameAdvanceUniform = requiredUniform(
                 resolveProfileProgram, "uReferenceFrameAdvance");
     }
@@ -757,10 +822,11 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             validatedExternalSceneCutBuffer = buffer;
             validatedExternalSceneCutBufferSize = size[0];
         }
-        long required = (long) byteOffset + Integer.BYTES;
+        long required = (long) byteOffset
+                + ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES;
         if (required > validatedExternalSceneCutBufferSize) {
             throw new IllegalArgumentException("External scene-cut SSBO is "
-                    + validatedExternalSceneCutBufferSize + " bytes; flag requires " + required);
+                    + validatedExternalSceneCutBufferSize + " bytes; record requires " + required);
         }
     }
 
@@ -777,8 +843,11 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private static void applyExternalSceneCutUniforms(ExternalSceneCutUniforms uniforms,
                                                        boolean externalSceneCut,
+                                                       boolean sceneEvidenceAvailable,
                                                        int externalSceneCutByteOffset) {
         GLES20.glUniform1i(uniforms.cpuFlag, externalSceneCut ? 1 : 0);
+        GLES20.glUniform1i(uniforms.sceneEvidenceAvailable,
+                sceneEvidenceAvailable ? 1 : 0);
         GLES30.glUniform1ui(uniforms.wordOffset, externalSceneCutByteOffset / Integer.BYTES);
     }
 
@@ -874,6 +943,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         return (length + 15) / 16;
     }
 
+    static int clampSourceFrameDelta(long sourceFrameDelta) {
+        return (int) Math.min(Math.max(sourceFrameDelta, 1L), 65535L);
+    }
+
     private static void shaderStorageBarrier() {
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT);
     }
@@ -890,6 +963,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 GLES31.GL_READ_ONLY, depthInternalFormat);
         GLES31.glBindImageTexture(PROFILE_IMAGE_BINDING, 0, 0, false, 0,
                 GLES31.GL_READ_ONLY, GLES30.GL_RGBA32F);
+        GLES31.glBindImageTexture(RAW_DEPTH_IMAGE_BINDING, 0, 0, false, 0,
+                GLES31.GL_READ_ONLY, GLES30.GL_R32F);
+        GLES31.glBindImageTexture(RELIABLE_DEPTH_IMAGE_BINDING, 0, 0, false, 0,
+                GLES31.GL_READ_ONLY, GLES30.GL_R32F);
     }
 
     private static int requiredUniform(int program, String name) {
@@ -930,8 +1007,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private void releaseGlResourcesUnchecked() {
         int[] programs = {resetStatsProgram, rawMinMaxProgram, rawHistogramProgram,
-                resolveRawProgram, temporalProgram,
-                accumulateProfileProgram, resolveProfileProgram, resetStateProgram};
+                resolveRawProgram, temporalProgram, resolveProfileProgram, resetStateProgram};
         for (int program : programs) {
             if (program != 0) {
                 GLES20.glDeleteProgram(program);
@@ -940,12 +1016,13 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         for (HealthReadbackSlot slot : healthReadbackSlots) {
             recycleHealthReadbackSlot(slot);
         }
-        int[] buffers = {rawStatsBuffer, profileStatsBuffer, stateBuffer,
+        int[] buffers = {rawStatsBuffer, stateBuffer,
                 zeroExternalSceneCutBuffer, sceneCutMailboxBuffer,
                 healthReadbackSlots[0].buffer, healthReadbackSlots[1].buffer,
                 healthReadbackSlots[2].buffer};
         GLES30.glDeleteBuffers(buffers.length, buffers, 0);
-        int[] textures = {depthTextures[0], depthTextures[1], profileTexture};
+        int[] textures = {depthTextures[0], depthTextures[1], rawDepthTexture,
+                reliableDepthTexture, profileTexture};
         GLES20.glDeleteTextures(textures.length, textures, 0);
         clearHandles();
     }
@@ -956,11 +1033,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         rawHistogramProgram = 0;
         resolveRawProgram = 0;
         temporalProgram = 0;
-        accumulateProfileProgram = 0;
         resolveProfileProgram = 0;
         resetStateProgram = 0;
         rawStatsBuffer = 0;
-        profileStatsBuffer = 0;
         stateBuffer = 0;
         zeroExternalSceneCutBuffer = 0;
         sceneCutMailboxBuffer = 0;
@@ -972,6 +1047,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
         depthTextures[0] = 0;
         depthTextures[1] = 0;
+        rawDepthTexture = 0;
+        reliableDepthTexture = 0;
         profileTexture = 0;
         result.validFrame = false;
     }
@@ -995,10 +1072,12 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private static final class ExternalSceneCutUniforms {
         final int cpuFlag;
+        final int sceneEvidenceAvailable;
         final int wordOffset;
 
         ExternalSceneCutUniforms(int program) {
             cpuFlag = requiredUniform(program, "uExternalSceneCut");
+            sceneEvidenceAvailable = requiredUniform(program, "uSceneEvidenceAvailable");
             wordOffset = requiredUniform(program, "uExternalSceneCutWordOffset");
         }
     }
@@ -1043,10 +1122,13 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private int sceneAge;
         private int frameNumber;
         private boolean hardCut;
-        private boolean depthCutArmed;
+        private boolean geometryCutArmed;
         private boolean percentileRangeCollapsed;
         private long hardCutCount;
-        private long externalCutRequestCount;
+        private long appearanceProposalCount;
+        private long acceptedAppearanceCutCount;
+        private long acceptedGeometryCutCount;
+        private long acceptedStructurelessEntryCutCount;
         private long emptyRawFrameCount;
         private long collapsedRawFrameCount;
         private float validRawFraction;
@@ -1068,6 +1150,23 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private float popRatio;
         private float changeFraction;
         private float hardCutEvidence;
+        private float shotRawMean;
+        private float currentRawMean;
+        private boolean currentDepthValid;
+        private boolean historyAdvanced;
+        private int appearanceBlockCount;
+        private float appearanceRawChangeFraction;
+        private float appearanceMeanLumaDelta;
+        private float appearanceStructuralChangeFraction;
+        private float appearanceCurrentSupportFraction;
+        private float appearanceCommonSupportFraction;
+        private int appearanceDetectorFlags;
+        private int cutDecisionFlags;
+        private long cutEventSequence;
+        private float latestDepthChangeFraction;
+        private float latestRangeShift;
+        private float latestInternalCutEvidence;
+        private float geometryChangeBaseline;
 
         void reset() {
             frameSequence = 0L;
@@ -1076,7 +1175,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             sceneAge = 0;
             frameNumber = 0;
             hardCut = false;
-            depthCutArmed = false;
+            geometryCutArmed = false;
             percentileRangeCollapsed = true;
             validRawFraction = 0.0f;
             frameRangeLow = 0.0f;
@@ -1092,23 +1191,45 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             subjectDepth = 0.5f;
             recenterDelta = 0.0f;
             zeroAnchorShift = 0.0f;
-            edgeFraction = ADAPTIVE_POP_UNCLASSIFIED_EDGE;
-            popStrength = ADAPTIVE_POP_FLOOR;
+            edgeFraction = LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+            popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
             popRatio = 1.0f;
             changeFraction = 0.0f;
             hardCutEvidence = 0.0f;
+            shotRawMean = 0.0f;
+            currentRawMean = 0.0f;
+            currentDepthValid = false;
+            historyAdvanced = false;
             hardCutCount = 0L;
-            externalCutRequestCount = 0L;
+            appearanceProposalCount = 0L;
+            acceptedAppearanceCutCount = 0L;
+            acceptedGeometryCutCount = 0L;
+            acceptedStructurelessEntryCutCount = 0L;
             emptyRawFrameCount = 0L;
             collapsedRawFrameCount = 0L;
+            appearanceBlockCount = 0;
+            appearanceRawChangeFraction = 0.0f;
+            appearanceMeanLumaDelta = 0.0f;
+            appearanceStructuralChangeFraction = 0.0f;
+            appearanceCurrentSupportFraction = 0.0f;
+            appearanceCommonSupportFraction = 0.0f;
+            appearanceDetectorFlags = 0;
+            cutDecisionFlags = 0;
+            cutEventSequence = 0L;
+            latestDepthChangeFraction = Float.NaN;
+            latestRangeShift = Float.NaN;
+            latestInternalCutEvidence = 0.0f;
+            geometryChangeBaseline = 0.0f;
         }
 
         void updateFromState(ByteBuffer state, long sampledFrameSequence, int expectedSamples) {
             frameSequence = sampledFrameSequence;
             expectedRawSamples = expectedSamples;
-            validRawSamples = Math.max(0, state.getInt(88));
-            sceneAge = state.getInt(80);
-            depthCutArmed = ClientSbsShotCutPolicy.isGeometryArmed(state.getInt(84));
+            // v2Camera.z always carries the actual current field's valid-sample count, including
+            // invalid fields whose stateCounters.z authority is cleared.
+            validRawSamples = Math.max(0, Math.round(state.getFloat(136)));
+            sceneAge = state.getInt(120);
+            geometryCutArmed = ClientSbsShotCutPolicy.isGeometryArmed(state.getInt(84));
             frameNumber = state.getInt(92);
             hardCut = state.getInt(76) != 0;
             frameRangeLow = state.getFloat(0);
@@ -1117,26 +1238,88 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             effectiveRangeLow = state.getFloat(8);
             effectiveRangeHigh = state.getFloat(12);
             effectiveRangeWidth = effectiveRangeHigh - effectiveRangeLow;
-            stretchLow = state.getFloat(16);
-            stretchHigh = state.getFloat(20);
-            stretchInverseRange = state.getFloat(24);
-            subjectDepth = state.getFloat(32);
-            recenterDelta = state.getFloat(36);
-            zeroAnchorShift = state.getFloat(40);
-            edgeFraction = state.getFloat(44);
-            popStrength = state.getFloat(52);
-            popRatio = state.getFloat(56);
-            stereoProfileInitialized = state.getInt(68) != 0;
+            shotRawMean = state.getFloat(128);
+            currentRawMean = state.getFloat(132);
+            int frameState = state.getInt(72);
+            int requiredCurrentFlags = ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_DEPTH_VALID
+                    | ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_V2_VALID;
+            currentDepthValid = (frameState & requiredCurrentFlags) == requiredCurrentFlags;
+            historyAdvanced = (frameState
+                    & ClientSbsShotCutPolicy.FRAME_STATE_HISTORY_ADVANCES) != 0;
+            // Keep the source-neutral telemetry ABI truthful: V2 has no normalized stretch,
+            // recenter, Bestv2 anchor, edge classifier, or adaptive-pop controller.
+            stretchLow = 0.0f;
+            stretchHigh = 0.0f;
+            stretchInverseRange = 0.0f;
+            subjectDepth = shotRawMean;
+            recenterDelta = 0.0f;
+            zeroAnchorShift = 0.0f;
+            edgeFraction = LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE;
+            popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
+            popRatio = 1.0f;
+            // Match publishProfile() exactly: both the persistent depth state and the
+            // shot-latched raw camera must exist. Current-field validity is reported separately
+            // because a valid frame may deliberately hold history while remaining renderable.
+            stereoProfileInitialized = state.getInt(68) != 0 && state.getFloat(140) > 0.5f;
             percentileRangeCollapsed = validRawSamples == 0
                     || isCollapsedRange(frameRangeLow, frameRangeHigh);
             changeFraction = state.getFloat(48);
             hardCutEvidence = state.getFloat(60);
             hardCutCount = unsignedIntToLong(state.getInt(96));
-            externalCutRequestCount = unsignedIntToLong(state.getInt(100));
+            // Offset 100 remains the source-compatible proposal counter. The appended copy owns
+            // the explicit causal ABI and must carry the same value.
+            appearanceProposalCount = unsignedIntToLong(
+                    state.getInt(CUT_REASON_COUNTERS_BYTE_OFFSET));
+            acceptedAppearanceCutCount = unsignedIntToLong(
+                    state.getInt(CUT_REASON_COUNTERS_BYTE_OFFSET + Integer.BYTES));
+            acceptedGeometryCutCount = unsignedIntToLong(
+                    state.getInt(CUT_REASON_COUNTERS_BYTE_OFFSET + 2 * Integer.BYTES));
+            acceptedStructurelessEntryCutCount = unsignedIntToLong(
+                    state.getInt(CUT_REASON_COUNTERS_BYTE_OFFSET + 3 * Integer.BYTES));
             emptyRawFrameCount = unsignedIntToLong(state.getInt(104));
             collapsedRawFrameCount = unsignedIntToLong(state.getInt(108));
+            appearanceBlockCount = Math.max(0,
+                    state.getInt(CUT_APPEARANCE_STATS_BYTE_OFFSET));
+            long rawModerateCount = unsignedIntToLong(
+                    state.getInt(CUT_APPEARANCE_STATS_BYTE_OFFSET + Integer.BYTES));
+            long rawDeltaSum = unsignedIntToLong(
+                    state.getInt(CUT_APPEARANCE_STATS_BYTE_OFFSET + 2 * Integer.BYTES));
+            long structuralChangeCount = unsignedIntToLong(
+                    state.getInt(CUT_APPEARANCE_STATS_BYTE_OFFSET + 3 * Integer.BYTES));
+            long currentSupportCount = unsignedIntToLong(
+                    state.getInt(CUT_APPEARANCE_META_BYTE_OFFSET));
+            long commonSupportCount = unsignedIntToLong(
+                    state.getInt(CUT_APPEARANCE_META_BYTE_OFFSET + Integer.BYTES));
+            appearanceDetectorFlags = state.getInt(
+                    CUT_APPEARANCE_META_BYTE_OFFSET + 2 * Integer.BYTES);
+            cutDecisionFlags = state.getInt(
+                    CUT_APPEARANCE_META_BYTE_OFFSET + 3 * Integer.BYTES);
+            cutEventSequence = unsignedIntToLong(state.getInt(CUT_EVENT_META_BYTE_OFFSET));
+            appearanceRawChangeFraction = fraction(rawModerateCount, appearanceBlockCount);
+            appearanceMeanLumaDelta = appearanceBlockCount == 0 ? 0.0f
+                    : Math.min(1.0f, rawDeltaSum / (255.0f * appearanceBlockCount));
+            appearanceStructuralChangeFraction = fraction(
+                    structuralChangeCount, appearanceBlockCount);
+            appearanceCurrentSupportFraction = fraction(
+                    currentSupportCount, appearanceBlockCount);
+            appearanceCommonSupportFraction = fraction(
+                    commonSupportCount, appearanceBlockCount);
+            float diagnosticChange = state.getFloat(CUT_DEPTH_DIAGNOSTICS_BYTE_OFFSET);
+            float diagnosticShift = state.getFloat(
+                    CUT_DEPTH_DIAGNOSTICS_BYTE_OFFSET + Float.BYTES);
+            latestDepthChangeFraction = diagnosticChange >= 0.0f
+                    ? diagnosticChange : Float.NaN;
+            latestRangeShift = diagnosticShift >= 0.0f ? diagnosticShift : Float.NaN;
+            latestInternalCutEvidence = state.getFloat(
+                    CUT_DEPTH_DIAGNOSTICS_BYTE_OFFSET + 2 * Float.BYTES);
+            geometryChangeBaseline = state.getFloat(
+                    CUT_DEPTH_DIAGNOSTICS_BYTE_OFFSET + 3 * Float.BYTES);
             validRawFraction = expectedSamples > 0
                     ? Math.min(1.0f, (float) validRawSamples / expectedSamples) : 0.0f;
+        }
+
+        private static float fraction(long value, int total) {
+            return total <= 0 ? 0.0f : Math.min(1.0f, (float) value / total);
         }
 
         static boolean isCollapsedRange(float low, float high) {
@@ -1167,23 +1350,63 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         /** Shot-latched zero-plane anchor, in Bestv2 source-pixel shift units. */
         public float getZeroAnchorShift() { return zeroAnchorShift; }
         public float getEdgeFraction() { return edgeFraction; }
-        /** Whether {@link #getEdgeFraction()} selected the currently latched pop strength. */
+        /** V2 has fixed pop, so the retired adaptive classifier is never present. */
         public boolean hasAdaptivePopClassification() {
-            return Float.isFinite(edgeFraction) && edgeFraction >= 0.0f;
+            return false;
         }
         public float getPopStrength() { return popStrength; }
         public float getPopRatio() { return popRatio; }
         public float getChangeFraction() { return changeFraction; }
-        /** 0..1 internal evidence, or 2 when an external cut flag was observed. */
+        /** 0..1 internal evidence, or 2 when an appearance proposal was selected. */
         public float getHardCutEvidence() { return hardCutEvidence; }
-        public boolean wasExternalCutRequested() { return hardCutEvidence > 1.5f; }
+        public float getShotRawMean() { return shotRawMean; }
+        public float getCurrentRawMean() { return currentRawMean; }
+        public boolean isCurrentDepthValid() { return currentDepthValid; }
+        public boolean didHistoryAdvance() { return historyAdvanced; }
+        public boolean isCurrentGeometryReady() {
+            return currentDepthValid && stereoProfileInitialized;
+        }
+        public boolean wasAppearanceProposalSelected() {
+            return (cutDecisionFlags & CUT_DECISION_SELECTED_APPEARANCE) != 0;
+        }
+        /** @deprecated This was always an appearance proposal, not an accepted cut request. */
+        @Deprecated
+        public boolean wasExternalCutRequested() { return wasAppearanceProposalSelected(); }
         public boolean wasHardCut() { return hardCut; }
-        public boolean isDepthCutArmed() { return depthCutArmed; }
+        public boolean isGeometryCutArmed() { return geometryCutArmed; }
         public int getSceneAge() { return sceneAge; }
         public int getFrameNumber() { return frameNumber; }
         /** Cumulative since the last temporal reset, so sparse polling cannot miss cuts. */
         public long getHardCutCount() { return hardCutCount; }
-        public long getExternalCutRequestCount() { return externalCutRequestCount; }
+        public long getAppearanceProposalCount() { return appearanceProposalCount; }
+        /** @deprecated Use {@link #getAppearanceProposalCount()}. */
+        @Deprecated
+        public long getExternalCutRequestCount() { return appearanceProposalCount; }
+        public long getAcceptedAppearanceCutCount() { return acceptedAppearanceCutCount; }
+        public long getAcceptedGeometryCutCount() { return acceptedGeometryCutCount; }
+        public long getAcceptedStructurelessEntryCutCount() {
+            return acceptedStructurelessEntryCutCount;
+        }
+        public int getAppearanceBlockCount() { return appearanceBlockCount; }
+        public float getAppearanceRawChangeFraction() { return appearanceRawChangeFraction; }
+        public float getAppearanceMeanLumaDelta() { return appearanceMeanLumaDelta; }
+        public float getAppearanceStructuralChangeFraction() {
+            return appearanceStructuralChangeFraction;
+        }
+        public float getAppearanceCurrentSupportFraction() {
+            return appearanceCurrentSupportFraction;
+        }
+        public float getAppearanceCommonSupportFraction() {
+            return appearanceCommonSupportFraction;
+        }
+        public int getAppearanceDetectorFlags() { return appearanceDetectorFlags; }
+        public int getCutDecisionFlags() { return cutDecisionFlags; }
+        /** Monotonic sequence of the latched accepted/proposed/vetoed/rejected cut decision. */
+        public long getCutEventSequence() { return cutEventSequence; }
+        public float getLatestDepthChangeFraction() { return latestDepthChangeFraction; }
+        public float getLatestRangeShift() { return latestRangeShift; }
+        public float getLatestInternalCutEvidence() { return latestInternalCutEvidence; }
+        public float getGeometryChangeBaseline() { return geometryChangeBaseline; }
         public long getEmptyRawFrameCount() { return emptyRawFrameCount; }
         public long getCollapsedRawFrameCount() { return collapsedRawFrameCount; }
     }

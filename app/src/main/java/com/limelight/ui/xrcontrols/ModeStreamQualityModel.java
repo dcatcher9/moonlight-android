@@ -55,18 +55,32 @@ public final class ModeStreamQualityModel {
 
     /** True when the staged state differs from the live connection, however it gets applied. */
     public boolean requiresApply() {
-        return selected
-                && (transportReconnectRequired || !liveQuality.equals(pendingQuality));
+        return selected && requiresApplyIfSelected();
     }
 
     /** True when applying the staged state must tear down and re-establish the stream. */
     public boolean requiresReconnect() {
-        return selected && (transportReconnectRequired || qualityDeltaRequiresReconnect);
+        return selected && requiresReconnectIfSelected();
     }
 
     /** True when the staged state can be applied to the running stream with no reconnect. */
     public boolean appliesLive() {
-        return requiresApply() && !requiresReconnect();
+        return selected && appliesLiveIfSelected();
+    }
+
+    /** Selection-independent form used to classify a mode before its presentation handoff. */
+    public boolean requiresApplyIfSelected() {
+        return transportReconnectRequired || !liveQuality.equals(pendingQuality);
+    }
+
+    /** Selection-independent reconnect classification for an inactive target mode. */
+    public boolean requiresReconnectIfSelected() {
+        return transportReconnectRequired || qualityDeltaRequiresReconnect;
+    }
+
+    /** Selection-independent live-apply classification for an inactive target mode. */
+    public boolean appliesLiveIfSelected() {
+        return requiresApplyIfSelected() && !requiresReconnectIfSelected();
     }
 
     public static Builder builder(StreamQualityTuple appliedQuality,

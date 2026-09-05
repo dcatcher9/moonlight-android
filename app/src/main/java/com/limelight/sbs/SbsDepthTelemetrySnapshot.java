@@ -69,6 +69,12 @@ public final class SbsDepthTelemetrySnapshot {
     public final float effectiveRangeWidth;
     public final long sceneAge;
     public final long hardCutCount;
+    /** Client SBS appearance proposals; equal to {@link #externalCutRequests}. */
+    public final long appearanceProposalCount;
+    /**
+     * Host protocol external requests, or the source-compatible alias for client appearance
+     * proposals. Client UI and logs should use {@link #appearanceProposalCount}.
+     */
     public final long externalCutRequests;
     public final long emptyDepthFrames;
     public final long collapsedDepthFrames;
@@ -106,6 +112,7 @@ public final class SbsDepthTelemetrySnapshot {
         this.effectiveRangeWidth = effectiveRangeWidth;
         this.sceneAge = sceneAge;
         this.hardCutCount = hardCutCount;
+        this.appearanceProposalCount = externalCutRequests;
         this.externalCutRequests = externalCutRequests;
         this.emptyDepthFrames = emptyDepthFrames;
         this.collapsedDepthFrames = collapsedDepthFrames;

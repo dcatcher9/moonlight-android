@@ -179,20 +179,10 @@ public final class XrPreferenceWidgetsTest {
                 PreferenceConfiguration.BITRATE_PREF_STRING);
         InlineListPreference rawPerEyeResolution = fragment.findPreference(
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING);
-        InlineListPreference clientDepthModel = fragment.findPreference(
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING);
         assertTrue(fragment.findPreference(PreferenceConfiguration.ENABLE_HDR_PREF_STRING)
                 instanceof SwitchPreferenceCompat);
-        assertTrue(clientDepthModel instanceof InlineListPreference);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                clientDepthModel.getValue());
-        assertEquals(4, clientDepthModel.getEntries().length);
-        assertEquals("DepthART S448 (Experimental)",
-                clientDepthModel.getEntries()[2].toString());
-        assertEquals("ZipDepth Base (Experimental · short 384)",
-                clientDepthModel.getEntries()[3].toString());
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
-                clientDepthModel.getEntryValues()[3].toString());
+        assertNull(fragment.findPreference(
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
         assertTrue(rawPerEyeResolution instanceof InlineListPreference);
         assertEquals(PreferenceConfiguration.DEFAULT_RAW_SBS_PER_EYE_RESOLUTION,
                 rawPerEyeResolution.getValue());

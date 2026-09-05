@@ -158,6 +158,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private int mClientSbsPostAckResizeHeight;
     /** Uptime boundary for the one bounded cold-backend exception to the packed-swap watchdog. */
     private long mClientSbsPostAckResizeStartedMs;
+    private boolean mClientSbsColdBackendInitializationObserved;
+    /** Absolute deadline for the one proof window granted after cold initialization completes. */
+    private long mClientSbsColdBackendReadyProofDeadlineMs;
     private boolean mClientSbsColdBackendWaitLogged;
     private ClientSbsResizePolicy.Stage mClientSbsResizeStage =
             ClientSbsResizePolicy.Stage.IDLE;
@@ -497,9 +500,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 return;
             }
 
-            // Detach MediaCodec from the XR surface onto a persistent dummy surface (a transient
-            // null/garbage-collected surface crashes MediaCodec).
-            if (!bindDecoderSurface(mDummySurface)) {
+            // Keep the last decoded SceneCore picture visible throughout this handoff. The
+            // presenter commits the new interpretation only after a fresh packed output swap.
+            if (!ClientSbsPresentationRetirement.parkDecoderRetainingPresentation(
+                    () -> bindDecoderSurface(mDummySurface))) {
                 completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
@@ -516,8 +520,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             glView.onResume();
 
         } else {
-            // Detach the decoder from the renderer's surface onto the persistent dummy surface.
-            if (!bindDecoderSurface(mDummySurface)) {
+            // Retain the packed Client SBS buffer while the decoder leaves the renderer-owned
+            // surface. The presenter switches interpretation at the fresh direct-output edge.
+            if (!ClientSbsPresentationRetirement.parkDecoderRetainingPresentation(
+                    () -> bindDecoderSurface(mDummySurface))) {
                 completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
@@ -537,6 +543,23 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 completeClientSbsSwitch(switchGeneration, false);
             }
         }, 2000);
+    }
+
+    /**
+     * Acknowledge Client-SBS entry only after its first fresh packed buffer has been swapped.
+     */
+    public boolean completeClientSbsModeSwitchAfterSwap(Runnable completion) {
+        if (completion == null || mDestroyed || mStereoRenderer == null
+                || !mStereoRenderer.isClientSbs()) {
+            return false;
+        }
+        final int switchGeneration = mClientSbsSwitchGeneration;
+        return mStereoRenderer.completeClientSbsModeSwitchAfterSwap(() -> post(() -> {
+            if (!mDestroyed && switchGeneration == mClientSbsSwitchGeneration
+                    && mStereoRenderer != null && mStereoRenderer.isClientSbs()) {
+                completion.run();
+            }
+        }));
     }
 
     private void onClientSbsRendererSurfaceReady(Surface surface, int surfaceGeneration,
@@ -968,6 +991,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mClientSbsPostAckResizeHeight = height;
         if (newPostAckBoundary) {
             mClientSbsPostAckResizeStartedMs = android.os.SystemClock.uptimeMillis();
+            mClientSbsColdBackendInitializationObserved = false;
+            mClientSbsColdBackendReadyProofDeadlineMs = 0L;
             mClientSbsColdBackendWaitLogged = false;
         }
         if (ClientSbsResizePolicy.shouldRequestPostAckProofDraw(
@@ -997,7 +1022,39 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mClientSbsPostAckResizeWidth = 0;
         mClientSbsPostAckResizeHeight = 0;
         mClientSbsPostAckResizeStartedMs = 0L;
+        mClientSbsColdBackendInitializationObserved = false;
+        mClientSbsColdBackendReadyProofDeadlineMs = 0L;
         mClientSbsColdBackendWaitLogged = false;
+    }
+
+    private boolean startClientSbsColdBackendReadyProofWindowIfNeeded(
+            ClientSbsResizePolicy.Stage stage, boolean postAckDecoderOutputReady,
+            boolean backendInitializing, long nowMillis, long postAckElapsedMillis,
+            int width, int height) {
+        boolean readyProofWindowStarted =
+                mClientSbsColdBackendReadyProofDeadlineMs > 0L;
+        if (!ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
+                stage, postAckDecoderOutputReady,
+                mClientSbsColdBackendInitializationObserved, backendInitializing,
+                readyProofWindowStarted, postAckElapsedMillis)) {
+            return false;
+        }
+
+        long proofMillis = ClientSbsResizePolicy.boundedColdBackendReadyProofMillis(
+                postAckElapsedMillis);
+        if (proofMillis <= 0L) {
+            return false;
+        }
+        mClientSbsColdBackendReadyProofDeadlineMs = nowMillis + proofMillis;
+        LimeLog.info("Client SBS cold AI backend finished initializing at "
+                + width + "x" + height + "; granting one fresh " + proofMillis
+                + " ms post-ack packed-presentation proof window");
+        if (mStereoRenderer == null
+                || !mStereoRenderer.requestLiveStreamResizeProofDraw()) {
+            LimeLog.warning("Client SBS ready AI backend could not nudge the active "
+                    + "packed-presentation proof");
+        }
+        return true;
     }
 
     private void armClientSbsResizeTimeoutForActiveStage() {
@@ -1010,15 +1067,31 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         int height = mPendingClientSbsResizeHeight;
         ClientSbsResizePolicy.Stage stage = mClientSbsResizeStage;
         boolean postAckDecoderOutputReady = hasClientSbsPostAckBoundaryForActiveResize();
+        long nowMillis = android.os.SystemClock.uptimeMillis();
+        long postAckElapsedMillis = mClientSbsPostAckResizeStartedMs > 0L
+                ? Math.max(0L, nowMillis - mClientSbsPostAckResizeStartedMs)
+                : -1L;
+        boolean backendInitializing = postAckDecoderOutputReady && mStereoRenderer != null
+                && mStereoRenderer.isClientSbsBackendInitializing();
+        if (backendInitializing
+                && mClientSbsColdBackendReadyProofDeadlineMs <= 0L) {
+            mClientSbsColdBackendInitializationObserved = true;
+        }
+        startClientSbsColdBackendReadyProofWindowIfNeeded(
+                stage, postAckDecoderOutputReady, backendInitializing,
+                nowMillis, postAckElapsedMillis, width, height);
+
         long timeoutMillis = ClientSbsResizePolicy.timeoutMillis(
                 stage, postAckDecoderOutputReady);
-        if (postAckDecoderOutputReady && mStereoRenderer != null
-                && mStereoRenderer.isClientSbsBackendInitializing()) {
-            long elapsedMillis = Math.max(0L,
-                    android.os.SystemClock.uptimeMillis()
-                            - mClientSbsPostAckResizeStartedMs);
+        if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP
+                && postAckDecoderOutputReady
+                && mClientSbsColdBackendReadyProofDeadlineMs > 0L) {
+            // Repeated decoder notifications may re-arm this runnable, but never the proof window.
+            timeoutMillis = Math.max(1L,
+                    mClientSbsColdBackendReadyProofDeadlineMs - nowMillis);
+        } else if (backendInitializing) {
             long coldPollMillis =
-                    ClientSbsResizePolicy.boundedColdBackendPollMillis(elapsedMillis);
+                    ClientSbsResizePolicy.boundedColdBackendPollMillis(postAckElapsedMillis);
             // At the deadline, post an immediate final check rather than falling back to another
             // full proof quantum. A duplicate decoder notification therefore cannot extend the
             // absolute cold-start ceiling.
@@ -1034,15 +1107,19 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             if (generation == mPendingClientSbsResizeGeneration
                     && mPendingClientSbsResize != null
                     && stage == mClientSbsResizeStage) {
-                boolean backendInitializing = mStereoRenderer != null
+                boolean backendInitializingNow = mStereoRenderer != null
                         && mStereoRenderer.isClientSbsBackendInitializing();
-                long postAckElapsedMillis = mClientSbsPostAckResizeStartedMs > 0L
-                        ? Math.max(0L, android.os.SystemClock.uptimeMillis()
-                                - mClientSbsPostAckResizeStartedMs)
+                long callbackNowMillis = android.os.SystemClock.uptimeMillis();
+                long callbackPostAckElapsedMillis = mClientSbsPostAckResizeStartedMs > 0L
+                        ? Math.max(0L, callbackNowMillis - mClientSbsPostAckResizeStartedMs)
                         : -1L;
+                boolean readyProofWindowStarted =
+                        mClientSbsColdBackendReadyProofDeadlineMs > 0L;
                 if (ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
                         stage, postAckDecoderOutputReady,
-                        backendInitializing, postAckElapsedMillis)) {
+                        backendInitializingNow, readyProofWindowStarted,
+                        callbackPostAckElapsedMillis)) {
+                    mClientSbsColdBackendInitializationObserved = true;
                     if (!mClientSbsColdBackendWaitLogged) {
                         mClientSbsColdBackendWaitLogged = true;
                         LimeLog.info("Client SBS host/decoder geometry is confirmed at "
@@ -1056,12 +1133,25 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                     armClientSbsResizeTimeoutForActiveStage();
                     return;
                 }
+                if (startClientSbsColdBackendReadyProofWindowIfNeeded(
+                        stage, postAckDecoderOutputReady, backendInitializingNow,
+                        callbackNowMillis, callbackPostAckElapsedMillis, width, height)) {
+                    armClientSbsResizeTimeoutForActiveStage();
+                    return;
+                }
+                if (readyProofWindowStarted
+                        && callbackNowMillis < mClientSbsColdBackendReadyProofDeadlineMs) {
+                    // A runnable may fire early across uptime scheduling granularity. Preserve the
+                    // original absolute deadline instead of manufacturing another proof window.
+                    armClientSbsResizeTimeoutForActiveStage();
+                    return;
+                }
                 String boundary;
                 if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
                     boundary = "EGL detachment";
                 } else if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH) {
                     boundary = "exact EGL attachment";
-                } else if (postAckDecoderOutputReady && backendInitializing) {
+                } else if (postAckDecoderOutputReady && backendInitializingNow) {
                     boundary = "bounded cold AI initialization and post-ack packed presentation";
                 } else if (postAckDecoderOutputReady) {
                     boundary = "post-ack packed presentation";

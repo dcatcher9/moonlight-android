@@ -88,8 +88,8 @@ public final class XrStatsTableLayoutTest {
             samples[i] = i % 7;
         }
         String trendValue =
-                "valid 100.0% | range 2.8467 | pop 2.000 | subject 0.884 | collapsed no";
-        addTrend.invoke(presenter, "Pop strength", trendValue,
+                "change 0.184 | range shift 0.027 | internal 0.441 | baseline 0.205";
+        addTrend.invoke(presenter, "Cut depth change", trendValue,
                 0xFFFFFFFF, samples, false, 0f, 1f);
 
         int raster = intConstant("STATS_RASTER_WIDTH");

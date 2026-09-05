@@ -1,6 +1,7 @@
 package com.limelight.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -25,17 +26,9 @@ public class ClientSbsPackagedModelArchiveTest {
     private static final String MODEL_NOTICE_DIRECTORY = "third_party/client_sbs_models/";
 
     @Test
-    public void packagedFamilyArchivesMatchEveryRuntimeContract() throws Exception {
+    public void packagedZipDepthArchiveMatchesEveryRuntimeContract() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         ClientSbsModelManifest[] manifests = {
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_16_9,
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_21_9,
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_32_9,
-                ClientSbsModelManifest.MIDAS_V2_STATIC_16_9,
-                ClientSbsModelManifest.MIDAS_V2_STATIC_21_9,
-                ClientSbsModelManifest.MIDAS_V2_STATIC_32_9,
-                ClientSbsModelManifest.DEPTHART_S448_STATIC_16_9,
-                ClientSbsModelManifest.DEPTHART_S448_STATIC_21_9,
                 ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
                 ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
                 ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9,
@@ -54,7 +47,7 @@ public class ClientSbsPackagedModelArchiveTest {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             try (java.io.InputStream archive = context.getAssets().open(
                     manifest.getModelArchiveAssetName(), AssetManager.ACCESS_STREAMING)) {
-                ClientSbsGpuInferenceEngine.extractArchivedModel(
+                ClientSbsModelAssetCache.extractArchivedModel(
                         archive, manifest.getAssetName(), sink, digest);
             }
             assertEquals(manifest.getAssetSha256(), toHex(digest.digest()));
@@ -62,12 +55,25 @@ public class ClientSbsPackagedModelArchiveTest {
     }
 
     @Test
+    public void retiredCandidateArchivesAreNotPackagedInTheApk() {
+        Context context = ApplicationProvider.getApplicationContext();
+        for (String retiredArchive : new String[] {
+                "client-sbs-dav2-models.tar.xz",
+                "client-sbs-midas-models.tar.xz",
+                "client-sbs-depthart-models.tar.xz",
+        }) {
+            assertThrows(retiredArchive, java.io.IOException.class,
+                    () -> context.getAssets().open(
+                            retiredArchive, AssetManager.ACCESS_STREAMING));
+        }
+    }
+
+    @Test
     public void packagedModelNoticesAreCompleteAndUnchanged() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String[][] expectedAssets = {
-                {"NOTICE.txt", "53f7f0d2a09d48ae58f2f817d20c466f883ec663e2a0760cb12f32335ff28423"},
+                {"NOTICE.txt", "25f8e224dba7b038a8808057f3dde261334a7b6cb208d80329b6cfcbb5d2f0af"},
                 {"LICENSE-APACHE-2.0.txt", "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
-                {"LICENSE-MIDAS-MIT.txt", "99ec0b9f9bcc9234b649787b8f03b07dbece95764b7879e1e72fb76cb0f96876"},
                 {"LICENSE-ZIPDEPTH-MIT.txt", "0007e2ff761f1b89ad89327870b807cd4de00cb657b442b62de2f92fdc87d508"},
         };
 
@@ -85,15 +91,10 @@ public class ClientSbsPackagedModelArchiveTest {
         String notice = new String(
                 readAsset(context, MODEL_NOTICE_DIRECTORY + "NOTICE.txt"),
                 StandardCharsets.UTF_8);
-        assertTrue(notice.contains("Depth Anything V2 Small"));
-        assertTrue(notice.contains("MiDaS v2.1 Small"));
-        assertTrue(notice.contains("DepthART S448 relative depth"));
         assertTrue(notice.contains("ZipDepth original base relative depth"));
         assertTrue(notice.contains("LiteRT 2.2.0 native runtime and accelerator"));
         assertTrue(notice.contains("modified TFLite conversions"));
-        assertTrue(notice.contains("does not claim a complete"));
         assertTrue(notice.contains("LICENSE-APACHE-2.0.txt"));
-        assertTrue(notice.contains("LICENSE-MIDAS-MIT.txt"));
         assertTrue(notice.contains("LICENSE-ZIPDEPTH-MIT.txt"));
     }
 

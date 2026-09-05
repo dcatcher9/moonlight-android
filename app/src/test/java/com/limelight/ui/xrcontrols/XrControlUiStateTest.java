@@ -127,21 +127,4 @@ public class XrControlUiStateTest {
         assertTrue(state.isStatsVisible());
     }
 
-    @Test
-    public void clientModelAloneEnablesAtomicReconnectApply() {
-        SessionSettingsModel shared = SessionSettingsModel.builder()
-                .putApplied(SessionSettingsModel.Key.HDR,
-                        "Off", SessionSettingsModel.Source.GLOBAL)
-                .build();
-        ClientSbsModeSettingsModel applied = new ClientSbsModeSettingsModel(
-                "dav2", "Depth Anything V2", "dav2", "Depth Anything V2",
-                SessionSettingsModel.Source.GLOBAL, "322 x 182", "Ready");
-        ClientSbsModeSettingsModel pending = new ClientSbsModeSettingsModel(
-                "dav2", "Depth Anything V2", "midas", "MiDaS 2.1",
-                SessionSettingsModel.Source.CURRENT_SESSION,
-                "352 x 192", "Reconnect required");
-
-        assertFalse(XrControlUiState.hasReconnectPending(shared, applied));
-        assertTrue(XrControlUiState.hasReconnectPending(shared, pending));
-    }
 }

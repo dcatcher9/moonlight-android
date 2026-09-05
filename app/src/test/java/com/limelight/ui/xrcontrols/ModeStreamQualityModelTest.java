@@ -14,14 +14,17 @@ public final class ModeStreamQualityModelTest {
 
     @Test
     public void selectedSavedTupleRequiresApplyWithoutNewlyStagedEdit() {
-        ModeStreamQualityModel selected = model(SAVED, SAVED, LIVE, true);
-        ModeStreamQualityModel unselected = model(SAVED, SAVED, LIVE, false);
+        ModeStreamQualityModel selected = model(SAVED, SAVED, LIVE, true, false, false);
+        ModeStreamQualityModel unselected = model(SAVED, SAVED, LIVE, false, false, false);
 
         assertFalse(selected.hasPendingChanges());
         assertTrue(selected.requiresApply());
         assertFalse(unselected.hasPendingChanges());
         assertFalse(unselected.requiresApply());
         assertFalse(unselected.requiresReconnect());
+        assertTrue(unselected.requiresApplyIfSelected());
+        assertFalse(unselected.requiresReconnectIfSelected());
+        assertTrue(unselected.appliesLiveIfSelected());
     }
 
     @Test
@@ -48,6 +51,8 @@ public final class ModeStreamQualityModelTest {
         assertTrue(model.requiresApply());
         assertTrue(model.requiresReconnect());
         assertFalse(model.appliesLive());
+        assertTrue(model.requiresReconnectIfSelected());
+        assertFalse(model.appliesLiveIfSelected());
     }
 
     @Test
@@ -67,6 +72,8 @@ public final class ModeStreamQualityModelTest {
         assertFalse(selected.hasPendingChanges());
         assertTrue(selected.requiresReconnect());
         assertFalse(unselected.requiresReconnect());
+        assertTrue(unselected.requiresApplyIfSelected());
+        assertTrue(unselected.requiresReconnectIfSelected());
     }
 
     @Test

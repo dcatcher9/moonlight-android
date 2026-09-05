@@ -104,12 +104,4 @@ public final class XrControlUiState {
         modeOptionsId = null;
     }
 
-    /** Apply must cover both shared and per-mode reconnect-required changes atomically. */
-    public static boolean hasReconnectPending(SessionSettingsModel shared,
-                                               ClientSbsModeSettingsModel clientSbs) {
-        if (shared == null || clientSbs == null) {
-            throw new IllegalArgumentException("settings models must not be null");
-        }
-        return shared.hasPendingChanges() || clientSbs.hasPendingModelChange();
-    }
 }

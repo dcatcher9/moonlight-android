@@ -1,10 +1,19 @@
 # Client SBS model-source provenance
 
-This directory records provenance only. Large source and benchmark model binaries are deliberately
-not stored in the repository or packaged in either Artemis APK. Download them to temporary storage
-when a model must be regenerated or a historical benchmark reproduced.
+This directory records model provenance and retains the three retired family archives. Upstream
+source checkpoints and loose benchmark models are deliberately not stored in the repository or
+packaged in either Moonlight 3D APK. Download those inputs to temporary storage when a model must
+be regenerated or a historical benchmark reproduced.
 
-## Depth Anything V2 Small production family
+As of 2026-09-03, original ZipDepth Base is the only production Client SBS model family and the
+only family accepted by `tools/bundle-client-sbs-models.py`. The three production aspect graphs are
+packaged in `app/src/nonRoot_game/assets/client-sbs-zipdepth-models.tar.xz`. Previously packaged
+DA-V2, MiDaS, and DepthART archives are retained under
+`tools/model-sources/retired-client-sbs-archives/`; that path is outside every Android source set
+and is never included in an APK. Their generators, provenance, and measurements remain below as
+historical offline-evaluation evidence.
+
+## Depth Anything V2 Small — retired production family
 
 - Upstream project: `DepthAnything/Depth-Anything-V2`
 - Upstream model: Depth Anything V2 Small
@@ -13,14 +22,12 @@ when a model must be regenerated or a historical benchmark reproduced.
 - License stated by upstream for the Small model: Apache-2.0
 - License and modification notice: `LICENSE-DEPTH-ANYTHING-V2-APACHE-2.0.txt`
 
-The non-root APK delivers the corresponding recipient-facing notice and verbatim license text at
-`assets/third_party/client_sbs_models/NOTICE.txt` and
-`assets/third_party/client_sbs_models/LICENSE-APACHE-2.0.txt`. The root flavor packages neither
-the models nor their model-specific notices.
+The non-root APK no longer delivers this model or a model-specific recipient-facing notice. Its
+former family archive and source-distribution license are retained here for offline reproduction.
 
-The packaged Artemis graphs are modified TFLite conversions, not verbatim upstream checkpoint
-files. The guarded transform records the exact immediate Float32 graph contracts that it accepts.
-For the three canonical production shapes those source SHA-256 values are:
+The formerly packaged Moonlight 3D graphs are modified TFLite conversions, not verbatim upstream
+checkpoint files. The guarded transform records the exact immediate Float32 graph contracts that
+it accepts. For the three former canonical shapes those source SHA-256 values are:
 
 - `322x182`: `eaf4f4fc25809da9000ba4e5330b1e3335722b1937fcd94c6e4935fbc411bc23`
 - `350x154`: `174ab97d5fb87c1d992f1c0ff6700ced949ccd3e5eda3bdf641be2c446f441f1`
@@ -28,9 +35,8 @@ For the three canonical production shapes those source SHA-256 values are:
 
 `tools/generate-dav2-attention-k352-model.py` verifies those immediate inputs and applies the
 documented static attention/GELU transformation; `tools/convert-tflite-fp16-weights.py` performs
-the guarded FP16-weight-storage conversion. The final production entry names and hashes are
-recorded in `ClientSbsModelManifest` and verified against the checked-in family archive by the
-non-root packaged-archive unit test.
+the guarded FP16-weight-storage conversion. The retired final entry names and hashes remain in the
+archived family and historical evaluation documentation.
 
 This checkout does **not** currently record the pinned upstream checkpoint revision and digest,
 exporter source revision, dependency lock, or exact export command that originally produced those
@@ -40,7 +46,7 @@ complete upstream-checkpoint-to-TFLite reproduction chain. Do not invent or impl
 chain. Any future model replacement must record those pins before its generated archive is
 promoted.
 
-## Qualcomm MiDaS v2.1 Small float graph
+## Qualcomm MiDaS v2.1 Small float graph — retired production family
 
 - Suggested temporary filename: `midas-midas-v2-float.tflite.model`
 - SHA-256: `3990551be4f21be7bffc71c159bb643279af221c6e8b328ce265374776ff2ec1`
@@ -60,9 +66,9 @@ https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/mi
 
 This verified square graph is the source for `tools/generate-midas-static-buckets.py`. The generator
 first specializes a temporary Float32 graph,
-then runs `tools/convert-tflite-fp16-weights.py`; its three production outputs use
+then runs `tools/convert-tflite-fp16-weights.py`; its three formerly packaged outputs use
 `-fp16weights.tflite.model` filenames while keeping Float32 public NHWC tensors. The square source
-must remain outside the repository and is never packaged in Artemis.
+must remain outside the repository and is never packaged in Moonlight 3D.
 
 After downloading and extracting the pinned archive, regenerate the static FP16-weight buckets with:
 
@@ -75,7 +81,7 @@ python tools/generate-midas-static-buckets.py `
 Loose generated graphs must stay under this client checkout's ignored `build` or `temp` tree,
 never under `app/src/*/assets` and never in Apollo-3D.
 
-## ZipDepth `base_npu` experimental family
+## ZipDepth `base_npu` — retired experiment
 
 - Upstream project: `fabiotosi92/ZipDepth`
 - Upstream project URL: `https://github.com/fabiotosi92/ZipDepth`
@@ -149,7 +155,7 @@ Sustained decode/reprojection thermals and full-clip on-device quality remain se
 - Code license stated upstream: MIT
 - Recipient-facing code license: `LICENSE-ZIPDEPTH-MIT.txt`
 
-These production candidates use the original base checkpoint and preserve its standard convex
+These production graphs use the original base checkpoint and preserve its standard convex
 unfold upsampling tail; they are not exports of the separately trained `zipdepth_base_npu.pth`
 checkpoint. The final static graphs have raw RGB Float32 NHWC input and full-resolution Float32
 NHWC relative-depth output. Selected constant weights use FP16 storage. The Adreno compatibility
@@ -182,7 +188,7 @@ as knowledge-distilled from Depth Anything V2 Large and does not separately stat
 license or analyze that training relationship. Clear the complete redistribution chain before a
 commercial release.
 
-## DepthART S448 experimental family
+## DepthART S448 — retired experiment
 
 - Upstream project: `xuefeng-cvr/DepthART`
 - Upstream project URL: `https://github.com/xuefeng-cvr/DepthART`
@@ -210,7 +216,7 @@ pre-stabilization inputs:
 only the first selective-scan LayerNorm by four and its epsilon by sixteen, verifies CPU output is
 unchanged, and requires these exact deterministic outputs:
 
-| Geometry | Production entry | SHA-256 | Operators |
+| Geometry | Historical entry | SHA-256 | Operators |
 | --- | --- | --- | ---: |
 | `672 x 384` | `depthart-s448-static-672x384-fp16weights.tflite.model` | `3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b` | 2231 |
 | `928 x 384` | `depthart-s448-static-928x384-fp16weights.tflite.model` | `d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2` | 2371 |
@@ -229,17 +235,14 @@ python tools/stabilize-depthart-fp16-layernorm.py `
     --width 928
 ```
 
-Both corrected graphs pass isolated Galaxy XR full-delegation, finite-output, and latency checks.
-DepthART remains an explicitly labeled experimental candidate until sustained live
-decode/reprojection cadence, compositor responsiveness, and thermals are qualified. There is no
-dedicated 32:9 graph; current 32:9 streams use the nearer `928 x 384` graph and must pass visual
-acceptance for direct-resize aspect compression.
+Both corrected graphs passed isolated Galaxy XR full-delegation, finite-output, and latency checks.
+The family is now retired from the APK. There was no dedicated 32:9 graph; historical 32:9 tests
+used `928 x 384` and incurred direct-resize aspect compression.
 
-## Publish the family archives
+## Publish the ZipDepth family archive
 
-After all three validated DA-V2 graphs, all three MiDaS graphs, both DepthART candidate graphs, and
-all three ZipDepth base graphs are present in one staging directory, publish the four standard
-solid family archives with:
+After all three original-Base ZipDepth graphs are present in one staging directory, publish the
+single standard solid family archive with:
 
 ```powershell
 python tools/bundle-client-sbs-models.py `
@@ -247,17 +250,13 @@ python tools/bundle-client-sbs-models.py `
     --output-dir .\app\src\nonRoot_game\assets
 ```
 
-The bundler requires all eleven exact filenames, creates one TAR/XZ per family, builds all four
-temporary archives first, and then atomically replaces each destination file. The four-file
-publication is not a filesystem transaction, so run the packaged-archive test before committing.
-Do not copy the loose models into source assets. The experimental DepthART archive is 10,991,860
-bytes with SHA-256
-`1dccec4aa315288b5cc471a9d585d57e00d0e12a56870cb4712da5f20fb476a6`; its entry hashes above remain
-the stronger per-model contract. The ZipDepth archive is 11,149,420 bytes with SHA-256
+The bundler requires the three exact ZipDepth filenames, builds one temporary TAR/XZ, and atomically
+replaces its destination file. Run the packaged-archive test before committing. Do not copy loose
+models into source assets. The ZipDepth archive is 11,149,420 bytes with SHA-256
 `0b737e7ff7d6717c9b376e2e6d195eb5ff4a54d49d862e3415f155d137c78558`; the three entry hashes in
 the production-family table remain its stronger per-model contract.
 
-## LiteRT Community MiDaS v2.1 Small FP16-weight graph (benchmark only)
+## LiteRT Community MiDaS v2.1 Small FP16-weight graph — historical benchmark only
 
 - Upstream repository: `litert-community/MiDaS-small`
 - Pinned revision: `e67ad159d92fba999903bdd394737a87c47509b0`
@@ -289,13 +288,13 @@ FP16 weight buffers. CPU output before/after this contract patch is bit-identica
 not use this independently exported graph; it derives FP16-stored weights reproducibly from the
 pinned Qualcomm Float32 source above so the existing static-bucket graph identity is retained.
 
-MiDaS is distributed under the MIT license; its notice is in `LICENSE-MIDAS-MIT.txt`.
+MiDaS is distributed under the MIT license; its historical notice is in `LICENSE-MIDAS-MIT.txt`.
 EfficientNet-Lite3 is attributed by the model card under Apache-2.0. See the
 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) and the pinned upstream model card
-for converter/model-specific provenance. The non-root APK delivers the MiDaS license at
-`assets/third_party/client_sbs_models/LICENSE-MIDAS-MIT.txt`; its adjacent `NOTICE.txt` describes
-the shipped graph modifications and references both bundled licenses.
+for converter/model-specific provenance. The current non-root APK does not contain MiDaS or its
+model-specific license.
 
-Do not copy loose model binaries into the repository. Only the solid family archives belong in the
-non-root asset source set. The pinned URLs, revisions, hashes, transformation tools, explicit gaps,
-and license notice above are the reproducibility source of truth.
+Do not copy loose model binaries into Android source assets. Only the active ZipDepth solid family
+archive belongs in the non-root asset source set. The pinned URLs, revisions, hashes,
+transformation tools, explicit gaps, and license notice above are the reproducibility source of
+truth; retired archives remain only in the explicitly non-packaged directory documented above.

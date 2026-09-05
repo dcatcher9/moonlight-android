@@ -4,8 +4,9 @@ package com.limelight.sbs;
  * Single-owner constants and a CPU reference for the Client-SBS shot-relatch policy.
  *
  * <p>The production decision remains GPU-resident in {@link ClientSbsGpuDepthShaders}. Keeping
- * the thresholds and transition reference here lets numerical JVM tests exercise the same
- * hysteresis without adding a render-path readback or a second source of numeric constants.</p>
+     * the thresholds and detector-present transition reference here lets numerical JVM tests
+     * exercise the same hysteresis without adding a render-path readback or a second source of
+     * numeric constants. Detector-loss fallback is covered by shader-contract and device tests.</p>
  *
  * <p>The state semantics intentionally match Apollo: geometry and qualified appearance have
  * independent arms, every accepted cut latches both, and a genuinely new geometry spike can
@@ -30,6 +31,12 @@ final class ClientSbsShotCutPolicy {
     static final float GEOMETRY_BASELINE_ALPHA = 0.125f;
     static final int CUT_SETTLE_VALID_DEPTH_UPDATES = 8;
 
+    // Keep this literal in lockstep with Apollo's STRUCTURAL_GEOMETRY_CUT_FLOOR. Geometry is
+    // allowed to relatch a shot only when the independent ordinal-color detector corroborates
+    // some structural replacement. A structureless reference waives unavailable ordinal evidence;
+    // complete detector loss has a separate bounded two-observation fallback in the GPU resolver.
+    static final float STRUCTURAL_GEOMETRY_CUT_FLOOR = 0.005f;
+
     // One per-slot mailbox word carries the mutually exclusive color classification and
     // event-scoped structureless-history transitions without a new buffer, binding, dispatch, or
     // readback. A manual CPU request remains appearance authority and is never converted into the
@@ -38,11 +45,6 @@ final class ClientSbsShotCutPolicy {
     static final int SCENE_EVIDENCE_EXPOSURE_LIKE = 1 << 1;
     static final int SCENE_EVIDENCE_PERSISTENT_LOW_START = 1 << 2;
     static final int SCENE_EVIDENCE_SUPPORTED_RETURN = 1 << 3;
-    private static final int SCENE_EVIDENCE_CLASSIFICATION_MASK =
-            SCENE_EVIDENCE_APPEARANCE | SCENE_EVIDENCE_EXPOSURE_LIKE;
-    private static final int SCENE_EVIDENCE_EVENT_MASK =
-            SCENE_EVIDENCE_PERSISTENT_LOW_START | SCENE_EVIDENCE_SUPPORTED_RETURN;
-
     static final int LOW_STRUCTURE_SCENE_INACTIVE = 0;
     static final int LOW_STRUCTURE_SCENE_ACTIVE = 1;
 
@@ -53,6 +55,21 @@ final class ClientSbsShotCutPolicy {
     static final int CUT_STATE_APPEARANCE_ONE_QUIET = 1 << 4;
     static final int CUT_STATE_GEOMETRY_LATCHED = 1 << 5;
     static final int CUT_STATE_APPEARANCE_LATCHED = 1 << 6;
+    static final int CUT_STATE_GEOMETRY_CONFIRMATION_PENDING = 1 << 7;
+    static final int CUT_STATE_APPEARANCE_RECOVERY = 1 << 8;
+
+    // Per-result stateFlags.z bits shared by every GPU history consumer. A result may be a valid
+    // flat/pending publication without being allowed to advance any reliable history.
+    static final int FRAME_STATE_FIRST_DEPTH = 1 << 0;
+    static final int FRAME_STATE_HOLD_RELIABLE_HISTORY = 1 << 1;
+    static final int FRAME_STATE_HISTORY_ADVANCES = 1 << 2;
+    static final int FRAME_STATE_CURRENT_DEPTH_VALID = 1 << 3;
+    // Raw completeness and V2 renderer validity are deliberately separate. Apollo still lets a
+    // finite collapsed field participate in private normalized cut history, but never lets it
+    // acquire or publish the raw shot camera.
+    static final int FRAME_STATE_CURRENT_V2_VALID = 1 << 4;
+    /** Identifies the structureless-gap reason within the generic reliable-history hold. */
+    static final int FRAME_STATE_STRUCTURELESS_GAP = 1 << 5;
 
     static final int CUT_STATE_STARTUP = 0;
     static final int CUT_STATE_READY = CUT_STATE_SETTLED
@@ -61,45 +78,6 @@ final class ClientSbsShotCutPolicy {
             | CUT_STATE_GEOMETRY_LATCHED | CUT_STATE_APPEARANCE_LATCHED;
 
     private ClientSbsShotCutPolicy() {
-    }
-
-    /**
-     * Selects the one typed color classification consumed by a valid depth update.
-     *
-     * <p>Any nonzero word from the exact current color frame supersedes the classification carried
-     * from an earlier all-invalid inference, including an event-only word whose classification is
-     * deliberately empty. Event bits are accumulated because a persistent-low start and its
-     * supported return can both occur before depth becomes valid again. Appearance wins malformed
-     * dual-classification input, matching the explicit/manual cut's authority.</p>
-     */
-    static int selectSceneEvidence(int currentEvidence, int pendingEvidence) {
-        int current = normalizeSceneEvidence(currentEvidence);
-        int pending = normalizeSceneEvidence(pendingEvidence);
-        int currentClassification = current & SCENE_EVIDENCE_CLASSIFICATION_MASK;
-        int pendingClassification = pending & SCENE_EVIDENCE_CLASSIFICATION_MASK;
-        int classification = current != 0
-                ? currentClassification : pendingClassification;
-        return classification | ((current | pending) & SCENE_EVIDENCE_EVENT_MASK);
-    }
-
-    private static int normalizeSceneEvidence(int evidence) {
-        int events = evidence & SCENE_EVIDENCE_EVENT_MASK;
-        if ((evidence & SCENE_EVIDENCE_APPEARANCE) != 0) {
-            return events | SCENE_EVIDENCE_APPEARANCE;
-        }
-        if ((evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0) {
-            return events | SCENE_EVIDENCE_EXPOSURE_LIKE;
-        }
-        return events;
-    }
-
-    static int encodePendingSceneEvidence(int evidence) {
-        int normalized = normalizeSceneEvidence(evidence);
-        return normalized == 0 ? 0 : -normalized;
-    }
-
-    static int decodePendingSceneEvidence(int encodedEvidence) {
-        return encodedEvidence < 0 ? normalizeSceneEvidence(-encodedEvidence) : 0;
     }
 
     static boolean isAppearanceEvidence(int evidence) {
@@ -119,8 +97,25 @@ final class ClientSbsShotCutPolicy {
         return (evidence & SCENE_EVIDENCE_SUPPORTED_RETURN) != 0;
     }
 
-    static boolean shouldHoldDepthHistory(int evidence) {
-        return isExposureLikeEvidence(evidence);
+    static boolean isFirstStructurelessHold(int evidence, boolean comparable,
+                                            boolean previousStructureSupported,
+                                            boolean currentStructureSupported) {
+        return isExposureLikeEvidence(evidence) && comparable
+                && previousStructureSupported && !currentStructureSupported;
+    }
+
+    static boolean isAppearanceRecoveryTail(int cutState, boolean appearanceProposal) {
+        return has(cutState, CUT_STATE_APPEARANCE_RECOVERY) && !appearanceProposal;
+    }
+
+    static boolean appearanceVeto(int cutState, boolean appearanceProposal,
+                                  boolean exposureLikeTransition) {
+        return exposureLikeTransition || isAppearanceRecoveryTail(cutState, appearanceProposal);
+    }
+
+    static boolean photometricRecoveryVeto(boolean exposureLikeTransition,
+                                           boolean firstStructurelessHold) {
+        return exposureLikeTransition && !firstStructurelessHold;
     }
 
     static boolean standaloneGeometryCut(float changeFraction, float distributionShift) {
@@ -139,6 +134,13 @@ final class ClientSbsShotCutPolicy {
         return changeFraction >= NOVEL_GEOMETRY_CHANGE_MINIMUM
                 && (changeFraction >= geometryBaseline + NOVEL_GEOMETRY_CHANGE_DELTA
                 || changeFraction >= geometryBaseline * NOVEL_GEOMETRY_CHANGE_RATIO);
+    }
+
+    static boolean geometryStructureCorroborated(float structuralChangeFraction,
+                                                  boolean persistentStructurelessTransition,
+                                                  boolean referenceStructureless) {
+        return persistentStructurelessTransition || referenceStructureless
+                || structuralChangeFraction >= STRUCTURAL_GEOMETRY_CUT_FLOOR;
     }
 
     static boolean acceptsStandaloneGeometryShotCut(boolean initialized, int cutState,
@@ -181,6 +183,145 @@ final class ClientSbsShotCutPolicy {
                 && standaloneGeometryCut(changeFraction, distributionShift);
     }
 
+    static boolean isGeometryConfirmationPending(int cutState) {
+        return has(cutState, CUT_STATE_GEOMETRY_CONFIRMATION_PENDING);
+    }
+
+    /** Geometry-only evidence is deliberately provisional until a compatible next update. */
+    static boolean geometryConfirmationCandidate(boolean initialized, int cutState,
+                                                  boolean exposureLikeTransition,
+                                                 float changeFraction,
+                                                 float distributionShift,
+                                                 boolean baselineInitialized,
+                                                 float geometryBaseline,
+                                                 int sourceFrameAge,
+                                                 int lowStructureSceneMarker,
+                                                 boolean persistentLowStart,
+                                                 boolean supportedReturn) {
+        return geometryConfirmationCandidate(initialized, cutState, exposureLikeTransition,
+                changeFraction, distributionShift, baselineInitialized, geometryBaseline,
+                sourceFrameAge, lowStructureSceneMarker, persistentLowStart, supportedReturn,
+                1.0f, true);
+    }
+
+    static boolean geometryConfirmationCandidate(boolean initialized, int cutState,
+                                                 boolean exposureLikeTransition,
+                                                 float changeFraction,
+                                                 float distributionShift,
+                                                 boolean baselineInitialized,
+                                                 float geometryBaseline,
+                                                 int sourceFrameAge,
+                                                 int lowStructureSceneMarker,
+                                                 boolean persistentLowStart,
+                                                  boolean supportedReturn,
+                                                  float structuralChangeFraction,
+                                                  boolean currentStructureReliable) {
+        boolean referenceStructureless = lowStructureSceneMarker == LOW_STRUCTURE_SCENE_ACTIVE
+                || persistentLowStart;
+        return geometryConfirmationCandidate(initialized, cutState, exposureLikeTransition,
+                changeFraction, distributionShift, baselineInitialized, geometryBaseline,
+                sourceFrameAge, lowStructureSceneMarker, persistentLowStart, supportedReturn,
+                referenceStructureless, structuralChangeFraction, currentStructureReliable);
+    }
+
+    static boolean geometryConfirmationCandidate(boolean initialized, int cutState,
+                                                  boolean exposureLikeTransition,
+                                                  float changeFraction,
+                                                  float distributionShift,
+                                                  boolean baselineInitialized,
+                                                  float geometryBaseline,
+                                                  int sourceFrameAge,
+                                                  int lowStructureSceneMarker,
+                                                  boolean persistentLowStart,
+                                                  boolean supportedReturn,
+                                                  boolean referenceStructureless,
+                                                  float structuralChangeFraction,
+                                                  boolean currentStructureReliable) {
+        boolean absoluteCandidate = standaloneGeometryCut(changeFraction, distributionShift);
+        boolean lowStructureScene = lowStructureSceneMarker == LOW_STRUCTURE_SCENE_ACTIVE
+                || persistentLowStart;
+        boolean structureCorroborated = geometryStructureCorroborated(
+                structuralChangeFraction, persistentLowStart, referenceStructureless);
+        return initialized && !exposureLikeTransition && structureCorroborated
+                && ((isGeometryArmed(cutState) && absoluteCandidate)
+                || (lowStructureScene && supportedReturn && currentStructureReliable
+                && absoluteCandidate)
+                || (isGeometryConfirmationPending(cutState) && currentStructureReliable
+                && absoluteCandidate)
+                || acceptsLatchedGeometryShotCut(initialized, cutState, baselineInitialized,
+                sourceFrameAge, false, changeFraction, geometryBaseline));
+    }
+
+    static boolean startsGeometryConfirmation(boolean initialized, int cutState,
+                                              boolean externalEvidence,
+                                              boolean exposureLikeTransition,
+                                              float changeFraction,
+                                              float distributionShift,
+                                              boolean baselineInitialized,
+                                              float geometryBaseline,
+                                              int sourceFrameAge,
+                                              int lowStructureSceneMarker,
+                                              boolean persistentLowStart,
+                                              boolean supportedReturn) {
+        return startsGeometryConfirmation(initialized, cutState, externalEvidence,
+                exposureLikeTransition, changeFraction, distributionShift,
+                baselineInitialized, geometryBaseline, sourceFrameAge,
+                lowStructureSceneMarker, persistentLowStart, supportedReturn, 1.0f, true);
+    }
+
+    static boolean startsGeometryConfirmation(boolean initialized, int cutState,
+                                              boolean externalEvidence,
+                                              boolean exposureLikeTransition,
+                                              float changeFraction,
+                                              float distributionShift,
+                                              boolean baselineInitialized,
+                                              float geometryBaseline,
+                                              int sourceFrameAge,
+                                              int lowStructureSceneMarker,
+                                              boolean persistentLowStart,
+                                              boolean supportedReturn,
+                                              float structuralChangeFraction,
+                                              boolean currentStructureReliable) {
+        boolean referenceStructureless = lowStructureSceneMarker == LOW_STRUCTURE_SCENE_ACTIVE
+                || persistentLowStart;
+        return startsGeometryConfirmation(initialized, cutState, externalEvidence,
+                exposureLikeTransition, changeFraction, distributionShift,
+                baselineInitialized, geometryBaseline, sourceFrameAge,
+                lowStructureSceneMarker, persistentLowStart, supportedReturn,
+                referenceStructureless, structuralChangeFraction, currentStructureReliable);
+    }
+
+    static boolean startsGeometryConfirmation(boolean initialized, int cutState,
+                                              boolean externalEvidence,
+                                              boolean exposureLikeTransition,
+                                              float changeFraction,
+                                              float distributionShift,
+                                              boolean baselineInitialized,
+                                              float geometryBaseline,
+                                              int sourceFrameAge,
+                                              int lowStructureSceneMarker,
+                                              boolean persistentLowStart,
+                                              boolean supportedReturn,
+                                              boolean referenceStructureless,
+                                              float structuralChangeFraction,
+                                              boolean currentStructureReliable) {
+        boolean candidate = geometryConfirmationCandidate(initialized, cutState,
+                exposureLikeTransition, changeFraction, distributionShift,
+                baselineInitialized, geometryBaseline, sourceFrameAge,
+                lowStructureSceneMarker, persistentLowStart, supportedReturn,
+                referenceStructureless, structuralChangeFraction, currentStructureReliable);
+        boolean immediateAppearance = acceptsExternalShotCut(initialized, cutState,
+                externalEvidence, changeFraction, distributionShift);
+        boolean alreadyConfirmed = persistentLowStart && candidate;
+        return candidate && !immediateAppearance && !alreadyConfirmed
+                && !isGeometryConfirmationPending(cutState);
+    }
+
+    static boolean historyAdvances(boolean currentDepthValid, boolean holdReliableHistory,
+                                   boolean startGeometryConfirmation) {
+        return currentDepthValid && !holdReliableHistory && !startGeometryConfirmation;
+    }
+
     static boolean acceptsShotCut(boolean initialized, int cutState,
                                   boolean externalEvidence, boolean exposureLikeTransition,
                                   float changeFraction,
@@ -196,19 +337,49 @@ final class ClientSbsShotCutPolicy {
                                   float changeFraction,
                                   float distributionShift, boolean baselineInitialized,
                                   float geometryBaseline, int validDepthUpdateAge,
+                                                  int lowStructureSceneMarker, boolean persistentLowStart,
+                                                  boolean supportedReturn) {
+        return acceptsShotCut(initialized, cutState, externalEvidence, exposureLikeTransition,
+                changeFraction, distributionShift, baselineInitialized, geometryBaseline,
+                validDepthUpdateAge, lowStructureSceneMarker, persistentLowStart,
+                supportedReturn, 1.0f, true);
+    }
+
+    static boolean acceptsShotCut(boolean initialized, int cutState,
+                                  boolean externalEvidence, boolean exposureLikeTransition,
+                                  float changeFraction,
+                                  float distributionShift, boolean baselineInitialized,
+                                  float geometryBaseline, int validDepthUpdateAge,
                                   int lowStructureSceneMarker, boolean persistentLowStart,
-                                  boolean supportedReturn) {
-        return acceptsStandaloneGeometryShotCut(
-                initialized, cutState, exposureLikeTransition,
+                                  boolean supportedReturn, float structuralChangeFraction,
+                                  boolean currentStructureReliable) {
+        boolean referenceStructureless = lowStructureSceneMarker == LOW_STRUCTURE_SCENE_ACTIVE
+                || persistentLowStart;
+        return acceptsShotCut(initialized, cutState, externalEvidence, exposureLikeTransition,
+                changeFraction, distributionShift, baselineInitialized, geometryBaseline,
+                validDepthUpdateAge, lowStructureSceneMarker, persistentLowStart,
+                supportedReturn, referenceStructureless, structuralChangeFraction,
+                currentStructureReliable);
+    }
+
+    static boolean acceptsShotCut(boolean initialized, int cutState,
+                                  boolean externalEvidence, boolean exposureLikeTransition,
+                                  float changeFraction,
+                                  float distributionShift, boolean baselineInitialized,
+                                  float geometryBaseline, int validDepthUpdateAge,
+                                  int lowStructureSceneMarker, boolean persistentLowStart,
+                                  boolean supportedReturn, boolean referenceStructureless,
+                                  float structuralChangeFraction,
+                                  boolean currentStructureReliable) {
+        boolean geometryCandidate = geometryConfirmationCandidate(initialized, cutState,
+                exposureLikeTransition, changeFraction, distributionShift,
+                baselineInitialized, geometryBaseline, validDepthUpdateAge,
+                lowStructureSceneMarker, persistentLowStart, supportedReturn,
+                referenceStructureless, structuralChangeFraction, currentStructureReliable);
+        return acceptsExternalShotCut(initialized, cutState, externalEvidence,
                 changeFraction, distributionShift)
-                || acceptsExternalShotCut(
-                initialized, cutState, externalEvidence, changeFraction, distributionShift)
-                || acceptsLatchedGeometryShotCut(
-                initialized, cutState, baselineInitialized, validDepthUpdateAge,
-                exposureLikeTransition, changeFraction, geometryBaseline)
-                || acceptsLowStructureReturnShotCut(
-                initialized, lowStructureSceneMarker, persistentLowStart, supportedReturn,
-                changeFraction, distributionShift);
+                || (persistentLowStart && geometryCandidate)
+                || (isGeometryConfirmationPending(cutState) && geometryCandidate);
     }
 
     static int nextLowStructureSceneMarker(int lowStructureSceneMarker,
@@ -234,11 +405,17 @@ final class ClientSbsShotCutPolicy {
      */
     static int nextValidDepthUpdateAge(int validDepthUpdateAge, boolean initialized,
                                        boolean acceptedHardCut) {
+        return nextSourceFrameAge(validDepthUpdateAge, initialized, acceptedHardCut, 1);
+    }
+
+    static int nextSourceFrameAge(int sourceFrameAge, boolean initialized,
+                                  boolean acceptedHardCut, int sourceFrameDelta) {
         if (!initialized || acceptedHardCut) {
             return 0;
         }
-        return validDepthUpdateAge >= 65535
-                ? 65535 : Math.max(validDepthUpdateAge, 0) + 1;
+        int delta = Math.min(Math.max(sourceFrameDelta, 1), 65535);
+        int age = Math.max(sourceFrameAge, 0);
+        return age >= 65535 - delta ? 65535 : age + delta;
     }
 
     static boolean isSettled(int cutState) {
@@ -270,13 +447,35 @@ final class ClientSbsShotCutPolicy {
     static int nextCutState(int cutState, boolean initialized, boolean acceptedHardCut,
                             boolean externalEvidence, float changeFraction,
                             int validDepthUpdateAge) {
+        return nextCutState(cutState, initialized, acceptedHardCut, externalEvidence,
+                changeFraction, validDepthUpdateAge, false);
+    }
+
+    static int nextCutState(int cutState, boolean initialized, boolean acceptedHardCut,
+                            boolean externalEvidence, float changeFraction,
+                            int validDepthUpdateAge, boolean startGeometryConfirmation) {
+        return nextCutState(cutState, initialized, acceptedHardCut, externalEvidence,
+                changeFraction, validDepthUpdateAge, startGeometryConfirmation, false);
+    }
+
+    static int nextCutState(int cutState, boolean initialized, boolean acceptedHardCut,
+                            boolean externalEvidence, float changeFraction,
+                            int validDepthUpdateAge, boolean startGeometryConfirmation,
+                            boolean photometricRecoveryVeto) {
         int next = cutState;
-        if (next == CUT_STATE_STARTUP && initialized
+        if (!isSettled(next) && initialized
                 && validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES) {
-            next = CUT_STATE_READY;
+            next = CUT_STATE_READY | (next & CUT_STATE_APPEARANCE_RECOVERY);
         }
         if (acceptedHardCut) {
             return CUT_STATE_LATCHED;
+        }
+        next &= ~(CUT_STATE_GEOMETRY_CONFIRMATION_PENDING | CUT_STATE_APPEARANCE_RECOVERY);
+        if (photometricRecoveryVeto) {
+            next |= CUT_STATE_APPEARANCE_RECOVERY;
+        }
+        if (startGeometryConfirmation) {
+            next |= CUT_STATE_GEOMETRY_CONFIRMATION_PENDING;
         }
         if (!isSettled(next)) {
             return next;
@@ -320,7 +519,16 @@ final class ClientSbsShotCutPolicy {
     static float nextGeometryBaseline(float geometryBaseline, boolean baselineInitialized,
                                       boolean acceptedHardCut, float changeFraction,
                                       boolean holdReliableHistory) {
-        if (holdReliableHistory) {
+        return nextGeometryBaseline(geometryBaseline, baselineInitialized, acceptedHardCut,
+                changeFraction, holdReliableHistory, false, false);
+    }
+
+    static float nextGeometryBaseline(float geometryBaseline, boolean baselineInitialized,
+                                      boolean acceptedHardCut, float changeFraction,
+                                      boolean firstStructurelessHold,
+                                      boolean appearanceRecoveryTail,
+                                      boolean startGeometryConfirmation) {
+        if (firstStructurelessHold || appearanceRecoveryTail || startGeometryConfirmation) {
             return geometryBaseline;
         }
         if (!baselineInitialized || acceptedHardCut) {

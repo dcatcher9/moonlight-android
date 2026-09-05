@@ -73,11 +73,11 @@ public final class XrChoiceGroupSegmentedTest {
     }
 
     @Test
-    public void depthModelSegmentsKeepReadableMinimumHeight() {
+    public void longSegmentLabelsKeepReadableMinimumHeight() {
         XrChoiceGroup group = new XrChoiceGroup(context);
-        group.setChoices(new CharSequence[] {"Depth Anything", "MiDaS"},
-                new CharSequence[] {"dav2", "midas"},
-                "dav2", null, value -> true);
+        group.setChoices(new CharSequence[] {"Maximum quality", "Balanced latency"},
+                new CharSequence[] {"quality", "balanced"},
+                "quality", null, value -> true);
 
         measureAndLayout(group, dp(420));
 

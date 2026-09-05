@@ -61,23 +61,27 @@ final class ClientSbsShaders {
     static final String MODEL_INPUT_FRAGMENT = createModelInputFragment(true);
 
     /**
-     * Builds the stream-fixed model-input shader. A source whose orientation matches its model
-     * gets a literal full-frame UV path. Portrait input uses the reflected-padding path with
-     * {@code u_sourceAspect = sourceAspect / modelAspect}; expressing it relative to the model is
-     * what preserves the source aspect on a rectangular landscape tensor. The external decoder
-     * texture is GL_LINEAR; a fixed tap lattice integrates each tensor texel's source footprint,
-     * including the narrower occupied content grid used by portrait reflected padding.
+     * The largest number of source cells one model texel can overlap on either axis. The worst
+     * supported XR ladder entry is 2160x5120 portrait: its reflected content occupies 162x384
+     * cells in the selected 672x384 graph, so a 13.34-cell footprint overlaps at most 15 cells.
+     * GLSL ES 1.00 requires a literal loop bound; 16 retains one cell of headroom without making
+     * the shader stream-size-specific (same-graph live resizes can therefore retain the program).
      */
-    /**
-     * Taps per axis when integrating the source footprint. Fixed rather than derived because a
-     * GLSL ES 1.00 loop bound must be a constant expression, and kept small because each tap is a
-     * samplerExternalOES fetch carrying a YUV conversion on a GPU that is already this pipeline's
-     * thermal limit. Three taps of bilinear each cover roughly two source pixels, so a 3x3 grid
-     * integrates about six pixels per axis -- enough for the 5.5x ratio a 1080p stream produces,
-     * and a large improvement on the single tap at 4K's 11x even though it is not exhaustive.
-     */
-    static final int MODEL_INPUT_DOWNSAMPLE_TAPS = 3;
+    static final int MODEL_INPUT_MAX_AREA_SOURCE_CELLS = 16;
 
+    /**
+     * Builds the stream-fixed model-input shader. A source whose orientation matches its model
+     * gets a literal full-frame path. Portrait input uses reflected padding with
+     * {@code u_sourceAspect = sourceAspect / modelAspect}; expressing it relative to the model is
+     * what preserves the source aspect on a rectangular landscape tensor.
+     *
+     * <p>Downsampling integrates every source texel cell covered by a model texel with its exact
+     * overlap area. Sampling a sparse fixed lattice aliases thin features, particularly at 4K.
+     * A source smaller than the occupied model grid instead uses pixel-center bilinear sampling,
+     * matching the host's resize contract. HDR conversion is applied to each source cell before
+     * spatial integration so HDR and equivalent SDR inputs do not average in different transfer
+     * domains.</p>
+     */
     static String createModelInputFragment(boolean directFullFrame) {
         String aspectUniform = directFullFrame ? "" : "uniform float u_sourceAspect;";
         String mirrorFunction = directFullFrame ? "" : String.join("\n",
@@ -95,40 +99,34 @@ final class ClientSbsShaders {
         String effectiveRatio = directFullFrame
                 ? "  vec2 effectiveDownsampleRatio = u_downsampleRatio;"
                 : "  vec2 effectiveDownsampleRatio = u_downsampleRatio / contentSize;";
-        String centerCoordinates = directFullFrame
-                ? "  vec2 centerUv = sourceUv;"
-                : String.join("\n",
-                "  vec2 centerUv = vec2(mirrorCoordinate(sourceUv.x),",
-                "      mirrorCoordinate(sourceUv.y));");
-        String footprintSteps = directFullFrame
+        String sourceCellUv = directFullFrame
                 ? String.join("\n",
-                // With no reflected boundary, the transform is affine over the whole footprint.
-                // Carry two pre-transformed basis steps through the inner loop.
-                "    vec2 stepX = ((u_TextureTransform * vec4(",
-                "        sourceUv + vec2(span.x, 0.0), 0.0, 1.0)).xy",
-                "        - baseUv) / float(TAPS);",
-                "    vec2 stepY = ((u_TextureTransform * vec4(",
-                "        sourceUv + vec2(0.0, span.y), 0.0, 1.0)).xy",
-                "        - baseUv) / float(TAPS);")
-                : "";
-        String footprintSample = directFullFrame
-                ? "        accumulated += texture2D(u_Texture,"
-                        + " baseUv + fx * stepX + fy * stepY);"
+                // GLSL ES 1.00 has no integer clamp overload, so clamp in float coordinates.
+                "  vec2 maxCell = max(u_sourceSize - vec2(1.0), vec2(0.0));",
+                "  vec2 boundedCell = clamp(vec2(sourceCell), vec2(0.0), maxCell);",
+                "  return (boundedCell + vec2(0.5)) / u_sourceSize;")
                 : String.join("\n",
-                // Reflection is piecewise affine. Mirror every tap before applying the decoder
-                // transform so a footprint crossing a padded-content boundary does not sample
-                // through the wrong side of the fold.
-                "        vec2 tapUv = sourceUv",
-                "            + vec2(fx * span.x, fy * span.y) / float(TAPS);",
-                "        tapUv = vec2(mirrorCoordinate(tapUv.x),",
-                "            mirrorCoordinate(tapUv.y));",
-                "        vec2 transformedTap = (u_TextureTransform",
-                "            * vec4(tapUv, 0.0, 1.0)).xy;",
-                "        accumulated += texture2D(u_Texture, transformedTap);");
+                // Reflection is piecewise affine. Resolve every discrete source cell before the
+                // decoder transform so a footprint crossing a padding fold remains exact.
+                "  vec2 sourceUv = (vec2(sourceCell) + vec2(0.5)) / u_sourceSize;",
+                "  return vec2(mirrorCoordinate(sourceUv.x),",
+                "      mirrorCoordinate(sourceUv.y));");
+        String footprintBounds = directFullFrame
+                ? String.join("\n",
+                "  vec2 sourceLo = vec2(targetPixel) * u_downsampleRatio;",
+                "  vec2 sourceHi = vec2(targetPixel + ivec2(1)) * u_downsampleRatio;")
+                : String.join("\n",
+                "  vec2 targetSize = u_sourceSize / u_downsampleRatio;",
+                "  vec2 sourceLo = ((vec2(targetPixel) / targetSize - padding)",
+                "      / contentSize) * u_sourceSize;",
+                "  vec2 sourceHi = ((vec2(targetPixel + ivec2(1)) / targetSize - padding)",
+                "      / contentSize) * u_sourceSize;");
         return String.join("\n",
             "#extension GL_OES_EGL_image_external : require",
             "precision highp float;",
-            "const int TAPS = " + MODEL_INPUT_DOWNSAMPLE_TAPS + ";",
+            "precision highp int;",
+            "const int MAX_AREA_SOURCE_CELLS = "
+                    + MODEL_INPUT_MAX_AREA_SOURCE_CELLS + ";",
             "uniform vec2 u_downsampleRatio;",
             "uniform vec2 u_sourceSize;",
             "varying vec2 v_TexCoord;",
@@ -157,62 +155,90 @@ final class ClientSbsShaders {
             "  vec3 high = 1.055 * pow(max(color, 0.0), vec3(1.0 / 2.4)) - 0.055;",
             "  return mix(low, high, step(vec3(0.0031308), color));",
             "}",
-            "void main() {",
-            sourceCoordinates,
-            effectiveRatio,
-            centerCoordinates,
-            "  vec2 baseUv = (u_TextureTransform * vec4(centerUv, 0.0, 1.0)).xy;",
-            // Integrate the source cells this tensor texel covers. One bilinear tap aliases badly
-            // once the source is several times the model grid -- 1920 -> 350 is 5.5x per axis and
-            // 3840 -> 350 is 11x, so a single tap reads four of every thirty to one hundred and
-            // twenty source pixels and discards the rest. Fine structure then collapses into a
-            // near-uniform plane and the aliasing that survives inflates the depth edge fraction,
-            // which the adaptive-pop controller reads as scene complexity and backs off from.
-            "  vec2 span = max(effectiveDownsampleRatio, vec2(1.0)) / u_sourceSize;",
-            "  vec4 color;",
-            "  if (effectiveDownsampleRatio.x <= 1.0",
-            "      && effectiveDownsampleRatio.y <= 1.0) {",
-            // The estimator contract never upscales; this is the capped/native edge case, where a
-            // box smaller than a texel would only blur.
-            "    color = texture2D(u_Texture, baseUv);",
-            "  } else {",
-            footprintSteps,
-            "    vec4 accumulated = vec4(0.0);",
-            "    for (int ty = 0; ty < TAPS; ty++) {",
-            "      float fy = float(ty) - 0.5 * float(TAPS - 1);",
-            "      for (int tx = 0; tx < TAPS; tx++) {",
-            "        float fx = float(tx) - 0.5 * float(TAPS - 1);",
-            footprintSample,
-            "      }",
-            "    }",
-            "    color = accumulated / float(TAPS * TAPS);",
-            "  }",
+            "vec3 toModelColor(vec3 encoded) {",
             "  if (u_isHdr) {",
             // ST2084 is normalized to 10,000 nits. Express it in the 80-nit reference-white
             // units expected by the SDR model, then convert primaries before tonemapping.
             "    vec3 linearColor = max(bt2020ToBt709(",
-            "        pqToLinear(color.rgb) * 125.0), vec3(0.0));",
+            "        pqToLinear(encoded) * 125.0), vec3(0.0));",
             "    float luminance = dot(linearColor, vec3(0.2126, 0.7152, 0.0722));",
             "    linearColor /= 1.0 + max(luminance, 0.0);",
             "    float peak = max(1.0, max(linearColor.r,",
             "        max(linearColor.g, linearColor.b)));",
-            "    color.rgb = linearToSrgb(clamp(linearColor / peak, 0.0, 1.0));",
+            "    return linearToSrgb(clamp(linearColor / peak, 0.0, 1.0));",
             "  }",
-            "  gl_FragColor = vec4(color.rgb, 1.0);",
+            "  return encoded;",
+            "}",
+            "vec2 sourceCellUv(ivec2 sourceCell) {",
+            sourceCellUv,
+            "}",
+            "vec3 loadModelColor(ivec2 sourceCell) {",
+            "  vec2 logicalUv = sourceCellUv(sourceCell);",
+            "  vec2 transformedUv = (u_TextureTransform",
+            "      * vec4(logicalUv, 0.0, 1.0)).xy;",
+            "  return toModelColor(texture2D(u_Texture, transformedUv).rgb);",
+            "}",
+            "vec3 sampleModelColorBilinear(vec2 centerUv) {",
+            "  vec2 sourcePosition = centerUv * u_sourceSize - vec2(0.5);",
+            "  ivec2 lo = ivec2(floor(sourcePosition));",
+            "  vec2 blend = fract(sourcePosition);",
+            "  vec3 top = mix(loadModelColor(lo),",
+            "      loadModelColor(lo + ivec2(1, 0)), blend.x);",
+            "  vec3 bottom = mix(loadModelColor(lo + ivec2(0, 1)),",
+            "      loadModelColor(lo + ivec2(1, 1)), blend.x);",
+            "  return mix(top, bottom, blend.y);",
+            "}",
+            "vec3 sampleModelFootprint(vec2 sourceLo, vec2 sourceHi) {",
+            "  ivec2 first = ivec2(floor(sourceLo));",
+            "  ivec2 end = ivec2(ceil(sourceHi));",
+            "  vec3 weightedSum = vec3(0.0);",
+            "  for (int sourceOffsetY = 0;",
+            "      sourceOffsetY < MAX_AREA_SOURCE_CELLS; sourceOffsetY++) {",
+            "    int sourceY = first.y + sourceOffsetY;",
+            "    if (sourceY >= end.y) break;",
+            "    float yCoverage = max(min(sourceHi.y, float(sourceY + 1))",
+            "        - max(sourceLo.y, float(sourceY)), 0.0);",
+            "    for (int sourceOffsetX = 0;",
+            "        sourceOffsetX < MAX_AREA_SOURCE_CELLS; sourceOffsetX++) {",
+            "      int sourceX = first.x + sourceOffsetX;",
+            "      if (sourceX >= end.x) break;",
+            "      float xCoverage = max(min(sourceHi.x, float(sourceX + 1))",
+            "          - max(sourceLo.x, float(sourceX)), 0.0);",
+            "      weightedSum += loadModelColor(ivec2(sourceX, sourceY))",
+            "          * (xCoverage * yCoverage);",
+            "    }",
+            "  }",
+            "  float footprintArea = max((sourceHi.x - sourceLo.x)",
+            "      * (sourceHi.y - sourceLo.y), 0.000001);",
+            "  return weightedSum / footprintArea;",
+            "}",
+            "void main() {",
+            sourceCoordinates,
+            effectiveRatio,
+            "  ivec2 targetPixel = ivec2(floor(gl_FragCoord.xy));",
+            footprintBounds,
+            "  vec3 color;",
+            "  if (effectiveDownsampleRatio.x < 1.0",
+            "      || effectiveDownsampleRatio.y < 1.0) {",
+            "    color = sampleModelColorBilinear(sourceUv);",
+            "  } else {",
+            "    color = sampleModelFootprint(sourceLo, sourceHi);",
+            "  }",
+            "  gl_FragColor = vec4(color, 1.0);",
             "}");
     }
 
     /**
      * Packs the manifest-sized RGBA8 model-input render target into LiteRT's tightly packed
-     * Float32 NHWC input. LiteRT converts this GL buffer to the selected model's internal GPU
+     * Float32 NHWC input. LiteRT converts this GL buffer to the resolved graph's internal GPU
      * layout and precision, so preprocessing remains GPU-resident without relying on direct
      * external-tensor mode.
      * The texture row is flipped because GL texture row zero is bottom-first while the model is
      * top-first.
      */
     static final String MODEL_INPUT_PACK_COMPUTE = createModelInputPackCompute(
-            ClientSbsModelManifest.MIDAS_V2_STATIC_16_9.getInputWidth(),
-            ClientSbsModelManifest.MIDAS_V2_STATIC_16_9.getInputHeight());
+            ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9.getInputWidth(),
+            ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9.getInputHeight());
 
     static String createModelInputPackCompute(int tensorWidth, int tensorHeight) {
         if (tensorWidth <= 0 || tensorHeight <= 0) {
@@ -373,13 +399,12 @@ final class ClientSbsShaders {
     }
 
     /**
-     * Sizes the probe budget for the source-aligned width of the selected model's depth output.
+     * Sizes the probe budget for the source-aligned width of the resolved depth graph's output.
      *
-     * <p>The aspect-only overload retains the conservative floor established for the original
-     * DA-V2/MiDaS families. Passing the resolved output width lets a larger future graph request
-     * the correspondingly finer probe lattice without adding that family to the hard-coded legacy
-     * bucket helpers below. Portrait callers must pass the cropped, source-aligned output width,
-     * not the padded landscape tensor width.</p>
+     * <p>The aspect-only overload is a legacy calibration helper retained for offline tests.
+     * Production passes the resolved ZipDepth output width and its dedicated bucket boundary.
+     * Portrait callers must pass the cropped, source-aligned output width, not the padded landscape
+     * tensor width.</p>
      */
     static int probeStepsForDepthOutput(float sourceAspect, int selectedDepthWidth) {
         if (!Float.isFinite(sourceAspect) || sourceAspect <= 0.0f) {
@@ -391,9 +416,8 @@ final class ClientSbsShaders {
         ClientSbsDepthInputShape bucket = ClientSbsDepthInputShape.select(sourceAspect);
         // Portrait input is aspect-fitted into the landscape graph and the reflected side padding
         // is cropped from its depth output. Size against that narrower, source-aligned output, not
-        // the padded tensor width. MiDaS has the taller graph in every bucket and therefore yields
-        // the widest cropped portrait map among the original families. Keep that legacy floor so
-        // their shader contracts do not shrink, while allowing a selected larger graph to raise it.
+        // the padded tensor width. Historical MiDaS graphs define the conservative legacy floor
+        // used by offline tests; production ZipDepth's larger resolved width raises it naturally.
         int legacyDepthWidth = sourceAspect < 1.0f
                 ? Math.max(1, Math.round(sourceAspect
                 * Math.max(bucket.getHeight(), tallestModelHeightFor(bucket))))
@@ -486,8 +510,9 @@ final class ClientSbsShaders {
         return withProbeSteps(REPROJECTION_TEMPLATE, probeSteps);
     }
 
-    /** Default retained for source/tests that do not yet pass the stream aspect explicitly. */
-    static final String REPROJECTION_FRAGMENT = createReprojectionFragment(16.0f / 9.0f);
+    /** Default ZipDepth 16:9 contract for source/tests without a resolved stream contract. */
+    static final String REPROJECTION_FRAGMENT =
+            createReprojectionFragment(productionZipDepth16By9ProbeSteps());
 
     /**
      * Precomputes the expensive Bestv2 inverse reprojection for both eyes. Red stores the left-eye
@@ -617,8 +642,80 @@ final class ClientSbsShaders {
         return withProbeSteps(WARP_MAP_TEMPLATE, probeSteps);
     }
 
-    /** Default retained for source/tests that do not yet pass the stream aspect explicitly. */
-    static final String WARP_MAP_FRAGMENT = createWarpMapFragment(16.0f / 9.0f);
+    /** Default ZipDepth 16:9 contract for source/tests without a resolved stream contract. */
+    static final String WARP_MAP_FRAGMENT =
+            createWarpMapFragment(productionZipDepth16By9ProbeSteps());
+
+    /**
+     * Builds the two-eye inverse map from an already conditioned signed-parallax field.
+     *
+     * <p>The conditioner guarantees a horizontal slope strictly below one, so each eye has one
+     * inverse. This is the same visibility contract as current Host SBS: eleven fixed-point
+     * iterations replace the legacy frontmost multi-root probe and its background fallback. Like
+     * the host shader, this paired-eye solve stops only when both next coordinates equal their
+     * current coordinates exactly; a non-settled sample still reaches the same hard cap as the
+     * reference solve.</p>
+     */
+    static final String CONTRACTIVE_WARP_MAP_FRAGMENT = String.join("\n",
+            "precision highp float;",
+            "varying vec2 v_TexCoord;",
+            "uniform highp sampler2D s_ParallaxTexture;",
+            "const int INVERSE_ITERATIONS = 11;",
+            "vec2 reprojectBothEyes() {",
+            "  vec2 destination = v_TexCoord.xx;",
+            "  vec2 sourceXs = destination;",
+            "  for (int iteration = 0; iteration < INVERSE_ITERATIONS; iteration++) {",
+            "    float leftParallax = texture2D(s_ParallaxTexture,",
+            "        vec2(sourceXs.x, v_TexCoord.y)).r;",
+            "    float rightParallax = texture2D(s_ParallaxTexture,",
+            "        vec2(sourceXs.y, v_TexCoord.y)).r;",
+            "    vec2 nextSourceXs = destination + vec2(-leftParallax, rightParallax);",
+            "    bool exactlySettled = all(equal(nextSourceXs, sourceXs));",
+            "    sourceXs = nextSourceXs;",
+            "    if (exactlySettled) break;",
+            "  }",
+            "  return sourceXs;",
+            "}",
+            "void main() {",
+            // As with the compatibility map, store signed displacements rather than absolute U
+            // so RG16F retains useful sub-pixel precision across the complete eye.
+            "  vec2 sourceXs = clamp(reprojectBothEyes(), 0.0, 1.0);",
+            "  gl_FragColor = vec4(sourceXs - v_TexCoord.xx, 0.0, 1.0);",
+            "}");
+
+    /**
+     * Doubles only the horizontal inverse-map lattice. The exact 1x map supplies a bilinear seed,
+     * then one fixed-point update against the same R32F parallax field contracts that seed error.
+     * The coarse FBO is vertically flipped by the renderer's texture coordinates, so its lookup
+     * explicitly undoes that storage flip before the refined FBO applies the same convention.
+     */
+    static final String CONTRACTIVE_WARP_MAP_REFINEMENT_FRAGMENT = String.join("\n",
+            "precision highp float;",
+            "varying vec2 v_TexCoord;",
+            "uniform highp sampler2D s_CoarseWarpMapTexture;",
+            "uniform highp sampler2D s_ParallaxTexture;",
+            "void main() {",
+            "  vec2 destination = v_TexCoord.xx;",
+            "  vec2 coarseOffsets = texture2D(s_CoarseWarpMapTexture,",
+            "      vec2(v_TexCoord.x, 1.0 - v_TexCoord.y)).rg;",
+            "  vec2 sourceXs = clamp(destination + coarseOffsets, 0.0, 1.0);",
+            "  float leftParallax = texture2D(s_ParallaxTexture,",
+            "      vec2(sourceXs.x, v_TexCoord.y)).r;",
+            "  float rightParallax = texture2D(s_ParallaxTexture,",
+            "      vec2(sourceXs.y, v_TexCoord.y)).r;",
+            "  sourceXs = clamp(destination + vec2(-leftParallax, rightParallax),",
+            "      0.0, 1.0);",
+            "  gl_FragColor = vec4(sourceXs - destination, 0.0, 1.0);",
+            "}");
+
+    private static int productionZipDepth16By9ProbeSteps() {
+        ClientSbsModelManifest manifest =
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9;
+        return probeStepsForDepthOutput(
+                16.0f / 9.0f,
+                manifest.getOutputWidth(),
+                ClientSbsModelManifest.minimumLandscapeAspectForDedicatedProbeBucket(manifest));
+    }
 
     private static String withProbeSteps(String template, int probeSteps) {
         if (probeSteps < 4 || probeSteps > 72) {
@@ -653,18 +750,4 @@ final class ClientSbsShaders {
             "  gl_FragColor = vec4(finalColor.rgb, 1.0);",
             "}");
 
-    /** Apollo's validated separable [0.375, 0.25, 0.375] depth prefilter. */
-    static final String DEPTH_PREFILTER_FRAGMENT = String.join("\n",
-            "precision highp float;",
-            "varying vec2 v_TexCoord;",
-            "uniform highp sampler2D s_InputTexture;",
-            "uniform vec2 u_texelSize;",
-            "uniform vec2 u_blurDirection;",
-            "void main() {",
-            "  vec2 delta = u_texelSize * u_blurDirection;",
-            "  float depth = texture2D(s_InputTexture, v_TexCoord - delta).r * 0.375 +",
-            "      texture2D(s_InputTexture, v_TexCoord).r * 0.25 +",
-            "      texture2D(s_InputTexture, v_TexCoord + delta).r * 0.375;",
-            "  gl_FragColor = vec4(depth, depth, depth, 1.0);",
-            "}");
 }

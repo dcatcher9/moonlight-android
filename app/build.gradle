@@ -30,8 +30,8 @@ android {
         resValues = true
     }
 
-    // Model-family assets are already solid XZ streams. Store them directly in the APK so
-    // AssetManager does not add a second compression layer before the selected model is extracted.
+    // The ZipDepth model-family asset is already a solid XZ stream. Store it directly in the APK
+    // so AssetManager does not add a second compression layer before the selected graph is extracted.
     androidResources {
         noCompress += ['xz']
     }

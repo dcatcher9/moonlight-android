@@ -73,14 +73,8 @@ public final class XrSessionSettingsController {
             choice("smoothness", "Smooth"));
     private static final List<SessionSettingsModel.Choice> AUDIO_CHOICES = choices(
             choice("2", "Stereo"), choice("51", "5.1"), choice("71", "7.1"));
-    private static final List<SessionSettingsModel.Choice> CLIENT_MODEL_CHOICES = choices(
-            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                    "Depth Anything"),
-            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2, "MiDaS"),
-            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
-                    "DepthART S448 (Experimental)"),
-            choice(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16,
-                    "ZipDepth Base (Experimental · short 384)"));
+    private static final String CLIENT_MODEL_ID =
+            PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16;
 
     private static final EnumMap<SessionSettingsModel.Key, String> PREF_KEYS =
             new EnumMap<>(SessionSettingsModel.Key.class);
@@ -131,8 +125,6 @@ public final class XrSessionSettingsController {
             appliedModeQualitySources =
             new EnumMap<>(SessionSettingsStore.PresenterMode.class);
 
-    private final String globalClientModel;
-    private final SessionSettingsModel.Source appliedClientModelSource;
     private final PreferenceConfiguration.RawSbsPerEyeResolution
             globalRawSbsPerEyeResolution;
     private final SessionSettingsModel.Source appliedRawSbsPerEyeResolutionSource;
@@ -147,8 +139,6 @@ public final class XrSessionSettingsController {
     private final SharedPreferences startupPreferences;
     private final boolean startupCodecCompatibilityAdjusted;
     private SessionSettingsStore.PresenterMode selectedMode;
-    private String appliedClientModel;
-    private String pendingClientModel;
     private PreferenceConfiguration.RawSbsPerEyeResolution
             appliedRawSbsPerEyeResolution;
     private PreferenceConfiguration.RawSbsPerEyeResolution
@@ -162,7 +152,6 @@ public final class XrSessionSettingsController {
     /** Whether the connected host implements Apollo-3D's live video-mode control extension. */
     private boolean liveVideoModeSupported = true;
     private boolean sharedInheritanceResetRequested;
-    private boolean clientModelInheritanceResetRequested;
     private boolean rawSbsPerEyeResolutionInheritanceResetRequested;
     private final EnumSet<SessionSettingsStore.PresenterMode> modeInheritanceResetRequested =
             EnumSet.noneOf(SessionSettingsStore.PresenterMode.class);
@@ -238,18 +227,6 @@ public final class XrSessionSettingsController {
             pendingModeQuality.put(mode, new EnumMap<>(applied));
             appliedModeQualitySources.put(mode, sources);
         }
-        globalClientModel = readClientSbsDepthModel(
-                globalPreferences,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2);
-        SharedPreferences clientPreferences = snapshot.preferencesForMode(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        appliedClientModel = readClientSbsDepthModel(clientPreferences, globalClientModel);
-        pendingClientModel = appliedClientModel;
-        appliedClientModelSource = snapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING)
-                ? SessionSettingsModel.Source.CURRENT_SESSION
-                : SessionSettingsModel.Source.GLOBAL;
         globalRawSbsPerEyeResolution =
                 readRawSbsPerEyeResolution(globalPreferences);
         SharedPreferences rawPreferences = snapshot.preferencesForMode(
@@ -271,8 +248,16 @@ public final class XrSessionSettingsController {
         liveStreamQuality = qualityTuple(appliedModeQuality.get(startupMode));
         startupCodecCompatibilityAdjusted = ensureSelectedRawCodecCompatibility();
         Map<String, Object> startupOverrides = new java.util.HashMap<>();
-        startupOverrides.put(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                appliedClientModel);
+        // Keep the connection parser on the exact tuple exposed as live by this controller.
+        // Client SBS has a deliberately lighter 1080p/30 default when it has no persisted
+        // per-mode quality. That default is synthesized by readModeValues(), so it is not present
+        // in snapshot.preferencesForMode() and must be overlaid explicitly for the first launch.
+        startupOverrides.put(PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                liveStreamQuality.resolution);
+        startupOverrides.put(PreferenceConfiguration.FPS_PREF_STRING,
+                liveStreamQuality.frameRate);
+        startupOverrides.put(PreferenceConfiguration.BITRATE_PREF_STRING,
+                liveStreamQuality.bitrateKbps);
         if (startupCodecCompatibilityAdjusted) {
             startupOverrides.put(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING,
                     pendingSharedValues.get(SessionSettingsModel.Key.CODEC));
@@ -447,20 +432,9 @@ public final class XrSessionSettingsController {
         int[] size = parseResolution((String) pendingModeQuality.get(
                 SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).get(
                 SessionSettingsModel.Key.RESOLUTION));
-        SessionSettingsModel.Source source = pendingClientModel.equals(globalClientModel)
-                ? SessionSettingsModel.Source.GLOBAL
-                : SessionSettingsModel.Source.CURRENT_SESSION;
-        if (pendingClientModel.equals(appliedClientModel)) {
-            source = appliedClientModelSource;
-        }
         return new ClientSbsModeSettingsModel(
-                appliedClientModel, clientModelName(appliedClientModel),
-                pendingClientModel, clientModelName(pendingClientModel), source,
-                ClientSbsModeSettingsModel.selectBucket(
-                        pendingClientModel, size[0], size[1]),
-                "GPU-only \u00b7 initializes on first use",
-                clientModelChoices(appliedClientModel, pendingClientModel),
-                pendingClientModel);
+                ClientSbsModeSettingsModel.selectBucket(size[0], size[1]),
+                "GPU-only \u00b7 initializes on first use");
     }
 
     public RawSbsModeSettingsModel getRawSbsModel() {
@@ -637,11 +611,6 @@ public final class XrSessionSettingsController {
         else {
             modeInheritanceResetRequested.remove(mode);
         }
-        if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI) {
-            pendingClientModel = globalClientModel;
-            clientModelInheritanceResetRequested =
-                    appliedClientModelSource == SessionSettingsModel.Source.CURRENT_SESSION;
-        }
         if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
             pendingRawSbsPerEyeResolution = globalRawSbsPerEyeResolution;
             rawSbsPerEyeResolutionInheritanceResetRequested =
@@ -670,13 +639,6 @@ public final class XrSessionSettingsController {
         copyValuesForScope(sessionValues, pending, true);
         // Restoring the session values also withdraws any staged "inherit global" action.
         modeInheritanceResetRequested.remove(mode);
-        if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI) {
-            pendingClientModel = readClientSbsDepthModel(
-                    snapshot.preferencesForMode(
-                            SessionSettingsStore.PresenterMode.CLIENT_SBS_AI),
-                    globalClientModel);
-            clientModelInheritanceResetRequested = false;
-        }
         if (mode == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
             pendingRawSbsPerEyeResolution = readRawSbsPerEyeResolution(
                     snapshot.preferencesForMode(
@@ -687,19 +649,6 @@ public final class XrSessionSettingsController {
         if (mode == selectedMode) {
             ensureSelectedRawCodecCompatibility();
         }
-    }
-
-    public void toggleClientSbsModel() {
-        selectClientSbsModel(nextChoiceId(CLIENT_MODEL_CHOICES, pendingClientModel));
-    }
-
-    /** Stages one exact Client SBS model family from the mode-specific choice group. */
-    public void selectClientSbsModel(String modelId) {
-        Objects.requireNonNull(modelId, "modelId");
-        if (!containsChoice(clientModelChoices(appliedClientModel, pendingClientModel), modelId)) {
-            throw new IllegalArgumentException("Unsupported Client SBS model: " + modelId);
-        }
-        pendingClientModel = modelId;
     }
 
     /** Stages the Raw SBS packing density for the current session. */
@@ -755,9 +704,6 @@ public final class XrSessionSettingsController {
                         globalValues.get(key));
             }
         }
-        editor.setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                pendingClientModel, globalClientModel);
         editor.setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
                 pendingRawSbsPerEyeResolution.preferenceValue,
@@ -779,11 +725,9 @@ public final class XrSessionSettingsController {
 
     public boolean hasPendingChanges() {
         if (sharedInheritanceResetRequested
-                || clientModelInheritanceResetRequested
                 || rawSbsPerEyeResolutionInheritanceResetRequested
                 || !modeInheritanceResetRequested.isEmpty()
                 || !pendingSharedValues.equals(appliedSharedValues)
-                || !pendingClientModel.equals(appliedClientModel)
                 || pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution
                 || modeRequiresApply(selectedMode)) {
             return true;
@@ -818,17 +762,15 @@ public final class XrSessionSettingsController {
 
     /**
      * True when anything staged beyond the selected mode's live-applicable quality delta is
-     * pending. Shared settings, the Client SBS model, Raw packing, inheritance resets, and other
+     * pending. Shared settings, Raw packing, inheritance resets, and other
      * modes' tuples are all committed as one guarded record replacement, so they keep the
      * established Apply &amp; reconnect behavior.
      */
     public boolean pendingChangesRequireReconnect() {
         if (sharedInheritanceResetRequested
-                || clientModelInheritanceResetRequested
                 || rawSbsPerEyeResolutionInheritanceResetRequested
                 || !modeInheritanceResetRequested.isEmpty()
                 || !pendingSharedValues.equals(appliedSharedValues)
-                || !pendingClientModel.equals(appliedClientModel)
                 || pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution
                 || modeRequiresReconnect(selectedMode)) {
             return true;
@@ -869,7 +811,7 @@ public final class XrSessionSettingsController {
      *       choices in their launch orientation instead of a synthetic square made from both
      *       independent long-axis maxima.</li>
      *   <li>An <em>aspect</em> change additionally forces a reconnect in Client SBS when it
-     *       changes the selected model-family manifest or the independently compiled reprojection
+     *       changes the ZipDepth aspect-bucket manifest or the independently compiled reprojection
      *       probe count. Nothing aspect-derived is expensive for 2D or Host SBS AI — the quad
      *       shape and cached aspect are recomputed on the live path anyway.</li>
      * </ul>
@@ -906,8 +848,7 @@ public final class XrSessionSettingsController {
             return false;
         }
         if (mode == SessionSettingsStore.PresenterMode.CLIENT_SBS_AI
-                && !sameClientSbsPipelineContract(appliedClientModel, dimensions,
-                        liveDimensions)) {
+                && !sameClientSbsPipelineContract(dimensions, liveDimensions)) {
             // The existing renderer cannot swap graphs, depth targets, or compiled shader loops.
             return false;
         }
@@ -921,11 +862,11 @@ public final class XrSessionSettingsController {
                 && dimensions[1] <= liveResolutionMaxHeight;
     }
 
-    /** Whether two stream sizes can share the selected model family's immutable pipeline. */
+    /** Whether two stream sizes can share the same immutable ZipDepth pipeline. */
     static boolean sameClientSbsPipelineContract(
-            String modelId, int[] candidate, int[] live) {
+            int[] candidate, int[] live) {
         return ClientSbsPipelineContract.sameForStream(
-                modelId,
+                CLIENT_MODEL_ID,
                 (double) candidate[0] / Math.max(candidate[1], 1),
                 (double) live[0] / Math.max(live[1], 1));
     }
@@ -1154,20 +1095,6 @@ public final class XrSessionSettingsController {
         return PreferenceConfiguration.RawSbsPerEyeResolution.fromPreferenceValue(value);
     }
 
-    private static String readClientSbsDepthModel(
-            SharedPreferences preferences, String fallback) {
-        String modelId;
-        try {
-            modelId = preferences.getString(
-                    PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                    fallback);
-        }
-        catch (ClassCastException invalidStoredType) {
-            modelId = fallback;
-        }
-        return PreferenceConfiguration.normalizeClientSbsDepthModelId(modelId);
-    }
-
     private static int nextBitrate(int current) {
         for (int bitrate : BITRATES) {
             if (bitrate > current) {
@@ -1226,22 +1153,6 @@ public final class XrSessionSettingsController {
         String id = choiceId(key, value);
         if (!containsChoice(choices, id)) {
             choices.add(choice(id, displayValue(key, value)));
-        }
-    }
-
-    private static List<SessionSettingsModel.Choice> clientModelChoices(
-            String appliedModelId, String pendingModelId) {
-        ArrayList<SessionSettingsModel.Choice> result =
-                new ArrayList<>(CLIENT_MODEL_CHOICES);
-        addClientModelChoice(result, appliedModelId);
-        addClientModelChoice(result, pendingModelId);
-        return result;
-    }
-
-    private static void addClientModelChoice(List<SessionSettingsModel.Choice> choices,
-                                             String modelId) {
-        if (!containsChoice(choices, modelId)) {
-            choices.add(choice(modelId, clientModelName(modelId)));
         }
     }
 
@@ -1360,16 +1271,4 @@ public final class XrSessionSettingsController {
         }
     }
 
-    private static String clientModelName(String id) {
-        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2.equals(id)) {
-            return "MiDaS";
-        }
-        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16.equals(id)) {
-            return "DepthART S448 (Experimental)";
-        }
-        if (PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16.equals(id)) {
-            return "ZipDepth Base (Experimental · short 384)";
-        }
-        return "Depth Anything";
-    }
 }
