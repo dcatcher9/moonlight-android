@@ -8,61 +8,6 @@ import org.junit.Test;
 
 public class ShaderUtilsTest {
     @Test
-    public void clientSbsOutputIsForcedOpaque() {
-        assertTrue(ClientSbsShaders.REPROJECTION_FRAGMENT.contains(
-                "gl_FragColor = vec4(finalColor.rgb, 1.0)"));
-        assertFalse(ClientSbsShaders.REPROJECTION_FRAGMENT.contains(
-                "gl_FragColor = finalColor"));
-        assertFalse(ClientSbsShaders.REPROJECTION_FRAGMENT.contains("u_debugMode"));
-    }
-
-    @Test
-    public void reprojectionUsesBestv2AndFrontmostInverseProbe() {
-        String shader = ClientSbsShaders.REPROJECTION_FRAGMENT;
-        assertTrue(shader.contains("const int PROBE_STEPS = 36"));
-        assertTrue(shader.contains("bestv2RawShift"));
-        assertTrue(shader.contains("float anchorShift = stereoProfile.x;"));
-        assertFalse(shader.contains("0.5 * subjectShift"));
-        assertFalse(shader.contains("convergenceOffset"));
-        assertFalse(shader.contains("parallaxLimit"));
-        assertTrue(shader.contains("shift - anchorShift"));
-        assertTrue(shader.contains("float parallaxScale ="));
-        assertTrue(shader.contains("crossingDepth > bestDepth"));
-        assertTrue(shader.contains("bestDepth >= 0.0 ? bestX : backgroundX"));
-        assertTrue(shader.contains("uniform highp sampler2D s_ColorTexture"));
-        assertTrue(shader.contains("1.0 - v_TexCoord.y"));
-        assertFalse(shader.contains("u_shift"));
-        assertFalse(shader.contains("u_parallax"));
-        assertFalse(shader.contains("u_UseGpuProfile"));
-        assertFalse(shader.contains("u_profileReady"));
-        assertFalse(shader.contains("u_stretchLow"));
-        assertFalse(shader.contains("u_subjectDepth"));
-    }
-
-    @Test
-    public void warpMapCachesTheSameInverseSolveForBothEyes() {
-        String shader = ClientSbsShaders.WARP_MAP_FRAGMENT;
-        assertTrue(shader.contains("const int PROBE_STEPS = 36"));
-        assertTrue(shader.contains("bestv2RawShift"));
-        assertTrue(shader.contains("float anchorShift = stereoProfile.x;"));
-        assertFalse(shader.contains("0.5 * subjectShift"));
-        assertFalse(shader.contains("convergenceOffset"));
-        assertTrue(shader.contains("shift - anchorShift"));
-        assertTrue(shader.contains("crossingDepth > bestDepth"));
-        assertTrue(shader.contains("leftBestDepth >= 0.0 ? leftBestX : backgroundX"));
-        assertTrue(shader.contains("rightBestDepth >= 0.0 ? rightBestX : backgroundX"));
-        assertTrue(shader.contains("vec2 previousG = vec2(previousDelta + previousParallax"));
-        assertTrue(shader.contains("vec2 g = vec2(delta + parallax, delta - parallax)"));
-        assertTrue(shader.contains("updateFrontmostCrossing(previousG.x, g.x"));
-        assertTrue(shader.contains("updateFrontmostCrossing(previousG.y, g.y"));
-        assertTrue(shader.contains("clamp(reprojectBothEyes(profileShape, anchorShift"));
-        assertTrue(shader.contains("sourceXs - v_TexCoord.xx"));
-        assertFalse(shader.contains("reprojectX("));
-        assertFalse(shader.contains("eyeSign"));
-        assertFalse(shader.contains("s_ColorTexture"));
-    }
-
-    @Test
     public void contractiveWarpMapUsesTheHostUniqueInverseWithoutLegacyOwnership() {
         String shader = ClientSbsShaders.CONTRACTIVE_WARP_MAP_FRAGMENT;
         assertTrue(shader.contains("uniform highp sampler2D s_ParallaxTexture"));
@@ -109,36 +54,6 @@ public class ShaderUtilsTest {
     }
 
     @Test
-    public void zipDepthOutputWidthSelectsTheCompiledProbeBudget() {
-        float twentyOneNineLowerBound = (float) Math.sqrt(
-                (672.0f / 384.0f) * (896.0f / 384.0f));
-        float widestLowerBound = (float) Math.sqrt(
-                (896.0f / 384.0f) * (928.0f / 384.0f));
-        assertEquals(36, ClientSbsShaders.probeStepsForDepthOutput(
-                16.0f / 9.0f, 672, 4.0f / 3.0f));
-        assertEquals(32, ClientSbsShaders.probeStepsForDepthOutput(
-                21.0f / 9.0f, 896, twentyOneNineLowerBound));
-        assertEquals(28, ClientSbsShaders.probeStepsForDepthOutput(
-                32.0f / 9.0f, 928, widestLowerBound));
-        assertTrue(ClientSbsShaders.createReprojectionFragment(36)
-                .contains("const int PROBE_STEPS = 36;"));
-        assertTrue(ClientSbsShaders.createWarpMapFragment(32)
-                .contains("const int PROBE_STEPS = 32;"));
-        assertTrue(ClientSbsShaders.createWarpMapFragment(28)
-                .contains("const int PROBE_STEPS = 28;"));
-    }
-
-    @Test(expected = IllegalArgumentException.class)
-    public void selectedDepthOutputRejectsInvalidWidth() {
-        ClientSbsShaders.probeStepsForDepthOutput(16.0f / 9.0f, 0);
-    }
-
-    @Test(expected = IllegalArgumentException.class)
-    public void probeBudgetRejectsInvalidStreamAspect() {
-        ClientSbsShaders.probeStepsForAspect(Float.NaN);
-    }
-
-    @Test
     public void fullResolutionComposePacksBothEyesInOneSeamSafeShader() {
         String shader = ClientSbsShaders.WARPED_REPROJECTION_FRAGMENT;
         assertTrue(shader.contains("uniform highp sampler2D s_WarpMapTexture"));
@@ -159,7 +74,7 @@ public class ShaderUtilsTest {
 
     @Test
     public void modelInputUsesDirectResizeAndTonemapsHdrOnlyForInference() {
-        String shader = ClientSbsShaders.MODEL_INPUT_FRAGMENT;
+        String shader = ClientSbsShaders.createModelInputFragment(true);
         assertTrue(shader.contains("vec2 sourceUv = v_TexCoord;"));
         assertFalse(shader.contains("u_sourceAspect"));
         assertFalse(shader.contains("mirrorCoordinate"));
@@ -301,7 +216,7 @@ public class ShaderUtilsTest {
 
     @Test
     public void nativeGpuInputUsesPackedFloat32WithoutQuantization() {
-        String shader = ClientSbsShaders.MODEL_INPUT_PACK_COMPUTE;
+        String shader = ClientSbsShaders.createModelInputPackCompute(672, 384);
         assertTrue(shader.contains("const uint TENSOR_WIDTH = 672u;"));
         assertTrue(shader.contains("const uint TENSOR_HEIGHT = 384u;"));
         assertTrue(shader.contains("float tensorValues[]"));

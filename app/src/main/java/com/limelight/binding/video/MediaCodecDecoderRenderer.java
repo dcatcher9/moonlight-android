@@ -8,6 +8,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -47,6 +49,84 @@ import android.view.Choreographer;
 import android.view.Surface;
 
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
+    public interface OutputSurfaceSwitchCallback {
+        void onComplete(boolean success);
+    }
+
+    /**
+     * Small ownership token shared with the UI deadline that owns one asynchronous bind.
+     * COMMITTED is published only after a guarded success callback is already in the main queue;
+     * a timeout that wins PENDING -> CANCELLED therefore makes the codec worker roll back. Its
+     * monitor covers only state transitions and a main-queue insertion, never a codec operation.
+     */
+    public static final class OutputSurfaceSwitchRequest {
+        private static final int STATE_PENDING = 0;
+        private static final int STATE_COMMITTED = 1;
+        private static final int STATE_CANCELLED = 2;
+        private static final int STATE_DELIVERED = 3;
+
+        private final long epoch;
+        private final AtomicInteger state = new AtomicInteger(STATE_PENDING);
+        private final Object transitionLock = new Object();
+
+        OutputSurfaceSwitchRequest(long epoch) {
+            this.epoch = epoch;
+        }
+
+        boolean isPending() {
+            return state.get() == STATE_PENDING;
+        }
+
+        /** Atomically queues success before making it visible to a competing UI deadline. */
+        boolean enqueueCompletionAndCommit(BooleanSupplier enqueueCompletion) {
+            synchronized (transitionLock) {
+                if (state.get() != STATE_PENDING) {
+                    return false;
+                }
+                if (!enqueueCompletion.getAsBoolean()) {
+                    return false;
+                }
+                return state.compareAndSet(STATE_PENDING, STATE_COMMITTED);
+            }
+        }
+
+        boolean tryCancelPending() {
+            synchronized (transitionLock) {
+                return state.compareAndSet(STATE_PENDING, STATE_CANCELLED);
+            }
+        }
+
+        boolean tryDeliverCommitted() {
+            synchronized (transitionLock) {
+                return state.compareAndSet(STATE_COMMITTED, STATE_DELIVERED);
+            }
+        }
+
+        /**
+         * @return true when the deadline owns failure; false when queued success already owns it
+         */
+        public boolean cancelAtDeadline() {
+            synchronized (transitionLock) {
+                int current = state.get();
+                if (current == STATE_COMMITTED || current == STATE_DELIVERED) {
+                    return false;
+                }
+                state.compareAndSet(STATE_PENDING, STATE_CANCELLED);
+                return true;
+            }
+        }
+
+        /** Supersession/teardown cancels even a committed callback that has not been delivered. */
+        public void cancel() {
+            synchronized (transitionLock) {
+                int current = state.get();
+                if (current != STATE_CANCELLED && current != STATE_DELIVERED) {
+                    state.set(STATE_CANCELLED);
+                }
+            }
+        }
+    }
+
     public enum ActualColorRange {
         /** MediaCodec has not reported a usable output color range. */
         UNKNOWN(false),
@@ -225,18 +305,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    private void releaseOutputBufferForRender(int bufferIndex, long renderTimestampNs) {
-        videoDecoder.releaseOutputBuffer(bufferIndex, renderTimestampNs);
-        acknowledgePresentationTransitionRendered();
-        recordFrameReleasedForRender();
-    }
-
-    private void releaseOutputBufferForRender(int bufferIndex) {
-        videoDecoder.releaseOutputBuffer(bufferIndex, true);
-        acknowledgePresentationTransitionRendered();
-        recordFrameReleasedForRender();
-    }
-
     /** Removes inputs for which MediaCodec never produced an output buffer. Lock must be held. */
     private void pruneStaleDecodeTimestampsLocked(long nowNs) {
         long staleBeforeNs = nowNs - 2_000_000_000L;
@@ -283,7 +351,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private Context context;
     private Activity activity;
-    private MediaCodec videoDecoder;
+    /** Published across codec recovery and the dedicated frame-rendered callback Looper. */
+    private volatile MediaCodec videoDecoder;
     private Thread rendererThread;
     private boolean needsSpsBitstreamFixup, isExynos4;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
@@ -318,7 +387,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int CR_RECOVERY_TYPE_FLUSH = 1;
     private static final int CR_RECOVERY_TYPE_RESTART = 2;
     private static final int CR_RECOVERY_TYPE_RESET = 3;
-    private AtomicInteger codecRecoveryType = new AtomicInteger(CR_RECOVERY_TYPE_NONE);
+    // Terminal token published without codecRecoveryMonitor so UI-triggered teardown never waits
+    // behind an uninterruptible vendor codec call. No recovery CAS accepts this value, and active
+    // recovery transactions must preserve it when their in-flight operation returns.
+    private static final int CR_RECOVERY_TYPE_STOPPED = 4;
+    private final AtomicInteger codecRecoveryType = new AtomicInteger(CR_RECOVERY_TYPE_NONE);
     private final Object codecRecoveryMonitor = new Object();
     private final DecoderModeTransitionGate modeTransitionFrameGate =
             new DecoderModeTransitionGate();
@@ -334,6 +407,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile IntConsumer modeTransitionOpenedListener;
     private volatile IntConsumer modeTransitionTimedOutListener;
     private volatile IntConsumer activeVideoFormatListener;
+    // Output rendering can race beginPresentationModeTransition() from another thread. Feed one
+    // preallocated commit callback from fields guarded by modeTransitionStateLock so the final gate
+    // check and MediaCodec release are one allocation-free transaction.
+    private int pendingOutputCommitBufferIndex;
+    private long pendingOutputCommitRenderTimestampNs;
+    private boolean pendingOutputCommitUsesTimestamp;
+    private final DecoderModeTransitionGate.OutputCommitter outputCommitter =
+            this::commitPendingOutputBufferForRender;
     // Guarded by codecRecoveryMonitor. Presentation-mode recovery is expected and must not consume
     // the limited codec-error recovery budget.
     private boolean presentationModeRecoveryPending;
@@ -407,6 +488,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
+    private final Object frameRenderedCallbackLock = new Object();
+    private HandlerThread frameRenderedCallbackThread;
+    private Handler frameRenderedCallbackHandler;
+    /** Invalidates callbacks posted by an earlier start/reset/recreation epoch. */
+    private final AtomicLong frameRenderedCallbackEpoch = new AtomicLong();
+    private final Object outputSurfaceSwitchThreadLock = new Object();
+    private HandlerThread outputSurfaceSwitchThread;
+    private Handler outputSurfaceSwitchHandler;
+    /** Invalidates queued/live surface requests when a newer request or teardown takes ownership. */
+    private final AtomicLong outputSurfaceSwitchEpoch = new AtomicLong();
+    private final AtomicReference<OutputSurfaceSwitchRequest> activeOutputSurfaceSwitchRequest =
+            new AtomicReference<>();
     private final AtomicBoolean firstFrameRendered = new AtomicBoolean();
     private volatile Runnable firstFrameRenderedListener;
 
@@ -628,7 +721,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     /**
      * Sets the initial output surface before MediaCodec is configured.
-     * Live XR surface handoffs must use {@link #setOutputSurface(Surface)}.
+     * Ordinary live XR handoffs must use {@link #setOutputSurfaceAsync}; the synchronous method is
+     * reserved for the GL recovery park that must finish before its retired BufferQueue is freed.
      */
     public void setRenderTarget(Surface renderTarget) {
         this.renderTarget = renderTarget;
@@ -719,6 +813,128 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         Runnable listener = firstFrameRenderedListener;
         if (listener != null) {
             listener.run();
+        }
+    }
+
+    private void handleFrameRendered(MediaCodec registeredCodec, long callbackEpoch,
+                                     MediaCodec mediaCodec, long presentationTimeUs,
+                                     long renderTimeNanos) {
+        MediaCodec activeCodec = videoDecoder;
+        if (!isFrameRenderedCallbackCurrent(
+                callbackEpoch, frameRenderedCallbackEpoch.get(),
+                mediaCodec == registeredCodec, registeredCodec == activeCodec, stopping)) {
+            return;
+        }
+        notifyFirstFrameRendered();
+        recordFramePresented();
+        long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
+        if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
+            synchronized (videoStatsLock) {
+                activeWindowVideoStats.totalTimeMs += delta;
+            }
+        }
+    }
+
+    static boolean isFrameRenderedCallbackCurrent(long callbackEpoch, long activeEpoch,
+                                                   boolean callbackMatchesRegistration,
+                                                   boolean registrationMatchesActiveCodec,
+                                                   boolean stopping) {
+        return callbackEpoch > 0L && callbackEpoch == activeEpoch
+                && callbackMatchesRegistration && registrationMatchesActiveCodec && !stopping;
+    }
+
+    /**
+     * Invalidates the application epoch and asks MediaCodec to remove queued framework callbacks.
+     * This must run before stop/reset/release: MediaCodec.reset() does not clear pending
+     * EVENT_FRAME_RENDERED messages, and those messages invoke the listener current at dispatch.
+     */
+    private void invalidateFrameRenderedCallbacks(MediaCodec decoder) {
+        frameRenderedCallbackEpoch.incrementAndGet();
+        if (decoder == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        try {
+            decoder.setOnFrameRenderedListener(null, null);
+        } catch (RuntimeException error) {
+            // The epoch still rejects a callback whose listener was already snapshotted by the
+            // framework. Some vendor codecs reject listener changes after entering an error state.
+            LimeLog.warning("Unable to unregister decoder frame callback: " + error);
+        }
+    }
+
+    /** Returns the lifecycle-owned urgent-display handler used for MediaCodec frame callbacks. */
+    private Handler ensureFrameRenderedCallbackHandler() {
+        synchronized (frameRenderedCallbackLock) {
+            if (frameRenderedCallbackThread != null
+                    && frameRenderedCallbackThread.isAlive()
+                    && frameRenderedCallbackHandler != null) {
+                return frameRenderedCallbackHandler;
+            }
+            if (stopping) {
+                throw new IllegalStateException(
+                        "Cannot start decoder frame callbacks while stopping");
+            }
+
+            HandlerThread thread = new HandlerThread(
+                    "Video - Frame Rendered", Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            thread.start();
+            Handler handler = new Handler(thread.getLooper());
+            frameRenderedCallbackThread = thread;
+            frameRenderedCallbackHandler = handler;
+            return handler;
+        }
+    }
+
+    /** Requests callback-looper shutdown without adding another blocking teardown join. */
+    private void shutdownFrameRenderedCallbackThread() {
+        HandlerThread thread;
+        synchronized (frameRenderedCallbackLock) {
+            thread = frameRenderedCallbackThread;
+            frameRenderedCallbackThread = null;
+            frameRenderedCallbackHandler = null;
+        }
+        if (thread != null) {
+            thread.quitSafely();
+        }
+    }
+
+    /** Returns the lifecycle-owned serial worker for potentially blocking MediaCodec handoffs. */
+    private Handler ensureOutputSurfaceSwitchHandler() {
+        synchronized (outputSurfaceSwitchThreadLock) {
+            if (outputSurfaceSwitchThread != null
+                    && outputSurfaceSwitchThread.isAlive()
+                    && outputSurfaceSwitchHandler != null) {
+                return outputSurfaceSwitchHandler;
+            }
+            if (stopping) {
+                return null;
+            }
+
+            HandlerThread thread = new HandlerThread(
+                    "Video - Surface Handoff", Process.THREAD_PRIORITY_DISPLAY);
+            thread.start();
+            Handler handler = new Handler(thread.getLooper());
+            outputSurfaceSwitchThread = thread;
+            outputSurfaceSwitchHandler = handler;
+            return handler;
+        }
+    }
+
+    /** Invalidates pending handoffs and requests worker shutdown without blocking lifecycle callers. */
+    private void shutdownOutputSurfaceSwitchThread() {
+        outputSurfaceSwitchEpoch.incrementAndGet();
+        OutputSurfaceSwitchRequest request = activeOutputSurfaceSwitchRequest.getAndSet(null);
+        if (request != null) {
+            request.cancel();
+        }
+        HandlerThread thread;
+        synchronized (outputSurfaceSwitchThreadLock) {
+            thread = outputSurfaceSwitchThread;
+            outputSurfaceSwitchThread = null;
+            outputSurfaceSwitchHandler = null;
+        }
+        if (thread != null) {
+            thread.quitSafely();
         }
     }
 
@@ -1265,6 +1481,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void configureAndStartDecoder(MediaFormat format) {
+        // Create the callback looper before entering any vendor configure/start call. Recovery can
+        // invoke this method on a codec worker, so relying on its implicit Looper would make
+        // callback latency and even callback delivery depend on the caller.
+        Handler frameRenderedHandler = ensureFrameRenderedCallbackHandler();
+
         // Set HDR metadata if present
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             if (currentHdrMetadata != null) {
@@ -1336,25 +1557,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         videoDecoder.start();
 
         // Recovery can recreate the native codec instance. Re-register this listener after every
-        // configure/start so the first-frame gate remains valid.
+        // configure/start so the first-frame gate remains valid. A non-null explicit Handler keeps
+        // per-frame callback work off the main/default Looper.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
-                @Override
-                public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs,
-                                            long renderTimeNanos) {
-                    if (mediaCodec != videoDecoder) {
-                        return;
-                    }
-                    notifyFirstFrameRendered();
-                    recordFramePresented();
-                    long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
-                    if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
-                        synchronized (videoStatsLock) {
-                            activeWindowVideoStats.totalTimeMs += delta;
-                        }
-                    }
-                }
-            }, null);
+            MediaCodec callbackCodec = videoDecoder;
+            long callbackEpoch = frameRenderedCallbackEpoch.incrementAndGet();
+            callbackCodec.setOnFrameRenderedListener(
+                    (mediaCodec, presentationTimeUs, renderTimeNanos) -> handleFrameRendered(
+                            callbackCodec, callbackEpoch, mediaCodec,
+                            presentationTimeUs, renderTimeNanos),
+                    frameRenderedHandler);
         }
 
 // Diagnostics: dump negotiated input/output formats and check vendor keys acceptance
@@ -1397,6 +1609,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         } finally {
             if (!configured && videoDecoder != null) {
+                invalidateFrameRenderedCallbacks(videoDecoder);
                 videoDecoder.release();
                 videoDecoder = null;
             }
@@ -1541,10 +1754,90 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return initializeDecoder(false);
     }
 
-    // Swap the decoder's output Surface live (used by the XR client-SBS path to move the decoder
-    // between the XR compositor surface and the on-device renderer's surface).
+    /**
+     * Queues an ordinary live XR output handoff away from the UI/GL threads.
+     *
+     * <p>The worker is deliberately distinct from the urgent frame-rendered callback thread. A
+     * vendor {@link MediaCodec#setOutputSurface} call may block, and delaying frame callbacks would
+     * add latency to every rendered frame. Completion is always dispatched on the main thread and
+     * is successful only while this request still owns the latest surface epoch and completes
+     * before its caller's absolute uptime deadline.</p>
+     *
+     * @return null when the request could not be queued; accepted requests complete once
+     */
+    public OutputSurfaceSwitchRequest setOutputSurfaceAsync(
+            Surface surface, long ownerDeadlineMs, OutputSurfaceSwitchCallback callback) {
+        if (callback == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || surface == null || !surface.isValid() || stopping
+                || SystemClock.uptimeMillis() >= ownerDeadlineMs) {
+            return null;
+        }
+
+        Handler worker = ensureOutputSurfaceSwitchHandler();
+        if (worker == null) {
+            return null;
+        }
+        final long requestEpoch = outputSurfaceSwitchEpoch.incrementAndGet();
+        final OutputSurfaceSwitchRequest request =
+                new OutputSurfaceSwitchRequest(requestEpoch);
+        OutputSurfaceSwitchRequest previousRequest =
+                activeOutputSurfaceSwitchRequest.getAndSet(request);
+        if (previousRequest != null) {
+            previousRequest.cancel();
+        }
+        final long queuedAtMs = SystemClock.uptimeMillis();
+        boolean queued = worker.post(() -> {
+            long startedAtMs = SystemClock.uptimeMillis();
+            boolean success = switchDecoderOutputSurface(
+                    surface, requestEpoch, ownerDeadlineMs, request, callback);
+            if (!success && request.tryCancelPending()) {
+                modeTransitionHandler.post(() -> callback.onComplete(false));
+            }
+            long completedAtMs = SystemClock.uptimeMillis();
+            if (completedAtMs - queuedAtMs >= 16L) {
+                LimeLog.info("Decoder output-surface handoff took "
+                        + (completedAtMs - queuedAtMs) + " ms (queue "
+                        + (startedAtMs - queuedAtMs) + " ms)");
+            }
+        });
+        if (!queued) {
+            activeOutputSurfaceSwitchRequest.compareAndSet(request, null);
+            request.cancel();
+            return null;
+        }
+        return request;
+    }
+
+    /** Nonblocking hard cancellation; an in-flight native call rolls back before committing. */
+    public void cancelPendingOutputSurfaceSwitches() {
+        outputSurfaceSwitchEpoch.incrementAndGet();
+        OutputSurfaceSwitchRequest request = activeOutputSurfaceSwitchRequest.get();
+        if (request != null) {
+            request.cancel();
+        }
+    }
+
+    /**
+     * Synchronous handoff reserved for GL context recovery. It invalidates every queued ordinary
+     * request before waiting so the recovery park is the last physical bind before GL releases the
+     * retired BufferQueue.
+     */
     @TargetApi(Build.VERSION_CODES.M)
     public boolean setOutputSurface(Surface surface) {
+        OutputSurfaceSwitchRequest request = activeOutputSurfaceSwitchRequest.getAndSet(null);
+        if (request != null) {
+            request.cancel();
+        }
+        long requestEpoch = outputSurfaceSwitchEpoch.incrementAndGet();
+        return switchDecoderOutputSurface(
+                surface, requestEpoch, Long.MAX_VALUE, null, null);
+    }
+
+    @TargetApi(Build.VERSION_CODES.M)
+    private boolean switchDecoderOutputSurface(Surface surface, long requestEpoch,
+                                                long ownerDeadlineMs,
+                                                OutputSurfaceSwitchRequest request,
+                                                OutputSurfaceSwitchCallback callback) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || surface == null || !surface.isValid()) {
             LimeLog.warning("Refusing invalid decoder output surface");
             return false;
@@ -1555,8 +1848,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         synchronized (codecRecoveryMonitor) {
             // A genuine codec-error recovery can overlap a UI mode request. Wait for that recovery
             // rather than racing setOutputSurface() against reset/release.
-            long recoveryDeadlineMs = SystemClock.uptimeMillis() + 2000;
-            while (!stopping && codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+            long recoveryDeadlineMs = Math.min(
+                    SystemClock.uptimeMillis() + 2000L, ownerDeadlineMs);
+            while (isOutputSurfaceSwitchCurrentBeforeDeadline(
+                    requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
+                    SystemClock.uptimeMillis(), ownerDeadlineMs)
+                    && isOutputSurfaceRequestPending(request, requestEpoch)
+                    && codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                 long remainingMs = recoveryDeadlineMs - SystemClock.uptimeMillis();
                 if (remainingMs <= 0) {
                     LimeLog.warning("Timed out waiting to switch decoder output surface during recovery");
@@ -1564,7 +1862,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
 
                 try {
-                    codecRecoveryMonitor.wait(remainingMs);
+                    // Poll the epoch at a low rate so a newer request can supersede a recovery wait
+                    // without making its UI caller contend on this monitor merely to notify it.
+                    codecRecoveryMonitor.wait(Math.min(remainingMs, 50L));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     LimeLog.warning("Interrupted while waiting to switch decoder output surface");
@@ -1572,18 +1872,67 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
 
-            if (videoDecoder == null || stopping
+            if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
+                    requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
+                    SystemClock.uptimeMillis(), ownerDeadlineMs)
+                    || !isOutputSurfaceRequestPending(request, requestEpoch)
+                    || videoDecoder == null
                     || codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                 LimeLog.warning("Cannot switch decoder output surface while decoder is unavailable");
                 return false;
             }
             try {
+                Surface previousSurface = renderTarget;
                 videoDecoder.setOutputSurface(surface);
+                if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
+                        requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
+                        SystemClock.uptimeMillis(), ownerDeadlineMs)
+                        || !isOutputSurfaceRequestPending(request, requestEpoch)) {
+                    // The native call cannot be interrupted, but timeout/supersession must not
+                    // leave its retired target installed. Surfaces remain owned until decoder
+                    // cleanup serializes through this monitor, so the previous target is safe to
+                    // restore here. A stopping decoder will be released as soon as we unlock.
+                    return rollbackDecoderOutputSurface(
+                            previousSurface, surface, "after the native bind");
+                }
                 renderTarget = surface;
                 // SceneCore may return a replacement Surface after a resize or an EGL handoff.
                 // Frame-rate metadata belongs to the Surface, so restore it after every live swap.
                 applySurfaceFrameRate(
                         surface, streamFrameRateState.getSurfaceFrameRateHintFps());
+                if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
+                        requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
+                        SystemClock.uptimeMillis(), ownerDeadlineMs)
+                        || !isOutputSurfaceRequestPending(request, requestEpoch)) {
+                    // Cancellation can race the first post-native check because it deliberately
+                    // does not take codecRecoveryMonitor. Recheck after publishing metadata and
+                    // restore the retained target if ownership changed in that interval.
+                    return rollbackDecoderOutputSurface(
+                            previousSurface, surface, "after target publication");
+                }
+
+                if (request != null) {
+                    // Queue guarded success and publish COMMITTED as one tiny request-token
+                    // transaction. The UI deadline contends only with this MessageQueue insert,
+                    // never with codecRecoveryMonitor or the vendor call. If deadline cancellation
+                    // already won, this returns false and the physical target is restored here.
+                    Runnable deliverSuccess = () -> {
+                        if (request.tryDeliverCommitted()) {
+                            callback.onComplete(true);
+                        }
+                    };
+                    long completedAtMs = SystemClock.uptimeMillis();
+                    long callbackAtMs = Math.min(completedAtMs, ownerDeadlineMs - 1L);
+                    if (!request.enqueueCompletionAndCommit(
+                            () -> SystemClock.uptimeMillis() < ownerDeadlineMs
+                                    && modeTransitionHandler.postAtTime(
+                                    deliverSuccess, callbackAtMs)
+                                    && SystemClock.uptimeMillis() < ownerDeadlineMs)) {
+                        return rollbackDecoderOutputSurface(
+                                previousSurface, surface,
+                                "after deadline cancellation or callback enqueue failure");
+                    }
+                }
                 return true;
             } catch (Exception e) {
                 LimeLog.warning("Decoder output-surface switch failed: " + e);
@@ -1723,7 +2072,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (SystemClock.uptimeMillis() >= modeTransitionWatchdogDeadlineMs) {
                 modeTransitionWatchdogActive = false;
                 modeTransitionWatchdogGeneration++;
-                if (modeTransitionFrameGate.cancel()) {
+                // Once the fresh output deadline expires, its eventual contents are no longer a
+                // trustworthy completion proof. Invalidate anything racing this callback and keep
+                // both sides closed until prepareForStop() tears down the stream.
+                if (modeTransitionFrameGate.retainClosedAfterFailure(latestInputFrameNumber)) {
                     timeoutTriggered = true;
                     timedOut = modeTransitionTimedOutListener;
                     timedOutTransitionGeneration = activePresentationTransitionGeneration;
@@ -1756,13 +2108,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    /** Publish transition completion only after MediaCodec accepts a render release. */
-    private void acknowledgePresentationTransitionRendered() {
+    /**
+     * Revalidates and renders one decoded output atomically against a presentation transition.
+     * DROP means the caller still owns the buffer and must release it without rendering.
+     */
+    private DecoderModeTransitionGate.OutputDecision commitOutputBufferForRender(
+            int bufferIndex, long presentationTimeUs, boolean usesTimestamp,
+            long renderTimestampNs) {
         IntConsumer opened = null;
         int openedTransitionGeneration = 0;
+        DecoderModeTransitionGate.OutputDecision decision;
         synchronized (modeTransitionStateLock) {
-            modeTransitionFrameGate.acknowledgeRenderedOutput();
-            if (modeTransitionFrameGate.consumeCompletedTransition()) {
+            pendingOutputCommitBufferIndex = bufferIndex;
+            pendingOutputCommitUsesTimestamp = usesTimestamp;
+            pendingOutputCommitRenderTimestampNs = renderTimestampNs;
+            decision = modeTransitionFrameGate.commitOutput(
+                    presentationTimeUs, outputCommitter);
+            if (decision != DecoderModeTransitionGate.OutputDecision.DROP
+                    && modeTransitionFrameGate.consumeCompletedTransition()) {
                 modeTransitionWatchdogActive = false;
                 modeTransitionWatchdogGeneration++;
                 opened = modeTransitionOpenedListener;
@@ -1770,22 +2133,111 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 activePresentationTransitionGeneration = 0;
             }
         }
-        if (opened != null && openedTransitionGeneration > 0) {
-            opened.accept(openedTransitionGeneration);
+        if (decision == DecoderModeTransitionGate.OutputDecision.DROP) {
+            return decision;
         }
+
+        recordFrameReleasedForRender();
+        if (opened != null && openedTransitionGeneration > 0) {
+            try {
+                opened.accept(openedTransitionGeneration);
+            } catch (RuntimeException e) {
+                LimeLog.warning("XR mode transition opened-listener failed: " + e);
+            }
+        }
+        return decision;
+    }
+
+    private DecoderModeTransitionGate.OutputDecision commitOutputBufferForRender(
+            int bufferIndex, long presentationTimeUs, long renderTimestampNs) {
+        return commitOutputBufferForRender(
+                bufferIndex, presentationTimeUs, true, renderTimestampNs);
+    }
+
+    private DecoderModeTransitionGate.OutputDecision commitOutputBufferForRender(
+            int bufferIndex, long presentationTimeUs) {
+        return commitOutputBufferForRender(bufferIndex, presentationTimeUs, false, 0L);
+    }
+
+    /** Runs only under modeTransitionStateLock and DecoderModeTransitionGate's output monitor. */
+    private void commitPendingOutputBufferForRender() {
+        if (pendingOutputCommitUsesTimestamp) {
+            videoDecoder.releaseOutputBuffer(
+                    pendingOutputCommitBufferIndex, pendingOutputCommitRenderTimestampNs);
+        } else {
+            videoDecoder.releaseOutputBuffer(pendingOutputCommitBufferIndex, true);
+        }
+    }
+
+    private static boolean isOutputSurfaceRequestPending(
+            OutputSurfaceSwitchRequest request, long requestEpoch) {
+        return request == null
+                || (request.epoch == requestEpoch && request.isPending());
+    }
+
+    /** Must be called with codecRecoveryMonitor held after the attempted native bind. */
+    private boolean rollbackDecoderOutputSurface(
+            Surface previousSurface, Surface attemptedSurface, String boundary) {
+        if (!stopping && previousSurface != null && previousSurface != attemptedSurface
+                && previousSurface.isValid()) {
+            videoDecoder.setOutputSurface(previousSurface);
+            renderTarget = previousSurface;
+            applySurfaceFrameRate(
+                    previousSurface, streamFrameRateState.getSurfaceFrameRateHintFps());
+            LimeLog.warning("Rolled back an expired or superseded decoder output-surface "
+                    + "handoff " + boundary);
+        } else {
+            LimeLog.warning("Decoder output-surface handoff lost ownership " + boundary
+                    + "; decoder teardown will release it");
+        }
+        return false;
+    }
+
+    static boolean isOutputSurfaceSwitchCurrent(long requestEpoch, long activeEpoch,
+                                                boolean stopping) {
+        return requestEpoch > 0L && requestEpoch == activeEpoch && !stopping;
+    }
+
+    static boolean isOutputSurfaceSwitchCurrentBeforeDeadline(
+            long requestEpoch, long activeEpoch, boolean stopping,
+            long nowMs, long ownerDeadlineMs) {
+        return isOutputSurfaceSwitchCurrent(requestEpoch, activeEpoch, stopping)
+                && nowMs < ownerDeadlineMs;
+    }
+
+    /** Must be called with codecRecoveryMonitor held. */
+    private boolean finishCodecRecoveryCancellationIfStopping() {
+        if (!stopping && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
+            return false;
+        }
+
+        // Preserve the terminal token even if prepareForStop() raced an in-flight lifecycle call.
+        codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED);
+        hdrMetadataRecoveryPending = false;
+        presentationModeRecoveryPending = false;
+        codecRecoveryThreadQuiescedFlags = 0;
+        codecRecoveryMonitor.notifyAll();
+        return true;
     }
 
     // All threads that interact with the MediaCodec instance must call this function regularly!
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
-        // NB: We cannot check 'stopping' here because we could end up bailing in a partially
-        // quiesced state that will cause the quiesced threads to never wake up.
-        if (codecRecoveryType.get() == CR_RECOVERY_TYPE_NONE) {
+        int pendingRecoveryType = codecRecoveryType.get();
+        if (pendingRecoveryType == CR_RECOVERY_TYPE_NONE
+                || pendingRecoveryType == CR_RECOVERY_TYPE_STOPPED) {
             // Common case
             return false;
         }
 
         // We need some sort of recovery, so quiesce all threads before starting that
         synchronized (codecRecoveryMonitor) {
+            // prepareForStop() deliberately does not take this monitor. Finish cancellation here
+            // so a partially quiesced transaction is released without allowing a late catch block
+            // to resurrect RESET/RESTART after the terminal token was published.
+            if (finishCodecRecoveryCancellationIfStopping()) {
+                return true;
+            }
+
             if (choreographerHandlerThread == null) {
                 // If we have no choreographer thread, we can just mark that as quiesced right now.
                 codecRecoveryThreadQuiescedFlags |= CR_FLAG_CHOREOGRAPHER;
@@ -1814,15 +2266,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     LimeLog.warning("Flushing decoder");
                     try {
                         videoDecoder.flush();
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        codecRecoveryType.compareAndSet(
+                                CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_NONE);
                         presentationModeRecoveryPending = false;
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
 
                         // Something went wrong during the restart, let's use a bigger hammer
                         // and try a reset instead.
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_RESTART);
+                        codecRecoveryType.compareAndSet(
+                                CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_RESTART);
                     }
+                }
+
+                if (finishCodecRecoveryCancellationIfStopping()) {
+                    return true;
                 }
 
                 // Flushes, HDR setup, and requested presentation transitions are not codec errors.
@@ -1853,9 +2311,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         LimeLog.warning("Trying to restart decoder after codec failure");
                     }
                     try {
+                        invalidateFrameRenderedCallbacks(videoDecoder);
                         videoDecoder.stop();
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
                         configureAndStartDecoder(configuredFormat);
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
+                        codecRecoveryType.compareAndSet(
+                                CR_RECOVERY_TYPE_RESTART, CR_RECOVERY_TYPE_NONE);
                         hdrMetadataRecoveryPending = false;
                         presentationModeRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
@@ -1863,15 +2329,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                         // Our Surface is probably invalid, so just stop
                         stopping = true;
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-                        presentationModeRecoveryPending = false;
+                        finishCodecRecoveryCancellationIfStopping();
+                        return true;
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
 
                         // Something went wrong during the restart, let's use a bigger hammer
                         // and try a reset instead.
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_RESET);
+                        codecRecoveryType.compareAndSet(
+                                CR_RECOVERY_TYPE_RESTART, CR_RECOVERY_TYPE_RESET);
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
                     }
+                }
+
+                if (finishCodecRecoveryCancellationIfStopping()) {
+                    return true;
                 }
 
                 // For other non-recoverable exceptions on L+, call reset() before escalating to
@@ -1889,9 +2363,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         LimeLog.warning("Trying to reset decoder after codec failure");
                     }
                     try {
+                        invalidateFrameRenderedCallbacks(videoDecoder);
                         videoDecoder.reset();
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
                         configureAndStartDecoder(configuredFormat);
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
+                        codecRecoveryType.compareAndSet(
+                                CR_RECOVERY_TYPE_RESET, CR_RECOVERY_TYPE_NONE);
                         hdrMetadataRecoveryPending = false;
                         presentationModeRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
@@ -1899,14 +2381,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                         // Our Surface is probably invalid, so just stop
                         stopping = true;
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-                        presentationModeRecoveryPending = false;
+                        finishCodecRecoveryCancellationIfStopping();
+                        return true;
                     } catch (IllegalStateException e) {
                         e.printStackTrace();
 
                         // Something went wrong during the reset, we'll have to resort to
                         // releasing and recreating the decoder now.
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
                     }
+                }
+
+                if (finishCodecRecoveryCancellationIfStopping()) {
+                    return true;
                 }
 
                 // If we _still_ haven't managed to recover, go for the nuclear option and just
@@ -1929,6 +2418,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         // Detach the old codec before release. If creation of the replacement fails,
                         // tryConfigureDecoder() must never release this stale object a second time.
                         MediaCodec oldDecoder = videoDecoder;
+                        invalidateFrameRenderedCallbacks(oldDecoder);
                         videoDecoder = null;
                         if (oldDecoder != null) {
                             try {
@@ -1938,11 +2428,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             }
                         }
 
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
                         int err = initializeDecoder(true);
                         if (err != 0) {
                             throw new IllegalStateException("Decoder recreation failed: " + err);
                         }
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
+                        if (!codecRecoveryType.compareAndSet(
+                                CR_RECOVERY_TYPE_RESTART, CR_RECOVERY_TYPE_NONE)) {
+                            codecRecoveryType.compareAndSet(
+                                    CR_RECOVERY_TYPE_RESET, CR_RECOVERY_TYPE_NONE);
+                        }
                         hdrMetadataRecoveryPending = false;
                         presentationModeRecoveryPending = false;
                     } catch (IllegalArgumentException e) {
@@ -1950,17 +2450,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                         // Our Surface is probably invalid, so just stop
                         stopping = true;
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-                        presentationModeRecoveryPending = false;
-                        hdrMetadataRecoveryPending = false;
+                        finishCodecRecoveryCancellationIfStopping();
+                        return true;
                     } catch (RuntimeException e) {
+                        if (finishCodecRecoveryCancellationIfStopping()) {
+                            return true;
+                        }
                         // If we failed to recover after all of these attempts, just crash
                         stopping = true;
-                        codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-                        hdrMetadataRecoveryPending = false;
-                        presentationModeRecoveryPending = false;
-                        codecRecoveryThreadQuiescedFlags = 0;
-                        codecRecoveryMonitor.notifyAll();
+                        finishCodecRecoveryCancellationIfStopping();
                         if (!reportedCrash) {
                             reportedCrash = true;
                             crashListener.notifyCrash(e);
@@ -1976,7 +2474,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             else {
                 // If we haven't quiesced all threads yet, wait to be signalled after recovery.
                 // The final thread to be quiesced will handle the codec recovery.
-                while (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+                while (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE
+                        && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
                     try {
                         LimeLog.info("Waiting to quiesce decoder threads: "+codecRecoveryThreadQuiescedFlags);
                         codecRecoveryMonitor.wait(1000);
@@ -2029,7 +2528,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         LimeLog.info("Decoder flush promoted to restart for recoverable CodecException");
                         e.printStackTrace();
                     }
-                    else if (codecRecoveryType.get() != CR_RECOVERY_TYPE_RESET && codecRecoveryType.get() != CR_RECOVERY_TYPE_RESTART) {
+                    else if (codecRecoveryType.get() != CR_RECOVERY_TYPE_RESET
+                            && codecRecoveryType.get() != CR_RECOVERY_TYPE_RESTART
+                            && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
                         throw new IllegalStateException("Unexpected codec recovery type: " + codecRecoveryType.get());
                     }
                 }
@@ -2046,7 +2547,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         LimeLog.info("Decoder restart promoted to reset for non-recoverable CodecException");
                         e.printStackTrace();
                     }
-                    else if (codecRecoveryType.get() != CR_RECOVERY_TYPE_RESET) {
+                    else if (codecRecoveryType.get() != CR_RECOVERY_TYPE_RESET
+                            && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
                         throw new IllegalStateException("Unexpected codec recovery type: " + codecRecoveryType.get());
                     }
                 }
@@ -2074,7 +2576,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     LimeLog.info("Decoder restart promoted to reset for IllegalStateException");
                     e.printStackTrace();
                 }
-                else if (codecRecoveryType.get() != CR_RECOVERY_TYPE_RESET) {
+                else if (codecRecoveryType.get() != CR_RECOVERY_TYPE_RESET
+                        && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
                     throw new IllegalStateException("Unexpected codec recovery type: " + codecRecoveryType.get());
                 }
 
@@ -2138,8 +2641,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             try {
                 while ((nextOutputBuffer = outputBufferQueue.poll()) != null) {
                     DecoderModeTransitionGate.OutputDecision outputDecision =
-                            evaluatePresentationTransitionOutput(
-                                    nextOutputBuffer.presentationTimeUs);
+                            commitOutputBufferForRender(
+                                    nextOutputBuffer.index,
+                                    nextOutputBuffer.presentationTimeUs,
+                                    frameTimeNanos);
                     if (outputDecision == DecoderModeTransitionGate.OutputDecision.DROP) {
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer.index, false);
                         nextOutputBuffer = null;
@@ -2152,11 +2657,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         LimeLog.info("XR mode transition: fresh IDR output reached render gate");
                     }
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        releaseOutputBufferForRender(nextOutputBuffer.index, frameTimeNanos);
-                    } else {
-                        releaseOutputBufferForRender(nextOutputBuffer.index);
-                    }
                     lastRenderedFrameTimeNanos = frameTimeNanos;
 
                     // Frame pacing renders at most one accepted output per display callback.
@@ -2223,24 +2723,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
-                            boolean releasedForRender = false;
 
                             // This is the precise end of the MediaCodec enqueue-to-output-dequeue
                             // interval. Presentation policy below must not affect decode latency.
                             updateDecodeLatencyStats(presentationTimeUs);
 
                             numFramesOut++;
-
-                            DecoderModeTransitionGate.OutputDecision outputDecision =
-                                    evaluatePresentationTransitionOutput(presentationTimeUs);
-                            if (outputDecision == DecoderModeTransitionGate.OutputDecision.DROP) {
-                                videoDecoder.releaseOutputBuffer(lastIndex, false);
-                                continue;
-                            }
-                            if (outputDecision
-                                    == DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN) {
-                                LimeLog.info("XR mode transition: fresh IDR output reached render gate");
-                            }
 
                             // Direct pacing modes keep only the newest output already waiting.
                             if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
@@ -2257,25 +2745,46 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     handleOutputFormatChanged();
                                 }
 
+                                // Only the newest candidate can render. Recheck it after the drain
+                                // so a transition that began while dequeuing cannot be bypassed by
+                                // a candidate that was newer than the first output.
+                                DecoderModeTransitionGate.OutputDecision outputDecision;
                                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
                                     // A timestamp of zero asks SurfaceFlinger not to discard this frame.
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        releaseOutputBufferForRender(lastIndex, 0);
-                                        releasedForRender = true;
+                                        outputDecision = commitOutputBufferForRender(
+                                                lastIndex, presentationTimeUs, 0L);
                                     } else {
-                                        releaseOutputBufferForRender(lastIndex);
-                                        releasedForRender = true;
+                                        outputDecision = commitOutputBufferForRender(
+                                                lastIndex, presentationTimeUs);
                                     }
                                 } else {
                                     // Minimum latency renders immediately. Timestamp scheduling is
                                     // reserved for the pacing modes above and Choreographer path.
-                                    releaseOutputBufferForRender(lastIndex);
-                                    releasedForRender = true;
+                                    outputDecision = commitOutputBufferForRender(
+                                            lastIndex, presentationTimeUs);
+                                }
+                                if (outputDecision
+                                        == DecoderModeTransitionGate.OutputDecision.DROP) {
+                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    continue;
+                                }
+                                if (outputDecision
+                                        == DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN) {
+                                    LimeLog.info("XR mode transition: fresh IDR output reached render gate");
                                 }
                             } else {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
                                 // We just put all frames into the output buffer queue and let it handle things.
+
+                                DecoderModeTransitionGate.OutputDecision outputDecision =
+                                        evaluatePresentationTransitionOutput(presentationTimeUs);
+                                if (outputDecision
+                                        == DecoderModeTransitionGate.OutputDecision.DROP) {
+                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    continue;
+                                }
 
                                 // Discard the oldest buffer before adding if we've reached our limit.
                                 //
@@ -2416,6 +2925,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
+        shutdownOutputSurfaceSwitchThread();
         cancelPresentationModeTransitionInternal();
 
         // Halt the rendering thread
@@ -2423,11 +2933,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             rendererThread.interrupt();
         }
 
-        // Stop any active codec recovery operations
-        synchronized (codecRecoveryMonitor) {
-            codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
-            codecRecoveryMonitor.notifyAll();
-        }
+        // Publish recovery cancellation without entering codecRecoveryMonitor. A vendor
+        // setOutputSurface() may be uninterruptibly blocked while holding it; prepareForStop() is
+        // called from UI surface/failure paths and must remain nonblocking. Every monitor wait is
+        // bounded (50 ms for handoff, 1 s for recovery), and cleanup later takes this monitor before
+        // releasing the codec, so teardown still serializes with an in-flight native call.
+        codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED);
+
+        // No frame callback is useful after stopping becomes visible. Request looper shutdown now
+        // and let it finish asynchronously; UI-triggered surface teardown must not join this
+        // per-frame callback thread.
+        shutdownFrameRenderedCallbackThread();
 
         // Post a quit message to the Choreographer looper (if we have one)
         Handler handler = choreographerHandler;
@@ -2484,9 +3000,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void cleanup() {
+        // setup() failures can reach cleanup() without a normal prepareForStop() call. Publish the
+        // terminal state before taking the codec monitor so queued handoffs cannot start afterward;
+        // an already-running native handoff owns the same monitor and therefore finishes first.
+        stopping = true;
+        codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED);
+        shutdownOutputSurfaceSwitchThread();
         MediaCodec decoderToRelease;
         synchronized (codecRecoveryMonitor) {
             decoderToRelease = videoDecoder;
+            invalidateFrameRenderedCallbacks(decoderToRelease);
             videoDecoder = null;
         }
         if (decoderToRelease != null) {
@@ -2496,6 +3019,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 LimeLog.warning("Failed to release decoder during cleanup: " + e);
             }
         }
+        // setup() failures can reach cleanup() without a normal stop transaction.
+        shutdownFrameRenderedCallbackThread();
     }
 
     @Override

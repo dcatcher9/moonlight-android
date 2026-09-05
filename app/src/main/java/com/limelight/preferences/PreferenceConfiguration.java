@@ -7,7 +7,6 @@ import android.view.Display;
 
 import androidx.preference.PreferenceManager;
 
-import com.limelight.BuildConfig;
 import com.limelight.nvstream.jni.MoonBridge;
 
 public class PreferenceConfiguration {
@@ -228,7 +227,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ENABLE_PIP = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_PERF_OVERLAY_BOTTOM = false;
-    private static final boolean DEFAULT_ENABLE_PERF_LOGGING = BuildConfig.DEBUG;
+    private static final boolean DEFAULT_ENABLE_PERF_LOGGING = false;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
     private static final boolean DEFAULT_REMEMBER_MOUSE_MODE = false;
@@ -286,9 +285,9 @@ public class PreferenceConfiguration {
     // The render-mode preference is deprecated: streaming always uses the single XR route (starts
     // in Normal/2D, modes switched from the in-headset bar). The per-variant render modes are gone.
 
-    // Max per-eye width for Host SBS AI: the host doubles this to 2W, which
-    // must fit the encoder's max width (NVENC HEVC/AV1 = 8192). Keep 2*this <= that cap. Mirrors the
-    // host's sbs_3d_max_encode_width (default 8192).
+    // Conservative per-axis Host SBS encode limits. The host doubles the logical width to 2W,
+    // then fits that packed raster inside both codec axes with one aspect-preserving scale.
+    // Runtime capability discovery and the applied-state ACK remain authoritative when lower.
     public static final int MAX_HOST_SBS_PACKED_WIDTH_H264 = 4096;
     public static final int MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1 = 8192;
 
@@ -300,11 +299,26 @@ public class PreferenceConfiguration {
 
     public static int[] hostSbsPackedDimensions(int eyeWidth, int eyeHeight,
                                                  int videoFormat) {
-        int packedWidthCap = maxHostSbsPackedWidthForVideoFormat(videoFormat);
-        int cappedEyeWidth = Math.min(eyeWidth, packedWidthCap / 2);
-        int packedWidth = (cappedEyeWidth * 2) & ~1;
-        int packedHeight = Math.round(eyeHeight * (cappedEyeWidth / (float) eyeWidth)) & ~1;
-        return new int[] {packedWidth, packedHeight};
+        if (eyeWidth <= 0 || eyeHeight <= 0) {
+            return new int[] {0, 0};
+        }
+
+        int axisCap = maxHostSbsPackedWidthForVideoFormat(videoFormat) & ~1;
+        long requestedPackedWidth = (long) eyeWidth * 2L;
+        if (requestedPackedWidth <= axisCap && eyeHeight <= axisCap) {
+            return new int[] {
+                    Math.max(2, (int) requestedPackedWidth & ~1),
+                    Math.max(2, eyeHeight & ~1)
+            };
+        }
+
+        double scale = Math.min(
+                axisCap / (double) requestedPackedWidth,
+                axisCap / (double) eyeHeight);
+        return new int[] {
+                Math.max(2, ((int) Math.round(requestedPackedWidth * scale)) & ~1),
+                Math.max(2, ((int) Math.round(eyeHeight * scale)) & ~1)
+        };
     }
 
     /**

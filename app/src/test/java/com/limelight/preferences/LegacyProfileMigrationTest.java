@@ -221,23 +221,39 @@ public final class LegacyProfileMigrationTest {
     }
 
     @Test
-    public void existingDebugInstallGetsLoggingEnabledOnce() {
+    public void formerlyAutoEnabledDebugLoggingBecomesOptInOnce() {
         assertTrue(preferences.edit()
-                .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, false)
+                .putBoolean(
+                        LegacyProfileMigration.LEGACY_DEBUG_LOGGING_DEFAULT_COMPLETE_KEY, true)
+                .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true)
                 .commit());
 
-        LegacyProfileMigration.applyDebugBuildDefaults(context);
+        LegacyProfileMigration.retireDebugPerformanceLoggingDefault(context);
+
+        assertFalse(preferences.getBoolean(
+                PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true));
+        assertTrue(preferences.getBoolean(
+                LegacyProfileMigration.DEBUG_LOGGING_OPT_IN_MIGRATION_COMPLETE_KEY, false));
+
+        assertTrue(preferences.edit()
+                .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true)
+                .commit());
+        LegacyProfileMigration.retireDebugPerformanceLoggingDefault(context);
+        assertTrue(preferences.getBoolean(
+                PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, false));
+    }
+
+    @Test
+    public void explicitLoggingWithoutTheRetiredForcedDefaultIsPreserved() {
+        assertTrue(preferences.edit()
+                .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true)
+                .commit());
+
+        LegacyProfileMigration.retireDebugPerformanceLoggingDefault(context);
 
         assertTrue(preferences.getBoolean(
                 PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, false));
         assertTrue(preferences.getBoolean(
-                LegacyProfileMigration.DEBUG_LOGGING_DEFAULT_COMPLETE_KEY, false));
-
-        assertTrue(preferences.edit()
-                .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, false)
-                .commit());
-        LegacyProfileMigration.applyDebugBuildDefaults(context);
-        assertFalse(preferences.getBoolean(
-                PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true));
+                LegacyProfileMigration.DEBUG_LOGGING_OPT_IN_MIGRATION_COMPLETE_KEY, false));
     }
 }

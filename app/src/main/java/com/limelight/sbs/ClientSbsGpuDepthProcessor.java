@@ -193,6 +193,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int healthGeneration = 1;
     /** Requests one prompt sample after construction/reset, before the periodic cadence begins. */
     private boolean healthSampleRequested = true;
+    /** False when neither Stats nor explicit performance logging consumes diagnostic health. */
+    private boolean healthSamplingEnabled = true;
     /** Raised while the stats panel is visible; see the focused sample interval. */
     private volatile boolean healthSamplingFocused;
     /** Successful process submission time used to preserve Apollo's wall-time EMA response. */
@@ -544,6 +546,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      */
     public HealthSnapshot pollHealthSnapshot() {
         assertOwnerContext();
+        if (!healthSamplingEnabled) {
+            return null;
+        }
         HealthReadbackSlot newestReady = null;
         for (HealthReadbackSlot slot : healthReadbackSlots) {
             if (slot.fence == 0L) {
@@ -599,6 +604,26 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     /** Raises the sample rate while someone is watching the history plots. */
     public void setHealthSamplingFocused(boolean focused) {
         healthSamplingFocused = focused;
+    }
+
+    /**
+     * Enables the diagnostic GPU-to-CPU health ring only while Stats or explicit perf logging is
+     * consuming it. Disabling retires every queued staging fence; re-enabling requests a fresh
+     * sample, so a newly opened panel never maps stale pre-boundary state.
+     */
+    public void setHealthSamplingEnabled(boolean enabled) {
+        assertOwnerContext();
+        if (healthSamplingEnabled == enabled) {
+            return;
+        }
+        healthSamplingEnabled = enabled;
+        healthSampleRequested = enabled;
+        if (!enabled) {
+            for (HealthReadbackSlot slot : healthReadbackSlots) {
+                recycleHealthReadbackSlot(slot);
+            }
+            healthSnapshot.reset();
+        }
     }
 
     public int getOutputWidth() {
@@ -853,7 +878,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
     private void scheduleHealthReadbackIfDue() {
         if (!shouldScheduleHealthReadback(
-                healthSampleRequested, frameSequence, healthSamplingFocused)) {
+                healthSamplingEnabled, healthSampleRequested,
+                frameSequence, healthSamplingFocused)) {
             return;
         }
         HealthReadbackSlot available = null;
@@ -899,6 +925,14 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      */
     static boolean shouldScheduleHealthReadback(boolean sampleRequested, long frameSequence,
                                                 boolean focused) {
+        return shouldScheduleHealthReadback(true, sampleRequested, frameSequence, focused);
+    }
+
+    static boolean shouldScheduleHealthReadback(boolean enabled, boolean sampleRequested,
+                                                long frameSequence, boolean focused) {
+        if (!enabled) {
+            return false;
+        }
         int interval = focused
                 ? HEALTH_SAMPLE_INTERVAL_FRAMES_FOCUSED : HEALTH_SAMPLE_INTERVAL_FRAMES;
         return sampleRequested || frameSequence % interval == 0L;

@@ -10,7 +10,10 @@ import android.opengl.GLES30;
 import android.opengl.GLES31;
 import android.opengl.GLSurfaceView;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.PowerManager;
+import android.os.Process;
 import android.util.Log;
 import android.view.Surface;
 
@@ -45,7 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFrameAvailableListener {
+public class Stereo3DRenderer implements GLSurfaceView.Renderer {
 
     // Constants
     private static final int GL_TEXTURE_EXTERNAL_OES = 0x8D65;
@@ -125,6 +128,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final Context context;
     private final PowerManager powerManager;
     private final GLSurfaceView glSurfaceView;
+    /** Routes decoder availability off the main Looper without ever performing GL work there. */
+    private final HandlerThread frameCallbackThread;
+    private final Handler frameCallbackHandler;
+    private final Object frameCallbackLifecycleLock = new Object();
+    /** Invalidates callbacks already posted by a retired listener registration. */
+    private final AtomicLong frameCallbackRegistrationToken = new AtomicLong(0L);
+    private final AtomicBoolean frameCallbackThreadStopped = new AtomicBoolean(false);
     private final OnSurfaceReadyListener onSurfaceReadyListener;
     /** Serializes the GL-thread context constructor against UI-thread terminal teardown. */
     private final Object surfaceLifecycleLock = new Object();
@@ -168,6 +178,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final AtomicBoolean frameDrainQueued = new AtomicBoolean(false);
     /** Invalidates queued latch events across mode/surface generations. */
     private final AtomicLong frameDrainToken = new AtomicLong(0L);
+    /** Ticket payload for {@link #frameDrainRunnable}; all three fields are guarded by frameLock. */
+    private long queuedFrameDrainToken;
+    private SurfaceTexture queuedFrameDrainTexture;
+    private int queuedFrameDrainGeneration = -1;
+    /** Reused for every decoder callback so the latch hot path allocates no capturing lambda. */
+    private final Runnable frameDrainRunnable = this::drainQueuedFrameWithoutSwap;
+    /** Packed renderer-generation/output-attachment ticket for one post-swap N+1 capture. */
+    private final AtomicLong queuedPostSwapCaptureTicket = new AtomicLong(0L);
+    /** Reused for every adoption so the render path does not allocate a capturing lambda. */
+    private final Runnable postSwapCaptureRunnable = this::captureAfterSwap;
     /** Serializes the single presentation-age deadline callback across lifecycle generations. */
     private final Object staleDepthWatchdogLock = new Object();
     private final Runnable staleDepthWatchdogRunnable;
@@ -204,8 +224,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final int refinedWarpMapHeight;
 
     // OpenGL Handles
-    private int dibr3dProgram;
-    private int warpMapProgram;
     private int contractiveWarpMapProgram;
     private int contractiveWarpMapRefinementProgram;
     private int warpedDibr3dProgram;
@@ -247,8 +265,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private QuadProgramBindings simpleProgramBindings;
     private QuadProgramBindings modelInputProgramBindings;
     private GpuPackProgramBindings gpuPackProgramBindings;
-    private ReprojectionProgramBindings reprojectionProgramBindings;
-    private WarpMapProgramBindings warpMapProgramBindings;
     private ContractiveWarpMapProgramBindings contractiveWarpMapProgramBindings;
     private ContractiveWarpMapRefinementProgramBindings
             contractiveWarpMapRefinementProgramBindings;
@@ -289,7 +305,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private final int[] gpuTimerSampleCounters =
             new int[ClientSbsGpuTimer.Stage.values().length];
     private int gpuTelemetryPollCounter;
-    /** Expensive diagnostics are active only while the XR Stats panel is visible. */
+    /** Diagnostics are active only while XR Stats or explicit performance logging consumes them. */
     private volatile boolean performanceSamplingEnabled;
     /** Rejects in-flight timings that cross a hidden/visible sampling boundary. */
     private final AtomicLong performanceSamplingEpoch = new AtomicLong(1L);
@@ -301,11 +317,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     private volatile boolean statsPanelVisible;
     /** GL-thread cache preventing redundant focus writes to the current processor. */
     private ClientSbsGpuDepthProcessor healthFocusProcessor;
+    private boolean appliedHealthSamplingEnabled;
     private boolean appliedHealthSamplingFocused;
     /**
-     * Recent history for the metrics a single reading cannot explain. Sampled here rather than in
-     * the panel because the ring must already be full when someone opens the panel to ask what
-     * just happened; the readback runs whether or not anything is watching.
+     * Recent history for the metrics a single reading cannot explain. It begins when Stats or
+     * explicit performance logging is enabled, keeping normal streaming free of GPU-to-CPU health
+     * maps while retaining the higher-rate history needed by active diagnostics.
      */
     private final SbsDepthTelemetryHistory depthTelemetryHistory =
             new SbsDepthTelemetryHistory();
@@ -621,6 +638,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         oesTextureVertexBuffer = ByteBuffer.allocateDirect(OES_TEXTURE_VERTICES.length * 4)
                 .order(ByteOrder.nativeOrder()).asFloatBuffer();
         oesTextureVertexBuffer.put(OES_TEXTURE_VERTICES).position(0);
+
+        // Keep these final and start them once after all fallible contract setup. Lazy creation at
+        // the first Client-SBS handoff would need to race terminal teardown and context recovery.
+        // In Normal/Host modes this Looper remains idle and owns no GL or decoder resources.
+        frameCallbackThread = new HandlerThread(
+                "ClientSbsFrameCallbacks", Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        frameCallbackThread.start();
+        frameCallbackHandler = new Handler(frameCallbackThread.getLooper());
     }
 
     /** Immutable copy of the processor's reused asynchronous health-readback view. */
@@ -1050,6 +1075,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         drainCompletedGpuTimerSamples();
         if (changed) {
+            resetDepthTelemetryEra();
             performanceGlStateResetRequested.set(true);
             if (!shuttingDown.get()) {
                 glSurfaceView.requestRender();
@@ -1209,13 +1235,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void pollGpuTelemetry() {
-        // Timer queries and their performance counters remain visibility/logging gated. The tiny
-        // health copy ring is intentionally independent: it builds useful pre-open history at the
-        // processor's 30-frame background cadence, then sharpens to 5 frames while Stats is open.
+        // Both timer queries and the 224-byte GPU-to-CPU health ring are diagnostics. Normal
+        // streaming does neither; explicit logging uses the 30-frame cadence and visible Stats
+        // sharpens it to 5 frames.
         int pollCounter = gpuTelemetryPollCounter++;
         ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
-        applyHealthSamplingFocusOnGlThread(processor);
-        if (!shouldPollHealthTelemetry(pollCounter)) {
+        applyHealthSamplingStateOnGlThread(processor);
+        if (!shouldPollHealthTelemetry(performanceSamplingEnabled, pollCounter)) {
             return;
         }
         if (shouldPollPerformanceTelemetry(performanceSamplingEnabled, pollCounter)) {
@@ -1277,6 +1303,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         return pollCounter % GPU_TELEMETRY_POLL_STRIDE == 0;
     }
 
+    static boolean shouldPollHealthTelemetry(boolean diagnosticsEnabled, int pollCounter) {
+        return diagnosticsEnabled && shouldPollHealthTelemetry(pollCounter);
+    }
+
     static boolean shouldPollPerformanceTelemetry(
             boolean performanceSamplingEnabled, int pollCounter) {
         return performanceSamplingEnabled && shouldPollHealthTelemetry(pollCounter);
@@ -1286,15 +1316,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         return classified && Float.isFinite(edgeFraction) && edgeFraction >= 0.0f;
     }
 
-    private void applyHealthSamplingFocusOnGlThread(ClientSbsGpuDepthProcessor processor) {
+    private void applyHealthSamplingStateOnGlThread(ClientSbsGpuDepthProcessor processor) {
         if (processor == null) {
             healthFocusProcessor = null;
+            appliedHealthSamplingEnabled = false;
+            appliedHealthSamplingFocused = false;
             return;
         }
-        boolean focused = statsPanelVisible;
-        if (healthFocusProcessor != processor || appliedHealthSamplingFocused != focused) {
+        boolean enabled = performanceSamplingEnabled;
+        boolean focused = enabled && statsPanelVisible;
+        if (healthFocusProcessor != processor || appliedHealthSamplingEnabled != enabled
+                || appliedHealthSamplingFocused != focused) {
+            processor.setHealthSamplingEnabled(enabled);
             processor.setHealthSamplingFocused(focused);
             healthFocusProcessor = processor;
+            appliedHealthSamplingEnabled = enabled;
             appliedHealthSamplingFocused = focused;
         }
     }
@@ -1339,6 +1375,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             terminalSurfaceDestroyRequested = true;
             shuttingDown.set(true);
         }
+        shutdownFrameCallbackThread();
         invalidateQueuedFrameDrain();
         cancelStaleDepthWatchdog();
 
@@ -1456,7 +1493,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             videoSurface = null;
         }
         if (videoSurfaceTexture != null) {
-            videoSurfaceTexture.setOnFrameAvailableListener(null);
+            unregisterFrameAvailableListener(videoSurfaceTexture);
             videoSurfaceTexture.release();
             videoSurfaceTexture = null;
         }
@@ -1646,6 +1683,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         outputSurfaceValidated = false;
         requestedDecoderSurfaceGeneration = generation;
+        // MediaCodec is parked before this handoff. Reject availability messages already posted
+        // by the retiring registration until onSurfaceChanged() installs the new SurfaceTexture.
+        invalidateFrameCallbackRegistration();
         clearClientSbsModeSwitchCompletion();
         awaitingFirstModeEntryFrame = true;
         invalidateQueuedFrameDrain();
@@ -1718,8 +1758,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
      * <ul>
      *   <li>the ZipDepth aspect-bucket manifest for the new aspect,</li>
      *   <li>its model/depth/warp target dimensions, and</li>
-     *   <li>the independently bucketed {@code PROBE_STEPS} literal compiled into both
-     *       reprojection shader programs.</li>
+     *   <li>the direct-resize versus aspect-fit content mapping used by model input.</li>
      * </ul>
      */
     public boolean canResizeStreamLive(int width, int height) {
@@ -1869,7 +1908,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 return 0;
             }
             try {
-                return advanceLiveResizeFrameBoundary(
+                // SurfaceTexture replaces its listener without replaying an availability edge
+                // that is already pending. Install the new token before the unconditional drain
+                // so a buffer queued during this boundary is either consumed below or reports
+                // through the new registration after frameLock is released.
+                registerFrameAvailableListener(texture);
+                int resizedGeneration = advanceLiveResizeFrameBoundary(
                         clientSbsGeneration,
                         this::invalidateQueuedFrameDrain,
                         () -> {
@@ -1884,6 +1928,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                             pendingFrameGeneration = -1;
                             pendingFrameCallbackSequence = 0L;
                         });
+                return resizedGeneration;
             } catch (RuntimeException error) {
                 Log.w("Stereo3DRenderer",
                         "Unable to discard decoder frame at live resize boundary", error);
@@ -2039,19 +2084,44 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                                                      Runnable completionAfterSwap) {
         synchronized (glCallbackLifecycleLock) {
             if (shuttingDown.get() || !clientSbs
-                    || !hdrInputTransition.commit(transitionGeneration)) {
+                    || hdrInputTransition.getGeneration() != transitionGeneration
+                    || !hdrInputTransition.isBlockingFrames()) {
                 return;
             }
 
-            hdrInput = hdrInputTransition.getTargetHdr();
-            int outputGeneration = clientSbsGeneration.incrementAndGet();
-            invalidateQueuedFrameDrain();
+            int outputGeneration;
             synchronized (frameLock) {
-                // A delayed callback from before the fresh-IDR release cannot become the first
-                // captured frame under the new transfer. The next decoder callback is authoritative.
+                SurfaceTexture texture = videoSurfaceTexture;
+                if (texture == null) {
+                    LimeLog.severe("Client SBS HDR transition has no decoder SurfaceTexture");
+                    return;
+                }
+
+                invalidateQueuedFrameDrain();
+                // SurfaceTexture does not replay a notification that was posted to the listener
+                // being replaced. Retokenize first, then unconditionally acquire the latest image
+                // while the transition is still blocked. This probe is discard-only: without an
+                // expected decoder PTS, a boundary image cannot safely prove the new transfer.
+                registerFrameAvailableListener(texture);
+                try {
+                    texture.updateTexImage();
+                    lastLatchedSurfaceTimestampNs = texture.getTimestamp();
+                } catch (RuntimeException error) {
+                    // Keep the transition fail-closed. A later frame may still drain normally, but
+                    // it must not be presented under the new transfer without a successful boundary.
+                    Log.w("Stereo3DRenderer",
+                            "Unable to discard decoder frame at HDR boundary", error);
+                    return;
+                }
+
                 frameAvailable.set(false);
                 pendingFrameGeneration = -1;
                 pendingFrameCallbackSequence = 0L;
+                if (!hdrInputTransition.commit(transitionGeneration)) {
+                    return;
+                }
+                hdrInput = hdrInputTransition.getTargetHdr();
+                outputGeneration = clientSbsGeneration.incrementAndGet();
             }
             hdrInputTransitionCompletion = completionAfterSwap;
             hdrInputTransitionCompletionGeneration = transitionGeneration;
@@ -2083,14 +2153,21 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         // surface creation and later decoder/onResume events already schedule a draw.
     }
 
-    @Override
-    public void onFrameAvailable(SurfaceTexture surfaceTexture) {
-        if (surfaceTexture != videoSurfaceTexture) {
+    private void onFrameAvailable(SurfaceTexture surfaceTexture, long registrationToken) {
+        if (!isFrameCallbackCurrent(
+                registrationToken, frameCallbackRegistrationToken.get(),
+                surfaceTexture == videoSurfaceTexture, clientSbs, shuttingDown.get(),
+                frameCallbackThreadStopped.get(), decoderSurfaceGeneration,
+                requestedDecoderSurfaceGeneration)) {
             return;
         }
         synchronized (frameLock) {
-            if (!clientSbs || shuttingDown.get()
-                    || decoderSurfaceGeneration != requestedDecoderSurfaceGeneration) {
+            // A boundary can invalidate a callback after its first check while it waits here.
+            if (!isFrameCallbackCurrent(
+                    registrationToken, frameCallbackRegistrationToken.get(),
+                    surfaceTexture == videoSurfaceTexture, clientSbs, shuttingDown.get(),
+                    frameCallbackThreadStopped.get(), decoderSurfaceGeneration,
+                    requestedDecoderSurfaceGeneration)) {
                 return;
             }
             int callbackGeneration = clientSbsGeneration.get();
@@ -2108,13 +2185,75 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
+    static boolean isFrameCallbackCurrent(long callbackToken, long activeToken,
+                                          boolean currentTexture, boolean clientSbs,
+                                          boolean shuttingDown, boolean callbackThreadStopped,
+                                          int decoderGeneration, int requestedGeneration) {
+        return callbackToken > 0L && callbackToken == activeToken
+                && currentTexture && clientSbs && !shuttingDown && !callbackThreadStopped
+                && decoderGeneration == requestedGeneration;
+    }
+
+    /** Installs one immutable registration token on the renderer-owned callback Looper. */
+    private void registerFrameAvailableListener(SurfaceTexture texture) {
+        if (texture == null) {
+            return;
+        }
+        synchronized (frameCallbackLifecycleLock) {
+            if (frameCallbackThreadStopped.get()) {
+                return;
+            }
+            long registrationToken = frameCallbackRegistrationToken.incrementAndGet();
+            SurfaceTexture.OnFrameAvailableListener listener =
+                    availableTexture -> onFrameAvailable(availableTexture, registrationToken);
+            texture.setOnFrameAvailableListener(listener, frameCallbackHandler);
+        }
+    }
+
+    private void invalidateFrameCallbackRegistration() {
+        synchronized (frameCallbackLifecycleLock) {
+            frameCallbackRegistrationToken.incrementAndGet();
+        }
+    }
+
+    private void unregisterFrameAvailableListener(SurfaceTexture texture) {
+        synchronized (frameCallbackLifecycleLock) {
+            invalidateFrameCallbackRegistration();
+            if (texture != null) {
+                texture.setOnFrameAvailableListener(null);
+            }
+        }
+    }
+
+    /** Terminal and idempotent: callbacks reject immediately; Looper exit is never joined. */
+    private void shutdownFrameCallbackThread() {
+        if (!frameCallbackThreadStopped.compareAndSet(false, true)) {
+            return;
+        }
+        synchronized (frameCallbackLifecycleLock) {
+            invalidateFrameCallbackRegistration();
+            frameCallbackThread.quitSafely();
+        }
+    }
+
     /**
      * Drains the decoder's latest-only SurfaceTexture on the GL thread without automatically
      * drawing or swapping the unchanged XR output. Worker completion still requests a real draw.
      */
     private void invalidateQueuedFrameDrain() {
-        frameDrainToken.incrementAndGet();
-        frameDrainQueued.set(false);
+        synchronized (frameLock) {
+            frameDrainToken.incrementAndGet();
+            frameDrainQueued.set(false);
+            clearQueuedFrameDrainTicketLocked();
+        }
+        queuedPostSwapCaptureTicket.set(0L);
+    }
+
+    /** Clears only the reusable runnable payload. The caller must hold frameLock. */
+    private void clearQueuedFrameDrainTicketLocked() {
+        queuedFrameDrainToken = 0L;
+        queuedFrameDrainTexture = null;
+        queuedFrameDrainGeneration = -1;
     }
 
     /**
@@ -2146,6 +2285,19 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
         return (int) Math.min(currentObservationSequence - previousObservationSequence,
                 65535L);
+    }
+
+    static long postSwapCaptureTicket(int generation, int validationEpoch) {
+        if (generation <= 0 || validationEpoch <= 0) {
+            return 0L;
+        }
+        return ((long) generation << 32) | (validationEpoch & 0xffffffffL);
+    }
+
+    static boolean isPostSwapCaptureTicketCurrent(long ticket, int generation,
+                                                   int validationEpoch) {
+        return ticket != 0L
+                && ticket == postSwapCaptureTicket(generation, validationEpoch);
     }
 
     private void scheduleStaleDepthWatchdog(int generation, long presentationAgeNs) {
@@ -2201,25 +2353,48 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
     }
 
     private void queueFrameDrain(SurfaceTexture expectedTexture, int expectedGeneration) {
-        if (shuttingDown.get() || !clientSbs
-                || !frameDrainQueued.compareAndSet(false, true)) {
-            return;
-        }
-        final long token = frameDrainToken.incrementAndGet();
-        try {
-            glSurfaceView.queueEvent(() -> drainLatestFrameWithoutSwap(
-                    token, expectedTexture, expectedGeneration));
-        } catch (RuntimeException error) {
-            if (frameDrainToken.get() == token) {
-                frameDrainQueued.set(false);
+        synchronized (frameLock) {
+            if (shuttingDown.get() || !clientSbs
+                    || !frameDrainQueued.compareAndSet(false, true)) {
+                return;
             }
-            // A lifecycle transition may temporarily leave GLSurfaceView without a GLThread.
-            // Keep the notification pending so the next lifecycle-driven draw can latch it.
-            LimeLog.warning("Client SBS decoder latch event deferred: " + error.getMessage());
-            if (!shuttingDown.get() && clientSbs) {
-                glSurfaceView.requestRender();
+            long token = frameDrainToken.incrementAndGet();
+            queuedFrameDrainToken = token;
+            queuedFrameDrainTexture = expectedTexture;
+            queuedFrameDrainGeneration = expectedGeneration;
+            try {
+                glSurfaceView.queueEvent(frameDrainRunnable);
+            } catch (RuntimeException error) {
+                if (frameDrainToken.get() == token) {
+                    frameDrainQueued.set(false);
+                }
+                if (queuedFrameDrainToken == token) {
+                    clearQueuedFrameDrainTicketLocked();
+                }
+                // A lifecycle transition may temporarily leave GLSurfaceView without a GLThread.
+                // Keep the notification pending so the next lifecycle-driven draw can latch it.
+                LimeLog.warning("Client SBS decoder latch event deferred: " + error.getMessage());
+                if (!shuttingDown.get() && clientSbs) {
+                    glSurfaceView.requestRender();
+                }
             }
         }
+    }
+
+    private void drainQueuedFrameWithoutSwap() {
+        long token;
+        SurfaceTexture expectedTexture;
+        int expectedGeneration;
+        synchronized (frameLock) {
+            token = queuedFrameDrainToken;
+            if (token == 0L) {
+                return;
+            }
+            expectedTexture = queuedFrameDrainTexture;
+            expectedGeneration = queuedFrameDrainGeneration;
+            clearQueuedFrameDrainTicketLocked();
+        }
+        drainLatestFrameWithoutSwap(token, expectedTexture, expectedGeneration);
     }
 
     private void drainLatestFrameWithoutSwap(long token, SurfaceTexture expectedTexture,
@@ -2308,6 +2483,67 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             return false;
         }
         return true;
+    }
+
+    /**
+     * Queues N+1 only after the draw that adopted N has returned through GLSurfaceView's swap.
+     * The generation, output attachment, and lifecycle are revalidated by the continuation.
+     */
+    private void scheduleCaptureAfterSwap(int expectedGeneration,
+                                          int expectedValidationEpoch) {
+        // A callback not yet latched owns its normal no-swap drain event. Queue this continuation
+        // only for a newer image which this draw already latched while N was still in flight.
+        if (shuttingDown.get() || !clientSbs || !outputSurfaceValidated
+                || expectedGeneration <= 0 || expectedValidationEpoch <= 0
+                || !hasFrameForActiveGeneration
+                || latchedFrameSequence <= lastCapturedFrameSequence) {
+            return;
+        }
+        long ticket = postSwapCaptureTicket(
+                expectedGeneration, expectedValidationEpoch);
+        if (!queuedPostSwapCaptureTicket.compareAndSet(0L, ticket)) {
+            return;
+        }
+        try {
+            // An event enqueued from onDrawFrame() runs after GLSurfaceView returns through the
+            // current draw's EGL swap, keeping capture/copy/inference for N+1 off N's critical
+            // presentation path.
+            glSurfaceView.queueEvent(postSwapCaptureRunnable);
+        } catch (RuntimeException error) {
+            queuedPostSwapCaptureTicket.compareAndSet(ticket, 0L);
+            LimeLog.warning("Unable to queue Client SBS post-swap capture: " + error);
+            // A dirty render requested here cannot begin until the current draw returns. Its
+            // ordinary no-adoption path will retry capture after the same swap boundary.
+            try {
+                glSurfaceView.requestRender();
+            } catch (RuntimeException fallbackError) {
+                LimeLog.warning("Unable to request Client SBS post-swap capture retry: "
+                        + fallbackError);
+            }
+        }
+    }
+
+    private void captureAfterSwap() {
+        synchronized (glCallbackLifecycleLock) {
+            long ticket = queuedPostSwapCaptureTicket.getAndSet(0L);
+            int currentGeneration = clientSbsGeneration.get();
+            if (!isPostSwapCaptureTicketCurrent(
+                    ticket, currentGeneration, outputSurfaceValidationEpoch)
+                    || shuttingDown.get() || !clientSbs || !surfaceLifecycleReady
+                    || !outputSurfaceValidated
+                    || activeClientSbsGeneration != currentGeneration) {
+                return;
+            }
+            if (EGL14.eglGetCurrentContext() == EGL14.EGL_NO_CONTEXT
+                    || EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
+                    == EGL14.EGL_NO_SURFACE) {
+                // A pause may drain queued events without a window. Preserve the uncaptured
+                // frame; the next lifecycle draw retries it through the no-adoption path.
+                glSurfaceView.requestRender();
+                return;
+            }
+            captureLatestFrameIfReady();
+        }
     }
 
     /** Polls Android's coarse thermal state at most once per second on the renderer thread. */
@@ -2538,7 +2774,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             videoSurface = null;
         }
         if (videoSurfaceTexture != null) {
-            videoSurfaceTexture.setOnFrameAvailableListener(null);
+            unregisterFrameAvailableListener(videoSurfaceTexture);
             videoSurfaceTexture.release();
             videoSurfaceTexture = null;
         }
@@ -2547,9 +2783,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
         videoTextureId = createExternalOESTexture();
         videoSurfaceTexture = new SurfaceTexture(videoTextureId);
-        videoSurfaceTexture.setOnFrameAvailableListener(this);
-        videoSurface = new Surface(videoSurfaceTexture);
         decoderSurfaceGeneration = requestedDecoderSurfaceGeneration;
+        registerFrameAvailableListener(videoSurfaceTexture);
+        videoSurface = new Surface(videoSurfaceTexture);
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         logGlCapabilities();
         // Query objects are created lazily on the first draw with visible XR Stats.
@@ -2566,10 +2802,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         modelInputPackProgram = createComputeProgram(
                 ClientSbsShaders.createModelInputPackCompute(
                         modelInputWidth, modelInputHeight));
-        // Legacy Bestv2/frontmost-inverse shaders remain available to offline tests, but the live
-        // renderer must never compile or select an alternate geometry path after strict V2 fails.
-        dibr3dProgram = 0;
-        warpMapProgram = 0;
         contractiveWarpMapProgram = createProgram(
                 ShaderUtils.VERTEX_SHADER,
                 ClientSbsShaders.CONTRACTIVE_WARP_MAP_FRAGMENT);
@@ -2584,8 +2816,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 ? new QuadProgramBindings(modelInputProgram) : null;
         gpuPackProgramBindings = modelInputPackProgram != 0
                 ? new GpuPackProgramBindings(modelInputPackProgram) : null;
-        reprojectionProgramBindings = null;
-        warpMapProgramBindings = null;
         contractiveWarpMapProgramBindings = contractiveWarpMapProgram != 0
                 ? new ContractiveWarpMapProgramBindings(contractiveWarpMapProgram) : null;
         contractiveWarpMapRefinementProgramBindings =
@@ -2619,7 +2849,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                         pipelineContract.getModelContentAspect(),
                         !pipelineContract.usesDirectFullFrameResize(),
                         Math.max(prefConfig.fps, 1));
-                applyHealthSamplingFocusOnGlThread(gpuDepthProcessor);
+                applyHealthSamplingStateOnGlThread(gpuDepthProcessor);
                 gpuComputeReady = gpuDepthProcessor.getOutputWidth() == depthMapWidth
                         && gpuDepthProcessor.getOutputHeight() == depthMapHeight;
                 if (!gpuComputeReady) {
@@ -2968,12 +3198,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             return;
         }
 
-        adoptLatestGpuInferenceResult();
+        boolean resultAdopted = adoptLatestGpuInferenceResult();
 
-        // Result adoption already tries to enqueue N+1 after N's depth/history commit. This second
-        // readiness check also covers draws with no result and a callback that raced adoption.
-        // Slot leases and per-slot cut words keep color/depth identity exact in both cases.
-        captureLatestFrameIfReady();
+        // With no newly adopted result, capture can start immediately: there is no completed N
+        // waiting for presentation. An adopted N instead schedules N+1 only after this draw has
+        // returned through EGL swap, keeping its full-resolution copy and inference submission
+        // off N's presentation-critical path.
+        if (!resultAdopted) {
+            captureLatestFrameIfReady();
+        }
 
         // Presentation is deliberately independent of delegate availability. A backend failure or
         // transition must not throw away the last valid matched stereo pair.
@@ -2981,6 +3214,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         scheduleClientSbsModeSwitchCompletionAfterSwap();
         scheduleHdrInputTransitionCompletionAfterSwap();
         scheduleLiveStreamResizeCompletionAfterSwap();
+        if (resultAdopted) {
+            scheduleCaptureAfterSwap(
+                    currentClientSbsGeneration, outputSurfaceValidationEpoch);
+        }
     }
 
     private void scheduleClientSbsModeSwitchCompletionAfterSwap() {
@@ -4197,7 +4434,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             // Keep the single-flight claim until history is committed. Otherwise N+1 could pack
             // against the previous owner while N's copy is still absent from the renderer queue.
             releaseInferenceClaim(result.inferenceClaimToken);
-            captureLatestFrameIfReady();
             return true;
         } catch (Throwable error) {
             LimeLog.severe("Client SBS GPU postprocess failed: " + error.getMessage());
@@ -4217,7 +4453,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             requestGpuShutdown(error.getMessage());
             return false;
         } finally {
-            // Token-specific release cannot clear N+1 if the successful path captured it above.
+            // Token-specific release is idempotent and cannot clear a later post-swap claim.
             releaseInferenceClaim(result.inferenceClaimToken);
         }
     }
@@ -4266,7 +4502,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
 
             releaseInferenceClaim(result.inferenceClaimToken);
-            captureLatestFrameIfReady();
             return true;
         } catch (Throwable error) {
             LimeLog.severe("Client SBS near-identical reuse failed: " + error.getMessage());
@@ -4513,7 +4748,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
                 videoSurface.release();
             }
             if (videoSurfaceTexture != null) {
-                videoSurfaceTexture.setOnFrameAvailableListener(null);
+                unregisterFrameAvailableListener(videoSurfaceTexture);
                 videoSurfaceTexture.release();
             }
             if (videoTextureId != 0) {
@@ -4521,9 +4756,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
             }
             videoTextureId = createExternalOESTexture();
             videoSurfaceTexture = new SurfaceTexture(videoTextureId);
-            videoSurfaceTexture.setOnFrameAvailableListener(this);
-            videoSurface = new Surface(videoSurfaceTexture);
             decoderSurfaceGeneration = requestedGeneration;
+            registerFrameAvailableListener(videoSurfaceTexture);
+            videoSurface = new Surface(videoSurfaceTexture);
             lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
         }
         outputSurfaceValidationEpoch++;
@@ -4993,27 +5228,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         }
     }
 
-    private static final class WarpMapProgramBindings {
-        final int position;
-        final int texCoord;
-        final int depthTexture;
-        final int profileTexture;
-        final int sourceSize;
-
-        WarpMapProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            depthTexture = GLES20.glGetUniformLocation(program, "s_DepthTexture");
-            profileTexture = GLES20.glGetUniformLocation(program, "s_ProfileTexture");
-            sourceSize = GLES20.glGetUniformLocation(program, "u_sourceSize");
-        }
-
-        boolean isComplete() {
-            return position >= 0 && texCoord >= 0 && depthTexture >= 0
-                    && profileTexture >= 0 && sourceSize >= 0;
-        }
-    }
-
     private static final class ContractiveWarpMapProgramBindings {
         final int position;
         final int texCoord;
@@ -5066,35 +5280,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer, SurfaceTexture.
         boolean isComplete() {
             return position >= 0 && texCoord >= 0 && colorTexture >= 0
                     && warpMapTexture >= 0;
-        }
-    }
-
-    private static final class ReprojectionProgramBindings {
-        final int position;
-        final int texCoord;
-        final int colorTexture;
-        final int depthTexture;
-        final int profileTexture;
-        final int sourceSize;
-        final int eyeSign;
-
-        ReprojectionProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            colorTexture = GLES20.glGetUniformLocation(program, "s_ColorTexture");
-            depthTexture = GLES20.glGetUniformLocation(program, "s_DepthTexture");
-            profileTexture = GLES20.glGetUniformLocation(program, "s_ProfileTexture");
-            sourceSize = GLES20.glGetUniformLocation(program, "u_sourceSize");
-            eyeSign = GLES20.glGetUniformLocation(program, "u_eyeSign");
-            LimeLog.info("Client SBS reprojection bindings: position=" + position
-                    + " texCoord=" + texCoord + " color=" + colorTexture
-                    + " depth=" + depthTexture + " profile=" + profileTexture
-                    + " sourceSize=" + sourceSize + " eyeSign=" + eyeSign);
-        }
-
-        boolean isComplete() {
-            return position >= 0 && texCoord >= 0 && colorTexture >= 0 && depthTexture >= 0
-                    && profileTexture >= 0 && sourceSize >= 0 && eyeSign >= 0;
         }
     }
 

@@ -469,7 +469,7 @@
     <string name="title_checkbox_enable_perf_overlay_lite">Enable Lite mode</string>
     <string name="summary_checkbox_enable_perf_overlay_lite">Display simplified performance information: Network Speed / Latency / Decode / Packet Loss Rate / FPS</string>
     <string name="title_checkbox_enable_perf_logging">Enable Performance Logging</string>
-    <string name="summary_checkbox_enable_perf_logging">"Stores performance data per configuration. (Offline only) "</string>
+    <string name="summary_checkbox_enable_perf_logging">Collect and log detailed performance diagnostics. Enable only while measuring.</string>
     <string name="title_checkbox_enable_perf_overlay_lite_dialog">Lite mode click to pop up quick options</string>
     <string name="summary_checkbox_enable_perf_overlay_lite_dialog">Replace the back button logic, pop up the game quick menu.</string>
     <string name="title_show_overlay_zoom_toggle_button">Show overlay zoom toggle button</string>

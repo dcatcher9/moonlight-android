@@ -33,8 +33,10 @@ public final class LegacyProfileMigration {
     static final String MIGRATION_COMPLETE_KEY = "legacy_profiles_flattened_v1";
     static final String RETIRED_SETTINGS_CLEANED_KEY = "xr_retired_settings_cleaned_v1";
     static final String FULL_RANGE_RECOVERY_COMPLETE_KEY = "xr_full_range_recovered_v2";
-    static final String DEBUG_LOGGING_DEFAULT_COMPLETE_KEY =
+    static final String LEGACY_DEBUG_LOGGING_DEFAULT_COMPLETE_KEY =
             "debug_perf_logging_default_applied_v1";
+    static final String DEBUG_LOGGING_OPT_IN_MIGRATION_COMPLETE_KEY =
+            "debug_perf_logging_opt_in_migrated_v2";
     static final String ZIPDEPTH_ONLY_MIGRATION_COMPLETE_KEY =
             "client_sbs_zipdepth_only_migrated_v1";
     private static final String PROFILES_DIR = "profiles";
@@ -194,19 +196,27 @@ public final class LegacyProfileMigration {
         }
     }
 
-    /** Applies the new debug-only default once, including to update-installed legacy profiles. */
-    public static void applyDebugBuildDefaults(Context context) {
+    /**
+     * Retires the former debug-only auto-enable so development APKs are valid latency subjects.
+     * A user can explicitly re-enable diagnostics after this one-time migration and that choice
+     * remains durable. Installs that never received the old forced default are left untouched.
+     */
+    public static void retireDebugPerformanceLoggingDefault(Context context) {
         if (!BuildConfig.DEBUG) {
             return;
         }
         SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
-        if (preferences.getBoolean(DEBUG_LOGGING_DEFAULT_COMPLETE_KEY, false)) {
+        if (preferences.getBoolean(DEBUG_LOGGING_OPT_IN_MIGRATION_COMPLETE_KEY, false)) {
             return;
         }
-        preferences.edit()
-                .putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, true)
-                .putBoolean(DEBUG_LOGGING_DEFAULT_COMPLETE_KEY, true)
-                .apply();
+        SharedPreferences.Editor editor = preferences.edit()
+                .putBoolean(DEBUG_LOGGING_OPT_IN_MIGRATION_COMPLETE_KEY, true);
+        if (preferences.getBoolean(LEGACY_DEBUG_LOGGING_DEFAULT_COMPLETE_KEY, false)
+                && preferences.getBoolean(
+                        PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, false)) {
+            editor.putBoolean(PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING, false);
+        }
+        editor.apply();
     }
 
     /**

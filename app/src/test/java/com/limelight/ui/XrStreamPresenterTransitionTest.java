@@ -123,7 +123,7 @@ public class XrStreamPresenterTransitionTest {
     @Test
     public void normalToRawHalfNeedsNoDecoderTransitionOrHostMessage() {
         // Both modes are sbs_mode 0 at W x H, so nothing about the stream changes: no IDR gate,
-        // no surface resize, no 0x3003/0x3007 round trip. Only the SceneCore stereo mode and the
+        // no surface resize, and no atomic presentation transaction. Only the SceneCore mode and
         // quad aspect move, and finishModeSwitch already applies both live.
         assertFalse(XrStreamPresenter.requiresDecoderTransition(
                 XrStreamPresenter.PresenterMode.NORMAL,

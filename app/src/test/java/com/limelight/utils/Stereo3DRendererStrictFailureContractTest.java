@@ -46,15 +46,12 @@ public class Stereo3DRendererStrictFailureContractTest {
     }
 
     @Test
-    public void productionInitializationNeverCompilesLegacyBestv2Programs() throws Exception {
+    public void productionRendererContainsOnlyStrictV2Programs() throws Exception {
+        String source = readRendererSource();
         String initialization = methodBody(
-                readRendererSource(),
+                source,
                 "private void onSurfaceCreatedLocked(GL10 gl, EGLConfig config)");
 
-        assertTrue(initialization.contains("dibr3dProgram = 0;"));
-        assertTrue(initialization.contains("warpMapProgram = 0;"));
-        assertTrue(initialization.contains("reprojectionProgramBindings = null;"));
-        assertTrue(initialization.contains("warpMapProgramBindings = null;"));
         assertTrue(initialization.contains(
                 "ClientSbsShaders.CONTRACTIVE_WARP_MAP_FRAGMENT"));
         assertTrue(initialization.contains(
@@ -68,6 +65,14 @@ public class Stereo3DRendererStrictFailureContractTest {
         assertFalse(initialization.contains("ClientSbsShaders.WARP_MAP_FRAGMENT"));
         assertFalse(initialization.contains("createReprojectionFragment("));
         assertFalse(initialization.contains("createWarpMapFragment("));
+        assertFalse(source.contains("private int dibr3dProgram;"));
+        assertFalse(source.contains("private int warpMapProgram;"));
+        assertFalse(source.contains(
+                "private ReprojectionProgramBindings reprojectionProgramBindings;"));
+        assertFalse(source.contains(
+                "private WarpMapProgramBindings warpMapProgramBindings;"));
+        assertFalse(source.contains("private static final class ReprojectionProgramBindings"));
+        assertFalse(source.contains("private static final class WarpMapProgramBindings"));
     }
 
     @Test

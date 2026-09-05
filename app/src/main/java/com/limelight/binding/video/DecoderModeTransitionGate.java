@@ -11,6 +11,10 @@ final class DecoderModeTransitionGate {
         void commit();
     }
 
+    interface OutputCommitter {
+        void commit();
+    }
+
     enum InputDecision {
         ACCEPT,
         DROP,
@@ -36,7 +40,6 @@ final class DecoderModeTransitionGate {
     private boolean outputFloorSet;
     private long outputFloorPtsUs;
     private boolean inputRefreshRequested;
-    private boolean renderReleasePending;
     private boolean completionReported;
     private long inputAdmissionGeneration;
 
@@ -48,7 +51,6 @@ final class DecoderModeTransitionGate {
         outputGateActive = true;
         outputFloorSet = false;
         inputRefreshRequested = false;
-        renderReleasePending = false;
         completionReported = false;
     }
 
@@ -139,8 +141,9 @@ final class DecoderModeTransitionGate {
     }
 
     /**
-     * Drops output queued before the transition IDR. The PTS floor remains after the gate opens so
-     * an older buffer already held by balanced frame pacing cannot render after the fresh IDR.
+     * Checks whether an output is currently eligible to render. This is only a provisional result:
+     * callers must use {@link #commitOutput(long, OutputCommitter)} immediately before presenting
+     * because a transition may begin after this method returns.
      */
     synchronized OutputDecision evaluateOutput(long ptsUs) {
         if (!outputFloorSet) {
@@ -150,27 +153,30 @@ final class DecoderModeTransitionGate {
             return OutputDecision.DROP;
         }
         if (outputGateActive) {
-            if (!renderReleasePending) {
-                renderReleasePending = true;
-                return OutputDecision.ACCEPT_AND_OPEN;
-            }
-            // Balanced pacing evaluates once while dequeuing and again immediately before the
-            // actual render release. The output gate remains logically armed until that release
-            // succeeds, but every post-floor output is safe to render while acknowledgement is
-            // pending.
-            return OutputDecision.ACCEPT;
+            return OutputDecision.ACCEPT_AND_OPEN;
         }
         return OutputDecision.ACCEPT;
     }
 
-    /** Returns true once, after an accepted post-transition output is successfully rendered. */
-    synchronized boolean acknowledgeRenderedOutput() {
-        if (!renderReleasePending) {
-            return false;
+    /**
+     * Linearizes the final output check, MediaCodec render release, and output-gate opening against
+     * {@link #begin(int)}. A failed release leaves the gate armed so cancellation or retry remains
+     * safe. The caller must release a {@link OutputDecision#DROP} buffer without rendering.
+     */
+    synchronized OutputDecision commitOutput(long ptsUs, OutputCommitter committer) {
+        if (committer == null) {
+            throw new NullPointerException("Decoder output committer must not be null");
         }
-        renderReleasePending = false;
-        outputGateActive = false;
-        return true;
+        OutputDecision decision = evaluateOutput(ptsUs);
+        if (decision == OutputDecision.DROP) {
+            return decision;
+        }
+
+        committer.commit();
+        if (decision == OutputDecision.ACCEPT_AND_OPEN) {
+            outputGateActive = false;
+        }
+        return decision;
     }
 
     /**
@@ -186,14 +192,30 @@ final class DecoderModeTransitionGate {
     }
 
     synchronized boolean cancel() {
-        boolean wasActive = active || outputGateActive || renderReleasePending;
+        boolean wasActive = active || outputGateActive;
         inputAdmissionGeneration++;
         active = false;
         targetSurfaceReady = false;
         outputGateActive = false;
         outputFloorSet = false;
         inputRefreshRequested = false;
-        renderReleasePending = false;
+        completionReported = false;
+        return wasActive;
+    }
+
+    /**
+     * Converts an inconclusive transition into a fail-closed state until stream teardown calls
+     * {@link #cancel()}. Any IDR/output that was already racing the timeout is invalidated too.
+     */
+    synchronized boolean retainClosedAfterFailure(int currentFrameNumber) {
+        boolean wasActive = active || outputGateActive;
+        inputAdmissionGeneration++;
+        boundaryFrameNumber = currentFrameNumber;
+        active = true;
+        targetSurfaceReady = false;
+        outputGateActive = true;
+        outputFloorSet = false;
+        inputRefreshRequested = false;
         completionReported = false;
         return wasActive;
     }

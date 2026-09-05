@@ -48,13 +48,13 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         assertFalse((boolean) getField(presenter, "panelRateReconcilePosted"));
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 
-        assertEquals(0, ShadowMoonBridge.getSetVideoModeCallCount());
+        assertEquals(0, ShadowMoonBridge.getSetVideoModeV2CallCount());
         presenter.onDestroy();
         controller.destroy();
     }
 
     @Test
-    public void connectionStopInvalidatesTransitionAndFencesQueuedModeAndDumpSends()
+    public void connectionStopInvalidatesTransitionAndFencesQueuedDumpSend()
             throws Exception {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyPresenter(controller.get());
@@ -68,10 +68,9 @@ public final class XrStreamPresenterControlTransportTeardownTest {
 
         Handler handler = new Handler(Looper.getMainLooper());
         handler.post(() -> presenter.onDecoderPresentationModeTransitionOpened(73));
-        // Models an already-posted mode-switch rollback/debug action that reaches the presenter
+        // Models an already-posted mode-switch debug action that reaches the presenter
         // after Game has synchronously delivered its pre-native-stop hook.
         handler.post(() -> {
-            presenter.sendHostSbsModeControl(0);
             presenter.sendHostDebugDumpControl();
         });
 
@@ -80,7 +79,6 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         assertFalse((boolean) getField(presenter, "modeSwitchInProgress"));
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 
-        assertEquals(0, ShadowMoonBridge.getSetSbsModeCallCount());
         assertEquals(0, ShadowMoonBridge.getSbsDebugDumpCallCount());
         presenter.onDestroy();
         controller.destroy();
@@ -95,7 +93,6 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         invoke(presenter, "schedulePanelRateReconcile");
 
         assertFalse((boolean) getField(presenter, "panelRateReconcilePosted"));
-        assertEquals(0, presenter.sendHostSbsModeControl(1));
         assertEquals(0, presenter.sendHostVideoModeControl(
                 1920, 1080, 6000, 1, 40_000));
         assertEquals(0, presenter.sendHostTelemetryControl(true, false, 1, 500));
@@ -107,8 +104,7 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         assertTrue(XrStreamPresenter.isPresentationModeSupported(
                 XrStreamPresenter.PresenterMode.HOST_SBS_RAW, false));
         assertEquals(MoonBridge.SBS_MODE_OFF, presenter.getInitialHostSbsWireMode());
-        assertEquals(0, ShadowMoonBridge.getSetSbsModeCallCount());
-        assertEquals(0, ShadowMoonBridge.getSetVideoModeCallCount());
+        assertEquals(0, ShadowMoonBridge.getSetVideoModeV2CallCount());
         assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         assertEquals(0, ShadowMoonBridge.getSbsDebugDumpCallCount());
 
@@ -131,6 +127,9 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         setField(presenter, "streamPresentationReady", true);
         setField(presenter, "currentPresenterMode",
                 XrStreamPresenter.PresenterMode.HOST_SBS_AI);
+        // These tests exercise Apollo's atomic control transport. Legacy/non-Apollo hosts no
+        // longer schedule v2-only panel reconciliation after protocol negotiation was tightened.
+        setField(presenter, "atomicPresentationV2Supported", true);
         return presenter;
     }
 

@@ -33,6 +33,10 @@ public class ClientSbsGpuDepthShadersTest {
                 false, 30L, false));
         assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
                 true, 1L, false));
+        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
+                false, true, 1L, true));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
+                true, true, 1L, false));
     }
 
     @Test

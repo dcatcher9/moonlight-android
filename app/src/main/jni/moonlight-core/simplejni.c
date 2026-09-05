@@ -16,19 +16,20 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendMouseMove(JNIEnv *env, jclass cla
 }
 
 JNIEXPORT jint JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_sendSetSbsMode(JNIEnv *env, jclass clazz,
-                                                          jint mode) {
-    return LiSendSetSbsMode((uint8_t) mode);
+Java_com_limelight_nvstream_jni_MoonBridge_sendSetVideoModeV2(JNIEnv *env, jclass clazz,
+                                                              jint desiredMode, jint requestId,
+                                                              jint sourceWidth, jint sourceHeight,
+                                                              jint framerateX100,
+                                                              jint totalWireBitrateKbps) {
+    return LiSendSetVideoModeV2((uint8_t) desiredMode, (uint32_t) requestId,
+                                (uint16_t) sourceWidth, (uint16_t) sourceHeight,
+                                (uint32_t) framerateX100,
+                                (uint32_t) totalWireBitrateKbps);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_sendSetVideoMode(JNIEnv *env, jclass clazz,
-                                                            jint width, jint height,
-                                                            jint framerateX100, jint requestId,
-                                                            jint bitrateKbps) {
-    return LiSendSetVideoMode((uint16_t) width, (uint16_t) height,
-                              (uint16_t) framerateX100, (uint16_t) requestId,
-                              (uint32_t) bitrateKbps);
+Java_com_limelight_nvstream_jni_MoonBridge_getHostFeatureFlags(JNIEnv *env, jclass clazz) {
+    return (jint)LiGetHostFeatureFlags();
 }
 
 JNIEXPORT jint JNICALL

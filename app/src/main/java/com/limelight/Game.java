@@ -202,6 +202,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private String sessionLocalSessionId;
     private volatile String sessionHostSessionId;
     private volatile boolean hostSessionIdSupported;
+    private volatile boolean atomicPresentationV2Supported;
     private XrSessionSettingsController xrSessionSettingsController;
     private boolean streamContainerReleasedForReconnect;
     private boolean reconnectScheduled;
@@ -523,7 +524,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 LimeLog.warning("Unable to persist the Raw SBS HEVC compatibility adjustment");
             }
         }
-        xrSessionSettingsController.setLiveVideoModeSupported(hostSessionIdSupported);
+        // Live presentation controls are enabled only after mutual RTSP v2 negotiation.
+        xrSessionSettingsController.setLiveVideoModeSupported(atomicPresentationV2Supported);
 
         return xrSessionSettingsController.getStartupPreferences();
     }
@@ -552,8 +554,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return;
         }
 
-        xrSessionSettingsController.setLiveVideoModeSupported(hostSessionIdSupported);
+        xrSessionSettingsController.setLiveVideoModeSupported(atomicPresentationV2Supported);
         presenter.setHostControlExtensionsSupported(hostSessionIdSupported);
+        presenter.setAtomicPresentationV2Supported(atomicPresentationV2Supported);
         refreshXrSessionSettingsModels();
         presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
             @Override
@@ -731,6 +734,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             .setLastSuccessfulMode(selected)
                             .commit();
                 }
+            }
+
+            @Override
+            public void onPresentationModeNeedsReconnect(
+                    XrStreamPresenter.PresenterMode mode) {
+                if (reconnectScheduled || xrSessionSettingsController == null) {
+                    return;
+                }
+                SessionSettingsStore.PresenterMode selected = toSessionPresenterMode(mode);
+                xrSessionSettingsController.selectPresentationMode(selected);
+                refreshXrSessionSettingsModels();
+                if (!xrSessionSettingsController.commitPending()) {
+                    showCenteredStreamMessage(
+                            getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
+                    return;
+                }
+                LimeLog.info("XR: reconnecting for atomic presentation compatibility: "
+                        + selected);
+                scheduleXrSessionReconnect();
             }
 
             @Override
@@ -1275,7 +1297,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 this);
         decoderRenderer.setFirstFrameRenderedListener(() -> runOnUiThread(() -> {
             if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onFirstVideoFrameRendered();
+                XrStreamPresenter presenter = streamContainer.getXrPresenter();
+                // Native video can render before connectionStarted(). RTSP feature negotiation is
+                // already complete, so publish v2 to both settings and presentation before saved
+                // mode restoration chooses between an atomic transaction and reconnect.
+                boolean atomicV2 = refreshAtomicPresentationV2Support();
+                if (xrSessionSettingsController != null) {
+                    xrSessionSettingsController.setLiveVideoModeSupported(atomicV2);
+                }
+                presenter.setAtomicPresentationV2Supported(atomicV2);
+                refreshXrSessionSettingsModels();
+                presenter.onFirstVideoFrameRendered();
             }
         }));
         decoderRenderer.setPresentationModeTransitionListeners(
@@ -4192,10 +4224,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             LimeLog.warning("Unable to persist the established host session capability");
         }
         runOnUiThread(() -> {
-            if (xrSessionSettingsController != null) {
-                xrSessionSettingsController.setLiveVideoModeSupported(
-                        hostSessionIdSupported);
-            }
             XrStreamPresenter presenter = streamContainer != null
                     ? streamContainer.getXrPresenter() : null;
             if (presenter != null) {
@@ -4569,6 +4597,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void connectionStarted() {
+        final boolean negotiatedAtomicPresentationV2 =
+                refreshAtomicPresentationV2Support();
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -4585,6 +4615,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 connected = true;
                 connecting = false;
+                XrStreamPresenter presenter = streamContainer != null
+                        ? streamContainer.getXrPresenter() : null;
+                if (presenter != null) {
+                    presenter.setAtomicPresentationV2Supported(
+                            negotiatedAtomicPresentationV2);
+                }
+                if (xrSessionSettingsController != null) {
+                    xrSessionSettingsController.setLiveVideoModeSupported(
+                            negotiatedAtomicPresentationV2);
+                    refreshXrSessionSettingsModels();
+                }
                 updatePipAutoEnter();
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
@@ -4772,16 +4813,27 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         });
     }
 
+    private boolean refreshAtomicPresentationV2Support() {
+        atomicPresentationV2Supported =
+                (MoonBridge.getHostFeatureFlags()
+                        & MoonBridge.LI_FF_ATOMIC_PRESENTATION_MODE_V2) != 0;
+        return atomicPresentationV2Supported;
+    }
+
     @Override
-    public void videoModeAck(int requestId, int status, int appliedWidth, int appliedHeight,
-                             int appliedFramerateX100, int appliedBitrateKbps) {
-        // Host answer to a live video-mode request. Callback arrives off the UI thread; every
-        // consumer below is main-thread/SceneCore-bound.
+    public void videoModeAckV2(int status, int appliedMode, int flags, int requestId,
+                               int stateGeneration, int appliedSourceWidth,
+                               int appliedSourceHeight, int exactEncodedWidth,
+                               int exactEncodedHeight, int appliedFramerateX100,
+                               int effectiveEncoderBitrateKbps) {
         runOnUiThread(() -> {
             if (isConnectionUiActive() && streamContainer != null
                     && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onVideoModeAck(requestId, status, appliedWidth,
-                        appliedHeight, appliedFramerateX100, appliedBitrateKbps);
+                streamContainer.getXrPresenter().onVideoModeAckV2(
+                        status, appliedMode, flags, requestId, stateGeneration,
+                        appliedSourceWidth, appliedSourceHeight,
+                        exactEncodedWidth, exactEncodedHeight,
+                        appliedFramerateX100, effectiveEncoderBitrateKbps);
             }
         });
     }
@@ -4878,7 +4930,48 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    public boolean setDecoderOutputSurface(Surface surface) {
+    /** Opaque owner token used by a UI deadline without exposing the decoder implementation. */
+    public static final class DecoderOutputSurfaceSwitchRequest {
+        private final MediaCodecDecoderRenderer.OutputSurfaceSwitchRequest rendererRequest;
+
+        private DecoderOutputSurfaceSwitchRequest(
+                MediaCodecDecoderRenderer.OutputSurfaceSwitchRequest rendererRequest) {
+            this.rendererRequest = rendererRequest;
+        }
+
+        /** Returns false only when queued decoder success already owns completion. */
+        public boolean cancelAtDeadline() {
+            return rendererRequest.cancelAtDeadline();
+        }
+
+        public void cancel() {
+            rendererRequest.cancel();
+        }
+    }
+
+    /** Queues an ordinary live output handoff on the decoder's dedicated serial worker. */
+    public DecoderOutputSurfaceSwitchRequest setDecoderOutputSurfaceAsync(
+            Surface surface, long ownerDeadlineMs,
+            StreamContainer.SurfaceSwitchCallback callback) {
+        MediaCodecDecoderRenderer renderer = decoderRenderer;
+        if (renderer == null || callback == null) {
+            return null;
+        }
+        MediaCodecDecoderRenderer.OutputSurfaceSwitchRequest request =
+                renderer.setOutputSurfaceAsync(
+                        surface, ownerDeadlineMs, callback::onComplete);
+        return request != null ? new DecoderOutputSurfaceSwitchRequest(request) : null;
+    }
+
+    public void cancelPendingDecoderOutputSurfaceSwitches() {
+        MediaCodecDecoderRenderer renderer = decoderRenderer;
+        if (renderer != null) {
+            renderer.cancelPendingOutputSurfaceSwitches();
+        }
+    }
+
+    /** Synchronous park used only while the GL thread owns a context-recovery teardown. */
+    public boolean setDecoderOutputSurfaceForGlRecovery(Surface surface) {
         return decoderRenderer != null && decoderRenderer.setOutputSurface(surface);
     }
 

@@ -24,8 +24,11 @@ headset's codec, Adreno, OpenCL, or SceneCore performance.
   desktop would only be aspect-fitted into the encoder surface rather than rendered at the selected
   geometry. The exact packed width must remain within the 8192-pixel HEVC/AV1 transport limit.
 - **Host SBS AI** uses the same direct stereo surface path; Apollo performs depth inference and SBS
-  synthesis before encoding. This mode is enabled only when the host advertises the Apollo-3D
-  session/control extension; it is disabled on regular Sunshine and Apollo hosts.
+  synthesis before encoding. Apollo fits the packed `2W x H` raster inside both encoder axes with
+  one even, aspect-preserving scale; the client's pre-ACK fallback mirrors the conservative codec
+  limits, while the applied-state ACK remains authoritative for runtime-discovered limits. This
+  mode is enabled only when the host advertises the Apollo-3D session/control extension; it is
+  disabled on regular Sunshine and Apollo hosts.
 - **Client SBS AI** decodes into an external-OES `SurfaceTexture`, runs the native LiteRT/GLES
   pipeline on the headset, and presents its packed `2W x H` output through the SceneCore entity in
   side-by-side mode. `W x H` is the client request/output contract: Client SBS does not apply a hidden
@@ -248,6 +251,14 @@ Scheduling is readiness-driven rather than timer-driven:
 - Surface callbacks may coalesce to the newest decoded frame. The GL thread continues draining and
   latching pending `SurfaceTexture` frames while inference is busy so the decoder consumer does not
   back up.
+- Both renderer-owned `SurfaceTexture` generations register on one urgent-display callback
+  `HandlerThread`, never the creating thread's implicit Looper. Each registration carries an
+  immutable token checked before and after the frame-state lock; surface replacement, live resize,
+  HDR transfer commit, and terminal teardown invalidate older tokens. The callback only publishes
+  the newest-frame metadata and queues GL work. Terminal teardown requests Looper exit without
+  joining it on the UI thread. The thread is created once after renderer contract construction so
+  its handler is final across context recovery; it remains idle in Normal/Host modes. This small
+  idle-thread cost avoids a lazy-start race with surface registration and terminal teardown.
 - A monotonic source-step approximation advances on every accepted decoder callback, including
   callbacks coalesced before one `updateTexImage()` latch. The callback sequence assigned to a
   latch is protected through `updateTexImage()`, so the four-step reuse bound cannot silently omit
@@ -288,6 +299,10 @@ Scheduling is readiness-driven rather than timer-driven:
   succeeds, and its exact model-input and scene-cut histories are committed. Only then is the
   single-flight claim released and the next callback-backed frame allowed to arbitrate. This makes
   the reuse owner unambiguous across renderer and inference contexts.
+- After an adoption, the renderer queues the next capture from a GL continuation validated against
+  both generation and output attachment. The adopted pair therefore returns through its EGL swap
+  before the next full-resolution color copy/model submission begins. Callback-driven no-swap
+  drains still latch and capture when no newly adopted pair is waiting for presentation.
 - Shared-context fences order input production, inference output, and GPU postprocessing without
   blocking the GL thread on normal operation.
 - Each adopted real pair or accepted reuse is rendered directly into the EGL default framebuffer
@@ -559,9 +574,9 @@ already authorized by the preceding valid result. Range, immediate temporal valu
 cut baselines, recovery state, and cut FSM otherwise remain unchanged until a complete valid
 inference arrives.
 
-Depth-health stats are diagnostics, not geometry inputs. A tiny asynchronous GPU state copy
-continues at a 30-real-inference background cadence even while Stats and explicit performance
-logging are off, and sharpens to every 5 real inferences while Stats is visible. Its poll is
+Depth-health stats are diagnostics, not geometry inputs. When explicit performance logging is on,
+a tiny asynchronous GPU state copy runs every 30 real inferences; Stats visibility sharpens it to
+every 5. With both consumers off, neither the copy nor its GPU-to-CPU map runs. Its enabled poll is
 nonblocking. Append-only state fields preserve the prior byte offsets while exposing appearance
 proposal count; exclusive accepted appearance, geometry, and structureless-return cut counts; the
 latest raw/structural/support evidence; depth change/range shift; and causal reason bits. This uses
@@ -579,11 +594,22 @@ The central contract is:
 
 > Whoever owns presentation supplies the initial `Surface` through
 > `MediaCodecDecoderRenderer.setRenderTarget()` before codec setup, and supplies every live
-> replacement through the guarded `MediaCodecDecoderRenderer.setOutputSurface()` transaction.
+> replacement through the guarded `MediaCodecDecoderRenderer.setOutputSurfaceAsync()` transaction.
 
 Mode switches are guarded asynchronous surface handoffs. Keep the decoder target, SceneCore surface
 size/stereo mode, renderer generation, and entity visibility synchronized. A stale callback from a
 previous generation must not retarget the decoder or publish a depth result.
+Ordinary live binds run on one decoder-owned serial worker, never the UI thread or the urgent
+frame-rendered callback thread. Each decoder handoff is bounded at two seconds, and the two-bind
+Host resize shares one two-second end-to-end deadline. Timeout invalidates the decoder request
+epoch, and an uncancellable native call that returns late restores the retained previous target
+while it still owns the codec-recovery lock. The worker checks that absolute owner deadline after
+the native call returns and before publishing the new Java render target, so a delayed main Looper
+cannot convert a late vendor success into an unowned surface switch. Initial pre-configure
+surface selection remains synchronous because `MediaCodec.configure()` needs its final target.
+Unexpected GL context recovery is the other deliberate synchronous exception: it parks and
+reasserts the persistent dummy before the GL thread releases the retired BufferQueue, while
+lifecycle cleanup serializes through the same codec-recovery lock before releasing either target.
 
 On crossings into or out of Client SBS, keep SceneCore's last submitted picture and its current
 stereo/shape interpretation visible while MediaCodec crosses its recovery barrier, parks on the
@@ -654,6 +680,36 @@ Host SBS AI geometry, but ordinary `W x H` for Raw Half, Normal, and Client SBS.
 On a regular Sunshine or Apollo host, every stream-quality change follows the standard
 commit-and-reconnect path, and automatic headset-panel-rate following is disabled because there is
 no live video-mode control/ack contract.
+
+Atomic presentation protocol v2 reuses reliable control types `0x3007`/`0x3008` only when the
+client advertises Moonlight feature `0x08` and Apollo advertises host feature `0x20000000`. Its
+little-endian request body is exactly 20 bytes:
+`{u8 version=2, u8 desired_mode, u16 flags=0, u32 request_id, u16 source_width,
+u16 source_height, u32 fps_x100, u32 total_wire_bitrate_kbps}`. Its ACK body is exactly 28 bytes:
+`{u8 version=2, u8 status, u8 applied_mode, u8 flags=0, u32 request_id,
+u32 state_generation, u16 applied_source_width, u16 applied_source_height,
+u16 exact_encoded_width, u16 exact_encoded_height, u32 fps_x100,
+u32 effective_encoder_bitrate_kbps}`. A mode/geometry-changing request closes the decoded-output
+gate before it is sent. The client commits it only after a matching, newer applied generation and
+a fresh frame at the ACK's exact encoded raster (plus the packed-swap proof for Client SBS). An
+FPS/bitrate-only request may settle directly from that ACK, without a new decoded-frame proof, only
+when there is no mode transition or logical source-geometry change and the ACK raster exactly
+matches the decoder's current output. Failure or ambiguity reconnects without a fire-and-forget
+rollback packet.
+
+Compatibility is deliberately asymmetric:
+
+| Client / host | Presentation-control behavior |
+|---|---|
+| Current Moonlight 3D / current Apollo-3D | Atomic v2 for every live quality request and every OFF/AI wire-mode crossing |
+| Current Moonlight 3D / upstream/original Apollo or Sunshine | No proprietary presentation controls; stream-quality changes use the standard reconnect path |
+
+Older Moonlight 3D clients and pre-v2 Apollo-3D hosts are outside this compatibility contract.
+There is no `0x3003` presentation command and no 12-byte request or 14-byte ACK fallback; live
+presentation control is available only after mutual atomic-v2 feature negotiation.
+
+This live presentation transaction is independent of offline whole-clip conversion. In particular,
+the offline/online no-lookahead policy does not change these control packets or their ordering.
 
 Artemis stores exactly one current-session record per PC. A new host app replaces that record;
 resuming the same host app preserves it. The record contains shared stream overrides, per-mode
@@ -952,9 +1008,10 @@ about 12 seconds while Stats requests focused 100 ms publications and about 60 s
 background 500 ms cadence; after opening Stats, the ring temporarily contains both cadences until
 the older background points age out. Every distinct accepted host publication enters the history
 at delivery even though the stats table repaints more slowly. Repeated heartbeat publications
-refresh liveness without adding duplicate chart points. Client SBS sample spacing likewise follows
-its visible five-real-inference and background 30-real-inference health-copy cadences; reuse freezes
-depth-health history.
+refresh liveness without adding duplicate chart points. Client SBS sample spacing follows its
+visible five-real-inference cadence or the 30-real-inference cadence used by explicit background
+performance logging; reuse freezes depth-health history. Opening diagnostics starts a fresh client
+history rather than backfilling time during which both consumers were disabled.
 
 The depth policy row must say `Uncapped | one in flight | newest frame when free`; Android thermal
 status is reported separately so it is not mistaken for a hidden throttle. Do not add expected
@@ -992,7 +1049,7 @@ SceneCore exposes no final compositor-present timestamp. Record the active warp 
 timings. Any path other than the strict exact-1x-seed plus 2x-horizontal one-correction `RG16F` V2
 cache is flat output, not a comparable geometry fallback.
 
-Performance logging is enabled by default and can be disabled in preferences. While enabled, the
+Performance logging is opt-in under XR Diagnostics. While enabled, the
 typed window is written to logcat at approximately the two-second stats cadence, never per frame.
 Normal and Host SBS write one
 `DecoderPerf` line with sender sequence, receive, decoder output, release, surface-presentation, and
@@ -1010,12 +1067,11 @@ five-second renderer debug lines and separate depth line are intentionally omitt
 logging. Use these lines for repeatable A/B captures; they add no per-frame logging or additional GPU
 synchronization.
 When Stats is hidden and explicit performance logging is disabled, Client SBS disables timer
-queries, bypasses its detailed synchronized/atomic performance-counter updates, and skips typed
-stats-table/log formatting. The cheap 30-frame health-copy producer and nonblocking poller remain
-active so the 120-sample diagnostic rings already contain pre-open context; opening Stats raises
-that copy cadence to 5 frames. Opening Stats resets only the CPU and detailed Client-SBS performance
-sampling baselines. Timer state is created/reset only on the renderer thread with its EGL context
-current.
+queries, bypasses its detailed synchronized/atomic performance-counter updates, skips typed
+stats-table/log formatting, and does not schedule or map the 224-byte GPU health-readback ring.
+Enabling explicit logging starts that ring at a 30-frame cadence; opening Stats raises it to 5
+frames and starts a fresh history rather than mapping stale hidden-state samples. Timer and
+readback state are created/reset only on the renderer thread with its EGL context current.
 
 ### Spatial UI learnings
 

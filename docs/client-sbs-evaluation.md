@@ -559,7 +559,7 @@ The tests cover:
 - `DecoderModeTransitionGateTest`: IDR/serial and presentation-timestamp gating around decoder
   output-surface transitions.
 - `PreferenceConfigurationPerformanceLoggingTest`: performance logging remains independent of the
-  visible Stats panel and defaults to the requested debug-on policy.
+  visible Stats panel and defaults off so measurements exercise the normal streaming path.
 - `ClientSbsDepthInputShapeTest`: deterministic nearest-multiplicative-aspect selection across the
   three ZipDepth buckets.
 - `ClientSbsGpuInferenceEngineTest`: compiler-cache identity, GPU priority parsing, infer/reuse
@@ -574,12 +574,13 @@ The tests cover:
   rejection.
 - `ClientSbsPackagedModelArchiveTest`: every packaged ZipDepth entry matches its manifest SHA-256,
   and retired family archives are absent from `nonRoot_game` assets.
-- `Stereo3DRendererSchedulingTest`: stale-result overlap ownership, packed-viewport limits, and
-  Stats epoch boundaries.
-- `Stereo3DRendererStrictFailureContractTest`: live initialization never compiles Bestv2/probe
-  programs, raw `R32F` depth feeds the conditioner directly while both inverse targets remain
-  `RG16F`, the exact seed cannot become a fallback, and any strict V2 stage failure reaches flat
-  composition only.
+- `Stereo3DRendererSchedulingTest`: stale-result overlap ownership, post-swap capture ordering,
+  explicit urgent-display `SurfaceTexture` callback routing/token invalidation, nonblocking callback
+  Looper teardown, packed-viewport limits, and Stats epoch boundaries.
+- `Stereo3DRendererStrictFailureContractTest`: production contains only the strict V2 programs;
+  retired Bestv2/probe shader state is absent, raw `R32F` depth feeds the conditioner directly
+  while both inverse targets remain `RG16F`, the exact seed cannot become a fallback, and any
+  strict V2 stage failure reaches flat composition only.
 - `ShaderUtilsTest`: exact source-cell area downsampling, bilinear-upscale selection, reflected
   per-cell portrait mapping, per-cell HDR conversion, per-stream fixed-shape packing, the 11-step
   unique seed inverse, and the one-correction refinement contract.
@@ -998,7 +999,7 @@ $Package = "com.limelight.moonlight3ddebug"
 Review for `ClientSbsGpu`, `Stereo3DRenderer`, delegate coverage, GL errors, fence failures,
 mailbox/slot failures, and uncaught exceptions. Initialization is expected once per new renderer;
 repeated initialization during a stable stream indicates a surface or lifecycle problem.
-Performance logging is enabled by default and can be disabled in preferences. While enabled, grep
+Performance logging is opt-in under XR Diagnostics. While enabled, grep
 `DecoderPerf` in Normal/Host SBS or `ClientSbsPerf` in Client SBS for one typed line per
 approximately two-second window. Both expose
 the complete sender-sequence / receive / decoder-output / render-release / surface-presented chain.

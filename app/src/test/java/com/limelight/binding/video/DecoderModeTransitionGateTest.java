@@ -3,6 +3,7 @@ package com.limelight.binding.video;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
@@ -58,13 +59,13 @@ public class DecoderModeTransitionGateTest {
         assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN,
                 gate.evaluateOutput(2_000));
         assertTrue(gate.isOutputGateActive());
-        assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
+        assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN,
                 gate.evaluateOutput(2_000));
-        assertTrue(gate.acknowledgeRenderedOutput());
+        assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN,
+                gate.commitOutput(2_000, () -> { }));
         assertFalse(gate.isOutputGateActive());
         assertTrue(gate.consumeCompletedTransition());
         assertFalse(gate.consumeCompletedTransition());
-        assertFalse(gate.acknowledgeRenderedOutput());
         assertEquals(DecoderModeTransitionGate.OutputDecision.DROP,
                 gate.evaluateOutput(1_998));
         assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
@@ -93,7 +94,7 @@ public class DecoderModeTransitionGateTest {
         assertTrue(gate.prepareIdrOutput(11, true, 100));
         assertTrue(gate.markIdrAccepted(11, true, 100));
         assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN,
-                gate.evaluateOutput(100));
+                gate.commitOutput(100, () -> { }));
 
         gate.begin(25);
         assertTrue(gate.isActive());
@@ -243,8 +244,7 @@ public class DecoderModeTransitionGateTest {
 
         assertTrue(gate.prepareIdrOutput(101, true, 2_000));
         assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN,
-                gate.evaluateOutput(2_000));
-        assertTrue(gate.acknowledgeRenderedOutput());
+                gate.commitOutput(2_000, () -> { }));
         assertFalse(gate.consumeCompletedTransition());
         assertTrue(gate.markIdrAccepted(101, true, 2_000));
         assertTrue(gate.consumeCompletedTransition());
@@ -263,7 +263,6 @@ public class DecoderModeTransitionGateTest {
                 gate.evaluateInput(101, false));
         assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
                 gate.evaluateOutput(0));
-        assertFalse(gate.acknowledgeRenderedOutput());
         assertFalse(gate.cancel());
     }
 
@@ -275,13 +274,97 @@ public class DecoderModeTransitionGateTest {
         assertTrue(gate.prepareIdrOutput(101, true, 2_000));
         assertTrue(gate.markIdrAccepted(101, true, 2_000));
 
-        assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN,
-                gate.evaluateOutput(2_000));
+        try {
+            gate.commitOutput(2_000, () -> {
+                throw new IllegalStateException("fake MediaCodec release failure");
+            });
+            fail("Expected the fake MediaCodec release to fail");
+        } catch (IllegalStateException expected) {
+            assertEquals("fake MediaCodec release failure", expected.getMessage());
+        }
         assertTrue(gate.isOutputGateActive());
         assertTrue(gate.cancel());
-        assertFalse(gate.acknowledgeRenderedOutput());
         assertFalse(gate.consumeCompletedTransition());
         assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
                 gate.evaluateOutput(0));
+    }
+
+    @Test
+    public void timedOutTransitionRetainsClosedGateUntilTeardownCancellation() {
+        DecoderModeTransitionGate gate = new DecoderModeTransitionGate();
+        gate.begin(100);
+        gate.markTargetSurfaceReady();
+        assertTrue(gate.prepareIdrOutput(101, true, 2_000));
+        assertTrue(gate.markIdrAccepted(101, true, 2_000));
+
+        assertTrue(gate.retainClosedAfterFailure(101));
+        assertTrue(gate.isActive());
+        assertTrue(gate.isOutputGateActive());
+        assertEquals(DecoderModeTransitionGate.OutputDecision.DROP,
+                gate.evaluateOutput(2_000));
+        assertEquals(DecoderModeTransitionGate.InputDecision.DROP,
+                gate.evaluateInput(102, true));
+
+        assertTrue(gate.cancel());
+        assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
+                gate.evaluateOutput(2_001));
+    }
+
+    @Test
+    public void transitionCannotLinearizeInsideOutputCommit() throws Exception {
+        DecoderModeTransitionGate gate = new DecoderModeTransitionGate();
+        CountDownLatch commitEntered = new CountDownLatch(1);
+        CountDownLatch releaseCommit = new CountDownLatch(1);
+        CountDownLatch beginStarted = new CountDownLatch(1);
+        CountDownLatch beginCompleted = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            Future<DecoderModeTransitionGate.OutputDecision> commit = executor.submit(
+                    () -> gate.commitOutput(1_000L, () -> {
+                        commitEntered.countDown();
+                        try {
+                            if (!releaseCommit.await(2L, TimeUnit.SECONDS)) {
+                                throw new AssertionError("Timed out holding fake render release");
+                            }
+                        } catch (InterruptedException error) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(error);
+                        }
+                    }));
+            assertTrue(commitEntered.await(1L, TimeUnit.SECONDS));
+            Future<?> begin = executor.submit(() -> {
+                beginStarted.countDown();
+                gate.begin(10);
+                beginCompleted.countDown();
+            });
+            assertTrue(beginStarted.await(1L, TimeUnit.SECONDS));
+            assertFalse(beginCompleted.await(100L, TimeUnit.MILLISECONDS));
+
+            releaseCommit.countDown();
+            assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
+                    commit.get(1L, TimeUnit.SECONDS));
+            begin.get(1L, TimeUnit.SECONDS);
+            assertTrue(beginCompleted.await(0L, TimeUnit.MILLISECONDS));
+            assertTrue(gate.isOutputGateActive());
+        } finally {
+            releaseCommit.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    public void outputAcceptedBeforeTransitionIsRecheckedAtCommit() {
+        DecoderModeTransitionGate gate = new DecoderModeTransitionGate();
+        AtomicInteger releases = new AtomicInteger();
+
+        assertEquals(DecoderModeTransitionGate.OutputDecision.ACCEPT,
+                gate.evaluateOutput(1_000L));
+        gate.begin(10);
+
+        assertEquals(DecoderModeTransitionGate.OutputDecision.DROP,
+                gate.commitOutput(1_000L, releases::incrementAndGet));
+        assertEquals(0, releases.get());
+        assertTrue(gate.isOutputGateActive());
     }
 }

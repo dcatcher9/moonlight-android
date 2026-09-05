@@ -26,16 +26,13 @@ public interface NvConnectionListener {
     void depthStatus(int phase);
 
     /**
-     * Host answer to a live video-mode request (Apollo extension). {@code requestId} is echoed
-     * verbatim and is the only correlation key. {@code status} is one of the
-     * {@code MoonBridge.VIDEO_MODE_ACK_*} values. The {@code applied*} values report what the host
-     * is actually running — a clamped apply is a success, not a failure. Geometry uses the
-     * request's wire coordinate system: Host SBS AI reports base dimensions, while Raw Full
-     * reports its already-packed desktop. {@code appliedBitrateKbps} is the host's post-budget
-     * encoder value.
+     * Correlated atomic presentation result. Geometry names deliberately distinguish the source
+     * desktop from the exact encoded frame that the decoder must prove before opening output.
      */
-    void videoModeAck(int requestId, int status, int appliedWidth, int appliedHeight,
-                      int appliedFramerateX100, int appliedBitrateKbps);
+    void videoModeAckV2(int status, int appliedMode, int flags, int requestId,
+                        int stateGeneration, int appliedSourceWidth, int appliedSourceHeight,
+                        int exactEncodedWidth, int exactEncodedHeight,
+                        int appliedFramerateX100, int effectiveEncoderBitrateKbps);
 
     /** Exact 88-byte Apollo host-SBS telemetry v1 state body. */
     void hostSbsTelemetryState(byte[] payload);

@@ -42,6 +42,26 @@ public class HostSbsCodecGeometryTest {
     }
 
     @Test
+    public void packedDimensionsFitBothCodecAxesWithOneScale() {
+        assertArrayEquals(new int[] {3456, 4096},
+                PreferenceConfiguration.hostSbsPackedDimensions(
+                        2160, 5120, MoonBridge.VIDEO_FORMAT_H264));
+        assertArrayEquals(new int[] {3456, 8192},
+                PreferenceConfiguration.hostSbsPackedDimensions(
+                        2160, 10240, MoonBridge.VIDEO_FORMAT_H265));
+    }
+
+    @Test
+    public void invalidHostSbsGeometryDoesNotDivideByZero() {
+        assertArrayEquals(new int[] {0, 0},
+                PreferenceConfiguration.hostSbsPackedDimensions(
+                        0, 2160, MoonBridge.VIDEO_FORMAT_H264));
+        assertArrayEquals(new int[] {0, 0},
+                PreferenceConfiguration.hostSbsPackedDimensions(
+                        3840, 0, MoonBridge.VIDEO_FORMAT_H265));
+    }
+
+    @Test
     public void rawSbsDefaultsToFullPerEyeResolution() {
         assertArrayEquals(new int[] {7680, 2160},
                 PreferenceConfiguration.rawSbsPackedDimensions(3840, 2160));

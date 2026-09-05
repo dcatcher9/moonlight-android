@@ -1,11 +1,11 @@
 package com.limelight.utils;
 
 /**
- * Historical DA-V2 patch-aligned bucket retained for probe calibration and offline evaluation.
+ * Historical DA-V2 patch-aligned bucket retained by legacy model manifests and offline evaluation.
  *
  * <p>LiteRT can resize dynamic tensors at the runtime layer, but the Android OpenCL delegate
  * currently accepts only fully static graphs. Production stream selection now uses ZipDepth's
- * manifests directly; this table remains for legacy shader calibration and offline tests.</p>
+ * manifests directly; this table is not part of live resize or reprojection.</p>
  */
 final class ClientSbsDepthInputShape {
     static final int PATCH_MULTIPLE = 14;

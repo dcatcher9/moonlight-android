@@ -23,91 +23,75 @@ public class XrStreamPresenterVideoModeAckTest {
     private static final int OUTSTANDING = 7;
 
     @Test
-    public void appliedAckForTheOutstandingRequestAdoptsTheAppliedValues() {
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_APPLIED));
-    }
-
-    @Test
-    public void needsReconnectStopsWaitingAndReconnects() {
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.NEEDS_RECONNECT,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT));
-    }
-
-    @Test
-    public void userClientSbsResolutionNeedsReconnectBypassesPresentationRollback() {
-        assertTrue(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
-                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.LiveQualityRequestOrigin.USER,
-                true));
-    }
-
-    @Test
-    public void onlyUserClientSbsResolutionNeedsReconnectBypassesPresentationRollback() {
-        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
-                MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.LiveQualityRequestOrigin.USER,
-                true));
-        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
-                MoonBridge.VIDEO_MODE_ACK_FAILED,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.LiveQualityRequestOrigin.USER,
-                true));
-        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
-                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW,
-                true));
-        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
-                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
+    public void nonV2HostsReconnectOnlyForWireModeCrossings() {
+        assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, false));
+        assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
                 XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.LiveQualityRequestOrigin.USER,
-                true));
-        assertFalse(XrStreamPresenter.shouldReconnectUserClientSbsWithoutRollback(
-                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.LiveQualityRequestOrigin.USER,
-                false));
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, false));
+        assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, true));
+        assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, false));
     }
 
     @Test
-    public void rejectedInvalidRevertsWithoutRetry() {
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.REJECTED_NO_RETRY,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID));
+    public void atomicAckAcceptsExactHostAiAndCappedOffGeometry() {
+        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_AI, 17,
+                5120, 2160, 8192, 1728, 9000, 180000));
+        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_OFF, 18,
+                5120, 2160, 4096, 1728, 9000, 180000));
     }
 
     @Test
-    public void transientFailureRevertsButPermitsRetry() {
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_FAILED));
+    public void atomicAckPermitsOnlyBoundedEvenRounding() {
+        // 4096 * 2112 / 5000 rounds to the even height 1730, so exact cross products differ.
+        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_OFF, 1,
+                5000, 2112, 4096, 1730, 6000, 100000));
+        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_OFF, 1,
+                5000, 2112, 4096, 1600, 6000, 100000));
+        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                1, MoonBridge.SBS_MODE_OFF, 1,
+                1920, 1080, 1920, 1080, 6000, 100000));
+        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_OFF, 0,
+                1920, 1080, 1920, 1080, 6000, 100000));
     }
 
     @Test
-    public void anAckForAnotherRequestIdIsStale() {
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.IGNORE_STALE,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING - 1,
-                        MoonBridge.VIDEO_MODE_ACK_APPLIED));
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.IGNORE_STALE,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING + 1,
-                        MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT));
+    public void atomicGenerationUsesUnsignedHalfRangeFreshnessIncludingWrap() {
+        assertTrue(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(0, 1));
+        assertTrue(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(-1, 1));
+        assertTrue(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(
+                0x7ffffffe, 0x80000001));
+        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(9, 9));
+        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(9, 8));
+        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(
+                1, 0x80000001));
+        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(1, 0));
     }
 
     @Test
-    public void anAckArrivingAfterTheRequestSettledIsStale() {
-        // A settled or timed-out request clears the outstanding id, so a late duplicate ack is a
-        // no-op rather than a second application.
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.IGNORE_STALE,
-                XrStreamPresenter.videoModeAckOutcome(-1, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_APPLIED));
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.IGNORE_STALE,
-                XrStreamPresenter.videoModeAckOutcome(0, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_APPLIED));
+    public void atomicFpsBitrateFastPathRequiresSameSourceAndExactDecoderRaster() {
+        StreamQualityTuple previous = new StreamQualityTuple("5120x2160", "90", 180000);
+        StreamQualityTuple fpsOnly = new StreamQualityTuple("5120x2160", "72", 180000);
+        StreamQualityTuple resized = new StreamQualityTuple("3840x2160", "72", 180000);
+
+        assertTrue(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+                false, previous, fpsOnly, 8192, 1728, 8192, 1728));
+        assertFalse(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+                true, previous, fpsOnly, 8192, 1728, 8192, 1728));
+        assertFalse(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+                false, previous, resized, 7680, 2160, 8192, 1728));
+        assertFalse(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+                false, previous, fpsOnly, 8192, 1728, 7680, 2160));
     }
 
     @Test
@@ -347,28 +331,16 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
-    public void anUnknownStatusRequiresMandatoryResynchronization() {
-        // Only the defined FAILED status proves rollback. A future status must not publish the
-        // previous tuple or consume panel-follow's retry budget.
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING, 99));
-    }
-
-    @Test
-    public void malformedOrUnknownAckRequiresResynchronization() {
-        XrStreamPresenter.AcknowledgedVideoMode valid =
-                XrStreamPresenter.acknowledgedVideoMode(
-                        new StreamQualityTuple("1920x1080", "90", 100000),
-                        1920, 1080, 9000, 90000);
-
-        assertFalse(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, valid));
-        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, null));
-        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC, valid));
-        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, null));
+    public void onlyDefinedAtomicAckStatusesAreKnown() {
+        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+                MoonBridge.VIDEO_MODE_ACK_APPLIED));
+        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID));
+        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+                MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT));
+        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+                MoonBridge.VIDEO_MODE_ACK_FAILED));
+        assertFalse(XrStreamPresenter.isKnownVideoModeAckStatus(99));
     }
 
     @Test
@@ -393,11 +365,7 @@ public class XrStreamPresenterVideoModeAckTest {
     @Test
     public void aClampedApplyIsAdoptedRatherThanReverted() {
         // The host clamps an oversized width to the codec ceiling and scales height to preserve
-        // aspect. That is still status=applied, so the outcome must adopt rather than fail.
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_APPLIED));
-
+        // aspect. The authoritative applied tuple must be adopted rather than the request.
         // Requested 5120x2160; the host packs 10240 wide, clamps to 8192 and reports 4096x1728.
         StreamQualityTuple applied = XrStreamPresenter.appliedTuple(4096, 1728, 6000, 118000);
         assertEquals("4096x1728", applied.resolution);
@@ -495,31 +463,17 @@ public class XrStreamPresenterVideoModeAckTest {
         assertNull(XrStreamPresenter.acknowledgedVideoMode(
                 request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
                 8194, 2160, 7200, 180000));
-        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, null));
-        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.REJECTED_NO_RETRY, null));
-        assertTrue(XrStreamPresenter.videoModeAckRequiresMandatoryResync(
-                XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, null));
     }
 
     @Test
-    public void malformedKnownRefusalReconnectDoesNotPersistRejectedUserTarget() {
+    public void onlyUserRequestsCommitStagedSettingsForResync() {
         XrStreamPresenter.LiveQualityRequestOrigin user =
                 XrStreamPresenter.LiveQualityRequestOrigin.USER;
         XrStreamPresenter.LiveQualityRequestOrigin panel =
                 XrStreamPresenter.LiveQualityRequestOrigin.PANEL_FOLLOW;
 
-        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
-                XrStreamPresenter.VideoModeAckOutcome.REJECTED_NO_RETRY, user));
-        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
-                XrStreamPresenter.VideoModeAckOutcome.FAILED_RETRYABLE, user));
-        assertTrue(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
-                XrStreamPresenter.VideoModeAckOutcome.NEEDS_RECONNECT, user));
-        assertTrue(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
-                XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED, user));
-        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForMalformedAckResync(
-                XrStreamPresenter.VideoModeAckOutcome.AMBIGUOUS_RESYNC, panel));
+        assertTrue(XrStreamPresenter.shouldCommitStagedSettingsForResync(user));
+        assertFalse(XrStreamPresenter.shouldCommitStagedSettingsForResync(panel));
     }
 
     @Test
@@ -551,12 +505,7 @@ public class XrStreamPresenterVideoModeAckTest {
     public void fiveKTwoKHostSbsAiIsAdoptedAtTheClampedSize() {
         // 5120x2160 in Host SBS AI packs to 10240 wide, over the 8192 codec ceiling, so the host
         // clamps the packed width and scales height to preserve aspect: per-eye lands near
-        // 4096x1728. That is status=applied, and the UI must show the clamped values rather than
-        // the request it did not get.
-        assertEquals(XrStreamPresenter.VideoModeAckOutcome.ADOPT_APPLIED,
-                XrStreamPresenter.videoModeAckOutcome(OUTSTANDING, OUTSTANDING,
-                        MoonBridge.VIDEO_MODE_ACK_APPLIED));
-
+        // 4096x1728. The UI must show the applied clamped values rather than the request.
         StreamQualityTuple applied = XrStreamPresenter.appliedTuple(4096, 1728, 9000, 130000);
         assertEquals("4096x1728", applied.resolution);
         assertEquals("90", applied.frameRate);

@@ -6,6 +6,10 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -72,6 +76,158 @@ public class Stereo3DRendererSchedulingTest {
         assertTrue(claim.compareAndSet(0L, 42L));
         assertFalse(Stereo3DRenderer.releaseInferenceClaimToken(claim, 41L));
         assertEquals(42L, claim.get());
+    }
+
+    @Test
+    public void postSwapCaptureTicketBindsGenerationAndOutputAttachment() {
+        long ticket = Stereo3DRenderer.postSwapCaptureTicket(9, 4);
+
+        assertTrue(Stereo3DRenderer.isPostSwapCaptureTicketCurrent(ticket, 9, 4));
+        assertFalse(Stereo3DRenderer.isPostSwapCaptureTicketCurrent(ticket, 10, 4));
+        assertFalse(Stereo3DRenderer.isPostSwapCaptureTicketCurrent(ticket, 9, 5));
+        assertFalse(Stereo3DRenderer.isPostSwapCaptureTicketCurrent(0L, 9, 4));
+        assertEquals(0L, Stereo3DRenderer.postSwapCaptureTicket(0, 4));
+        assertEquals(0L, Stereo3DRenderer.postSwapCaptureTicket(9, 0));
+    }
+
+    @Test
+    public void decoderCallbackRequiresTheExactLiveRegistrationAndSurfaceGeneration() {
+        assertTrue(Stereo3DRenderer.isFrameCallbackCurrent(
+                41L, 41L, true, true, false, false, 7, 7));
+        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+                40L, 41L, true, true, false, false, 7, 7));
+        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+                41L, 41L, false, true, false, false, 7, 7));
+        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+                41L, 41L, true, false, false, false, 7, 7));
+        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+                41L, 41L, true, true, true, false, 7, 7));
+        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+                41L, 41L, true, true, false, true, 7, 7));
+        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+                41L, 41L, true, true, false, false, 6, 7));
+    }
+
+    @Test
+    public void surfaceTextureCallbacksUseOneExplicitUrgentDisplayLooper() throws IOException {
+        String source = rendererSource();
+        String constructor = source.substring(
+                source.indexOf("public Stereo3DRenderer(GLSurfaceView view,"),
+                source.indexOf("/** Immutable copy of the processor's reused"));
+        assertTrue(constructor.contains("new HandlerThread("));
+        assertTrue(constructor.contains("Process.THREAD_PRIORITY_URGENT_DISPLAY"));
+        assertTrue(constructor.contains("new Handler(frameCallbackThread.getLooper())"));
+        assertTrue(constructor.contains("In Normal/Host modes this Looper remains idle"));
+
+        String registration = source.substring(
+                source.indexOf("private void registerFrameAvailableListener"),
+                source.indexOf("private void invalidateFrameCallbackRegistration"));
+        assertTrue(registration.contains(
+                "texture.setOnFrameAvailableListener(listener, frameCallbackHandler)"));
+        assertFalse(source.contains("setOnFrameAvailableListener(this)"));
+
+        String surfaceCreation = source.substring(
+                source.indexOf("private void onSurfaceCreatedLocked"),
+                source.indexOf("private void logGlCapabilities"));
+        String surfaceReplacement = source.substring(
+                source.indexOf("private void onSurfaceChangedLocked"),
+                source.indexOf("private boolean initializeFbo()"));
+        assertTrue(surfaceCreation.contains(
+                "registerFrameAvailableListener(videoSurfaceTexture)"));
+        assertTrue(surfaceReplacement.contains(
+                "registerFrameAvailableListener(videoSurfaceTexture)"));
+    }
+
+    @Test
+    public void callbackBoundariesRetokenizeBeforeDiscardAndTerminalShutdownNeverJoins()
+            throws IOException {
+        String source = rendererSource();
+        String callback = source.substring(
+                source.indexOf("private void onFrameAvailable("),
+                source.indexOf("static boolean isFrameCallbackCurrent"));
+        assertEquals(2, occurrences(callback, "isFrameCallbackCurrent("));
+        assertTrue(callback.contains("queueFrameDrain(surfaceTexture, callbackGeneration)"));
+        assertFalse(callback.contains("GLES"));
+        assertFalse(callback.contains("updateTexImage"));
+        assertFalse(callback.contains("captureLatestFrameIfReady"));
+        assertFalse(callback.contains("presentClientSbs"));
+
+        String resize = source.substring(
+                source.indexOf("private int discardPendingFrameAndAdvanceLiveResizeGeneration"),
+                source.indexOf("static int advanceLiveResizeFrameBoundary"));
+        assertTrue(resize.indexOf("registerFrameAvailableListener(texture)")
+                < resize.indexOf("advanceLiveResizeFrameBoundary("));
+
+        String hdrCommit = source.substring(
+                source.indexOf("private void commitHdrInputTransitionOnGlThread"),
+                source.indexOf("public boolean isHdrOutputCapable"));
+        int hdrRegistration = hdrCommit.indexOf("registerFrameAvailableListener(texture)");
+        int hdrDiscard = hdrCommit.indexOf("texture.updateTexImage()");
+        int hdrCommitState = hdrCommit.indexOf("hdrInputTransition.commit(transitionGeneration)");
+        assertTrue(hdrRegistration >= 0 && hdrRegistration < hdrDiscard);
+        assertTrue(hdrDiscard < hdrCommitState);
+
+        String shutdown = source.substring(
+                source.indexOf("private void shutdownFrameCallbackThread"),
+                source.indexOf("private void invalidateQueuedFrameDrain"));
+        assertTrue(shutdown.contains(
+                "frameCallbackThreadStopped.compareAndSet(false, true)"));
+        assertTrue(shutdown.indexOf("invalidateFrameCallbackRegistration()")
+                < shutdown.indexOf("frameCallbackThread.quitSafely()"));
+        assertTrue(shutdown.contains("frameCallbackThread.quitSafely()"));
+        assertFalse(shutdown.contains("join("));
+
+        String terminalEntry = source.substring(
+                source.indexOf("public void onSurfaceDestroyedAsync"),
+                source.indexOf("private boolean awaitTerminalWorkerCleanup"));
+        assertTrue(terminalEntry.contains("shutdownFrameCallbackThread()"));
+    }
+
+    @Test
+    public void adoptedResultCannotStartNextCaptureBeforePresentation() throws IOException {
+        String source = Files.readString(new File(
+                "src/main/java/com/limelight/utils/Stereo3DRenderer.java").toPath(),
+                StandardCharsets.UTF_8);
+        String draw = source.substring(
+                source.indexOf("private void onDrawFrameLocked"),
+                source.indexOf("private void scheduleClientSbsModeSwitchCompletionAfterSwap"));
+        assertTrue(draw.contains("if (!resultAdopted)"));
+        assertTrue(draw.indexOf("presentClientSbs();")
+                < draw.indexOf("scheduleCaptureAfterSwap("));
+
+        String inferenceAdoption = source.substring(
+                source.indexOf("private boolean adoptLatestGpuInferenceResultLocked"),
+                source.indexOf("private boolean adoptNearIdenticalReuseLocked"));
+        String reuseAdoption = source.substring(
+                source.indexOf("private boolean adoptNearIdenticalReuseLocked"),
+                source.indexOf("private boolean closeGpuInferenceOnWorker"));
+        assertFalse(inferenceAdoption.contains("captureLatestFrameIfReady();"));
+        assertFalse(reuseAdoption.contains("captureLatestFrameIfReady();"));
+    }
+
+    @Test
+    public void frameDrainHotPathReusesOneRunnableAndSnapshotsAGuardedTicket()
+            throws IOException {
+        String source = rendererSource();
+        assertTrue(source.contains(
+                "private final Runnable frameDrainRunnable = this::drainQueuedFrameWithoutSwap"));
+
+        String enqueue = source.substring(
+                source.indexOf("private void queueFrameDrain("),
+                source.indexOf("private void drainQueuedFrameWithoutSwap()"));
+        assertTrue(enqueue.contains("synchronized (frameLock)"));
+        assertTrue(enqueue.contains("glSurfaceView.queueEvent(frameDrainRunnable)"));
+        assertFalse(enqueue.contains("queueEvent(() ->"));
+        assertFalse(enqueue.contains("new Runnable"));
+
+        String drain = source.substring(
+                source.indexOf("private void drainQueuedFrameWithoutSwap()"),
+                source.indexOf("private void drainLatestFrameWithoutSwap("));
+        assertTrue(drain.contains("synchronized (frameLock)"));
+        assertTrue(drain.indexOf("token = queuedFrameDrainToken")
+                < drain.indexOf("clearQueuedFrameDrainTicketLocked()"));
+        assertTrue(drain.indexOf("clearQueuedFrameDrainTicketLocked()")
+                < drain.indexOf("drainLatestFrameWithoutSwap("));
     }
 
     @Test
@@ -184,5 +340,21 @@ public class Stereo3DRendererSchedulingTest {
         assertFalse(Stereo3DRenderer.offerControlMessage(
                 queue, "shutdown", 1, TimeUnit.MILLISECONDS));
         assertEquals("frame", queue.poll());
+    }
+
+    private static String rendererSource() throws IOException {
+        return Files.readString(new File(
+                "src/main/java/com/limelight/utils/Stereo3DRenderer.java").toPath(),
+                StandardCharsets.UTF_8);
+    }
+
+    private static int occurrences(String text, String needle) {
+        int count = 0;
+        int offset = 0;
+        while ((offset = text.indexOf(needle, offset)) >= 0) {
+            count++;
+            offset += needle.length();
+        }
+        return count;
     }
 }

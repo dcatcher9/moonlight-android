@@ -3,6 +3,9 @@ package com.limelight.ui;
 import android.content.Context;
 import android.graphics.PixelFormat;
 import android.opengl.GLSurfaceView;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.Surface;
@@ -24,6 +27,7 @@ import javax.microedition.khronos.egl.EGLDisplay;
 
 /** Owns the single XR presentation route, guarded decoder/GL surface handoffs, and input bridge. */
 public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback {
+    private static final long DECODER_SURFACE_HANDOFF_TIMEOUT_MS = 2_000L;
 
     /**
      * Prefer a 10-bit window for Client SBS so PQ values survive the final EGL surface. Some XR
@@ -135,6 +139,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private volatile Surface mClientSbsSurface;
     private volatile Surface mBoundDecoderSurface;
     private SurfaceSwitchCallback mPendingClientSbsSwitch;
+    /** One absolute owner deadline shared by every stage of the current mode handoff. */
+    private long mPendingClientSbsSwitchDeadlineMs;
     private volatile int mClientSbsSwitchGeneration;
     /** EGL attachment/detachment identity is independent from the renderer input generation. */
     private int mClientSbsEglOperationGeneration;
@@ -146,12 +152,16 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private int mPendingClientSbsResizeGeneration;
     private int mPendingClientSbsResizeWidth;
     private int mPendingClientSbsResizeHeight;
+    private int mHostSurfaceResizeGeneration;
+    private SurfaceSwitchCallback mPendingHostSurfaceResize;
     /** Latest host clamp received while the current replacement EGL surface is still attaching. */
     private SurfaceSwitchCallback mQueuedClientSbsResize;
     private int mQueuedClientSbsResizeGeneration;
     private int mQueuedClientSbsResizeWidth;
     private int mQueuedClientSbsResizeHeight;
     private int mClientSbsResizeTimeoutToken;
+    /** Absolute deadline currently owned by the active Client-SBS resize stage. */
+    private long mClientSbsResizeStageDeadlineMs;
     /** Active resize generation causally matched by the current post-ACK decoder transition. */
     private int mClientSbsPostAckResizeGeneration;
     private int mClientSbsPostAckResizeWidth;
@@ -182,6 +192,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private android.graphics.SurfaceTexture mDummySurfaceTexture;
     private Surface mDummySurface;
+    private final Handler mDeadlineHandler = new Handler(Looper.getMainLooper());
+    private final Object mDecoderSurfaceHandoffLock = new Object();
+    private int mDecoderSurfaceHandoffGeneration;
+    private boolean mDecoderSurfaceHandoffPending;
+    private Surface mDecoderSurfaceHandoffTarget;
+    private SurfaceSwitchCallback mDecoderSurfaceHandoffCallback;
+    private Game.DecoderOutputSurfaceSwitchRequest mDecoderSurfaceHandoffRequest;
+    /** Blocks ordinary UI binds between the synchronous GL recovery park and replacement input. */
+    private volatile boolean mClientSbsContextRecoveryParked;
 
     // Set once teardown starts so the GL EGLWindowSurfaceFactory.destroySurface() callback (which
     // fires on the GL thread as the view detaches) doesn't try to rebind the decoder to an
@@ -230,10 +249,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // Visibility is retained by this container before the renderer/processor exists and
             // republished after every Client-SBS GL generation.
             mStereoRenderer.setStatsPanelVisible(mClientSbsStatsVisible);
-            // Normal and Host SBS don't execute this pipeline, so their Stats panel must not
-            // create Client-SBS GL timer queries or per-stage counter contention. The renderer's
-            // cheap health ring is deliberately independent and only receives new copies while
-            // Client SBS actually processes depth.
+            // Normal and Host SBS don't execute this pipeline. In Client SBS, both timer queries
+            // and the health-readback ring stay off unless Stats or explicit perf logging consumes
+            // them, avoiding hidden per-stage counter contention and GPU-to-CPU maps.
             mStereoRenderer.setPerformanceSamplingEnabled(
                     clientSbsDiagnosticsEnabled() && mStereoRenderer.isClientSbs());
         }
@@ -468,6 +486,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     public void switchToClientSbs(boolean enable, boolean hostSbsTarget,
                                   SurfaceSwitchCallback callback) {
+        if (callback == null) {
+            return;
+        }
+        if (mPendingClientSbsSwitch != null) {
+            // A second direct mode request must not replace or complete the active owner. The
+            // presenter can retry after that exact transaction settles.
+            callback.onComplete(false);
+            return;
+        }
         // Available in any host-SBS presentation (Raw or AI). The presentations
         // (Normal / Host SBS / Client SBS AI) are mutually exclusive: entering Client SBS runs
         // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
@@ -480,10 +507,24 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
         final int switchGeneration = ++mClientSbsSwitchGeneration;
         final int eglOperationGeneration = nextClientSbsEglOperationGeneration();
+        final long switchDeadlineMs = newDecoderSurfaceHandoffDeadlineMs();
         mPendingClientSbsSwitch = callback;
+        mPendingClientSbsSwitchDeadlineMs = switchDeadlineMs;
         mPendingClientSbsSwitchEglGeneration = eglOperationGeneration;
         mPendingClientSbsEnable = enable;
         mPendingHostSbsTarget = hostSbsTarget;
+        mDeadlineHandler.postAtTime(() -> {
+            if (switchGeneration == mClientSbsSwitchGeneration
+                    && mPendingClientSbsSwitch != null) {
+                if (!currentDecoderSurfaceHandoffDeadlineOwnsFailure()) {
+                    return;
+                }
+                LimeLog.severe(enable
+                        ? "Timed out waiting for generation-acknowledged Client SBS surfaces"
+                        : "Timed out waiting for Client SBS EGL detachment");
+                completeClientSbsSwitch(switchGeneration, false);
+            }
+        }, switchDeadlineMs);
 
         if (enable) {
             // Client SBS may have been inactive while Normal/Host changed resolution. Re-pin the
@@ -499,50 +540,56 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
+        }
 
-            // Keep the last decoded SceneCore picture visible throughout this handoff. The
-            // presenter commits the new interpretation only after a fresh packed output swap.
-            if (!ClientSbsPresentationRetirement.parkDecoderRetainingPresentation(
-                    () -> bindDecoderSurface(mDummySurface))) {
+        // Keep the last decoded SceneCore picture visible throughout this handoff. The presenter
+        // commits the target interpretation only after its fresh presentation proof.
+        bindDecoderSurfaceAsync(mDummySurface, switchDeadlineMs,
+                success -> continueClientSbsSwitchAfterDecoderPark(
+                        switchGeneration, eglOperationGeneration, enable, glView, success));
+    }
+
+    private void continueClientSbsSwitchAfterDecoderPark(
+            int switchGeneration, int eglOperationGeneration, boolean enable,
+            GLSurfaceView glView, boolean success) {
+        if (mDestroyed || switchGeneration != mClientSbsSwitchGeneration
+                || eglOperationGeneration != mPendingClientSbsSwitchEglGeneration
+                || mPendingClientSbsSwitch == null || mPendingClientSbsEnable != enable) {
+            return;
+        }
+        if (!success) {
+            completeClientSbsSwitch(switchGeneration, false);
+            return;
+        }
+        if (SystemClock.uptimeMillis() >= mPendingClientSbsSwitchDeadlineMs) {
+            completeClientSbsSwitch(switchGeneration, false);
+            return;
+        }
+
+        if (enable) {
+            // Size the XR surface before onResume() so EGL creates its window at the target size.
+            boolean surfaceReady;
+            try {
+                surfaceReady = mXrPresenter.setClientSbsSurfaceSize(true);
+            } catch (RuntimeException error) {
+                LimeLog.severe("Unable to size the Client SBS SceneCore surface: " + error);
+                surfaceReady = false;
+            }
+            Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
+            if (target == null || !target.isValid()) {
                 completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
-
-            // Size the XR surface for full negotiated-resolution packed Client SBS. Must happen before
-            // onResume() so EGL creates its window surface at the new size.
-            mXrPresenter.setClientSbsSurfaceSize(true);
-            mExpectedEglOutputSurface = mXrPresenter.getVideoSurface();
+            mExpectedEglOutputSurface = target;
             mCreatedEglAttachGeneration = 0;
             mRequestedEglAttachGeneration = eglOperationGeneration;
             mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
-
-            // XR surface is now free. Resume the GLSurfaceView so EGL connects to it.
             glView.onResume();
-
         } else {
-            // Retain the packed Client SBS buffer while the decoder leaves the renderer-owned
-            // surface. The presenter switches interpretation at the fresh direct-output edge.
-            if (!ClientSbsPresentationRetirement.parkDecoderRetainingPresentation(
-                    () -> bindDecoderSurface(mDummySurface))) {
-                completeClientSbsSwitch(switchGeneration, false);
-                return;
-            }
-
-            // onPause() only requests a pause. Wait for the EGL factory to acknowledge this exact
-            // generation after eglDestroySurface() releases the XR producer.
+            // onPause() only requests a pause. Wait for this exact eglDestroySurface() ack.
             mRequestedEglDetachGeneration = eglOperationGeneration;
             glView.onPause();
         }
-
-        postDelayed(() -> {
-            if (switchGeneration == mClientSbsSwitchGeneration
-                    && mPendingClientSbsSwitch != null) {
-                LimeLog.severe(enable
-                        ? "Timed out waiting for generation-acknowledged Client SBS surfaces"
-                        : "Timed out waiting for Client SBS EGL detachment");
-                completeClientSbsSwitch(switchGeneration, false);
-            }
-        }, 2000);
     }
 
     /**
@@ -589,10 +636,46 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
 
         mXrPresenter.onClientSbsOutputCapabilityChanged();
-        boolean success = surface == mClientSbsSurface && mBoundDecoderSurface == surface;
-        if (!success) {
-            success = game != null && bindDecoderSurface(surface);
+        if (contextRecovery) {
+            // onSurfaceReady proves GL has released the retired decoder input and created its
+            // replacement. Ordinary asynchronous handoffs may safely resume now.
+            mClientSbsContextRecoveryParked = false;
         }
+        long ownerDeadlineMs = pendingEnable
+                ? mPendingClientSbsSwitchDeadlineMs
+                : pendingResize
+                ? mClientSbsResizeStageDeadlineMs
+                : newDecoderSurfaceHandoffDeadlineMs();
+        bindDecoderSurfaceAsync(surface, ownerDeadlineMs,
+                success -> finishClientSbsRendererSurfaceBind(
+                        surface, surfaceGeneration, eglAttachGeneration, success));
+    }
+
+    private void finishClientSbsRendererSurfaceBind(
+            Surface surface, int surfaceGeneration, int eglAttachGeneration, boolean success) {
+        if (mDestroyed || surface == null || eglAttachGeneration <= 0
+                || eglAttachGeneration != mRequestedEglAttachGeneration
+                || mXrPresenter == null
+                || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
+            return;
+        }
+
+        boolean pendingEnable = mPendingClientSbsSwitch != null
+                && mPendingClientSbsEnable
+                && surfaceGeneration == mClientSbsSwitchGeneration
+                && eglAttachGeneration == mPendingClientSbsSwitchEglGeneration;
+        boolean pendingResize = mPendingClientSbsResize != null
+                && ClientSbsResizePolicy.acceptsRendererReady(mClientSbsResizeStage)
+                && surfaceGeneration == mActiveClientSbsDecoderGeneration
+                && eglAttachGeneration == mPendingClientSbsResizeGeneration;
+        boolean contextRecovery = mPendingClientSbsSwitch == null
+                && mPendingClientSbsResize == null
+                && surfaceGeneration == mActiveClientSbsDecoderGeneration
+                && mStereoRenderer != null && mStereoRenderer.isClientSbs();
+        if (!pendingEnable && !pendingResize && !contextRecovery) {
+            return;
+        }
+
         if (success) {
             mClientSbsSurface = surface;
             mActiveClientSbsDecoderGeneration = surfaceGeneration;
@@ -671,21 +754,34 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 || mDummySurface == null || !mDummySurface.isValid()) {
             return false;
         }
-        synchronized (this) {
+        synchronized (mDecoderSurfaceHandoffLock) {
             // Re-entry may create a new EGL context after the current mode switch already parked
             // MediaCodec and advanced the requested generation. The persistent dummy itself is
-            // the required acknowledgement, independent of the retired SurfaceTexture's tag.
-            if (mBoundDecoderSurface == mDummySurface) {
-                return true;
+            // the required acknowledgement, independent of the retired SurfaceTexture's tag. We
+            // still reassert it synchronously so an already-running async bind cannot become the
+            // last physical MediaCodec target after this callback returns.
+            if (mBoundDecoderSurface != mDummySurface) {
+                if (surfaceGeneration != mActiveClientSbsDecoderGeneration) {
+                    return false;
+                }
+                if (mBoundDecoderSurface != oldSurface || mClientSbsSurface != oldSurface) {
+                    return false;
+                }
             }
-            if (surfaceGeneration != mActiveClientSbsDecoderGeneration) {
-                return false;
-            }
-            if (mBoundDecoderSurface != oldSurface || mClientSbsSurface != oldSurface) {
-                return false;
-            }
-            return bindDecoderSurface(mDummySurface);
+            mClientSbsContextRecoveryParked = true;
         }
+
+        // Invalidate before entering MediaCodec so no queued UI handoff can reclaim oldSurface.
+        // The flag remains set until the replacement renderer input reaches the UI callback.
+        invalidateDecoderSurfaceHandoff(true);
+        boolean parked = game != null
+                && game.setDecoderOutputSurfaceForGlRecovery(mDummySurface);
+        if (parked) {
+            mBoundDecoderSurface = mDummySurface;
+        } else {
+            mClientSbsContextRecoveryParked = false;
+        }
+        return parked;
     }
 
     private void onClientSbsEglDetached(int detachGeneration) {
@@ -712,15 +808,39 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
         // Client -> Normal or Raw Half goes directly to W x H; Client -> Host SBS AI goes directly
         // to its packed target. Only a Raw Full transport boundary reconnects before this path.
-        mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
-        Surface target = mXrPresenter.getVideoSurface();
-        completeClientSbsSwitch(mClientSbsSwitchGeneration,
-                target != null && target.isValid() && bindDecoderSurface(target));
+        int switchGeneration = mClientSbsSwitchGeneration;
+        if (SystemClock.uptimeMillis() >= mPendingClientSbsSwitchDeadlineMs) {
+            completeClientSbsSwitch(switchGeneration, false);
+            return;
+        }
+        boolean surfaceReady;
+        try {
+            surfaceReady = mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
+        } catch (RuntimeException error) {
+            LimeLog.severe("Unable to size the Host SceneCore surface after Client SBS: " + error);
+            surfaceReady = false;
+        }
+        Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
+        if (target == null || !target.isValid()) {
+            completeClientSbsSwitch(switchGeneration, false);
+            return;
+        }
+        bindDecoderSurfaceAsync(target, mPendingClientSbsSwitchDeadlineMs, success -> {
+            if (mDestroyed || switchGeneration != mClientSbsSwitchGeneration
+                    || mPendingClientSbsSwitch == null || mPendingClientSbsEnable
+                    || detachGeneration != mPendingClientSbsSwitchEglGeneration) {
+                return;
+            }
+            completeClientSbsSwitch(switchGeneration, success);
+        });
     }
 
     private void completeClientSbsSwitch(int generation, boolean success) {
         if (generation != mClientSbsSwitchGeneration) {
             return;
+        }
+        if (!success) {
+            cancelDecoderSurfaceHandoffAfterFailure();
         }
         SurfaceSwitchCallback callback = mPendingClientSbsSwitch;
         if (callback == null) {
@@ -732,6 +852,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         boolean completedEnable = mPendingClientSbsEnable;
         mPendingClientSbsSwitch = null;
         mPendingClientSbsSwitchEglGeneration = 0;
+        mPendingClientSbsSwitchDeadlineMs = 0L;
         if (success && !completedEnable) {
             mActiveClientSbsDecoderGeneration = 0;
             mClientSbsSurface = null;
@@ -755,18 +876,183 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mClientSbsEglOperationGeneration;
     }
 
-    private synchronized boolean bindDecoderSurface(Surface surface) {
-        if (surface == null || !surface.isValid()) {
-            return false;
+    /**
+     * Queues an ordinary decoder handoff without making the UI thread enter a vendor codec call.
+     * Only the exact latest target may update {@link #mBoundDecoderSurface} or complete its owner.
+     */
+    private void bindDecoderSurfaceAsync(Surface surface, long ownerDeadlineMs,
+                                         SurfaceSwitchCallback callback) {
+        if (callback == null) {
+            return;
         }
-        if (surface == mBoundDecoderSurface) {
-            return true;
+        if (surface == null || !surface.isValid() || mDestroyed
+                || SystemClock.uptimeMillis() >= ownerDeadlineMs) {
+            callback.onComplete(false);
+            return;
         }
-        boolean success = game.setDecoderOutputSurface(surface);
-        if (success) {
-            mBoundDecoderSurface = surface;
+
+        final int handoffGeneration;
+        final boolean alreadyBound;
+        final SurfaceSwitchCallback supersededCallback;
+        synchronized (mDecoderSurfaceHandoffLock) {
+            supersededCallback = mDecoderSurfaceHandoffPending
+                    ? mDecoderSurfaceHandoffCallback : null;
+            handoffGeneration = nextDecoderSurfaceHandoffGenerationLocked();
+            mDecoderSurfaceHandoffPending = true;
+            mDecoderSurfaceHandoffTarget = surface;
+            mDecoderSurfaceHandoffCallback = callback;
+            mDecoderSurfaceHandoffRequest = null;
+            alreadyBound = surface == mBoundDecoderSurface
+                    && supersededCallback == null
+                    && !mClientSbsContextRecoveryParked;
         }
-        return success;
+        if (supersededCallback != null) {
+            // Unexpected overlap is a transaction failure for the retired owner, never a silent
+            // success borrowed from the newer target.
+            post(() -> supersededCallback.onComplete(false));
+        }
+
+        if (alreadyBound) {
+            // Keep every completion asynchronous so callers cannot accidentally re-enter a mode
+            // transaction midway through its setup.
+            post(() -> completeDecoderSurfaceHandoff(
+                    handoffGeneration, surface, true, false));
+        } else {
+            Game.DecoderOutputSurfaceSwitchRequest queuedRequest = null;
+            synchronized (mDecoderSurfaceHandoffLock) {
+                // Linearize request creation/storage with the GL thread's recovery-park flag.
+                // Game only queues work here; the vendor call runs later on the decoder worker.
+                // Once recovery publishes its flag, no newer ordinary request can outrank the
+                // synchronous dummy bind that must be physically last before EGL teardown.
+                if (isDecoderSurfaceHandoffCurrent(
+                        handoffGeneration, mDecoderSurfaceHandoffGeneration,
+                        mDecoderSurfaceHandoffPending, mDestroyed,
+                        surface == mDecoderSurfaceHandoffTarget)
+                        && !mClientSbsContextRecoveryParked && game != null) {
+                    queuedRequest = game.setDecoderOutputSurfaceAsync(
+                            surface, ownerDeadlineMs,
+                            success -> completeDecoderSurfaceHandoff(
+                                    handoffGeneration, surface, success, false));
+                    if (queuedRequest != null) {
+                        mDecoderSurfaceHandoffRequest = queuedRequest;
+                    }
+                }
+            }
+            if (queuedRequest == null) {
+                completeDecoderSurfaceHandoff(
+                        handoffGeneration, surface, false, false);
+                return;
+            }
+        }
+
+        mDeadlineHandler.postAtTime(() -> completeDecoderSurfaceHandoff(
+                handoffGeneration, surface, false, true), ownerDeadlineMs);
+    }
+
+    private void completeDecoderSurfaceHandoff(int handoffGeneration, Surface surface,
+                                               boolean success, boolean timedOut) {
+        if (timedOut && !decoderSurfaceHandoffDeadlineOwnsFailure(
+                handoffGeneration, surface)) {
+            return;
+        }
+        SurfaceSwitchCallback callback;
+        synchronized (mDecoderSurfaceHandoffLock) {
+            if (!isDecoderSurfaceHandoffCurrent(
+                    handoffGeneration, mDecoderSurfaceHandoffGeneration,
+                    mDecoderSurfaceHandoffPending, mDestroyed,
+                    surface == mDecoderSurfaceHandoffTarget)) {
+                return;
+            }
+            mDecoderSurfaceHandoffPending = false;
+            mDecoderSurfaceHandoffTarget = null;
+            callback = mDecoderSurfaceHandoffCallback;
+            mDecoderSurfaceHandoffCallback = null;
+            mDecoderSurfaceHandoffRequest = null;
+            success = success && surface.isValid();
+            if (success) {
+                mBoundDecoderSurface = surface;
+            }
+        }
+        if (timedOut) {
+            cancelDecoderSurfaceHandoffAfterFailure();
+            LimeLog.severe("Timed out waiting for decoder output-surface handoff");
+        }
+        callback.onComplete(success);
+    }
+
+    /** Invalidates an ordinary request before a synchronous GL recovery park or teardown. */
+    private void invalidateDecoderSurfaceHandoff(boolean reportFailure) {
+        SurfaceSwitchCallback callback;
+        Game.DecoderOutputSurfaceSwitchRequest request;
+        synchronized (mDecoderSurfaceHandoffLock) {
+            nextDecoderSurfaceHandoffGenerationLocked();
+            callback = mDecoderSurfaceHandoffPending
+                    ? mDecoderSurfaceHandoffCallback : null;
+            mDecoderSurfaceHandoffPending = false;
+            mDecoderSurfaceHandoffTarget = null;
+            mDecoderSurfaceHandoffCallback = null;
+            request = mDecoderSurfaceHandoffRequest;
+            mDecoderSurfaceHandoffRequest = null;
+        }
+        if (request != null) {
+            request.cancel();
+        }
+        if (reportFailure && callback != null) {
+            post(() -> callback.onComplete(false));
+        }
+    }
+
+    private void cancelDecoderSurfaceHandoffAfterFailure() {
+        if (game != null) {
+            game.cancelPendingDecoderOutputSurfaceSwitches();
+        }
+        invalidateDecoderSurfaceHandoff(false);
+    }
+
+    private int nextDecoderSurfaceHandoffGenerationLocked() {
+        mDecoderSurfaceHandoffGeneration++;
+        if (mDecoderSurfaceHandoffGeneration <= 0) {
+            mDecoderSurfaceHandoffGeneration = 1;
+        }
+        return mDecoderSurfaceHandoffGeneration;
+    }
+
+    static boolean isDecoderSurfaceHandoffCurrent(
+            int requestGeneration, int activeGeneration, boolean pending,
+            boolean destroyed, boolean exactTarget) {
+        return requestGeneration > 0 && requestGeneration == activeGeneration
+                && pending && !destroyed && exactTarget;
+    }
+
+    private static long newDecoderSurfaceHandoffDeadlineMs() {
+        return SystemClock.uptimeMillis() + DECODER_SURFACE_HANDOFF_TIMEOUT_MS;
+    }
+
+    private boolean decoderSurfaceHandoffDeadlineOwnsFailure(
+            int handoffGeneration, Surface surface) {
+        Game.DecoderOutputSurfaceSwitchRequest request;
+        synchronized (mDecoderSurfaceHandoffLock) {
+            if (!isDecoderSurfaceHandoffCurrent(
+                    handoffGeneration, mDecoderSurfaceHandoffGeneration,
+                    mDecoderSurfaceHandoffPending, mDestroyed,
+                    surface == mDecoderSurfaceHandoffTarget)) {
+                return false;
+            }
+            request = mDecoderSurfaceHandoffRequest;
+        }
+        return request == null || request.cancelAtDeadline();
+    }
+
+    /** Used by an outer multi-stage owner deadline before it declares the transaction failed. */
+    private boolean currentDecoderSurfaceHandoffDeadlineOwnsFailure() {
+        Game.DecoderOutputSurfaceSwitchRequest request;
+        synchronized (mDecoderSurfaceHandoffLock) {
+            if (!mDecoderSurfaceHandoffPending) {
+                return true;
+            }
+            request = mDecoderSurfaceHandoffRequest;
+        }
+        return request == null || request.cancelAtDeadline();
     }
 
     /**
@@ -888,6 +1174,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         // On failure, report through the newest queued request because it owns the presenter's
         // currently armed confirmation boundary.
+        if (!success) {
+            cancelDecoderSurfaceHandoffAfterFailure();
+        }
         SurfaceSwitchCallback callback = mQueuedClientSbsResize != null
                 ? mQueuedClientSbsResize : mPendingClientSbsResize;
         mClientSbsResizeTimeoutToken++;
@@ -906,6 +1195,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mPendingClientSbsResizeGeneration = 0;
         mPendingClientSbsResizeWidth = 0;
         mPendingClientSbsResizeHeight = 0;
+        mClientSbsResizeStageDeadlineMs = 0L;
         clearQueuedClientSbsResize();
         clearClientSbsPostAckResizeBoundary();
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
@@ -941,6 +1231,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mClientSbsResizeTimeoutToken++;
             clearQueuedClientSbsResize();
             clearClientSbsPostAckResizeBoundary();
+            mClientSbsResizeStageDeadlineMs = 0L;
             mClientSbsResizeStage = ClientSbsResizePolicy.Stage.IDLE;
             callback.onComplete(false);
         }
@@ -1098,9 +1389,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             timeoutMillis = Math.max(1L, coldPollMillis);
         }
         if (timeoutMillis <= 0L) {
+            mClientSbsResizeStageDeadlineMs = 0L;
             return;
         }
-        postDelayed(() -> {
+        final long stageDeadlineMs = nowMillis + timeoutMillis;
+        mClientSbsResizeStageDeadlineMs = stageDeadlineMs;
+        mDeadlineHandler.postAtTime(() -> {
             if (timeoutToken != mClientSbsResizeTimeoutToken) {
                 return;
             }
@@ -1146,6 +1440,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                     armClientSbsResizeTimeoutForActiveStage();
                     return;
                 }
+                if (!currentDecoderSurfaceHandoffDeadlineOwnsFailure()) {
+                    return;
+                }
                 String boundary;
                 if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
                     boundary = "EGL detachment";
@@ -1162,24 +1459,80 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                         + " at " + width + "x" + height);
                 failClientSbsResizeChain();
             }
-        }, timeoutMillis);
+        }, stageDeadlineMs);
     }
 
-    public boolean resizeHostSbsSurface(boolean sbs) {
-        if (mXrPresenter == null || mDestroyed || mDummySurface == null
-                || !mDummySurface.isValid()) {
+    public boolean resizeHostSbsSurface(boolean sbs, int logicalWidth, int logicalHeight,
+                                        SurfaceSwitchCallback callback) {
+        if (callback == null || mXrPresenter == null || mDestroyed || mDummySurface == null
+                || !mDummySurface.isValid() || mPendingHostSurfaceResize != null
+                || logicalWidth <= 0 || logicalHeight <= 0) {
             return false;
         }
-        // Park the decoder on the persistent dummy surface while the XR surface is resized.
-        if (!bindDecoderSurface(mDummySurface)) {
-            return false;
+
+        final int resizeGeneration = ++mHostSurfaceResizeGeneration;
+        final long resizeDeadlineMs = newDecoderSurfaceHandoffDeadlineMs();
+        mPendingHostSurfaceResize = callback;
+        mDeadlineHandler.postAtTime(() -> {
+            if (resizeGeneration == mHostSurfaceResizeGeneration
+                    && mPendingHostSurfaceResize != null) {
+                if (!currentDecoderSurfaceHandoffDeadlineOwnsFailure()) {
+                    return;
+                }
+                LimeLog.severe("Timed out waiting for Host SBS decoder-surface resize");
+                completeHostSurfaceResize(resizeGeneration, false);
+            }
+        }, resizeDeadlineMs);
+
+        // Park first, resize SceneCore only after the exact park succeeds, then bind its exact
+        // replacement. Neither potentially blocking MediaCodec call runs on the UI thread.
+        bindDecoderSurfaceAsync(mDummySurface, resizeDeadlineMs, parked -> {
+            if (mDestroyed || resizeGeneration != mHostSurfaceResizeGeneration
+                    || mPendingHostSurfaceResize == null) {
+                return;
+            }
+            if (!parked) {
+                completeHostSurfaceResize(resizeGeneration, false);
+                return;
+            }
+            if (SystemClock.uptimeMillis() >= resizeDeadlineMs) {
+                completeHostSurfaceResize(resizeGeneration, false);
+                return;
+            }
+            boolean surfaceReady;
+            try {
+                surfaceReady = mXrPresenter.setHostSurfaceSize(
+                        sbs, logicalWidth, logicalHeight);
+            } catch (RuntimeException error) {
+                LimeLog.severe("Unable to resize the Host SceneCore surface: " + error);
+                surfaceReady = false;
+            }
+            Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
+            if (target == null || !target.isValid()) {
+                completeHostSurfaceResize(resizeGeneration, false);
+                return;
+            }
+            bindDecoderSurfaceAsync(target, resizeDeadlineMs, rebound -> {
+                if (mDestroyed || resizeGeneration != mHostSurfaceResizeGeneration
+                        || mPendingHostSurfaceResize == null) {
+                    return;
+                }
+                completeHostSurfaceResize(resizeGeneration, rebound);
+            });
+        });
+        return true;
+    }
+
+    private void completeHostSurfaceResize(int generation, boolean success) {
+        if (generation != mHostSurfaceResizeGeneration || mPendingHostSurfaceResize == null) {
+            return;
         }
-        mXrPresenter.setHostSurfaceSize(sbs);
-        Surface s = mXrPresenter.getVideoSurface();
-        if (s != null && s.isValid()) {
-            return bindDecoderSurface(s);
+        if (!success) {
+            cancelDecoderSurfaceHandoffAfterFailure();
         }
-        return false;
+        SurfaceSwitchCallback callback = mPendingHostSurfaceResize;
+        mPendingHostSurfaceResize = null;
+        callback.onComplete(success);
     }
 
     @Override
@@ -1350,14 +1703,20 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             }
         }
         mDestroyed = true;
+        invalidateDecoderSurfaceHandoff(false);
+        mClientSbsContextRecoveryParked = false;
         mClientSbsSwitchGeneration++;
         mPendingClientSbsSwitch = null;
         mPendingClientSbsSwitchEglGeneration = 0;
+        mPendingClientSbsSwitchDeadlineMs = 0L;
         mActiveClientSbsDecoderGeneration = 0;
         mPendingClientSbsResize = null;
         mPendingClientSbsResizeGeneration = 0;
         mPendingClientSbsResizeWidth = 0;
         mPendingClientSbsResizeHeight = 0;
+        mClientSbsResizeStageDeadlineMs = 0L;
+        mHostSurfaceResizeGeneration++;
+        mPendingHostSurfaceResize = null;
         clearQueuedClientSbsResize();
         mClientSbsResizeTimeoutToken++;
         clearClientSbsPostAckResizeBoundary();

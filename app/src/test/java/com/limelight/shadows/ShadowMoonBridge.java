@@ -39,9 +39,13 @@ public class ShadowMoonBridge {
 
     private static final List<Integer> hostSbsTelemetryResults = new ArrayList<>();
     private static final List<Boolean> hostSbsTelemetryEnabledCalls = new ArrayList<>();
-    private static int setSbsModeCallCount;
-    private static int setVideoModeCallCount;
+    private static int setVideoModeV2CallCount;
     private static int sbsDebugDumpCallCount;
+    private static int hostFeatureFlags;
+    private static int lastV2DesiredMode;
+    private static int lastV2RequestId;
+    private static int lastV2SourceWidth;
+    private static int lastV2SourceHeight;
 
     public static void setHostSbsTelemetryResults(int... results) {
         hostSbsTelemetryResults.clear();
@@ -68,12 +72,17 @@ public class ShadowMoonBridge {
                 - getHostSbsTelemetryEnabledCallCount();
     }
 
-    public static int getSetSbsModeCallCount() {
-        return setSbsModeCallCount;
+    public static int getSetVideoModeV2CallCount() {
+        return setVideoModeV2CallCount;
     }
 
-    public static int getSetVideoModeCallCount() {
-        return setVideoModeCallCount;
+    public static int[] getLastSetVideoModeV2Request() {
+        return new int[] {lastV2DesiredMode, lastV2RequestId,
+                lastV2SourceWidth, lastV2SourceHeight};
+    }
+
+    public static void setHostFeatureFlags(int flags) {
+        hostFeatureFlags = flags;
     }
 
     public static int getSbsDebugDumpCallCount() {
@@ -94,16 +103,20 @@ public class ShadowMoonBridge {
     }
 
     @Implementation
-    public static int sendSetSbsMode(int mode) {
-        setSbsModeCallCount++;
+    public static int sendSetVideoModeV2(int desiredMode, int requestId,
+                                         int sourceWidth, int sourceHeight,
+                                         int framerateX100, int totalWireBitrateKbps) {
+        setVideoModeV2CallCount++;
+        lastV2DesiredMode = desiredMode;
+        lastV2RequestId = requestId;
+        lastV2SourceWidth = sourceWidth;
+        lastV2SourceHeight = sourceHeight;
         return 1;
     }
 
     @Implementation
-    public static int sendSetVideoMode(int width, int height, int framerateX100,
-                                       int requestId, int bitrateKbps) {
-        setVideoModeCallCount++;
-        return 1;
+    public static int getHostFeatureFlags() {
+        return hostFeatureFlags;
     }
 
     @Implementation
@@ -115,9 +128,13 @@ public class ShadowMoonBridge {
     public static void reset() {
         hostSbsTelemetryResults.clear();
         hostSbsTelemetryEnabledCalls.clear();
-        setSbsModeCallCount = 0;
-        setVideoModeCallCount = 0;
+        setVideoModeV2CallCount = 0;
         sbsDebugDumpCallCount = 0;
+        hostFeatureFlags = 0;
+        lastV2DesiredMode = 0;
+        lastV2RequestId = 0;
+        lastV2SourceWidth = 0;
+        lastV2SourceHeight = 0;
     }
 
     // stubbed methods used by code but not relevant to unit tests

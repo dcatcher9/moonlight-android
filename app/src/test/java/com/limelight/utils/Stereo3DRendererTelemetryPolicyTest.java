@@ -10,10 +10,11 @@ import org.junit.Test;
 
 public class Stereo3DRendererTelemetryPolicyTest {
     @Test
-    public void cheapHealthPollKeepsItsStrideWhilePerformanceSamplingIsHidden() {
-        assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(0));
-        assertFalse(Stereo3DRenderer.shouldPollHealthTelemetry(1));
-        assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(4));
+    public void healthReadbackIsGatedWithDiagnosticsAndKeepsItsEnabledStride() {
+        assertFalse(Stereo3DRenderer.shouldPollHealthTelemetry(false, 0));
+        assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(true, 0));
+        assertFalse(Stereo3DRenderer.shouldPollHealthTelemetry(true, 1));
+        assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(true, 4));
 
         assertFalse(Stereo3DRenderer.shouldPollPerformanceTelemetry(false, 0));
         assertTrue(Stereo3DRenderer.shouldPollPerformanceTelemetry(true, 0));

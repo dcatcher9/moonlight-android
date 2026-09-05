@@ -104,9 +104,9 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   host-confirmed resume of the same session/app restores the last successful mode. Client SBS has
   no strength/convergence/balance/movie-mode parameter panel; the old `render_mode_list` and client
   depth-parameter preferences are not part of the current path.
-- Debug builds default performance logging on; release builds default it off. The first debug
-  update using this policy enables logging once for existing installs; subsequent explicit
-  Diagnostics choices persist.
+- Performance logging is opt-in in both debug and release builds so diagnostics do not perturb
+  latency or frame-pacing measurements. The first update from the former debug-on policy disables
+  that forced value once; subsequent explicit Diagnostics choices persist.
 - From **Git Bash**, prefix adb commands that pass Unix-style paths (e.g. `run-as`, `/data/...`)
   with `MSYS_NO_PATHCONV=1` so MSYS doesn't mangle the paths.
 

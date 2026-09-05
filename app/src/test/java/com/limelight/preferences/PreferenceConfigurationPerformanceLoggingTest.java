@@ -34,15 +34,15 @@ public final class PreferenceConfigurationPerformanceLoggingTest {
     }
 
     @Test
-    public void performanceLoggingDefaultsToEnabled() {
+    public void performanceLoggingDefaultsToDisabled() {
         assertFalse(preferences.contains(KEY));
-        assertTrue(PreferenceConfiguration.readPreferences(context).enablePerfLogging);
+        assertFalse(PreferenceConfiguration.readPreferences(context).enablePerfLogging);
     }
 
     @Test
-    public void explicitDisableIsPreserved() {
-        assertTrue(preferences.edit().putBoolean(KEY, false).commit());
-        assertFalse(PreferenceConfiguration.readPreferences(context).enablePerfLogging);
+    public void explicitEnableIsPreserved() {
+        assertTrue(preferences.edit().putBoolean(KEY, true).commit());
+        assertTrue(PreferenceConfiguration.readPreferences(context).enablePerfLogging);
     }
 
     @Test

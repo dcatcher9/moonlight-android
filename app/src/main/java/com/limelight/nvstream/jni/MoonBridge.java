@@ -381,19 +381,18 @@ public class MoonBridge {
         }
     }
 
-    // Host answer to a sendSetVideoMode() request (Apollo extension 0x3008). requestId is echoed
-    // verbatim and is the only correlation key. The applied* values report what the host is
-    // actually running, which may legitimately differ from the request (a clamped apply is still
-    // a success). Geometry is expressed in the 0x3007 wire coordinate system: ordinary and Host
-    // AI requests use the base size, while Raw Full already carries its packed 2W x H desktop.
-    // appliedBitrateKbps is the host's post-budget encoder value.
-    public static void bridgeClVideoModeAck(int requestId, int status, int appliedWidth,
-                                            int appliedHeight, int appliedFramerateX100,
-                                            int appliedBitrateKbps) {
+    public static void bridgeClVideoModeAckV2(int status, int appliedMode, int flags,
+                                              int requestId, int stateGeneration,
+                                              int appliedSourceWidth, int appliedSourceHeight,
+                                              int exactEncodedWidth, int exactEncodedHeight,
+                                              int appliedFramerateX100,
+                                              int effectiveEncoderBitrateKbps) {
         BridgeSession session = bridgeSession;
         if (session != null) {
-            session.connectionListener.videoModeAck(requestId, status, appliedWidth,
-                    appliedHeight, appliedFramerateX100, appliedBitrateKbps);
+            session.connectionListener.videoModeAckV2(status, appliedMode, flags, requestId,
+                    stateGeneration, appliedSourceWidth, appliedSourceHeight,
+                    exactEncodedWidth, exactEncodedHeight, appliedFramerateX100,
+                    effectiveEncoderBitrateKbps);
         }
     }
 
@@ -427,14 +426,13 @@ public class MoonBridge {
 
     public static native void interruptConnection();
 
-    // Host-side SBS modes for sendSetSbsMode (Apollo protocol extension). Must match the
-    // SBS_MODE_* values in moonlight-common-c's Limelight.h.
+    // Host-side SBS modes carried by atomic presentation v2 and the launch-time SBS setting.
+    // Must match the SBS_MODE_* values in moonlight-common-c's Limelight.h.
     public static final int SBS_MODE_OFF = 0; // No host depth; plain W x H frame.
     public static final int SBS_MODE_AI = 1;  // Enable Apollo's selected SBS profile; 2W x H frame.
 
-    // Ask the host (Apollo protocol extension) to switch host-side SBS 3D mode mid-stream.
-    /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
-    public static native int sendSetSbsMode(int mode);
+    /** Host/client-negotiated atomic presentation transaction support. */
+    public static final int LI_FF_ATOMIC_PRESENTATION_MODE_V2 = 0x20000000;
 
     // Video-mode acknowledgement statuses. Must match the VIDEO_MODE_ACK_* values in Limelight.h.
     /** The requested mode is live on the host. */
@@ -453,8 +451,14 @@ public class MoonBridge {
     // clamp and FEC/audio deduction. requestId is an opaque correlation token echoed verbatim in
     // the resulting videoModeAck; the host never interprets it.
     /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
-    public static native int sendSetVideoMode(int width, int height, int framerateX100,
-                                              int requestId, int bitrateKbps);
+    /** Sends the exact 20-byte atomic presentation v2 request on negotiated Apollo hosts. */
+    public static native int sendSetVideoModeV2(int desiredMode, int requestId,
+                                                int sourceWidth, int sourceHeight,
+                                                int framerateX100,
+                                                int totalWireBitrateKbps);
+
+    /** Returns the feature flags advertised by the active host during RTSP negotiation. */
+    public static native int getHostFeatureFlags();
 
     /**
      * Enables, changes cadence, or disables Apollo host SBS telemetry v1.

@@ -37,7 +37,7 @@ static jmethodID BridgeClRumbleTriggersMethod;
 static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
 static jmethodID BridgeClDepthStatusMethod;
-static jmethodID BridgeClVideoModeAckMethod;
+static jmethodID BridgeClVideoModeAckV2Method;
 static jmethodID BridgeClHostSbsTelemetryStateMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
@@ -104,7 +104,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
     BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(I)V");
-    BridgeClVideoModeAckMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClVideoModeAck", "(IIIIII)V");
+    BridgeClVideoModeAckV2Method = (*env)->GetStaticMethodID(
+            env, clazz, "bridgeClVideoModeAckV2", "(IIIIIIIIIII)V");
     BridgeClHostSbsTelemetryStateMethod = (*env)->GetStaticMethodID(
             env, clazz, "bridgeClHostSbsTelemetryState", "([B)V");
 }
@@ -428,15 +429,21 @@ void BridgeClDepthStatus(uint8_t phase) {
     }
 }
 
-void BridgeClVideoModeAck(uint16_t requestId, uint16_t status,
-                          uint16_t appliedWidth, uint16_t appliedHeight,
-                          uint16_t appliedFramerateX100, uint32_t appliedBitrateKbps) {
+void BridgeClVideoModeAckV2(uint8_t status, uint8_t appliedMode, uint8_t flags,
+                            uint32_t requestId, uint32_t stateGeneration,
+                            uint16_t appliedSourceWidth, uint16_t appliedSourceHeight,
+                            uint16_t exactEncodedWidth, uint16_t exactEncodedHeight,
+                            uint32_t appliedFramerateX100,
+                            uint32_t effectiveEncoderBitrateKbps) {
     JNIEnv* env = GetThreadEnv();
 
-    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClVideoModeAckMethod,
-                                 (jint)requestId, (jint)status, (jint)appliedWidth,
-                                 (jint)appliedHeight, (jint)appliedFramerateX100,
-                                 (jint)appliedBitrateKbps);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClVideoModeAckV2Method,
+                                 (jint)status, (jint)appliedMode, (jint)flags,
+                                 (jint)requestId, (jint)stateGeneration,
+                                 (jint)appliedSourceWidth, (jint)appliedSourceHeight,
+                                 (jint)exactEncodedWidth, (jint)exactEncodedHeight,
+                                 (jint)appliedFramerateX100,
+                                 (jint)effectiveEncoderBitrateKbps);
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
         (*JVM)->DetachCurrentThread(JVM);
@@ -534,8 +541,8 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .setMotionEventState = BridgeClSetMotionEventState,
         .setControllerLED = BridgeClSetControllerLED,
         .depthStatus = BridgeClDepthStatus,
-        .videoModeAck = BridgeClVideoModeAck,
         .hostSbsTelemetryState = BridgeClHostSbsTelemetryState,
+        .videoModeAckV2 = BridgeClVideoModeAckV2,
 };
 
 JNIEXPORT jint JNICALL
