@@ -73,6 +73,9 @@ public class NvHTTP {
     public static final int SHORT_CONNECTION_TIMEOUT = 3000;
     public static final int LONG_CONNECTION_TIMEOUT = 5000;
     public static final int READ_TIMEOUT = 7000;
+    // Launch/resume/quit can run host commands, but must not retain the global session permit
+    // forever when a server accepts the socket and then stops replying. Pairing stays separate.
+    public static final int SESSION_CALL_TIMEOUT = 30000;
 
     // Print URL and content to logcat on debug builds
     private static boolean verbose = BuildConfig.DEBUG;
@@ -83,7 +86,9 @@ public class NvHTTP {
     
     private OkHttpClient httpClientLongConnectTimeout;
     private OkHttpClient httpClientLongConnectNoReadTimeout;
+    private OkHttpClient httpClientSession;
     private OkHttpClient httpClientShortConnectTimeout;
+    private final HttpCallScope callScope;
 
     private X509TrustManager defaultTrustManager;
     private X509TrustManager trustManager;
@@ -191,6 +196,9 @@ public class NvHTTP {
         httpClientLongConnectNoReadTimeout = httpClientLongConnectTimeout.newBuilder()
                 .readTimeout(0, TimeUnit.MILLISECONDS)
                 .build();
+        httpClientSession = httpClientLongConnectNoReadTimeout.newBuilder()
+                .callTimeout(SESSION_CALL_TIMEOUT, TimeUnit.MILLISECONDS)
+                .build();
     }
 
     public HttpUrl getHttpsUrl(boolean likelyOnline) throws IOException {
@@ -204,6 +212,13 @@ public class NvHTTP {
     }
     
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
+        this(address, httpsPort, uniqueId, serverCert, cryptoProvider, new HttpCallScope());
+    }
+
+    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId,
+                  X509Certificate serverCert, LimelightCryptoProvider cryptoProvider,
+                  HttpCallScope callScope) throws IOException {
+        this.callScope = callScope;
         this.uniqueId = uniqueId;
 
         this.deviceName = DeviceUtils.getModel();
@@ -549,7 +564,7 @@ public class NvHTTP {
         if (requestBody == null) request = _builder.get().build();
         else request = _builder.post(requestBody).build();
 
-        Response response = executeCall(performAndroidTlsHack(client).newCall(request));
+        Response response = callScope.execute(performAndroidTlsHack(client).newCall(request));
 
         ResponseBody body = response.body();
         
@@ -603,10 +618,8 @@ public class NvHTTP {
     }
 
     private String openHttpConnectionToString(OkHttpClient client, HttpUrl baseUrl, String path, String query, RequestBody requestBody) throws IOException {
-        try {
-            ResponseBody resp = openHttpConnection(client, baseUrl, path, query, requestBody);
+        try (ResponseBody resp = openHttpConnection(client, baseUrl, path, query, requestBody)) {
             String respString = resp.string();
-            resp.close();
 
             if (verbose && !path.equals("serverinfo")) {
                 LimeLog.info(getCompleteUrl(baseUrl, path, query)+" -> "+respString);
@@ -973,7 +986,7 @@ public class NvHTTP {
             throw new IOException("Refusing to launch without an application identity");
         }
 
-        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb,
+        String xmlStr = openHttpConnectionToString(httpClientSession, getHttpsUrl(true), verb,
             appIdentityQuery +
             "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fpsInt +
             "&scaleFactor=" + context.streamConfig.getResolutionScaleFactor() +
@@ -1024,7 +1037,7 @@ public class NvHTTP {
             cancelQuery = "hostSessionId=" + expectedHostSessionId.trim();
         }
 
-        String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout,
+        String xmlStr = openHttpConnectionToString(httpClientSession,
                 getHttpsUrl(true), "cancel", cancelQuery);
         if (getXmlString(xmlStr, "cancel", true).equals("0")) {
             return false;

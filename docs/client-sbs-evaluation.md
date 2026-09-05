@@ -17,6 +17,10 @@ client artifacts into the Apollo checkout.
 
 ## Production contract
 
+The current model/runtime, rendering math, and surface-ownership authority is
+[android-xr-sbs.md](android-xr-sbs.md). This guide owns reproducible test procedures and measured
+qualification evidence; retired contracts below describe the artifacts used in those experiments.
+
 Client SBS has one native LiteRT GPU backend and one production model family, original ZipDepth
 Base. Because the Galaxy XR GPU delegate requires static graphs, ZipDepth uses three fixed aspect
 buckets with Float32 public tensors and FP16-stored large weights. The renderer selects the graph

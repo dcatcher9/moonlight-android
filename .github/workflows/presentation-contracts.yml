@@ -1,0 +1,22 @@
+name: Presentation contracts
+
+on:
+  pull_request:
+  push:
+    branches: [moonlight-noir]
+
+permissions:
+  contents: read
+
+jobs:
+  presentation-transactions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+      - name: Test production presentation transactions without Android or model assets
+        run: bash ./gradlew -p tools/workflow-tests test --no-daemon

@@ -39,6 +39,7 @@ import com.limelight.nvstream.http.HostHttpResponseException;
 import com.limelight.nvstream.http.LimelightCryptoProvider;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
+import com.limelight.nvstream.http.HttpCallScope;
 import com.limelight.nvstream.http.PairingManager;
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
@@ -61,6 +62,7 @@ public class NvConnection {
     private Thread connectionThread;
     private boolean connectionPermitHeld;
     private boolean ownsNativeBridge;
+    private HttpCallScope startupHttpCalls = new HttpCallScope();
 
     public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert)
     {
@@ -119,13 +121,18 @@ public class NvConnection {
 
     private void stopNativeConnection() {
         Thread startThread;
+        HttpCallScope calls;
         synchronized (lifecycleLock) {
             stopRequested = true;
             startThread = connectionThread;
+            calls = startupHttpCalls;
             if (startThread != null && startThread != Thread.currentThread()) {
                 startThread.interrupt();
             }
         }
+        // Thread.interrupt alone does not wake OkHttp reads on an established socket. Cancel
+        // the actual calls before joining; later calls in this attempt are rejected as well.
+        calls.cancel();
 
         // interruptConnection() is process-global, so only the NvConnection that owns the native
         // bridge may call it. A canceled connection waiting on the semaphore must not interrupt a
@@ -315,7 +322,8 @@ public class NvConnection {
     
     private boolean startApp() throws XmlPullParserException, IOException
     {
-        NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId, context.serverCert, cryptoProvider);
+        NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId,
+                context.serverCert, cryptoProvider, startupHttpCalls);
 
         String serverInfo = h.getServerInfo(true);
         
@@ -565,6 +573,7 @@ public class NvConnection {
                 throw new IllegalStateException("Connection is already active or starting");
             }
             stopRequested = false;
+            startupHttpCalls = new HttpCallScope();
             connectionThread = new Thread(
                     () -> runConnection(audioRenderer, videoDecoderRenderer, connectionListener),
                     "Artemis connection start");

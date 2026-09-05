@@ -335,6 +335,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
         SurfaceSwitchCallback callback = mPendingClientSbsHdrSwitch;
         mPendingClientSbsHdrSwitch = null;
+        if (!success && mStereoRenderer != null) {
+            mStereoRenderer.cancelHdrInputTransition(mRendererHdrTransitionGeneration);
+        }
         mRendererHdrTransitionGeneration = 0;
         if (callback != null) {
             callback.onComplete(success);
@@ -607,6 +610,13 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 completion.run();
             }
         }));
+    }
+
+    /** The presenter has already checked the exact owner generation before canceling. */
+    public void cancelClientSbsModeSwitchCompletion() {
+        if (mStereoRenderer != null) {
+            mStereoRenderer.clearClientSbsModeSwitchCompletion();
+        }
     }
 
     private void onClientSbsRendererSurfaceReady(Surface surface, int surfaceGeneration,

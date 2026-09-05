@@ -6640,8 +6640,12 @@ public class XrStreamPresenter {
                             actualWidth, actualHeight);
                 } else if (!pendingClientPackedSwapProofArmed) {
                     pendingClientPackedSwapProofArmed = true;
+                    int packedProofGeneration =
+                            decoderTransitionGenerations.currentModeGeneration();
                     boolean armed = streamContainer.completeClientSbsModeSwitchAfterSwap(() -> {
-                        if (!liveQualityChangeInProgress) {
+                        if (!liveQualityChangeInProgress
+                                || decoderTransitionGenerations.currentModeGeneration()
+                                != packedProofGeneration) {
                             return;
                         }
                         liveQualityConfirmations.onPresentationReady();
@@ -6882,6 +6886,9 @@ public class XrStreamPresenter {
     }
 
     private void clearLiveQualityChange() {
+        if (pendingClientPackedSwapProofArmed) {
+            cancelClientSbsModeSwap();
+        }
         cancelLiveQualityAckTimeout();
         liveQualityChangeInProgress = false;
         liveQualityConfirmations.clear();
@@ -7268,6 +7275,7 @@ public class XrStreamPresenter {
 
     private void failPendingClientSbsModeSwap(int transitionGeneration, String reason) {
         decoderTransitionGenerations.dispatchModeIfCurrent(transitionGeneration, () -> {
+            cancelClientSbsModeSwap();
             decoderTransitionGenerations.clearMode();
             LimeLog.severe("XR: Client SBS mode " + reason);
             if (isAckFirstModeTransitionPending()) {
@@ -7281,6 +7289,15 @@ public class XrStreamPresenter {
                 ((com.limelight.Game) activity).handleDecoderSurfaceSwitchFailure();
             }
         });
+    }
+
+    private void cancelClientSbsModeSwap() {
+        com.limelight.Game game = activity instanceof com.limelight.Game
+                ? (com.limelight.Game) activity : null;
+        StreamContainer streamContainer = game != null ? game.getStreamContainer() : null;
+        if (streamContainer != null) {
+            streamContainer.cancelClientSbsModeSwitchCompletion();
+        }
     }
 
     private void finishPendingModeTransition(PresenterMode pendingMode) {

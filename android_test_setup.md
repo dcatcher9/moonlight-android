@@ -6,15 +6,14 @@ Quick-start guide: writing JVM/Robolectric unit tests for this repo
     • Build task:  
       – Default flavour: `./gradlew :app:testNonRoot_gameDebugUnitTest`  
       – Root flavour:   `./gradlew :app:testRootDebugUnitTest`  
-      – All:           `./gradlew :app:testDebugUnitTest`
+      – All JVM variants: `./gradlew test`
 
-1.  Dependencies & Gradle switches  
-    `app/build.gradle` already contains everything you need:  
+    The [portable presentation project](tools/workflow-tests/README.md) runs the existing shared
+    transaction and swap-proof tests without Android SDK, native libraries, or model assets.
 
-        testImplementation 'junit:junit:4.13.2'
-        testImplementation 'androidx.test:core:1.5.0'
-        testImplementation 'org.robolectric:robolectric:4.11.1'
-        testImplementation 'org.mockito:mockito-core:5.11.0'
+1.  Dependencies & Gradle switches
+    [app/build.gradle](app/build.gradle) owns the current JUnit, AndroidX Test, Robolectric, and
+    Mockito dependencies. Use its declared versions rather than installing a separate test stack.
 
     Extra flag:  
 
@@ -51,7 +50,8 @@ Quick-start guide: writing JVM/Robolectric unit tests for this repo
     }
     ```
 
-    • `@Config(sdk = {33})` makes Robolectric emulate Android 13 (matches `compileSdk 34` while staying stable).  
+    • `@Config(sdk = {33})` makes Robolectric emulate Android 13. The emulated SDK is independent
+      of the application's `compileSdk`, declared in [app/build.gradle](app/build.gradle).
     • `shadows = …` suppresses native or platform calls:
 
       – `ShadowMoonBridge` eliminates the static initializer that tries `System.loadLibrary("moonbr")`, and provides minimal stubs/constants used by the app.  

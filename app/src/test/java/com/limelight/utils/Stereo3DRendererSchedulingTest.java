@@ -190,7 +190,7 @@ public class Stereo3DRendererSchedulingTest {
                 StandardCharsets.UTF_8);
         String draw = source.substring(
                 source.indexOf("private void onDrawFrameLocked"),
-                source.indexOf("private void scheduleClientSbsModeSwitchCompletionAfterSwap"));
+                source.indexOf("public void clearClientSbsModeSwitchCompletion"));
         assertTrue(draw.contains("if (!resultAdopted)"));
         assertTrue(draw.indexOf("presentClientSbs();")
                 < draw.indexOf("scheduleCaptureAfterSwap("));
@@ -306,6 +306,19 @@ public class Stereo3DRendererSchedulingTest {
         assertTrue(state.commit(sdrGeneration));
         assertFalse(state.finish(hdrGeneration));
         assertTrue(state.finish(sdrGeneration));
+    }
+
+    @Test
+    public void hdrTimeoutCancelsOnlyItsExactOwnerAndRejectsLateCompletion() {
+        Stereo3DRenderer.HdrInputTransitionState state =
+                new Stereo3DRenderer.HdrInputTransitionState();
+        int retired = state.begin(true);
+        int current = state.begin(false);
+        assertFalse(state.cancel(retired));
+        assertTrue(state.commit(current));
+        assertTrue(state.cancel(current));
+        assertFalse(state.finish(current));
+        assertFalse(state.isActive());
     }
 
     @Test

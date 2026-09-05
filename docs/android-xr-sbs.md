@@ -76,6 +76,21 @@ submits only the newest. **Balanced** alone uses the two-buffer Choreographer qu
 
 ## Direct SceneCore path
 
+Mode entry, HDR changes, and live Client SBS resize share one renderer presentation-completion
+transaction. It binds the owning operation to the renderer generation and validated EGL
+attachment, and commits once only after a second draw on that same attachment proves the first
+swap succeeded. A queued GLSurfaceView event only requests the confirmation draw: Android runs
+such events even after a failed swap. Generation/attachment replacement and owner cancellation
+invalidate the proof. The enclosing decoder/resize owner retains its existing fresh-IDR and
+cold-backend deadlines; the common proof adds no new timer or inference cadence.
+
+Connection startup retains a cancellable HTTP call scope through response-body consumption.
+Stopping cancels that scope before joining the start worker, including established sockets which
+do not wake on a Java thread interrupt. Launch, resume, and quit have a 30-second total call
+deadline; PIN-entry pairing keeps its separate user-interaction policy. The global connection
+permit is released after the startup worker, native stop, and optional bounded quit finish, so
+replacement sessions cannot overlap local teardown.
+
 The working Galaxy XR sequence is:
 
 1. Create a `SurfaceEntity` with the appropriate mono or side-by-side stereo mode.

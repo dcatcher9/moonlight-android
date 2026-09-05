@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 11
+}
+
+// Compile the real shared scheduler and proof without loading the Android application build.
+sourceSets {
+    main {
+        java {
+            setSrcDirs(['../../app/src/main/java'])
+            include 'com/limelight/utils/ClientSbsPresentationTransaction.java'
+            include 'com/limelight/utils/ClientSbsSwapProof.java'
+        }
+    }
+    test {
+        java {
+            setSrcDirs(['../../app/src/test/java'])
+            include 'com/limelight/utils/ClientSbsPresentationTransactionTest.java'
+            include 'com/limelight/utils/ClientSbsSwapProofTest.java'
+        }
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+
+test {
+    useJUnit()
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+    }
+}

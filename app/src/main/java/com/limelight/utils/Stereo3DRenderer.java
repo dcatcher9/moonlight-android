@@ -110,17 +110,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final HdrInputTransitionState hdrInputTransition =
             new HdrInputTransitionState();
     /** GL-thread state: reveal is acknowledged only after a new-format output has been swapped. */
-    private volatile Runnable hdrInputTransitionCompletion;
-    private volatile int hdrInputTransitionCompletionGeneration;
-    private volatile int hdrInputTransitionOutputGeneration;
-    /** Client-mode entry completes only after its first fresh packed output swap. */
-    private volatile Runnable clientSbsModeSwitchCompletion;
-    private volatile int clientSbsModeSwitchCompletionGeneration;
-    /** Resize readiness is published only after one new-generation packed buffer is swapped. */
-    private volatile Runnable liveStreamResizeCompletion;
-    private volatile int liveStreamResizeCompletionGeneration;
-    /** GL-thread two-draw fence proving a prior swap survived on the same output attachment. */
-    private final ClientSbsSwapProof liveStreamResizeSwapProof = new ClientSbsSwapProof();
+    private final ClientSbsPresentationTransaction presentationCompletion =
+            new ClientSbsPresentationTransaction();
     private int outputSurfaceValidationEpoch;
     private long outputDrawSequence;
 
@@ -541,6 +532,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         synchronized void cancel() {
             generation = 0;
             committed = false;
+        }
+
+        synchronized boolean cancel(int expectedGeneration) {
+            if (expectedGeneration <= 0 || generation != expectedGeneration) {
+                return false;
+            }
+            cancel();
+            return true;
         }
 
         boolean isActive() {
@@ -1514,11 +1513,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
 
     private boolean stopAiWorkers() {
         shuttingDown.set(true);
+        presentationCompletion.cancel();
         hdrInputTransition.cancel();
-        hdrInputTransitionCompletion = null;
-        hdrInputTransitionCompletionGeneration = 0;
-        hdrInputTransitionOutputGeneration = 0;
-        clearClientSbsModeSwitchCompletion();
         invalidateQueuedFrameDrain();
         synchronized (frameLock) {
             frameAvailable.set(false);
@@ -1644,10 +1640,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 clientSbs = enabled;
                 clientSbsGeneration.incrementAndGet();
                 hdrInputTransition.cancel();
-                hdrInputTransitionCompletion = null;
-                hdrInputTransitionCompletionGeneration = 0;
-                hdrInputTransitionOutputGeneration = 0;
-                clearClientSbsModeSwitchCompletion();
+                presentationCompletion.cancel();
                 // Clear on both edges. A delayed callback from the previous decoder attachment
                 // must never become the first frame of a later Client-SBS generation.
                 frameAvailable.set(false);
@@ -1660,9 +1653,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 cancelFirstModeEntryFrameWait();
                 synchronized (liveStreamResizeLock) {
                     pendingLiveStreamResize = null;
-                    liveStreamResizeCompletion = null;
-                    liveStreamResizeCompletionGeneration = 0;
-                    clearLiveStreamResizeSwapCandidate();
+                    presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
                 }
             }
             glSurfaceView.requestRender();
@@ -1735,9 +1726,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             }
             int transitionGeneration = hdrInputTransition.begin(enabled);
             clientSbsGeneration.incrementAndGet();
-            hdrInputTransitionCompletion = null;
-            hdrInputTransitionCompletionGeneration = 0;
-            hdrInputTransitionOutputGeneration = 0;
+
+            presentationCompletion.cancel();
             invalidateQueuedFrameDrain();
             synchronized (frameLock) {
                 frameAvailable.set(false);
@@ -1746,6 +1736,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             }
             glSurfaceView.requestRender();
             return transitionGeneration;
+        }
+    }
+
+    /** A timed-out owner cannot leave a completion that a late draw could acknowledge. */
+    public void cancelHdrInputTransition(int transitionGeneration) {
+        synchronized (glCallbackLifecycleLock) {
+            if (hdrInputTransition.cancel(transitionGeneration)) {
+                presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.HDR);
+            }
         }
     }
 
@@ -1866,9 +1865,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 pendingLiveStreamResize = null;
                 return false;
             }
-            liveStreamResizeCompletion = null;
-            liveStreamResizeCompletionGeneration = 0;
-            clearLiveStreamResizeSwapCandidate();
+
+            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
             resetPresentationForGeneration(resizedGeneration);
 
             boolean targetsAlreadyMatch = colorFrameWidth == resize.width
@@ -1956,75 +1954,42 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
      * Exact EGL validation has already succeeded when StreamContainer calls this method.
      */
     public boolean completeLiveStreamResizeAfterSwap(Runnable completion) {
-        if (completion == null || shuttingDown.get() || !clientSbs
-                || !outputSurfaceValidated || pendingLiveStreamResize != null) {
-            return false;
-        }
         synchronized (liveStreamResizeLock) {
-            if (shuttingDown.get() || !clientSbs
-                    || !outputSurfaceValidated || pendingLiveStreamResize != null) {
-                return false;
-            }
-            liveStreamResizeCompletionGeneration = clientSbsGeneration.get();
-            clearLiveStreamResizeSwapCandidate();
-            liveStreamResizeCompletion = completion;
-        }
-        try {
-            glSurfaceView.requestRender();
-            return true;
-        } catch (RuntimeException error) {
-            synchronized (liveStreamResizeLock) {
-                if (liveStreamResizeCompletion == completion
-                        && liveStreamResizeCompletionGeneration
-                        == clientSbsGeneration.get()) {
-                    liveStreamResizeCompletion = null;
-                    liveStreamResizeCompletionGeneration = 0;
-                    clearLiveStreamResizeSwapCandidate();
-                }
-            }
-            LimeLog.warning("Unable to arm Client SBS packed-presentation proof: " + error);
-            return false;
+            return armPresentationCompletion(
+                    ClientSbsPresentationTransaction.Kind.RESIZE, completion);
         }
     }
 
-    /**
-     * Arms the Client-mode entry boundary after MediaCodec releases its fresh IDR. Completion is
-     * queued from the first draw containing a frame from this renderer generation, so it runs only
-     * after GLSurfaceView has returned through that draw's EGL swap.
-     */
+    /** Uses the same successful-swap proof as HDR and live resize. */
     public boolean completeClientSbsModeSwitchAfterSwap(Runnable completion) {
+        return armPresentationCompletion(
+                ClientSbsPresentationTransaction.Kind.MODE_ENTRY, completion);
+    }
+
+    private boolean armPresentationCompletion(ClientSbsPresentationTransaction.Kind kind,
+                                               Runnable completion) {
         if (completion == null || shuttingDown.get() || !clientSbs
                 || !outputSurfaceValidated || pendingLiveStreamResize != null) {
             return false;
         }
-        int generation = clientSbsGeneration.get();
-        clientSbsModeSwitchCompletionGeneration = generation;
-        clientSbsModeSwitchCompletion = completion;
+        long token = presentationCompletion.arm(kind, clientSbsGeneration.get(),
+                outputSurfaceValidationEpoch, completion);
+        if (token == 0L) return false;
         try {
             glSurfaceView.requestRender();
             return true;
         } catch (RuntimeException error) {
-            if (clientSbsModeSwitchCompletion == completion
-                    && clientSbsModeSwitchCompletionGeneration == generation) {
-                clearClientSbsModeSwitchCompletion();
-            }
-            LimeLog.warning("Unable to arm Client SBS mode-entry swap acknowledgement: "
-                    + error);
+            presentationCompletion.cancel(token);
+            LimeLog.warning("Unable to arm Client SBS presentation proof: " + error);
             return false;
         }
     }
 
-    /**
-     * Nudges an already-armed packed-output proof at the post-ACK decoder boundary.
-     *
-     * <p>The request is not an acknowledgement: {@link ClientSbsSwapProof} still requires two
-     * distinct draws on the exact renderer generation and validated EGL attachment.</p>
-     */
+    /** A nudge only; a queued event can never acknowledge a swap. */
     public boolean requestLiveStreamResizeProofDraw() {
         synchronized (liveStreamResizeLock) {
-            if (liveStreamResizeCompletion == null
-                    || liveStreamResizeCompletionGeneration <= 0
-                    || liveStreamResizeCompletionGeneration != clientSbsGeneration.get()
+            if (!presentationCompletion.isPending(
+                    ClientSbsPresentationTransaction.Kind.RESIZE, clientSbsGeneration.get())
                     || shuttingDown.get() || !clientSbs || !outputSurfaceValidated) {
                 return false;
             }
@@ -2033,7 +1998,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             glSurfaceView.requestRender();
             return true;
         } catch (RuntimeException error) {
-            LimeLog.warning("Unable to request Client SBS packed-presentation proof: " + error);
+            LimeLog.warning("Unable to request Client SBS presentation proof: " + error);
             return false;
         }
     }
@@ -2041,9 +2006,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     /** Cancels a superseded swap acknowledgement without invalidating the attached EGL output. */
     public void cancelLiveStreamResizeCompletion() {
         synchronized (liveStreamResizeLock) {
-            liveStreamResizeCompletion = null;
-            liveStreamResizeCompletionGeneration = 0;
-            clearLiveStreamResizeSwapCandidate();
+            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
         }
     }
 
@@ -2051,9 +2014,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     public void abandonLiveStreamResize() {
         synchronized (liveStreamResizeLock) {
             pendingLiveStreamResize = null;
-            liveStreamResizeCompletion = null;
-            liveStreamResizeCompletionGeneration = 0;
-            clearLiveStreamResizeSwapCandidate();
+            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
             outputSurfaceValidated = false;
         }
         invalidateQueuedFrameDrain();
@@ -2089,7 +2050,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 return;
             }
 
-            int outputGeneration;
             synchronized (frameLock) {
                 SurfaceTexture texture = videoSurfaceTexture;
                 if (texture == null) {
@@ -2121,12 +2081,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     return;
                 }
                 hdrInput = hdrInputTransition.getTargetHdr();
-                outputGeneration = clientSbsGeneration.incrementAndGet();
+                clientSbsGeneration.incrementAndGet();
             }
-            hdrInputTransitionCompletion = completionAfterSwap;
-            hdrInputTransitionCompletionGeneration = transitionGeneration;
-            hdrInputTransitionOutputGeneration = outputGeneration;
-            glSurfaceView.requestRender();
+            if (!armPresentationCompletion(ClientSbsPresentationTransaction.Kind.HDR, () -> {
+                if (hdrInputTransition.finish(transitionGeneration)) completionAfterSwap.run();
+            })) {
+                LimeLog.warning("Unable to arm Client SBS HDR presentation proof");
+            }
         }
     }
 
@@ -2142,9 +2103,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             outputSurfaceValidated = false;
             rejectedOutputSurfaceGeneration = 0;
             pendingLiveStreamResize = null;
-            liveStreamResizeCompletion = null;
-            liveStreamResizeCompletionGeneration = 0;
-            clearLiveStreamResizeSwapCandidate();
+            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
             this.outputWidthOverride = width;
             this.outputHeightOverride = height;
         }
@@ -3211,38 +3170,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         // Presentation is deliberately independent of delegate availability. A backend failure or
         // transition must not throw away the last valid matched stereo pair.
         presentClientSbs();
-        scheduleClientSbsModeSwitchCompletionAfterSwap();
-        scheduleHdrInputTransitionCompletionAfterSwap();
-        scheduleLiveStreamResizeCompletionAfterSwap();
+        schedulePresentationCompletionAfterSwap();
         if (resultAdopted) {
             scheduleCaptureAfterSwap(
                     currentClientSbsGeneration, outputSurfaceValidationEpoch);
         }
     }
 
-    private void scheduleClientSbsModeSwitchCompletionAfterSwap() {
-        Runnable completion = clientSbsModeSwitchCompletion;
-        int generation = clientSbsModeSwitchCompletionGeneration;
-        if (completion == null || generation <= 0
-                || generation != activeClientSbsGeneration
-                || !clientSbs || !hasFrameForActiveGeneration) {
-            return;
-        }
-
-        clientSbsModeSwitchCompletion = null;
-        clientSbsModeSwitchCompletionGeneration = 0;
-        try {
-            // queueEvent() runs only after GLSurfaceView returns from this draw and swaps it.
-            glSurfaceView.queueEvent(completion);
-        } catch (RuntimeException error) {
-            LimeLog.warning("Unable to queue Client SBS mode-entry swap acknowledgement: "
-                    + error);
-        }
-    }
-
-    private void clearClientSbsModeSwitchCompletion() {
-        clientSbsModeSwitchCompletion = null;
-        clientSbsModeSwitchCompletionGeneration = 0;
+    /** Clears the proof during a handoff or after the owner's validated timeout. */
+    public void clearClientSbsModeSwitchCompletion() {
+        presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.MODE_ENTRY);
     }
 
     /** Holds the initial EGL callback so it cannot submit an empty buffer over SceneCore's old one. */
@@ -3300,110 +3237,29 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    private void scheduleHdrInputTransitionCompletionAfterSwap() {
-        Runnable completion = hdrInputTransitionCompletion;
-        int transitionGeneration = hdrInputTransitionCompletionGeneration;
-        int outputGeneration = hdrInputTransitionOutputGeneration;
-        if (completion == null || transitionGeneration <= 0
-                || outputGeneration != activeClientSbsGeneration
-                || !hasFrameForActiveGeneration
-                || !hdrInputTransition.isCommitted(transitionGeneration)) {
+    private void schedulePresentationCompletionAfterSwap() {
+        if (!clientSbs || shuttingDown.get() || !hasFrameForActiveGeneration
+                || !outputSurfaceValidated
+                || activeClientSbsGeneration != clientSbsGeneration.get()
+                || !presentationCompletion.hasPending()) {
             return;
         }
-
-        // queueEvent() is serviced only after GLSurfaceView returns from this draw and swaps its
-        // EGL buffer. StreamContainer then posts the acknowledgement back to the main thread.
-        hdrInputTransitionCompletion = null;
-        hdrInputTransitionCompletionGeneration = 0;
-        hdrInputTransitionOutputGeneration = 0;
-        if (!hdrInputTransition.finish(transitionGeneration)) {
-            return;
-        }
+        int generation = activeClientSbsGeneration;
+        int attachment = outputSurfaceValidationEpoch;
         try {
-            glSurfaceView.queueEvent(completion);
-        } catch (RuntimeException error) {
-            LimeLog.warning("Unable to queue Client SBS HDR swap acknowledgement: " + error);
-        }
-    }
-
-    private void scheduleLiveStreamResizeCompletionAfterSwap() {
-        if (liveStreamResizeCompletion == null) {
-            return;
-        }
-        Runnable completion;
-        int outputGeneration;
-        int validationEpoch;
-        long drawSequence;
-        synchronized (liveStreamResizeLock) {
-            completion = liveStreamResizeCompletion;
-            outputGeneration = liveStreamResizeCompletionGeneration;
-            if (completion == null || outputGeneration <= 0
-                    || outputGeneration != activeClientSbsGeneration
-                    || !clientSbs || !hasFrameForActiveGeneration
-                    || !outputSurfaceValidated) {
-                return;
-            }
-
-            validationEpoch = outputSurfaceValidationEpoch;
-            drawSequence = outputDrawSequence;
-            if (liveStreamResizeSwapProof.observe(
-                    outputGeneration, validationEpoch, drawSequence)) {
-                liveStreamResizeCompletion = null;
-                liveStreamResizeCompletionGeneration = 0;
-                clearLiveStreamResizeSwapCandidate();
-            } else {
-                completion = null;
-            }
-        }
-        if (completion == null) {
-            // A second draw on the same renderer generation and exact EGL attachment is the proof
-            // that GLSurfaceView returned from the prior draw and accepted its swap. Queue the
-            // render request itself so GLSurfaceView services it only after this callback returns
-            // through the current eglSwapBuffers() iteration. The queued callback is only a draw
-            // trigger; a failed/context-replaced swap changes the validation epoch and restarts
-            // the proof instead of publishing success.
-            LimeLog.info("Client SBS packed swap proof candidate: generation="
-                    + outputGeneration + " validationEpoch=" + validationEpoch
-                    + " draw=" + drawSequence);
-            queueLiveStreamResizeProofDrawAfterSwap(outputGeneration, validationEpoch);
-            return;
-        }
-        LimeLog.info("Client SBS packed swap proof confirmed: generation="
-                + outputGeneration + " validationEpoch=" + validationEpoch
-                + " draw=" + drawSequence);
-        completion.run();
-    }
-
-    private void queueLiveStreamResizeProofDrawAfterSwap(int expectedGeneration,
-                                                         int expectedValidationEpoch) {
-        try {
-            glSurfaceView.queueEvent(() -> {
-                synchronized (liveStreamResizeLock) {
-                    if (liveStreamResizeCompletion == null
-                            || liveStreamResizeCompletionGeneration != expectedGeneration
-                            || clientSbsGeneration.get() != expectedGeneration
-                            || outputSurfaceValidationEpoch != expectedValidationEpoch
-                            || shuttingDown.get() || !clientSbs || !outputSurfaceValidated) {
-                        return;
-                    }
+            presentationCompletion.afterDraw(generation, attachment, outputDrawSequence,
+                    glSurfaceView::queueEvent, () -> {
+                if (generation == clientSbsGeneration.get()
+                        && attachment == outputSurfaceValidationEpoch && !shuttingDown.get()
+                        && clientSbs && outputSurfaceValidated) {
+                    // Events also run after failed swaps. They only request a new draw;
+                    // successful presentation is committed exclusively inside onDrawFrame.
+                    glSurfaceView.requestRender();
                 }
-                glSurfaceView.requestRender();
             });
         } catch (RuntimeException error) {
-            // The current draw proves a GL thread exists, but retain a direct request as a
-            // lifecycle-race fallback if GLSurfaceView rejects the queued callback.
-            LimeLog.warning("Unable to queue Client SBS packed-presentation proof draw: " + error);
-            try {
-                glSurfaceView.requestRender();
-            } catch (RuntimeException fallbackError) {
-                LimeLog.warning("Unable to request fallback Client SBS packed-presentation "
-                        + "proof draw: " + fallbackError);
-            }
+            LimeLog.warning("Unable to request Client SBS confirmation draw: " + error);
         }
-    }
-
-    private void clearLiveStreamResizeSwapCandidate() {
-        liveStreamResizeSwapProof.reset();
     }
 
     private void presentClientSbs() {
