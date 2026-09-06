@@ -210,15 +210,6 @@
         android:key="category_xr_diagnostics"
         android:title="@string/category_xr_diagnostics">
 
-        <SwitchPreferenceCompat
-            android:defaultValue="@bool/default_enable_perf_logging"
-            android:key="checkbox_enable_perf_logging"
-        android:icon="@drawable/ic_xr_diagnostics"
-            android:summary="@string/summary_checkbox_enable_perf_logging"
-            android:title="@string/title_checkbox_enable_perf_logging"
-            app:iconSpaceReserved="false" />
-
-
         <Preference
             android:key="pref_debug_info"
         android:icon="@drawable/ic_xr_dump"

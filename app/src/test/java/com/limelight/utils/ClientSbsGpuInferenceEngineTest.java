@@ -103,25 +103,6 @@ public class ClientSbsGpuInferenceEngineTest {
     }
 
     @Test
-    public void gpuPriorityHintsMatchLiteRtWireContract() {
-        assertEquals(1, ClientSbsGpuInferenceEngine.GpuPriorityHint.LOW.wireValue);
-        assertEquals("Low", ClientSbsGpuInferenceEngine.GpuPriorityHint.LOW.label);
-        assertEquals(2, ClientSbsGpuInferenceEngine.GpuPriorityHint.NORMAL.wireValue);
-        assertEquals("Normal", ClientSbsGpuInferenceEngine.GpuPriorityHint.NORMAL.label);
-
-        assertEquals(ClientSbsGpuInferenceEngine.GpuPriorityHint.LOW,
-                ClientSbsGpuInferenceEngine.GpuPriorityHint.fromNativeValue(1));
-        assertEquals(ClientSbsGpuInferenceEngine.GpuPriorityHint.NORMAL,
-                ClientSbsGpuInferenceEngine.GpuPriorityHint.fromNativeValue(2));
-    }
-
-    @Test
-    public void unknownGpuPriorityHintIsRejected() {
-        assertThrows(IllegalStateException.class,
-                () -> ClientSbsGpuInferenceEngine.GpuPriorityHint.fromNativeValue(3));
-    }
-
-    @Test
     public void runDispositionMatchesNativeWireContract() {
         assertEquals(1, ClientSbsGpuInferenceEngine.RunDisposition.INFER.wireValue);
         assertEquals(2, ClientSbsGpuInferenceEngine.RunDisposition.REUSE.wireValue);
@@ -131,6 +112,8 @@ public class ClientSbsGpuInferenceEngineTest {
                 ClientSbsGpuInferenceEngine.RunDisposition.fromNativeValue(2));
         assertThrows(IllegalStateException.class,
                 () -> ClientSbsGpuInferenceEngine.RunDisposition.fromNativeValue(0));
+        assertThrows(IllegalStateException.class,
+                () -> ClientSbsGpuInferenceEngine.RunDisposition.fromNativeValue(3));
     }
 
     @Test

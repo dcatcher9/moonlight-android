@@ -51,7 +51,7 @@ video-mode changes) must be capability-gated and must never be sent speculativel
 host.
 
 Client near-identical reuse is fully local and adds no `serverinfo`, launch, RTSP, or control
-message. It works unchanged with original Sunshine and Apollo. If host-assisted exact/damage reuse
+message. It uses the same local path with original Sunshine and Apollo. If host-assisted exact/damage reuse
 is pursued later, it must be a distinct versioned capability advertised by the host; support must
 never be inferred from `hostsessionid` or another unrelated extension. When that capability is
 absent, malformed, or stale, Client SBS must continue with local decoded-pixel arbitration or full
@@ -74,6 +74,23 @@ latency** nonblockingly drains ready MediaCodec outputs, discards superseded buf
 submits only the newest. **Balanced** alone uses the two-buffer Choreographer queue. The former LFR /
 "Prefer lower delays" checkbox was an inverted duplicate and must not be reintroduced.
 
+Stopping suppresses MediaCodec frame-rendered callback work immediately but keeps its callback
+looper alive until cleanup unregisters the listener and releases the codec. Only then is the looper
+asked to quit asynchronously, so late native events cannot target an already stopped handler.
+
+Playback callback threads request Android AUDIO priority for PCM and DISPLAY priority for decoder
+input once on their actual native thread; a denied priority request preserves playback. AudioTrack
+writes submit complete interleaved frames nonblockingly, yield for 1 ms on zero progress, and stop
+retrying at the 40 ms write/native-backlog bound. Stop, focus transitions, and track replacement
+invalidate the packet's playback generation so pre-flush PCM cannot resume on a later retry.
+When native pending audio reaches 40 ms, recovery discards stale audio until the queue reaches one
+selected output-buffer duration, capped at 20 ms. Queue and AudioTrack allocation sizes are unchanged.
+Client gain/limiting always applies. Temporary per-sample peak/RMS metering and five-second level
+logs have been removed; bounded backlog-recovery warnings remain operational logs. A recovery
+warning requires a complete PCM write on the same playback generation; reaching the native queue
+target alone does not clear accumulated drops. The warning labels the queue duration sampled before
+that write. Partial/zero-progress attempts retain their drop totals until a complete write succeeds.
+
 ## Direct SceneCore path
 
 Mode entry, HDR changes, and live Client SBS resize share one renderer presentation-completion
@@ -93,7 +110,8 @@ replacement sessions cannot overlap local teardown.
 
 The working Galaxy XR sequence is:
 
-1. Create a `SurfaceEntity` with the appropriate mono or side-by-side stereo mode.
+1. Create a `SurfaceEntity` with the appropriate mono or side-by-side stereo mode and request
+   `MediaBlendingMode.OPAQUE` before publishing its surface. All four modes present opaque video.
 2. Set its surface pixel dimensions so the SBS split lands on the exact half-frame boundary.
 3. Parent it to `scene.getActivitySpace()`, enable it, and set alpha to one.
 4. Hide the activity's main 2D panel while immersive presentation is active.
@@ -104,6 +122,13 @@ Two historical pitfalls remain important:
 
 - An unparented entity is not part of the rendered scene graph and appears as a black/missing quad.
 - The activity's opaque main panel can occlude an otherwise working entity.
+
+Media blending and entity visibility have separate ownership. Preserve entity alpha zero/one
+around presentation and HDR transitions; opaque video does not authorize exposing an unfinished
+frame. The beta02 media-blending accessors are Java-public but library-restricted, so one narrow
+adapter contains the lint suppression and handles unavailable runtime support without aborting
+streaming. Its cached readback verifies the SDK request only; it does not prove native compositor
+application or a GPU saving. The retained entity keeps the request across mode changes.
 
 `CCodec`'s `onWorkDone` message is not a frame counter, and
 `setOutputSurface ... failed to set consumer usage (6/BAD_INDEX)` also appears on working paths.
@@ -117,17 +142,17 @@ Client SBS has one production inference path:
 MediaCodec
   -> external-OES SurfaceTexture
   -> SurfaceTexture crop/orientation transform
-       |-> GLES SDR exact-area model-input render + fused tensor-pack/color-cut pass (slot 0 or 1)
+       |-> GLES SDR exact-area RGBA8 model-input render + color-cut/reuse classification
        |    (one stream-selected static depth-model aspect bucket)
-       |    -> GPU color-cut flag + client-local integrity-checked near-identical decision
+       |    -> GPU color-cut flag + client-local integrity-checked near-reuse decision
        |    -> input-ready fence -> native arbitration
-       |         |-> infer: LiteRT 2.x / validated OpenCL -> packed Float32 depth (same slot)
-       |         `-> reuse: skip LiteRT and retain the last real depth/profile/warp
+       |         |-> infer: native Float32 pack -> LiteRT/OpenCL -> depth + raw-output memo
+       |         `-> near: retain the committed depth/profile/warp without postprocessing
        `-> full-resolution matched color texture (same slot)
   -> adopt current color and retain its color-slot lease
-  -> infer only: GLES raw mean + private P2/P98 cut analysis + coherent history commit
-  -> reuse only: freeze every depth-derived and comparison-history field
-  -> infer only: source-aligned raw R32F ZipDepth -> per-graph coordinate
+  -> infer: GLES raw mean + private P2/P98 cut analysis + coherent history commit
+  -> near only: freeze every depth-derived and comparison-history field
+  -> infer: source-aligned raw R32F ZipDepth -> per-graph coordinate
   -> host V2 far/linear/near curve + fixed pop 1.75
   -> exact +/-0.04 fourth-root container
   -> vertical 2/W upper/lower envelopes with 0.75/0.25 share
@@ -176,9 +201,16 @@ TAR entry under `code_cache/client-sbs-model-assets`, and verifies its SHA-256. 
 separate from the native engine and loads no JNI/LiteRT library, creates no EGL context, and submits
 no GPU work. Failure is nonfatal so the root flavor, which contains neither the ZipDepth archive nor
 the LiteRT runtime, keeps its normal direct modes unchanged. Speculative staging does not prune a
-different aspect bucket. Authoritative first-use initialization takes the same process lock,
-revalidates a speculatively staged file once before trusting it, prunes other staged graphs, and
-gives LiteRT the verified read-only file. Later authoritative reuse avoids repeating that digest.
+different aspect bucket. UI-side admission and request deduplication use a separate short lock;
+they never acquire the cache-integrity lock held through extraction, hashing, and publication.
+Authoritative first-use initialization takes that worker-side cache lock,
+revalidates a speculatively staged file once before trusting it, prunes obsolete or incomplete
+staged graphs, and gives LiteRT the verified read-only file. The three current manifest-qualified
+aspect files remain on disk after they have been extracted; selecting A, then B, then A does not
+delete A merely because another bucket was selected. Each current file is 12,345,768 bytes, so all
+three occupy 37,037,304 bytes (35.3 MiB). Retention is a filename/manifest whitelist, not permission
+to trust unverified content: existing digest validation and atomic publication still apply.
+Later authoritative reuse avoids repeating an already completed digest check.
 XZ decompression is sequential: selecting a later TAR entry on a cold cache must
 decompress the preceding stream even though those earlier files are not materialized. The verified
 cache avoids that work on later use.
@@ -228,7 +260,9 @@ Per-frame code reuses that graph and those allocations; it must never extract, r
 in the render loop. LiteRT performs its packed-to-internal conversion on the GPU. Production keeps
 the public renderer contract packed
 NHWC: a debug-only half4 external-buffer probe was slightly faster but reproducibly left output
-pixels unwritten after a fresh refill, so it failed completeness/parity and remains rejected.
+pixels unwritten after a fresh refill, so it failed completeness/parity and its temporary runtime
+probe has been removed. Debug and release both use the fixed Low GPU-priority hint; the former
+ADB override and async runtime probe are also retired.
 ZipDepth uses automatic internal OpenCL storage. Its execution policy is included in the
 compiler-cache namespace. The
 renderer and inference worker
@@ -251,13 +285,21 @@ The inference worker owns native LiteRT creation, invocation, and destruction. D
 engine from the renderer thread. Renderer-side failures must signal the owner thread to stop, while
 releasing every frame-slot lease, inference claim, and GL fence exactly once.
 
-## Color/depth scheduling and bounded reuse
+## Color/depth scheduling and input reuse
 
-Every real Client SBS inference remains paired with the exact captured color slot that produced
-it. The sole deliberate exception is Apollo-compatible near-identical reuse: after a GPU comparison
-accepts a new model input, the renderer presents that current color with the cached depth, profile,
-conditioned disparity, and warp derived from the last valid real inference. No other path may pair a color
-frame with older depth.
+Every real Client SBS inference remains paired with the captured color slot that produced it.
+Near-identical reuse presents current color with the committed depth, profile, conditioned disparity,
+and warp while freezing all downstream history. It always compares with the retained real-inference
+input, never the preceding reused frame. Content, valid ownership, and source ordering control the
+reuse lifetime; there is no elapsed-time or callback-gap refresh. This prevents a series of individually
+small changes from silently replacing the reference. A candidate outside the unchanged pixel-change
+thresholds runs inference again.
+
+The separate Exact-input/raw-model memoization tier has been removed. There is no equality-only
+image/history reduction, retained native raw-output alias, or Exact Stats counter. Historical
+measurements of that tier remain in [the evaluation guide](client-sbs-evaluation.md); they do not
+qualify the current content-driven Near policy. Sustained moving-content quality and performance
+must be evaluated with the current implementation.
 
 Scheduling is readiness-driven rather than timer-driven:
 
@@ -276,42 +318,65 @@ Scheduling is readiness-driven rather than timer-driven:
   idle-thread cost avoids a lazy-start race with surface registration and terminal teardown.
 - A monotonic source-step approximation advances on every accepted decoder callback, including
   callbacks coalesced before one `updateTexImage()` latch. The callback sequence assigned to a
-  latch is protected through `updateTexImage()`, so the four-step reuse bound cannot silently omit
-  coalesced frames.
+  latch is protected through `updateTexImage()`, preserving monotonic source identity across
+  coalesced frames. Callback count is not a reuse-expiry clock.
+- Decoder-drain admission yields to every requested presentation draw, including a ready result
+  and the stale-depth deadline. Any already-queued drain returns without latching, callbacks retain
+  only their newest metadata, and admission reopens at draw entry. Invalid surfaces still reject
+  drains. This bounds progress
+  to the running drain plus at most one queued drain even when callbacks keep arriving; a bounded
+  queue alone would not provide fairness in GLSurfaceView's event-first loop. Surface invalidation
+  closes admission, so drains cannot starve pause/resize work before the next draw.
 - A single-flight inference claim prevents the worker queue from growing.
 - There are exactly two native input/output tensor slots and exactly two matching full-resolution
   color slots. A capture, its public LiteRT tensors, and its eventual depth result always use the
-  same slot index.
+  same slot index. Reuse adds no raw-output cache, concurrent inference, or result queue.
 - The two slots allow one published color/depth state to remain active while the newest uncaptured
   frame is arbitrated. LiteRT invocation itself remains single-flight.
 - The renderer submits the model-input fence before the full-resolution color copy. That lets the
   worker begin waiting on the same-slot decision while the renderer finishes capturing the matched
   color, without weakening their shared lease/generation identity.
-- The fused model-input pack compares the exact packed Float32 input with the last valid real
-  inference input on GPU. Apollo's bounds are literal: `16 x 16` tiles, medium absolute channel
+- The fused classifier compares clamped model RGB with the qualified near owner's Float32 input
+  history. Packing, color evidence and Near comparison share the same fetched and clamped RGB
+  values. The native lazy-pack path neither writes nor reads the current tensor slot. Apollo's near bounds are
+  literal: `16 x 16` tiles, medium absolute channel
   delta `>= 1/64`, strong delta `>= 0.20`, at most 10% medium pixels globally, at most 2.5% strong
   pixels globally, and no more than 75% strong pixels in any tile with at least 64 admitted pixels.
   Every expected input pixel must be finite and admitted; malformed or incomplete evidence forces
   inference.
-- A comparison is eligible only in the same renderer generation, with presentable depth, for a
-  cumulative callback-sequence gap of one through four and an owner age from zero through strictly
-  less than 100 ms. Reused frames never advance either bound; both remain relative to the last real
-  inference.
+- A near comparison is eligible only in the same renderer generation, with presentable depth,
+  a positive real-owner source sequence, a strictly newer positive candidate sequence, and a
+  candidate capture timestamp that does not precede the owner's. Neither elapsed age nor the
+  number of intervening callbacks forces inference. Reuse never commits new model-input history,
+  renews ownership, or advances the reliable scene/cut tuple.
+- Generation/model/input-contract reset, an invalid real raw field, a collapsed V2 field, or a
+  reliable-history hold invalidates the reuse owner. Only an accepted valid real-inference
+  transaction with advancing reliable history can restore it.
+- Java applies a negative-only owner-order check using the newest real-inference capture. It
+  cannot authorize reuse or infer GPU owner validity from Java history presence. Native still
+  authenticates a fresh decision for every candidate; an old token cannot authorize another input.
 - The worker waits on the input fence and reads only a client-local, integrity-checked 32-byte
-  decision record. Its final word classifies reuse, content rejection, owner frame-gap/age
-  rejection, or invalid evidence without adding another map or synchronization point. This record
+  decision record. Its final word classifies reuse, content rejection, invalid ownership, or
+  invalid evidence without adding another map or synchronization point. Retired Exact tag 3 and
+  retired reason values 3, 4, and 10 cannot authorize reuse. This record
   never crosses the network.
   Buffer identity/allocation/range changes and map/unmap failures disable further decision reads
   for that engine lifetime and fail open to LiteRT. A stale token, malformed record, or explicit
   infer decision affects only the current frame, so later valid records remain eligible. This tiny
   CPU map is an Android implementation difference from Apollo's CUDA conditional graph and must be
   measured for stalls on Galaxy XR; no image or tensor is read back to CPU.
-- On reuse, native skips LiteRT and returns a flushed fence through the normal per-slot ownership
+- On near reuse, native skips LiteRT and returns a flushed fence through the normal per-slot ownership
   protocol. The renderer activates the current color but freezes model-input history, scene-cut
   history, normalization, temporal depth, profile, conditioned disparity, and cached warp at the last real
   inference.
-- A real inference is adopted only after its output fence is ordered, depth/profile processing
-  succeeds, and its exact model-input and scene-cut histories are committed. Only then is the
+- Native compiles an optional pack shader once. When available with the classifier, it packs only
+  on INFER, including malformed/stale decisions, map/unmap failure, content rejection, and invalid
+  ownership. It clamps RGB to `[0,1]` and flips GL row `y` to tensor row `H-1-y`, exactly like the
+  eager packer. If lazy packing or the classifier is unavailable, the renderer keeps eager packing.
+  The shared model texture stays immutable through worker completion and history commit/discard.
+  Cut work remains eager; no extra CPU arbitration round trip was added.
+- An inferred result is adopted only after its output fence is ordered,
+  depth/profile processing succeeds, and the authorized histories are committed. Only then is the
   single-flight claim released and the next callback-backed frame allowed to arbitrate. This makes
   the reuse owner unambiguous across renderer and inference contexts.
 - After an adoption, the renderer queues the next capture from a GL continuation validated against
@@ -335,8 +400,8 @@ Scheduling is readiness-driven rather than timer-driven:
 
 The client cannot reproduce Apollo's exact DDup admission because MediaCodec/SurfaceTexture does
 not expose Desktop Duplication present IDs, dirty/move rectangles, or host route authority. Its
-near-identical branch therefore authenticates decoded-pixel similarity plus strict callback-gap,
-age, generation, and depth-owner bounds. Host DDup exact-copy/idle/route decisions could be followed
+near-identical branch therefore authenticates decoded-pixel similarity, monotonic source identity,
+generation, and valid retained depth ownership. Host DDup exact-copy/idle/route decisions could be followed
 exactly only through the separately negotiated optional extension described above; legacy hosts
 remain on the local path.
 
@@ -346,14 +411,15 @@ from color.
 
 Fence ownership is part of the slot contract:
 
-1. The renderer packs model input and the client-local decision, then transfers a nonzero
+1. The renderer renders model input and publishes the client-local decision (also packing eagerly
+   when native lazy packing is unavailable), then transfers a nonzero
    input-ready fence and any nonzero previous output-consumed fence for the same slot to native.
 2. Native first waits on and deletes the current input-publication fence, then maps and authenticates
    that exact decision record. It waits on and deletes the prior-output/slot-reuse dependency only
-   afterward; both dependencies must succeed before either bounded reuse or LiteRT inference. Native
+   afterward; both dependencies must succeed before either reuse or LiteRT inference. Native
    returns a new ready fence owned by the caller.
-3. For real inference, the renderer orders the ready fence, dispatches output reads and history
-   commit, then creates a new output-consumed fence. Reuse and unread/discarded results retain the
+3. For real inference, the renderer orders the ready fence, dispatches output
+   reads and history commit, then creates a new output-consumed fence. Near reuse and unread/discarded results retain the
    ready fence itself because no renderer read of that output buffer was submitted.
 4. Slot reuse transfers that consumed fence back to native. Shutdown transfers the newest final
    consumer fence for both slots to the inference worker for bounded teardown.
@@ -413,6 +479,13 @@ serial-line compute passes produce a linearly sampled `R32F` signed-parallax fie
 client-only spatial prefilter or half-float staging target before subtraction against the `R32F`
 shot mean and coordinate conversion, matching the host's raw-depth geometry contract.
 
+The vertical forward pass retains its RGBA32F upper/lower/raw envelope, and vertical finish writes
+the separate R32F vertical field. Horizontal forward writes the already allocated final R32F
+texture; horizontal reverse reads and writes that image in place, with each invocation owning an
+entire row. Interpass image/texture barriers remain. This reduces nominal horizontal-forward writes
+by 12 bytes per texel (2.95 MiB at `672x384`); it removes neither an allocation nor any of the four
+dispatches, and does not establish a measured speedup.
+
 Vertical upper/lower envelopes use a step of `2/W` and combine as `0.75 * upper + 0.25 * lower`.
 The horizontal result is the least majorant `max_s(v(s) - 0.5 * |x-s| / W)`. This bound makes each
 eye mapping contractive. Starting from `x0 = u`, the map shader executes at most 11 updates: left
@@ -427,7 +500,8 @@ axis. Each refined texel bilinearly samples the exact 1x seed, reconstructs both
 and performs one more paired-eye fixed-point correction against the conditioned `R32F` parallax
 field. The full-width packed-SBS draw then consumes the refined cache and request-resolution matched
 color. Its steady per-output cost remains one warp-map lookup plus one color lookup; refinement runs
-only when a new real depth is adopted, and near-identical reuse freezes both caches. The live
+only when a real inferred raw result is postprocessed, and near-identical reuse freezes both caches.
+The live
 renderer compiles no seed-only, Bestv2, or frontmost-probe geometry fallback. Direct/full-resolution
 `R32F` inversion and a blind 2x-by-2x 11-step map remain deferred experiments.
 
@@ -450,7 +524,8 @@ duplicated flat and never applies the 1x seed alone, old geometry to the failed 
 mapping. A no-cut collapsed result retains the existing shot camera; a cut landing on a collapsed result clears it,
 and the next usable result reacquires it. The private normalized cut history can still advance on a
 finite collapsed result, matching the host's independent cut bridge. Near-identical reuse is the
-sole explicit current-color/cached-geometry exception and is bounded by the owner rules above. A
+whole-geometry freeze exception and remains subject to the fixed-owner content and validity checks
+above. A
 collapsed result may update that private cut/color history, but explicitly invalidates the cached
 geometry owner so the next accepted candidate must run real inference again.
 
@@ -461,12 +536,27 @@ the client conditioner.
 
 ## Scene cuts and depth health
 
-Scene-cut detection is GPU-only and paired with the exact SDR model-input frame. Each bounds-safe
-16 x 16 workgroup stores average integer Rec.709 luma for the broad raw-change gate and a separate
-structural value: the median `max(R,G,B)` of a fixed 3 x 3 sample lattice. The latter is an order
-statistic of an exposure-equivariant scalar, so an identical global monotone RGB exposure curve
-(gain, offset, gamma, clamp, and rounding) can preserve an ordering or collapse it into a tie but
-cannot reverse it. On the small persistent block grid the comparison pass checks all ten pairwise
+Scene-cut detection is GPU-only and paired with the exact model-input frame. The existing model
+texture keeps area-resized, tone-mapped SDR RGB unchanged. Its private alpha channel carries
+`max(R,G,B)` from one fixed decoded source texel before area resizing or tone mapping, using a
+separate nearest/clamp sampler and the same SurfaceTexture transform. The ordinal remains in
+encoded SDR or PQ codes; it is never model input or presentation alpha. Only the nine consumed
+anchor positions in each 16x16 model tile perform the source lookup; other alpha texels are zero.
+The mask uses `floor(gl_FragCoord.xy)` and the actual model extent. Each clipped tile uses axis
+positions `{0, floor((validExtent-1)/2), validExtent-1}`, including repeated edge anchors. At
+`672x384`, this reduces logical ordinal-fetch opportunities from 258,048 to 9,072 without changing
+the nine inputs to each median, model RGB, or the number of GPU passes. Actual execution savings
+depend on the GPU/compiler. The model draw disables and restores
+GL dithering so the private ordinal uses deterministic RGBA8 quantization; area/tone RGB arithmetic
+is unchanged. The GLES regression compares both paths with dithering disabled, rather than claiming
+byte identity with an implementation-dependent former dither pattern.
+
+Each bounds-safe 16 x 16 workgroup stores average integer Rec.709 model-RGB luma for the broad
+raw-change gate, plus the median of a fixed 3 x 3 lattice of source-point ordinals. That order
+statistic commutes with a shared global monotone RGB exposure curve (gain, offset, gamma, clamp,
+and rounding). Spatial averaging before the ordinal would violate this property: regions with
+different texture distributions can reverse their averages under a nonlinear exposure change.
+On the small persistent block grid the comparison pass checks all ten pairwise
 orderings in a center/left/right/up/down stencil. A relation votes only if it differs by at least
 four codes in both frames; a changed site needs at least four common relations, two reversals, and
 a reversal majority. The comparison separately counts sites with at least four reliable current
@@ -516,7 +606,7 @@ memory.
 
 The detector is an optional cut-quality/reuse component, not a depth-pipeline readiness gate. If
 it cannot be created or fails at runtime, Client SBS continues full inference and reprojection,
-disables near-identical reuse and color-based appearance/exposure authority, and uses bounded
+disables both reuse tiers and color-based appearance/exposure authority, and uses bounded
 two-valid-observation depth-only confirmation. The stats pane identifies pending, accepted, and
 rejected fallback decisions explicitly.
 
@@ -535,15 +625,17 @@ reliable current structure. On startup, both branches remain blocked through sou
 and arming happens after that update's decision.
 
 The first update of an ordinary geometry-only candidate freezes the raw camera center, geometry
-baseline, reliable normalized depth, model-input owner, and scene-cut history as one coherent
+baseline, reliable normalized depth, reliable model-input reference, and scene-cut history as one coherent
 comparison tuple. Its live P2/P98 range and immediate temporal depth continue to update, and its
 finite noncollapsed current raw field still publishes geometry through the existing shot camera.
 Confirmation compares the second update with the unchanged reliable owner. A confirmed cut
 coherently advances the tuple and latches the new raw arithmetic mean; a failed confirmation clears
 the pending state without mixing reliable histories. On Android, the scalar decision is published
 at this final resolver and the exact normalized-depth texture is promoted at the beginning of the
-next actual inference, before that inference compares. Reuse dispatches nothing and cannot promote
-it. This preserves the host-visible dependency order without a seventh full-grid pass. Qualified
+next real raw observation, before its depth comparison. Near reuse dispatches nothing and cannot
+promote it. A held reliable comparison tuple invalidates Near ownership until a valid real
+inference advances the tuple. This preserves the dependency
+order without a seventh full-grid pass. Qualified
 appearance cuts remain immediate because the independent structural evidence already supplies the
 second authority.
 
@@ -569,8 +661,9 @@ alpha `0.125` and resets to the current fraction on each accepted cut, so a sust
 converges instead of pulsing repeatedly.
 
 Cut age follows the protected decoder callback/source-step delta attached to each complete valid
-inference, not wall time and not merely one increment per sparse depth result. It resets on
-initialization or an accepted cut. Reuse and invalid depth do not advance it. Reliable history is
+postprocessed real-inference observation, not wall time and not merely
+one increment per sparse depth result. It resets on initialization or an accepted cut. Near reuse
+and invalid depth do not advance it. Reliable history is
 held only for the first structureless update and the first geometry-confirmation observation;
 ordinary exposure advances normally. This keeps source timing distinct from reliable
 model-input/scene-cut/depth ownership when callbacks coalesce while LiteRT is busy.
@@ -589,9 +682,15 @@ already authorized by the preceding valid result. Range, immediate temporal valu
 cut baselines, recovery state, and cut FSM otherwise remain unchanged until a complete valid
 inference arrives.
 
-Depth-health stats are diagnostics, not geometry inputs. When explicit performance logging is on,
-a tiny asynchronous GPU state copy runs every 30 real inferences; Stats visibility sharpens it to
-every 5. With both consumers off, neither the copy nor its GPU-to-CPU map runs. Its enabled poll is
+Each private depth/disparity processor uploads its immutable sampler bindings, tensor/output
+dimensions, packed FP32 stride, coordinate calibration, and spatial scale once when its programs
+are created. Per-frame uploads retain source offsets, current evidence, and time-dependent
+coefficients. Temporal resets preserve the immutable uniforms; context recreation creates and
+initializes new programs.
+
+Depth-health Stats are observations, not geometry inputs. While Stats is visible, a tiny
+asynchronous GPU state copy runs every five postprocessed raw observations. When Stats is hidden,
+neither the copy nor its GPU-to-CPU map runs. Its enabled poll is
 nonblocking. Append-only state fields preserve the prior byte offsets while exposing appearance
 proposal count; exclusive accepted appearance, geometry, and structureless-return cut counts; the
 latest raw/structural/support evidence; depth change/range shift; and causal reason bits. This uses
@@ -772,15 +871,27 @@ values currently saved in Global Settings rather than forcing this factory basel
 values, falling back to its current global values where no session override exists.
 
 Normal, Raw Host SBS, and Host SBS AI therefore begin with a durable **90 FPS ceiling**. Client SBS
-keeps its intentional 30 FPS mode default. A headset panel/thermal transition may temporarily lower
-the effective on-wire rate to an offered rung, but it never rewrites the selected ceiling; the host
+defaults to **1920 x 1080 at 30 FPS with a 72 Hz panel preference**. A headset panel/thermal
+transition may temporarily lower the effective on-wire rate to an offered rung, but it never
+rewrites the selected ceiling; the host
 automatically follows the panel back upward, at most to that ceiling, when the panel recovers. The
 SceneCore presentation Surface advertises the durable ceiling rather than the temporary effective
-rate so a recreated output swapchain cannot pin the panel at a throttled mode. In Client SBS the
-decoder writes to the renderer's offscreen `SurfaceTexture`; that input is not the display-rate
-authority. The actual `SurfaceEntity` output receives the durable vote after every `getSurface()`
-replacement and after every successful explicit ceiling change. The paused, hidden GLSurfaceView
-holder remains neutral on XR; ordinary non-XR presentation holders retain their legacy vote.
+rate so a recreated output swapchain cannot pin the panel at a throttled mode. Client SBS votes
+`max(72, durable FPS)` and, while its durable ceiling is at most 72, also requests the advertised
+72 Hz window mode at the current physical resolution. The window preference uses that mode's
+actual rate (`72.00001` on Galaxy XR). The headset's display service rejected an unadvertised 60 Hz
+refresh-only request, so the client uses an advertised mode and does not request a hidden mode ID
+or an unadvertised window rate. If no matching 72 Hz mode is advertised, the previous window hints
+remain in effect while SceneCore retains its 72 Hz Surface vote. This panel preference does not
+raise the 30 FPS stream or inference cadence. Android XR
+retains final control of the physical refresh rate. The scoped window preference restores the
+previous window hints when leaving Client SBS, committing a higher durable ceiling, or destroying
+the presenter; a temporarily capped ACK cannot keep a higher user ceiling pinned to 72. In Client
+SBS the decoder writes to the renderer's offscreen `SurfaceTexture`; that input is not the
+display-rate authority. The actual `SurfaceEntity` output receives the mode-aware durable vote
+after every `getSurface()` replacement, committed presentation-mode change, and successful explicit
+ceiling change. The paused, hidden GLSurfaceView holder remains neutral on XR; ordinary non-XR
+presentation holders retain their legacy vote.
 
 An ACK may clamp a panel-follow request below both its temporary rung and the durable ceiling—for
 example ceiling 90, request 72, applied 60. That 60 is the effective on-wire rate only; dynamic
@@ -873,8 +984,9 @@ Reusing the source YUV limited/full flag would apply range interpretation twice 
 already produced normalized RGB. Clear explicit Client SBS metadata before returning to a direct
 mode so SceneCore again follows the decoded `HardwareBuffer` metadata.
 
-Force output alpha to one. External-OES video may sample with alpha zero, which otherwise makes the
-SceneCore quad transparent or black.
+Force presentation output alpha to one. External-OES video may sample with alpha zero, which
+otherwise makes the SceneCore quad transparent or black. The private model-input texture instead
+uses alpha for its independent source-point scene-cut ordinal; RGB tensor packing ignores alpha.
 
 ## In-headset controls and stats
 
@@ -890,6 +1002,17 @@ falls back to the compact multi-machine grid.
 
 ### Spatial control layout
 
+All seven in-stream panel root canvases fill their complete bounds with an opaque background.
+Panel corner radii are zero and local alpha is one; hidden/loading panels retain their existing
+visibility gates. Collapsing the dock no longer dims the glance strip. The collapsed dock crops
+both its raster and physical quad around the reveal pill at the same metres per pixel, restoring
+the original raster on reveal, so a solid root does not expose an empty full-width slab. These
+changes guarantee solid panel content; SceneCore does not expose the hosted panel surface's
+compositor blending flag. In beta02, panel metres and raster dimensions are coupled through the
+runtime pixel density: `setSize()` converts back to `setSizeInPixels()`. Entity scale is the
+separate multiplier. The dock uses one pixel-size request, preserving scale, rather than a second
+metre-size request that would overwrite its cropped raster.
+
 A passive glance strip sits above the video and never intercepts input. It keeps the PC/application
 identity, active presentation mode, live stream tuple, and reconnect/status cue visible without
 requiring a pane. The main dock remains level at its fixed pose beneath the video. Opening or closing
@@ -897,17 +1020,18 @@ another surface must not move that dock.
 
 The contextual mode panel is anchored directly below the dock and pitches upward toward the
 viewer while leaving the dock pose unchanged. When fitting mode content between its 0.52 m
-baseline and 0.90 m cap, resize both the hosted Android
-raster with `setSizeInPixels()` and the physical quad with `setSize()`. Derive both from the original
-raster/metre pair so repeated mode refreshes cannot accumulate rounding drift; retain the whole-pane
+baseline and 0.90 m cap, keep the hosted Android raster and physical quad consistent with the
+runtime pixel density and entity scale. Derive target dimensions from the original raster/metre
+pair so repeated mode refreshes cannot accumulate rounding drift; retain the whole-pane
 `ScrollView` beyond the cap. Session Settings opens to the **left** of the video;
 its inner edge remains anchored outside the video and the panel yaws inward toward the viewer's
 face. **Stats** uses the **right** side as a compact, single-column panel whose
 inner edge is anchored just beyond the video's right edge. It yaws inward around local Y so its
 outer edge wraps toward the current head position, with a clearance limit preventing it from
 approaching the viewer too closely. Its Android raster and physical height grow together with the
-visible rows from the authored 1920 x 1440 / 1.05 m baseline to the deterministic 2538 px / 1.85 m
-cap; only content beyond that cap uses the bounded vertical `ScrollView`. Recompute side-panel
+visible rows from the authored 1920 x 1440 / 1.05 m baseline to the authored 2538 px / 1.85 m
+cap; actual SDK raster dimensions remain subject to runtime density and integer quantization.
+Only content beyond that cap uses the bounded vertical `ScrollView`. Recompute side-panel
 poses when they open, on video resize/mode change, after screen movement/Cinema View, and on the
 existing slow Stats refresh. Never poll head pose from the video frame loop or while the associated
 side panel is hidden.
@@ -961,6 +1085,16 @@ masks Stats. The Stats choice is persisted so an in-place
 reconnect or activity recreation cannot silently clear it. All controls remain ordinary clickable
 Android `View`s grouped within their respective panel; never create one entity per control.
 
+**Cinema** toggles its existing screen size/pose preset together with an empty black background.
+The public SceneCore environment API owns the background; video decoding and publication continue
+normally. Entering saves the current environment and passthrough preferences, and leaving restores
+them rather than forcing a particular system environment. The override also releases those
+preferences before activity stop, disconnect, and scene teardown. A same-activity foreground return
+reapplies black if Cinema remains selected; the choice is session state, not a new durable setting.
+If environment control is unavailable, the screen preset remains usable. Runtime application is
+asynchronous and is logged separately from the request. Newer environment preferences are not
+overwritten during cleanup. Temporary shell-controlled scene overrides have been removed.
+
 Enum values in both Global Settings and the current-session panel are ordinary buttons in one
 connected segmented surface, not radio dialogs or cycle-only rows. Compact choices use equal-width,
 single-line horizontal segments with an 80 dp minimum gaze-target height. If every localized label
@@ -993,104 +1127,67 @@ hidden. This is a soft visibility policy only; it must not alter the dock pose o
 
 ### Stats content and telemetry
 
-The visible pane is a lean optimization summary: negotiated codec/profile, exact Android decoder
-component, whether that component is dedicated to low latency, whether low-latency format options
-were requested, the separate Artemis output-pacing policy, sender / receive FPS, decoder output /
-release / surface FPS, network and host/decode latency, app CPU as core-equivalent load, device GPU
-busy/clock, and Android thermal status. Client SBS adds the model/backend/input shape,
-latch/inference/reuse/output FPS, reuse acceptance ratio and rejection reasons, 32-byte decision-read
-wall average/maximum, LiteRT call-wall average/maximum, real-inference result-age average/maximum,
-and four separately labelled true GL GPU averages: model-input resize/color-cut/pack, matched-color
-copy, raw-V2/cut-state processing, and stereo conditioner/inverse-map/packed draw. The last region is
-the only live V2 geometry route. The device GPU percentage remains a
-system-wide total: GL stages can overlap each other and OpenCL, so their durations must not be
-summed into a synthetic utilization percentage. Show XR composition as unavailable because
-SceneCore exposes no compositor timing. The fault row keeps occupied color slots (`color_busy`), flat
-SBS outputs (`flat`), invalid raw transactions, and collapsed diagnostic cut ranges visible. Depth
-health is a compact scalar set:
-renderer-ready/current-field-valid/history-advance-or-hold, fixed pop with shot/current raw means,
-the last latched depth and appearance cut evidence, its causal decision, and accepted-cut counts. A valid held
-field must read `ready yes` with `history hold`; holding the reliable comparison-history tuple does
-not make its geometry unrenderable. Do not show the retired normalized
-stretch/recenter/subject/Bestv2 anchor or
-adaptive-pop classifier as live V2 state. Host SBS likewise labels current protocol data as raw V2,
-fixed pop, validity, cut evidence/events, and faults rather than as a median zero-plane profile.
-Trend plots use fixed oldest-left/newest-right sample-slot spacing. While a history is still short,
-its samples occupy only the newest slots at the right instead of stretching across the entire
-width; once full, each new sample scrolls the oldest point off the left edge. This is not a fixed
-wall-clock scale because the producer cadence varies. The 120 retained Host SBS points represent
-about 12 seconds while Stats requests focused 100 ms publications and about 60 seconds at the
-background 500 ms cadence; after opening Stats, the ring temporarily contains both cadences until
-the older background points age out. Every distinct accepted host publication enters the history
-at delivery even though the stats table repaints more slowly. Repeated heartbeat publications
-refresh liveness without adding duplicate chart points. Client SBS sample spacing follows its
-visible five-real-inference cadence or the 30-real-inference cadence used by explicit background
-performance logging; reuse freezes depth-health history. Opening diagnostics starts a fresh client
-history rather than backfilling time during which both consumers were disabled.
+Stats remains available in every presentation mode. The removed performance-logging switch no
+longer enables background sampling or periodic `ClientSbsPerf` / `DecoderPerf` log lines. Startup,
+capability, transition, failure, and bounded playback-recovery logs remain available. Closing Stats
+stops its device/CPU sampling, detailed Client-SBS counters, GL timer queries, and asynchronous
+health-copy polling; reopening starts fresh sample windows rather than including hidden time.
+Hidden decoder windows retain aggregate stream/loss accounting without allocating completed-window
+snapshots or histogram copies, and do not sample a pruning clock for absent timing records. Visible
+Stats retain unchanged row text and share one pending panel-sizing callback, cancelled when the
+panel is hidden or destroyed.
 
-The depth policy row must say `Uncapped | one in flight | newest frame when free`; Android thermal
-status is reported separately so it is not mistaken for a hidden throttle. Do not add expected
-latest-frame skips, callback coalescing, retained-output drains, or ordinary single-flight busy
-events as counters: those are normal scheduling behavior rather than faults.
+The pane shows negotiated codec/profile and Android decoder, low-latency component/options,
+output-pacing policy, sender/receive/output/release/surface FPS, network/host/decode latency, app
+CPU core-equivalent load, device GPU busy/clock, and Android thermal status. Client SBS adds
+model/backend/input shape, latch/inference/reuse/output FPS, candidate-map bypasses, reuse ratio,
+content/invalid rejection counts, decision-read wall, LiteRT call wall, real result age, and four
+separate GL GPU averages. Exact reuse and age/frame-gap rejection counters are retired.
 
-Surface callbacks and GL latches may follow the decoded stream while inference/reuse arbitration,
-adoption, SBS composition, and EGL swaps run at the lower workload-limited cadence. This is not an
-FPS cap. After the first valid pair, that difference is expected: a drain with no adoption retains
-the SceneCore buffer instead of submitting duplicate pixels. Composition and swap cadence should
-track real-inference plus reuse adoption; repeated output blits or swaps with no adoption are a
-regression.
+The four GPU regions are model render + color-cut/classification, matched-color copy, raw-V2/cut
+state, and disparity conditioning + inverse maps + packed draw. Nonblocking
+`GL_EXT_disjoint_timer_query` rings poll only ready results and discard clock-disjoint samples;
+unavailable measurements must not be represented as measured zero. The model-input region includes
+eager tensor packing; native deferred packing runs in the worker context outside that query.
+These are sampled GLES durations, not per-process utilization. They cannot time LiteRT's OpenCL
+execution or SceneCore composition and must not be summed into device GPU busy.
 
-Do not show managed/PBO/free-CPU-buffer/result-worker stages, CPU command-submission/invoke/
-dependency timings, or custom CPU/GPU temperature probes. Android 14 has no trustworthy public
-per-app NPU-utilization API, so the pane does not probe or display NPU usage. The active Client SBS
-backend is the GPU; Android thermal status comes from the platform thermal API.
+`LiteRT run call wall (not pure GPU)` includes runtime overhead and blocking within the LiteRT
+call and excludes reuse. `Decision read avg / max` brackets validation and the authenticated
+32-byte map/copy/unmap; immutable object/range checks are cached after first success. The map can
+wait for pending GPU work despite the earlier server-side fence wait, so its wall time overlaps
+the input/classifier dependency and is not additive with the GPU stage duration. Real depth-result
+age measures capture-to-adoption latency. It is neither a Near expiry clock nor final XR latency.
 
-Keep timing domains explicit. `LiteRT run call wall (not pure GPU)` brackets
-`LiteRtRunCompiledModel()` and includes runtime overhead plus any blocking visible to that API;
-LiteRT does not expose the OpenCL event needed to isolate accelerator execution. Reuse is excluded
-from this timing. Depth result age is the real inference pair's capture-to-adoption latency, not a
-GPU timer; reused depth ownership is separately hard-bounded to less than 100 ms.
-`Decision read avg / max` measures CPU wall time around validation plus the authenticated 32-byte
-map/copy/unmap. Immutable object/allocation/range checks are cached after their first success, so
-steady-state time primarily exposes the cross-context synchronization cost on the device.
+The depth policy remains `Uncapped | one in flight | newest frame when free`; thermal status is
+telemetry, not a hidden throttle. Near reuse compares current model pixels with the retained real
+inference owner and can continue indefinitely while content and ownership remain valid. It does
+not renew its owner from the preceding reused frame. A static source need not produce identical
+lossy decoded pixels; reuse remains a thresholded content decision.
 
-Actual GLES completion timing is backed by nonblocking `GL_EXT_disjoint_timer_query` rings. It
-reports averages only for model render + color cut + pack, matched-color copy, raw-V2
-depth/cut-state publication, and raw V2 disparity conditioning followed by inverse-map and
-packed SBS draw. Poll availability rather than
-waiting, discard samples from disjoint clock intervals, and show the timers as unavailable when the
-driver cannot provide reliable queries. GLES queries cannot bracket LiteRT's OpenCL work, and
-SceneCore exposes no final compositor-present timestamp. Record the active warp path alongside these
-timings. Any path other than the strict exact-1x-seed plus 2x-horizontal one-correction `RG16F` V2
-cache is flat output, not a comparable geometry fallback.
+The fault row retains occupied color slots, flat outputs, invalid raw transactions and collapsed
+cut ranges. Expected callback coalescing, latest-frame replacement and single-flight busy events
+are scheduling behavior rather than faults. A valid held depth field must show `ready yes` and
+`history hold`; holding the reliable comparison tuple does not itself make geometry unrenderable.
+Raw means, fixed pop, current validity, cut evidence/causes and accepted-cut counts remain the
+compact health state. Retired stretch/recenter/subject/Bestv2 and adaptive-pop state is not live V2.
 
-Performance logging is opt-in under XR Diagnostics. While enabled, the
-typed window is written to logcat at approximately the two-second stats cadence, never per frame.
-Normal and Host SBS write one
-`DecoderPerf` line with sender sequence, receive, decoder output, release, surface-presentation, and
-decode latency. Client SBS writes one consolidated `ClientSbsPerf` line with those same stream
-boundaries plus the model/backend/input, latch/inference/reuse/output FPS, reuse acceptance
-ratio, content/frame-gap/owner-age/invalid reuse-rejection counts, decision-read wall
-average/maximum, LiteRT wall average/maximum, real-inference result-age
-average/maximum, the four GLES completion averages, exceptional `color_busy`/`flat` counts, and
-causal depth health. `proposals` counts appearance-detector proposals, not accepted cuts;
-`cuts_app`, `cuts_geom`, and `cuts_low` partition accepted cuts by reason; `cuts_low` specifically
-counts the two-observation transition into persistent low structure. The latest raw,
-structural/support, depth/range, detector-bit, and decision-bit fields explain the current sample.
-The line also includes app CPU core-equivalent load, GPU busy/clock, and Android thermal status. The former
-five-second renderer debug lines and separate depth line are intentionally omitted to avoid duplicate
-logging. Use these lines for repeatable A/B captures; they add no per-frame logging or additional GPU
-synchronization.
-When Stats is hidden and explicit performance logging is disabled, Client SBS disables timer
-queries, bypasses its detailed synchronized/atomic performance-counter updates, skips typed
-stats-table/log formatting, and does not schedule or map the 224-byte GPU health-readback ring.
-Enabling explicit logging starts that ring at a 30-frame cadence; opening Stats raises it to 5
-frames and starts a fresh history rather than mapping stale hidden-state samples. Timer and
-readback state are created/reset only on the renderer thread with its EGL context current.
+Health copies contain the 224-byte depth state only; the Exact evidence tail is gone. Copies,
+fences and maps remain asynchronous, failures back off without disabling valid depth, and recovery
+requires a fresh completed sample. Near reuse freezes postprocess health. Client history advances
+with visible five-observation sampling. Host trends retain their 120 samples at the negotiated
+focused/background cadence. All plots use oldest-left/newest-right sample slots, not an invented
+fixed wall-clock axis; repeated host heartbeat publications do not duplicate event points.
+
+GL latches may outpace inference/reuse adoption while the transaction is occupied. Composition
+and swaps follow real inference plus reuse adoption; drains without adoption retain the existing
+SceneCore buffer. Repeated packed draws without adoption are a regression. There is no managed
+CPU tensor path or Java postprocess worker. SceneCore final presentation timing and per-app NPU
+utilization are unavailable; custom CPU/GPU temperature probes are not part of Stats.
 
 ### Spatial UI learnings
 
-These rules are verified on Galaxy XR with SceneCore alpha16:
+These rules come from Galaxy XR observations across SceneCore alpha16 through beta02:
 
 - Host several clickable Android `View`s inside one `PanelEntity`, like a toolbar. Separate panels
   per tile do not receive the same native child-view gaze highlight.
@@ -1102,6 +1199,11 @@ These rules are verified on Galaxy XR with SceneCore alpha16:
   than a Button compound drawable.
 - Panel contents scale with the entity's physical meter size. Tune meter dimensions together with
   child dp/sp sizes, padding, and margins.
+- Hiding a `PanelEntity` does not hide its hosted Android view or stop indeterminate drawables.
+  Synchronize animated panels with their Android root visibility, hidden before attachment and
+  whenever the panel is inactive; use `INVISIBLE` when its measured raster bounds must survive.
+  The depth-status spinner is visible only during its delayed loading indicator, and ready, idle,
+  mode reset, and destruction hide the Android root to stop its animation.
 - Host depth-preparation status is a transient `PanelEntity` centered on the video and offset
   slightly toward the viewer. Phase 1 means process-wide engine preparation; phase 3 means
   per-stream GPU-pipeline setup for the already resident model.

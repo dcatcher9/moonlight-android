@@ -2,6 +2,8 @@ package com.limelight.binding.video;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.media.MediaFormat;
@@ -58,21 +60,6 @@ public class MediaCodecDecoderRendererTelemetryTest {
         assertEquals("Balanced (vsync queue)",
                 MediaCodecDecoderRenderer.describeOutputPacing(
                         PreferenceConfiguration.FRAME_PACING_BALANCED));
-    }
-
-    @Test
-    public void hiddenPaneStillDispatchesWhenExplicitLoggingIsEnabled() {
-        assertTrue(MediaCodecDecoderRenderer.shouldDispatchPerformanceSnapshot(false, true));
-    }
-
-    @Test
-    public void hiddenPaneWithoutLoggingDoesNotDispatch() {
-        assertFalse(MediaCodecDecoderRenderer.shouldDispatchPerformanceSnapshot(false, false));
-    }
-
-    @Test
-    public void visiblePaneDispatchesWithoutLogging() {
-        assertTrue(MediaCodecDecoderRenderer.shouldDispatchPerformanceSnapshot(true, false));
     }
 
     @Test
@@ -141,11 +128,6 @@ public class MediaCodecDecoderRendererTelemetryTest {
         active.totalFramesReceived = 29;
         active.framesLost = 1;
 
-        VideoStats last = new VideoStats();
-        last.measurementStartTimestamp = 50;
-        last.totalFrames = 60;
-        last.totalFramesDecoded = 60;
-
         VideoStats global = new VideoStats();
         global.measurementStartTimestamp = 1;
         global.totalFrames = 100;
@@ -153,7 +135,7 @@ public class MediaCodecDecoderRendererTelemetryTest {
         global.framesLost = 2;
 
         MediaCodecDecoderRenderer.restartPerformanceTelemetryWindow(
-                active, last, global, 500);
+                active, global, 500);
 
         assertEquals(130, global.totalFrames);
         assertEquals(127, global.totalFramesReceived);
@@ -162,25 +144,88 @@ public class MediaCodecDecoderRendererTelemetryTest {
         assertEquals(0, active.totalFramesReceived);
         assertEquals(0, active.totalFramesDecoded);
         assertEquals(500, active.measurementStartTimestamp);
-        assertEquals(0, last.totalFrames);
-        assertEquals(0, last.totalFramesDecoded);
-        assertEquals(0, last.measurementStartTimestamp);
     }
 
     @Test
     public void enablingTelemetryDoesNotFoldAnUnstartedWindowIntoGlobalStats() {
         VideoStats active = new VideoStats();
-        VideoStats last = new VideoStats();
         VideoStats global = new VideoStats();
         global.measurementStartTimestamp = 25;
         global.totalFrames = 7;
 
         MediaCodecDecoderRenderer.restartPerformanceTelemetryWindow(
-                active, last, global, 500);
+                active, global, 500);
 
         assertEquals(7, global.totalFrames);
         assertEquals(25, global.measurementStartTimestamp);
         assertEquals(500, active.measurementStartTimestamp);
+    }
+
+    @Test
+    public void hiddenWindowsKeepCumulativeAccountingWithoutAllocatingSnapshots() {
+        VideoStats active = new VideoStats();
+        VideoStats global = new VideoStats();
+        active.measurementStartTimestamp = 100;
+        active.totalFrames = 90;
+        active.totalFramesReceived = 88;
+        active.framesLost = 2;
+        active.frameLossEvents = 1;
+        active.totalTimeMs = 176;
+        active.recordDecoderQueueLatency(3, 1);
+
+        assertNull(MediaCodecDecoderRenderer.completePerformanceTelemetryWindow(
+                active, global, 1100, false));
+        assertEquals(90, global.totalFrames);
+        assertEquals(88, global.totalFramesReceived);
+        assertEquals(2, global.framesLost);
+        assertEquals(1, global.frameLossEvents);
+        assertEquals(176, global.totalTimeMs);
+        assertEquals(3.0f, global.getDecoderQueueP95Ms(), 0.0f);
+        assertEquals(100, global.measurementStartTimestamp);
+        assertEquals(0, active.totalFrames);
+        assertEquals(1100, active.measurementStartTimestamp);
+
+        active.totalFrames = 45;
+        active.totalFramesReceived = 45;
+        MediaCodecDecoderRenderer.restartPerformanceTelemetryWindow(active, global, 1600);
+        assertEquals(135, global.totalFrames);
+        assertEquals(133, global.totalFramesReceived);
+        assertEquals(1600, active.measurementStartTimestamp);
+
+        active.totalFrames = 90;
+        active.totalFramesReceived = 90;
+        active.totalFramesDecoded = 90;
+        active.recordDecoderQueueLatency(1, 0);
+        VideoStats visible = MediaCodecDecoderRenderer.completePerformanceTelemetryWindow(
+                active, global, 2600, true);
+        assertNotNull(visible);
+        assertEquals(1600, visible.measurementStartTimestamp);
+        assertEquals(90, visible.totalFrames);
+        assertEquals(0, visible.framesLost);
+        assertEquals(1.0f, visible.getDecoderQueueP95Ms(), 0.0f);
+        assertEquals(225, global.totalFrames);
+        assertEquals(223, global.totalFramesReceived);
+        assertEquals(2, global.framesLost);
+    }
+
+    @Test
+    public void visibleWindowSnapshotSurvivesTheNextActiveWindow() {
+        VideoStats active = new VideoStats();
+        VideoStats global = new VideoStats();
+        active.measurementStartTimestamp = 100;
+        active.totalFrames = 90;
+        active.recordDecoderQueueLatency(7, 2);
+        VideoStats completed = MediaCodecDecoderRenderer.completePerformanceTelemetryWindow(
+                active, global, 1100, true);
+
+        active.totalFrames = 1;
+        active.recordDecoderQueueLatency(1, 0);
+        assertEquals(90, completed.totalFrames);
+        assertEquals(100, completed.measurementStartTimestamp);
+        assertEquals(7.0f, completed.getDecoderQueueP95Ms(), 0.0f);
+        assertEquals(1, active.totalFrames);
+        assertEquals(1100, active.measurementStartTimestamp);
+        assertEquals(1.0f, active.getDecoderQueueP95Ms(), 0.0f);
     }
 
     @Test

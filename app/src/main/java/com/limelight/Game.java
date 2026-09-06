@@ -55,7 +55,6 @@ import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
 import com.limelight.utils.MouseModeOption;
 import com.limelight.utils.PanZoomHandler;
-import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
@@ -135,10 +134,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -2563,33 +2560,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         .putInt("LastNotifiedCrashCount", 0)
                         .apply();
             }
-            if(prefConfig.enablePerfLogging && decoderRenderer.performanceWasTracked()) {
-                new PerformanceDataTracker().savePerformanceStatistics(
-                        getBaseContext(),
-                        Build.MODEL,
-                        Build.VERSION.SDK_INT + "",
-                        BuildConfig.VERSION_NAME,
-                        selectedVideoFormat,
-                        decoderRenderer.getMinDecoderLatency(),
-                        decoderRenderer.getMinDecoderLatencyFullLog(),
-                        String.valueOf((prefConfig.bitrate / 1000)),
-                        displayWidth + "x" + displayHeight,
-                        prefConfig.fps + " hz",
-                        decoderRenderer.getAverageDecoderLatency() + " ms",
-                        PreferenceConfiguration.getSelectedFramePacingName(getBaseContext()),
-                        formatCurrentTime(System.currentTimeMillis())
-                );
-            }
 
         }
 
         finish();
-    }
-
-    public static String formatCurrentTime(long currentTimeMillis) {
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm");
-        Date date = new Date(currentTimeMillis);
-        return dateFormat.format(date);
     }
 
     private void setInputGrabState(boolean grab) {
@@ -5320,9 +5294,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         final StreamContainer currentContainer = streamContainer;
         final XrStreamPresenter currentPresenter = currentContainer != null
                 ? currentContainer.getXrPresenter() : null;
-        boolean diagnosticsEnabled = currentPresenter != null
-                && (currentPresenter.isStatsVisible() || prefConfig.enablePerfLogging);
-        if (!diagnosticsEnabled) {
+        if (currentPresenter == null || !currentPresenter.isStatsVisible()) {
             return;
         }
         long nowMs = android.os.SystemClock.uptimeMillis();
@@ -5335,13 +5307,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // its boundary relative to the immutable stream snapshot.
         final StreamContainer sampledContainer = currentContainer;
         final Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbsSnapshot =
-                sampledContainer != null
-                        ? sampledContainer.sampleClientSbsPerformance() : null;
+                sampledContainer.sampleClientSbsPerformance();
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 // XR stats panel so the "Stats" bar toggle can show it in the headset.
-                if (sampledContainer == streamContainer && sampledContainer != null
+                if (sampledContainer == streamContainer
                         && sampledContainer.getXrPresenter() != null) {
                     sampledContainer.getXrPresenter().setStats(
                             snapshot, clientSbsSnapshot, streamHdrActive);
@@ -5350,14 +5321,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         });
     }
 
-    /** Synchronizes decoder timing with the XR Stats toggle; explicit logging stays independent. */
+    /** Collect decoder timing only while XR Stats is visible. */
     public void setPerformanceTelemetryEnabled(boolean statsVisible) {
         if (statsVisible) {
             lastXrStatsDispatchMs = 0L;
         }
         if (decoderRenderer != null) {
-            decoderRenderer.setPerformanceTelemetryEnabled(
-                    statsVisible || prefConfig.enablePerfLogging);
+            decoderRenderer.setPerformanceTelemetryEnabled(statsVisible);
         }
     }
 

@@ -72,7 +72,7 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
     }
 
     @Test
-    public void teardownDropsLateCallbacksAndNeverJoinsCallbackThread() throws Exception {
+    public void teardownKeepsCallbackThreadUntilCodecReleaseAndNeverJoinsIt() throws Exception {
         String source = readRendererSource();
         String callback = methodBody(
                 source, "private void handleFrameRendered(MediaCodec registeredCodec,");
@@ -83,11 +83,14 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
 
         assertTrue(callback.contains("frameRenderedCallbackEpoch.get()"));
         assertTrue(callback.contains("registeredCodec == activeCodec"));
-        assertTrue(prepareForStop.indexOf("stopping = true")
-                < prepareForStop.indexOf("shutdownFrameRenderedCallbackThread()"));
+        assertTrue(prepareForStop.contains("stopping = true"));
+        assertFalse(prepareForStop.contains("shutdownFrameRenderedCallbackThread()"));
         assertTrue(shutdown.contains("thread.quitSafely()"));
         assertFalse(shutdown.contains("join("));
-        assertTrue(cleanup.contains("shutdownFrameRenderedCallbackThread()"));
+        int unregister = cleanup.indexOf("invalidateFrameRenderedCallbacks(decoderToRelease)");
+        int release = cleanup.indexOf("decoderToRelease.release()");
+        int shutdownThread = cleanup.indexOf("shutdownFrameRenderedCallbackThread()");
+        assertTrue(unregister >= 0 && release > unregister && shutdownThread > release);
     }
 
     @Test

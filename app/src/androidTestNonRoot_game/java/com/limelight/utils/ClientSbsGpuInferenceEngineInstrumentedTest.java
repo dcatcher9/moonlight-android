@@ -22,6 +22,8 @@ import android.util.Log;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -45,77 +47,235 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
     private static final int EGL_OPENGL_ES3_BIT_KHR = 0x0040;
     private static final int PACKED_RGB_FLOAT_PIXEL_BYTES = 3 * Float.BYTES;
     private static final int PACKED_DEPTH_FLOAT_PIXEL_BYTES = Float.BYTES;
-    private static final int PHWC4_FP16_PIXEL_BYTES = 4 * Short.BYTES;
-    private static final float PHWC4_OUTPUT_SENTINEL = -1024.0f;
     private static final int BENCHMARK_WARMUP_RUNS = 20;
     private static final int BENCHMARK_MEASURED_RUNS = 100;
-    /**
-     * Explicit device-only capability probe for LiteRT direct external FP16 PHWC4 buffer storage.
-     * Normal suites skip this test; run it with {@code -e direct_phwc4_probe true}. Production
-     * remains packed NHWC with automatic internal storage.
-     */
+
+    /** Exercises the production JNI/fence path with real inference and asymmetric RGBA8 input. */
     @Test
-    public void benchmarkOnlyDirectExternalPhwc4MatchesPacked() throws Exception {
-        Bundle arguments = InstrumentationRegistry.getArguments();
-        assumeTrue("Direct external PHWC4 is an explicit instrumentation-only probe; pass "
-                        + "-e direct_phwc4_probe true",
-                "true".equalsIgnoreCase(arguments.getString("direct_phwc4_probe", "false")));
-        int warmupRuns = positiveArgument(arguments, "warmups", 10);
-        int measuredRuns = positiveArgument(arguments, "runs", 30);
-        double maximumNormalizedRmse = nonNegativeDoubleArgument(
-                arguments, "phwc4_max_nrmse", 0.02);
-        double minimumCosine = boundedDoubleArgument(
-                arguments, "phwc4_min_cosine", 0.999, -1.0, 1.0);
-
-        Context runtimeContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        AssetManager modelAssets = runtimeContext.getAssets();
+    public void nearReusePreservesSlotsAndLazyPackingHandlesEveryInferenceFallback() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         ClientSbsModelManifest manifest = ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9;
-        PowerManager powerManager = (PowerManager) runtimeContext.getSystemService(
-                Context.POWER_SERVICE);
-        PowerManager.WakeLock wakeLock = powerManager == null ? null
-                : powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-                "Artemis:ClientSbsPhwc4Probe");
-        if (wakeLock != null) {
-            wakeLock.setReferenceCounted(false);
-            wakeLock.acquire(TimeUnit.MINUTES.toMillis(3));
-        }
-
-        ExternalIoProbeRun packedRun = null;
-        ExternalIoProbeRun directRun = null;
-        assertTrue("Stale benchmark caches must be removed before the PHWC4 probe",
-                ClientSbsGpuInferenceEngine.clearBenchmarkCaches(runtimeContext));
+        int width = manifest.getInputWidth();
+        int height = manifest.getInputHeight();
+        PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        PowerManager.WakeLock wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                "Artemis:ClientSbsNativeReuse");
+        wakeLock.acquire(TimeUnit.MINUTES.toMillis(3));
         try (EglFixture egl = EglFixture.create()) {
-            packedRun = runExternalIoProbeLeg(runtimeContext, modelAssets, egl, manifest,
-                    false, warmupRuns, measuredRuns);
-            directRun = runExternalIoProbeLeg(runtimeContext, modelAssets, egl, manifest,
-                    true, warmupRuns, measuredRuns);
-        } finally {
+            ClientSbsGpuInferenceEngine engine = ClientSbsGpuInferenceEngine.createShared();
+            assertNotNull(engine);
+            ExecutorService worker = Executors.newSingleThreadExecutor();
+            long[] consumed = new long[2];
+            int[] texture = new int[1];
+            int[] records = new int[1];
             try {
-                if (wakeLock != null && wakeLock.isHeld()) {
-                    wakeLock.release();
+                worker.submit(() -> { engine.initialize(context, manifest); return null; }).get();
+                assertTrue("Production worker must support conditional RGBA8 packing",
+                        engine.supportsLazyInputPacking());
+                GLES30.glGenTextures(1, texture, 0);
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0]);
+                GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA8, width, height);
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER,
+                        GLES30.GL_NEAREST);
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER,
+                        GLES30.GL_NEAREST);
+                int[] alignment = new int[1];
+                GLES30.glGetIntegerv(GLES31.GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, alignment, 0);
+                int stride = ((32 + alignment[0] - 1) / alignment[0]) * alignment[0];
+                GLES30.glGenBuffers(1, records, 0);
+                GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, records[0]);
+                GLES30.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, stride * 2, null,
+                        GLES30.GL_DYNAMIC_DRAW);
+
+                // Establish ordinary ownership in both slots using distinct current textures.
+                for (int slot = 0; slot < 2; slot++) {
+                    uploadReuseTexture(texture[0], width, height, slot);
+                    runReuseInvocation(engine, worker, consumed, slot, false,
+                            records[0], slot * stride, 0L, texture[0]);
+                    assertEquals(ClientSbsGpuInferenceEngine.RunDisposition.INFER,
+                            engine.getLastRunDisposition(slot));
+                    assertPackedReuseTexture(engine.getInputBufferId(slot), width, height, slot);
+                    readDepthSnapshot(engine.getOutputBufferId(slot), width, height);
+                    consumed[slot] = createRendererFence();
                 }
+
+                // Authenticated Near skips both tensor writes and LiteRT, but must publish a
+                // usable fence and retain the next invocation's output-consumption obligation.
+                for (int slot = 0; slot < 2; slot++) {
+                    poisonFloatBuffer(engine.getInputBufferId(slot), manifest.getInputByteSize());
+                    poisonFloatBuffer(engine.getOutputBufferId(slot), manifest.getOutputByteSize());
+                    publishReuseRecord(records[0], slot * stride, 10L + slot,
+                            ClientSbsNearIdenticalPolicy.DECISION_REUSE_TAG,
+                            ClientSbsNearIdenticalPolicy.REASON_REUSE, false);
+                    runReuseInvocation(engine, worker, consumed, slot, true,
+                            records[0], slot * stride, 10L + slot, texture[0]);
+                    assertEquals(ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
+                            engine.getLastRunDisposition(slot));
+                    assertEquals(ClientSbsNearIdenticalPolicy.REASON_REUSE,
+                            engine.getLastNearIdenticalDecisionReason(slot));
+                    assertEquals(0L, engine.getLastLiteRtRunWallNanos(slot));
+                    assertReuseSentinel(engine.getInputBufferId(slot), width * height * 3);
+                    assertReuseSentinel(engine.getOutputBufferId(slot), width * height);
+                    consumed[slot] = createRendererFence();
+                }
+
+                // Every rejection must repack the current asymmetric input and invoke LiteRT.
+                // Retired wire tag 3/reasons 3, 4, and 10 must not be accepted, even with valid cookies.
+                // The invalid range is deliberately last: its sticky fallback affects both slots.
+                for (int scenario = 0; scenario < 13; scenario++) {
+                    int slot = scenario % 2;
+                    int variant = scenario + 2;
+                    long token = 100L + scenario;
+                    uploadReuseTexture(texture[0], width, height, variant);
+                    poisonFloatBuffer(engine.getInputBufferId(slot), manifest.getInputByteSize());
+                    poisonFloatBuffer(engine.getOutputBufferId(slot), manifest.getOutputByteSize());
+                    // An authentic older decision cannot claim the current capture. Vary only
+                    // the high token word so both halves of the 64-bit token must be checked.
+                    long recordToken = scenario == 3 ? token ^ (1L << 32) : token;
+                    int decision = scenario == 4 || scenario == 5 ? 3
+                            : (scenario >= 7 && scenario <= 10
+                            ? ClientSbsNearIdenticalPolicy.DECISION_INFER_TAG
+                            : ClientSbsNearIdenticalPolicy.DECISION_REUSE_TAG);
+                    int reason = scenario == 4 || scenario == 6 || scenario == 7 ? 10
+                            : (scenario == 1 || scenario == 8
+                            ? ClientSbsNearIdenticalPolicy.REASON_OWNER_INVALID
+                            : (scenario == 9 ? 3 : (scenario == 10 ? 4
+                            : ClientSbsNearIdenticalPolicy.REASON_REUSE)));
+                    publishReuseRecord(records[0], slot * stride, recordToken,
+                            decision, reason, scenario == 0);
+                    runReuseInvocation(engine, worker, consumed, slot, scenario != 2,
+                            records[0], scenario == 11 ? stride * 2 : slot * stride,
+                            token, texture[0]);
+                    assertEquals("Fallback scenario " + scenario,
+                            ClientSbsGpuInferenceEngine.RunDisposition.INFER,
+                            engine.getLastRunDisposition(slot));
+                    assertEquals("Fallback reason " + scenario,
+                            scenario == 2 ? ClientSbsNearIdenticalPolicy.REASON_NOT_CANDIDATE
+                                    : (scenario == 8 ? ClientSbsNearIdenticalPolicy.REASON_OWNER_INVALID
+                                    : ClientSbsNearIdenticalPolicy.REASON_RECORD_INVALID),
+                            engine.getLastNearIdenticalDecisionReason(slot));
+                    assertPackedReuseTexture(engine.getInputBufferId(slot), width, height, variant);
+                    assertTrue(engine.getLastLiteRtRunWallNanos(slot) > 0L);
+                    DepthSnapshot output = readDepthSnapshot(
+                            engine.getOutputBufferId(slot), width, height);
+                    assertTrue("Inference must overwrite output sentinel for scenario " + scenario,
+                            output.minimum != -7.0f || output.maximum != -7.0f);
+                    consumed[slot] = createRendererFence();
+                    if (scenario == 10) {
+                        // Authentication failures reject one frame, not all future proposals.
+                        poisonFloatBuffer(engine.getInputBufferId(slot), manifest.getInputByteSize());
+                        poisonFloatBuffer(engine.getOutputBufferId(slot), manifest.getOutputByteSize());
+                        publishReuseRecord(records[0], slot * stride, 999L,
+                                ClientSbsNearIdenticalPolicy.DECISION_REUSE_TAG,
+                                ClientSbsNearIdenticalPolicy.REASON_REUSE, false);
+                        runReuseInvocation(engine, worker, consumed, slot, true,
+                                records[0], slot * stride, 999L, texture[0]);
+                        assertEquals(ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
+                                engine.getLastRunDisposition(slot));
+                        assertEquals(0L, engine.getLastLiteRtRunWallNanos(slot));
+                        assertReuseSentinel(engine.getInputBufferId(slot), width * height * 3);
+                        assertReuseSentinel(engine.getOutputBufferId(slot), width * height);
+                        consumed[slot] = createRendererFence();
+                    }
+                }
+                assertEquals(GLES30.GL_NO_ERROR, GLES30.glGetError());
             } finally {
-                assertTrue("PHWC4 probe caches must be removed",
-                        ClientSbsGpuInferenceEngine.clearBenchmarkCaches(runtimeContext));
+                GLES30.glFinish();
+                final long first = consumed[0];
+                final long second = consumed[1];
+                try {
+                    assertTrue(worker.submit(() -> engine.close(first, second, true)).get());
+                } finally {
+                    worker.shutdownNow();
+                    GLES30.glDeleteBuffers(1, records, 0);
+                    GLES30.glDeleteTextures(1, texture, 0);
+                }
+            }
+        } finally {
+            if (wakeLock.isHeld()) wakeLock.release();
+        }
+    }
+
+    private static void runReuseInvocation(ClientSbsGpuInferenceEngine engine,
+            ExecutorService worker, long[] consumed, int slot, boolean candidate, int records,
+            int offset, long token, int texture) throws Exception {
+        long inputReady = createRendererFence();
+        long previous = consumed[slot];
+        consumed[slot] = 0L;
+        long ready = worker.submit(() -> engine.run(slot, inputReady, previous, candidate,
+                records, offset, token, texture)).get();
+        waitAndDeleteFence(ready);
+    }
+
+    private static void publishReuseRecord(int buffer, int offset, long token,
+            int decision, int reason, boolean corrupt) {
+        int low = (int) token;
+        int high = (int) (token >>> 32);
+        ByteBuffer bytes = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());
+        bytes.putInt(decision).putInt(decision ^ ClientSbsNearIdenticalPolicy.DECISION_COOKIE);
+        bytes.putInt(low).putInt(high);
+        bytes.putInt(low ^ ClientSbsNearIdenticalPolicy.TOKEN_LOW_COOKIE ^ (corrupt ? 1 : 0));
+        bytes.putInt(high ^ ClientSbsNearIdenticalPolicy.TOKEN_HIGH_COOKIE);
+        bytes.putInt(ClientSbsNearIdenticalPolicy.PROPOSAL_MAGIC).putInt(reason).flip();
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer);
+        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, offset, 32, bytes);
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    private static int reuseTextureByte(int x, int y, int channel, int variant) {
+        return (x * (3 + channel) + y * (7 + channel * 4) + variant * 37) & 255;
+    }
+
+    private static void uploadReuseTexture(int texture, int width, int height, int variant) {
+        ByteBuffer pixels = ByteBuffer.allocateDirect(width * height * 4);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                for (int channel = 0; channel < 3; channel++) {
+                    pixels.put((byte) reuseTextureByte(x, y, channel, variant));
+                }
+                pixels.put((byte) 255);
             }
         }
+        pixels.flip();
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture);
+        GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels);
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0);
+    }
 
-        assertNotNull(packedRun);
-        assertNotNull(directRun);
-        DepthComparison comparison = DepthComparison.compare(
-                directRun.output, packedRun.output);
-        Log.i(BENCHMARK_TAG, "directExternalPhwc4Probe comparison model="
-                + manifest.getId() + " packedVsDirect=" + comparison
-                + " packedRunWallMs=" + summarizeNanos(packedRun.liteRtRunNanos)
-                + " directRunWallMs=" + summarizeNanos(directRun.liteRtRunNanos));
-        assertEquals("Every packed/direct depth value must form a finite pair",
-                manifest.getOutputWidth() * manifest.getOutputHeight(), comparison.compared);
-        assertTrue("Direct external PHWC4 NRMSE exceeds " + maximumNormalizedRmse
-                        + ": " + comparison,
-                comparison.normalizedRmse <= maximumNormalizedRmse);
-        assertTrue("Direct external PHWC4 cosine is below " + minimumCosine
-                        + ": " + comparison,
-                comparison.cosineSimilarity >= minimumCosine);
+    private static void poisonFloatBuffer(int buffer, int bytes) {
+        ByteBuffer values = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder());
+        while (values.hasRemaining()) values.putFloat(-7.0f);
+        values.flip();
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer);
+        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bytes, values);
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    private static void assertReuseSentinel(int buffer, int valueCount) {
+        for (float value : readFloatRange(buffer, valueCount)) {
+            assertEquals("Near must not write either tensor buffer", -7.0f, value, 0.0f);
+        }
+    }
+
+    private static void assertPackedReuseTexture(int buffer, int width, int height, int variant) {
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer);
+        ByteBuffer values = ((ByteBuffer) GLES30.glMapBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER,
+                0, width * height * 12, GLES30.GL_MAP_READ_BIT)).order(ByteOrder.nativeOrder());
+        assertNotNull(values);
+        float maxError = 0.0f;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                for (int channel = 0; channel < 3; channel++) {
+                    float expected = reuseTextureByte(x, height - 1 - y, channel, variant) / 255.0f;
+                    maxError = Math.max(maxError, Math.abs(expected - values.getFloat()));
+                }
+            }
+        }
+        assertTrue(GLES30.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER));
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+        assertTrue("Native packing must preserve every RGB texel and GL-to-tensor row flip: "
+                + maxError, maxError <= 0.00000006f);
     }
 
     @Test
@@ -580,142 +740,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         }
     }
 
-    private static ExternalIoProbeRun runExternalIoProbeLeg(
-            Context runtimeContext, AssetManager modelAssets, EglFixture egl,
-            ClientSbsModelManifest manifest, boolean directExternalPhwc4,
-            int warmupRuns, int measuredRuns) throws Exception {
-        ClientSbsGpuInferenceEngine engine = ClientSbsGpuInferenceEngine.createShared();
-        assertNotNull("A shared LiteRT GPU context must be available", engine);
-        ExecutorService inferenceWorker = Executors.newSingleThreadExecutor(
-                runnable -> new Thread(runnable, directExternalPhwc4
-                        ? "ClientSbsPhwc4Worker" : "ClientSbsPackedProbeWorker"));
-        long[] outputConsumedFences =
-                new long[ClientSbsGpuInferenceEngine.BUFFER_SLOT_COUNT];
-        try {
-            inferenceWorker.submit(() -> {
-                engine.initializeForBenchmark(
-                        runtimeContext, modelAssets, manifest, directExternalPhwc4);
-                return null;
-            }).get();
-            egl.assertRendererContextCurrent();
-            assertEquals("Native external-I/O mode must match the requested benchmark leg",
-                    directExternalPhwc4, engine.isDirectExternalPhwc4Mode());
-
-            int inputBuffer = engine.getInputBufferId(0);
-            int outputBuffer = engine.getOutputBufferId(0);
-            int expectedInputBytes = manifest.getInputWidth() * manifest.getInputHeight()
-                    * (directExternalPhwc4
-                    ? PHWC4_FP16_PIXEL_BYTES : PACKED_RGB_FLOAT_PIXEL_BYTES);
-            int expectedOutputBytes = manifest.getOutputWidth() * manifest.getOutputHeight()
-                    * (directExternalPhwc4
-                    ? PHWC4_FP16_PIXEL_BYTES : PACKED_DEPTH_FLOAT_PIXEL_BYTES);
-            assertTrue(engine.getInputBufferSize(0) >= expectedInputBytes);
-            assertTrue(engine.getOutputBufferSize(0) >= expectedOutputBytes);
-            assertEquals(directExternalPhwc4
-                            ? PHWC4_FP16_PIXEL_BYTES : PACKED_RGB_FLOAT_PIXEL_BYTES,
-                    engine.getInputPixelStrideBytes(0));
-            assertEquals(directExternalPhwc4
-                            ? PHWC4_FP16_PIXEL_BYTES : PACKED_DEPTH_FLOAT_PIXEL_BYTES,
-                    engine.getOutputPixelStrideBytes(0));
-
-            if (directExternalPhwc4) {
-                uploadGradientPhwc4Fp16(inputBuffer, manifest.getInputWidth(),
-                        manifest.getInputHeight());
-                fillPhwc4Fp16Depth(outputBuffer, manifest.getOutputWidth(),
-                        manifest.getOutputHeight(), PHWC4_OUTPUT_SENTINEL);
-            } else {
-                uploadBenchmarkGradient(inputBuffer, manifest.getInputWidth(),
-                        manifest.getInputHeight(), false, false);
-            }
-            assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
-
-            for (int iteration = 0; iteration < warmupRuns; iteration++) {
-                runBenchmarkInvocation(engine, inferenceWorker, egl, 0,
-                        outputConsumedFences);
-            }
-            long[] liteRtRunNanos = new long[measuredRuns];
-            long[] outputReadyNanos = new long[measuredRuns];
-            for (int iteration = 0; iteration < measuredRuns; iteration++) {
-                BenchmarkSample sample = runBenchmarkInvocation(
-                        engine, inferenceWorker, egl, 0, outputConsumedFences);
-                liteRtRunNanos[iteration] = sample.liteRtRunNanos;
-                outputReadyNanos[iteration] = sample.outputReadyNanos;
-            }
-
-            GLES30.glDeleteSync(outputConsumedFences[0]);
-            outputConsumedFences[0] = 0L;
-            int outputStride = directExternalPhwc4
-                    ? PHWC4_FP16_PIXEL_BYTES : PACKED_DEPTH_FLOAT_PIXEL_BYTES;
-            DepthReadback firstReadback = readDepthSnapshot(
-                    outputBuffer, manifest.getOutputWidth(), manifest.getOutputHeight(),
-                    outputStride, directExternalPhwc4 ? PHWC4_OUTPUT_SENTINEL : null);
-            Log.i(BENCHMARK_TAG, "directExternalPhwc4Probe provisional leg="
-                    + (directExternalPhwc4 ? "direct-phwc4-fp16-buffer" : "packed-nhwc")
-                    + " model=" + manifest.getId()
-                    + " sentinelCount=" + firstReadback.sentinelCount
-                    + " sentinelSamples=" + firstReadback.sentinelSamples
-                    + " outputRange=[" + firstReadback.output.minimum + ','
-                    + firstReadback.output.maximum + "]"
-                    + " liteRtRunWallMs=" + summarizeNanos(liteRtRunNanos)
-                    + " invokeToOutputReadyMs=" + summarizeNanos(outputReadyNanos));
-            if (directExternalPhwc4) {
-                assertEquals("Direct external PHWC4 output lane 0 retained the sentinel in "
-                                + firstReadback.sentinelCount + " pixels; LiteRT did not write "
-                                + "the complete bound GL output",
-                        0, firstReadback.sentinelCount);
-                fillPhwc4Fp16Depth(outputBuffer, manifest.getOutputWidth(),
-                        manifest.getOutputHeight(), PHWC4_OUTPUT_SENTINEL);
-            }
-            assertDepthSnapshot(firstReadback.output);
-            outputConsumedFences[0] = createRendererFence();
-            runBenchmarkInvocation(engine, inferenceWorker, egl, 0, outputConsumedFences);
-            GLES30.glDeleteSync(outputConsumedFences[0]);
-            outputConsumedFences[0] = 0L;
-            DepthReadback repeatedReadback = readDepthSnapshot(
-                    outputBuffer, manifest.getOutputWidth(), manifest.getOutputHeight(),
-                    outputStride, directExternalPhwc4 ? PHWC4_OUTPUT_SENTINEL : null);
-            if (directExternalPhwc4) {
-                Log.i(BENCHMARK_TAG, "directExternalPhwc4Probe freshWrite sentinelCount="
-                        + repeatedReadback.sentinelCount + " sentinelSamples="
-                        + repeatedReadback.sentinelSamples);
-                assertEquals("Direct external PHWC4 output lane 0 remained at the sentinel after "
-                                + "a fresh invocation; LiteRT left the bound GL output untouched",
-                        0, repeatedReadback.sentinelCount);
-            }
-            assertDepthSnapshot(repeatedReadback.output);
-            assertRepeatableOutput(firstReadback.output, repeatedReadback.output, 0);
-            outputConsumedFences[0] = createRendererFence();
-
-            Log.i(BENCHMARK_TAG, "directExternalPhwc4Probe leg="
-                    + (directExternalPhwc4 ? "direct-phwc4" : "packed-nhwc")
-                    + " model=" + manifest.getId()
-                    + " completeOpenClDelegation=required"
-                    + " physicalPixelStride=" + outputStride
-                    + " warmups=" + warmupRuns + " runs=" + measuredRuns
-                    + " liteRtRunWallMs=" + summarizeNanos(liteRtRunNanos)
-                    + " invokeToOutputReadyMs=" + summarizeNanos(outputReadyNanos));
-            return new ExternalIoProbeRun(firstReadback.output, liteRtRunNanos,
-                    outputReadyNanos);
-        } finally {
-            try {
-                final long slotZeroFence = outputConsumedFences[0];
-                final long slotOneFence = outputConsumedFences[1];
-                outputConsumedFences[0] = 0L;
-                outputConsumedFences[1] = 0L;
-                GLES20.glFinish();
-                assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
-                assertTrue("Native PHWC4 probe engine close must complete on its owner worker",
-                        inferenceWorker.submit(() -> engine.close(
-                                slotZeroFence, slotOneFence, true)).get());
-            } finally {
-                inferenceWorker.shutdown();
-                assertTrue("PHWC4 probe inference worker must terminate",
-                        inferenceWorker.awaitTermination(10, TimeUnit.SECONDS));
-            }
-            egl.assertRendererContextCurrent();
-        }
-    }
-
     private static String requiredArgument(Bundle arguments, String key) {
         String value = arguments.getString(key);
         assertNotNull("Missing instrumentation argument: " + key, value);
@@ -923,9 +947,7 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                         "result backend=" + manifest.getGpuExecutionPolicy().getBackendId()
                                 + " completeOpenClDelegation=required"
                                 + " model=" + manifest.getId()
-                                + " gpuPriorityHint=" + engine.getGpuPriorityHintLabel()
-                                + " gpuPriorityOverride="
-                                + engine.isGpuPriorityHintOverridden()
+                                + " gpuPriorityHint=Low"
                                 + " weights=" + weightStorage
                                 + " normalization=" + (externalImageNetNormalization
                                 ? "EXTERNAL_IMAGENET" : "EMBEDDED_IMAGENET")
@@ -1039,19 +1061,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         final long outputReadyNanos;
 
         BenchmarkSample(long liteRtRunNanos, long outputReadyNanos) {
-            this.liteRtRunNanos = liteRtRunNanos;
-            this.outputReadyNanos = outputReadyNanos;
-        }
-    }
-
-    private static final class ExternalIoProbeRun {
-        final DepthSnapshot output;
-        final long[] liteRtRunNanos;
-        final long[] outputReadyNanos;
-
-        ExternalIoProbeRun(DepthSnapshot output, long[] liteRtRunNanos,
-                           long[] outputReadyNanos) {
-            this.output = output;
             this.liteRtRunNanos = liteRtRunNanos;
             this.outputReadyNanos = outputReadyNanos;
         }
@@ -1301,63 +1310,9 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
     }
 
-    private static void uploadGradientPhwc4Fp16(int bufferId, int width, int height) {
-        ByteBuffer input = ByteBuffer.allocateDirect(
-                        width * height * PHWC4_FP16_PIXEL_BYTES)
-                .order(ByteOrder.nativeOrder());
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                float red = x / (float) (width - 1);
-                float green = y / (float) (height - 1);
-                float blue = (x + y) / (float) (width + height - 2);
-                float objectX = red - 0.22f;
-                float objectY = green - 0.68f;
-                if (objectX * objectX + objectY * objectY < 0.018f) {
-                    red = 1.0f;
-                    green = 0.05f;
-                    blue = 0.8f;
-                }
-                input.putShort(floatToHalfBits(red));
-                input.putShort(floatToHalfBits(green));
-                input.putShort(floatToHalfBits(blue));
-                input.putShort(floatToHalfBits(0.0f));
-            }
-        }
-        input.flip();
-        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId);
-        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, input.remaining(), input);
-        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
-    }
-
-    private static void fillPhwc4Fp16Depth(int bufferId, int width, int height,
-                                           float sentinel) {
-        ByteBuffer output = ByteBuffer.allocateDirect(
-                        width * height * PHWC4_FP16_PIXEL_BYTES)
-                .order(ByteOrder.nativeOrder());
-        short sentinelBits = floatToHalfBits(sentinel);
-        for (int index = 0; index < width * height * 4; index++) {
-            output.putShort(sentinelBits);
-        }
-        output.flip();
-        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId);
-        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, output.remaining(), output);
-        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
-    }
-
     private static DepthSnapshot readDepthSnapshot(int bufferId, int width, int height) {
-        return readDepthSnapshot(bufferId, width, height,
-                PACKED_DEPTH_FLOAT_PIXEL_BYTES, null).output;
-    }
-
-    private static DepthReadback readDepthSnapshot(int bufferId, int width, int height,
-                                                   int pixelStrideBytes, Float sentinel) {
-        assertTrue("Depth pixel stride must be packed Float32 or FP16 PHWC4",
-                pixelStrideBytes == PACKED_DEPTH_FLOAT_PIXEL_BYTES
-                        || pixelStrideBytes == PHWC4_FP16_PIXEL_BYTES);
-        boolean fp16Phwc4 = pixelStrideBytes == PHWC4_FP16_PIXEL_BYTES;
-        short sentinelHalfBits = sentinel == null ? 0 : floatToHalfBits(sentinel);
         int valueCount = width * height;
-        int bytes = valueCount * pixelStrideBytes;
+        int bytes = valueCount * PACKED_DEPTH_FLOAT_PIXEL_BYTES;
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bufferId);
         Buffer mapped = GLES30.glMapBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bytes,
                 GLES30.GL_MAP_READ_BIT);
@@ -1370,26 +1325,9 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         int[] tileCounts = new int[16];
         double spatialChecksum = 0.0;
         int nonFiniteCount = 0;
-        int sentinelCount = 0;
-        StringBuilder sentinelSamples = new StringBuilder();
         for (int index = 0; index < valueCount; index++) {
-            int byteOffset = index * pixelStrideBytes;
-            short halfBits = fp16Phwc4 ? output.getShort(byteOffset) : 0;
-            float value = fp16Phwc4
-                    ? halfBitsToFloat(halfBits) : output.getFloat(byteOffset);
+            float value = output.getFloat();
             values[index] = value;
-            if (sentinel != null && (fp16Phwc4
-                    ? halfBits == sentinelHalfBits
-                    : Float.floatToRawIntBits(value) == Float.floatToRawIntBits(sentinel))) {
-                sentinelCount++;
-                if (sentinelCount <= 16) {
-                    if (sentinelSamples.length() != 0) {
-                        sentinelSamples.append(',');
-                    }
-                    sentinelSamples.append(index).append('@')
-                            .append(index % width).append('x').append(index / width);
-                }
-            }
             if (Float.isFinite(value)) {
                 minimum = Math.min(minimum, value);
                 maximum = Math.max(maximum, value);
@@ -1415,80 +1353,8 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
             tileMinimum = Math.min(tileMinimum, mean);
             tileMaximum = Math.max(tileMaximum, mean);
         }
-        return new DepthReadback(
-                new DepthSnapshot(values, minimum, maximum, tileMinimum, tileMaximum,
-                        spatialChecksum / valueCount),
-                sentinelCount, sentinelSamples.toString());
-    }
-
-    /** IEEE-754 round-to-nearest-even conversion used to populate raw GLES half4 SSBOs. */
-    private static short floatToHalfBits(float value) {
-        int bits = Float.floatToRawIntBits(value);
-        int sign = (bits >>> 16) & 0x8000;
-        int exponent = (bits >>> 23) & 0xff;
-        int significand = bits & 0x7fffff;
-        if (exponent == 0xff) {
-            int halfSignificand = significand == 0 ? 0 : Math.max(1, significand >>> 13);
-            return (short) (sign | 0x7c00 | halfSignificand);
-        }
-
-        int halfExponent = exponent - 127 + 15;
-        if (halfExponent >= 0x1f) {
-            return (short) (sign | 0x7c00);
-        }
-        if (halfExponent <= 0) {
-            if (halfExponent < -10) {
-                return (short) sign;
-            }
-            significand |= 0x800000;
-            int shift = 14 - halfExponent;
-            int halfSignificand = significand >>> shift;
-            int remainder = significand & ((1 << shift) - 1);
-            int halfway = 1 << (shift - 1);
-            if (remainder > halfway || (remainder == halfway && (halfSignificand & 1) != 0)) {
-                halfSignificand++;
-            }
-            return (short) (sign | halfSignificand);
-        }
-
-        int halfSignificand = significand >>> 13;
-        int remainder = significand & 0x1fff;
-        if (remainder > 0x1000 || (remainder == 0x1000 && (halfSignificand & 1) != 0)) {
-            halfSignificand++;
-            if (halfSignificand == 0x400) {
-                halfSignificand = 0;
-                halfExponent++;
-                if (halfExponent >= 0x1f) {
-                    return (short) (sign | 0x7c00);
-                }
-            }
-        }
-        return (short) (sign | (halfExponent << 10) | halfSignificand);
-    }
-
-    /** IEEE-754 binary16 to binary32 conversion for direct-PHWC4 result validation. */
-    private static float halfBitsToFloat(short half) {
-        int bits = half & 0xffff;
-        int sign = (bits & 0x8000) << 16;
-        int exponent = (bits >>> 10) & 0x1f;
-        int significand = bits & 0x3ff;
-        if (exponent == 0) {
-            if (significand == 0) {
-                return Float.intBitsToFloat(sign);
-            }
-            exponent = 1;
-            while ((significand & 0x400) == 0) {
-                significand <<= 1;
-                exponent--;
-            }
-            significand &= 0x3ff;
-            exponent += 127 - 15;
-        } else if (exponent == 0x1f) {
-            return Float.intBitsToFloat(sign | 0x7f800000 | (significand << 13));
-        } else {
-            exponent += 127 - 15;
-        }
-        return Float.intBitsToFloat(sign | (exponent << 23) | (significand << 13));
+        return new DepthSnapshot(values, minimum, maximum, tileMinimum, tileMaximum,
+                spatialChecksum / valueCount);
     }
 
     private static TensorSnapshot readTensorSnapshot(int bufferId, int valueCount,
@@ -1649,18 +1515,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         }
     }
 
-    private static final class DepthReadback {
-        final DepthSnapshot output;
-        final int sentinelCount;
-        final String sentinelSamples;
-
-        DepthReadback(DepthSnapshot output, int sentinelCount, String sentinelSamples) {
-            this.output = output;
-            this.sentinelCount = sentinelCount;
-            this.sentinelSamples = sentinelSamples;
-        }
-    }
-
     private static final class TensorSnapshot {
         final float[] values;
         final float minimum;
@@ -1710,57 +1564,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                     partialNonFiniteVectors, minimum, maximum, mean, rms,
                     values.length == 0 ? Double.NaN : zeroCount / (double) values.length,
                     checksum);
-        }
-    }
-
-    private static final class DepthComparison {
-        final int compared;
-        final double normalizedRmse;
-        final double cosineSimilarity;
-
-        DepthComparison(int compared, double normalizedRmse, double cosineSimilarity) {
-            this.compared = compared;
-            this.normalizedRmse = normalizedRmse;
-            this.cosineSimilarity = cosineSimilarity;
-        }
-
-        static DepthComparison compare(DepthSnapshot candidate, DepthSnapshot reference) {
-            assertEquals("Packed/direct depth element count",
-                    reference.values.length, candidate.values.length);
-            int compared = 0;
-            double squaredError = 0.0;
-            double candidateSquares = 0.0;
-            double referenceSquares = 0.0;
-            double dot = 0.0;
-            for (int index = 0; index < candidate.values.length; index++) {
-                float candidateValue = candidate.values[index];
-                float referenceValue = reference.values[index];
-                if (!Float.isFinite(candidateValue) || !Float.isFinite(referenceValue)) {
-                    continue;
-                }
-                compared++;
-                double error = candidateValue - referenceValue;
-                squaredError += error * error;
-                candidateSquares += (double) candidateValue * candidateValue;
-                referenceSquares += (double) referenceValue * referenceValue;
-                dot += (double) candidateValue * referenceValue;
-            }
-            if (compared == 0) {
-                return new DepthComparison(0, Double.NaN, Double.NaN);
-            }
-            double rmse = Math.sqrt(squaredError / compared);
-            double referenceRms = Math.sqrt(referenceSquares / compared);
-            double cosine = dot / Math.max(
-                    Math.sqrt(candidateSquares * referenceSquares), 1.0e-30);
-            return new DepthComparison(compared,
-                    rmse / Math.max(referenceRms, 1.0e-30), cosine);
-        }
-
-        @Override
-        public String toString() {
-            return String.format(Locale.ROOT,
-                    "{finitePairs=%d nrmse=%.9g cosine=%.9g}",
-                    compared, normalizedRmse, cosineSimilarity);
         }
     }
 

@@ -299,7 +299,8 @@ public final class ClientSbsGpuReliableHistoryParityInstrumentedTest {
                 pixels.put((byte) value);
                 pixels.put((byte) value);
                 pixels.put((byte) value);
-                pixels.put((byte) 255);
+                // Fixture RGB is already source-point grayscale; alpha carries its ordinal.
+                pixels.put((byte) value);
             }
         }
         pixels.flip();

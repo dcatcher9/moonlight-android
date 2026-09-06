@@ -15,6 +15,475 @@ Run commands from the Moonlight 3D checkout root. Keep generated APKs, reports, 
 repository's build directories, the device app directory, or a temporary directory. Do not write
 client artifacts into the Apollo checkout.
 
+## Current reuse and measurement scope
+
+Client SBS now has one content-driven Near reuse path. It compares every admitted finite model
+pixel with the retained real-inference input using the existing medium/strong/local thresholds.
+Positive source identity must advance and capture time must not move backward relative to that
+owner; neither 100 ms nor four callbacks forces refresh. Reused frames never replace the reference,
+so cumulative change beyond the retained owner's thresholds still requires real inference.
+Generation, model/input-contract changes, invalid geometry and reliable-history holds retain their
+invalidation rules. The separate Exact equality/raw-model-cache tier has been removed.
+
+Stats remains available, including its visible-only native wall timings, GL timer queries, device
+sampling and asynchronous depth health. The performance-logging switch, background typed
+`ClientSbsPerf`/`DecoderPerf` logging, audio level meter, temporary publication/hide/black debug
+broadcasts and opt-in classifier timing method have been removed. Operational startup, transition,
+failure and playback-recovery logs remain. Existing offline evaluation, Dump3D and production-model
+benchmark tooling is retained; retired experimental APIs must not be assumed available.
+
+Current correctness gates include `ClientSbsNearIdenticalPolicyTest`,
+`ClientSbsGpuSceneCutShadersTest`, `ClientSbsGpuSceneCutDetectorTest`, and the actual-GLES
+`ClientSbsGpuSceneCutDecisionReasonInstrumentedTest`. Its long-lived reuse case exercises more than
+a day and a 64-bit source gap, unchanged/lazy inputs, cumulative change against a fixed owner,
+new real-owner replacement, reset invalidation and authenticated decision tokens. The native
+`nearReusePreservesSlotsAndLazyPackingHandlesEveryInferenceFallback` gate checks the corresponding
+slot/fence/fallback path. Build and device qualification for this latest cleanup must be recorded
+separately; the historical test totals and timings below are not results for the new implementation.
+
+## Processor setup and Stats review, 2026-09-06
+
+The current depth/disparity processors initialize fixed uniforms once per private program,
+removing 21 steady-state uploads per normal real-inference/postprocess cycle. Decoder Stats avoid
+hidden-window snapshot/histogram allocation; visible rows retain unchanged text and coalesce
+panel-sizing callbacks. Rendering contracts remain in `android-xr-sbs.md`.
+
+Both debug APKs assembled on Temurin 25.0.3+9. All 258 focused JVM tests and nine Galaxy XR
+depth/disparity GLES tests passed. The new fixed-uniform test checks program isolation, temporal
+resets, repeated raw output and disparity dispatch. Its initial sampler float-query assertion
+failed; using the integer sampler getter passed with the production APK unchanged. No assertion
+was relaxed. The existing output and production-shape tests also passed.
+
+Evidence is under `app/build/perf-review-2026-09-06-*`; the final GLES log is
+`perf-review-2026-09-06-gles-retry.log`. The update-installed arm64 APK SHA-256 is
+`b8f6d76d4af9e91f49fc2c2fd8454021094ef4fca995e575c83a908d1cbe261d`.
+Saved app data/pairing were preserved, and only the `.test` package was removed after testing.
+These gates establish correctness and removed redundant work; live FPS, latency and device GPU
+utilization improvements have not yet been measured.
+
+## Audio recovery and runtime follow-up, 2026-09-06
+
+The 12:03 live Host SBS session's client snapshot is under `app/build/log-review-2026-09-06-1203/`.
+It confirms the preceding optimized APK and 7680x2160 HDR direct decode, with the physical display
+at 90 Hz. Operational logs do not establish actual decoded FPS or dropped video frames.
+
+Eight audio-backlog recoveries at headset time 12:05:33.676–12:05:34.911 discarded about 410 ms of
+PCM across the burst. The measured headset clock was about 3356 ms ahead of the host. A separate
+code review reproduced premature recovery reporting: native backlog could reach its target, but
+the next PCM write could still fail or stop early after the drop totals had already been cleared.
+Two real-renderer tests first failed, then passed with reporting/reset after a complete write on the
+same active playback generation. The fix adds no native-queue reads, waits or stricter discard
+policy. It fixes accounting; it is not evidence that the audio gaps have been eliminated.
+
+Three legacy migration readers now avoid opening absent databases. Tests also create and migrate
+all three real historical schemas alongside a current computer and verify preservation after
+reopening. All 31 focused audio, priority and database tests passed; the non-root debug APK assembled
+and was update-installed with app data preserved. SHA-256:
+`203d144eedf2961703b6175e588f74951802d6495d1f12a3ff5e409c937debff`.
+Evidence is under `app/build/audio-cadence-2026-09-06-*`. The main app was not uninstalled or cleared.
+
+Read-only Wi-Fi service history records scan completions at 12:05:35.206, 12:07:36.864, 12:09:38.520,
+12:11:40.174 and 12:13:41.832, about 121.7 seconds apart. Later audio recoveries align with these
+too; the last reported recovery at 12:13:41.825 precedes scan completion by about 7 ms. This repeats
+the earlier scan correlation but does not identify the requesting module or radio failure mechanism.
+`AllSingleScanListener` also receives scans initiated by other modules; associated network selection
+was already disabled, external-app one-shot scan requests were zero, and scan throttling was enabled.
+The service dump and device context are under `app/build/wifi-scan-review-2026-09-06/`.
+
+The saved link used 6295 MHz and Android Wi-Fi standard 8 (802.11be). Samsung acknowledges Galaxy XR
+PC-streaming stutter on Wi-Fi 7/6 GHz and recommends temporarily using Wi-Fi 6/5 GHz while an update
+rolls out. A matched test should keep stream settings fixed and span several scan cycles. The notice
+does not name our exact periodic symptom or a fixed firmware version, so the observed
+`I610UEU2AZF3`/June 2026 security patch cannot be classified from that notice alone.
+[Samsung guidance](https://www.samsung.com/us/support/troubleshoot/TSG10007646/),
+[Android Wi-Fi standard constants](https://developer.android.com/reference/android/net/wifi/ScanResult#WIFI_STANDARD_11BE).
+
+Keep scan throttling enabled: it limits app `startScan()` calls, not all system scans. The generic
+Wi-Fi-scanning setting is not a reliable connected-scan shutdown switch. Disabling Location Accuracy
+is a lower-confidence controlled test only if that service is the requester; XR availability is
+unverified and location-dependent features can lose accuracy. No device setting was changed during
+this review. [Android scan throttling](https://developer.android.com/develop/connectivity/wifi/wifi-scan),
+[Google Location Accuracy](https://support.google.com/android/answer/3467281?hl=en),
+[AOSP scan listener](https://android.googlesource.com/platform/packages/modules/Wifi/+/c6e2a6083b342a9196091f17ab5276cac8f4d2b3/service/java/com/android/server/wifi/WifiConnectivityManager.java).
+
+The capture also contains 181 non-JNI-local-reference warnings, eight subview messages during the
+stereo commit, and 28 startup pose warnings. There is no fatal exception. The subview messages come
+from SceneCore's native media-material path; application head-pose reads use published runtime
+state. The JNI warning lacks a native stack to identify its exact library. No warning suppression
+or unverified dependency replacement was made; official SceneCore releases still listed beta02
+when checked. Dependency sources are retained under `app/build/xr-warning-review-2026-09-06/`.
+
+## Historical client reuse and model-internal review, 2026-09-05
+
+The [six client reuse changes](client-performance-reuse-review-2026-09-05.md) were built on JDK 25
+and tested on the physical Galaxy XR SM-I610, Android 14/API 34. All 853 non-root debug JVM tests
+passed, both APKs assembled, and seven focused output-scatter tool tests passed. Host production
+code and model assets were not changed by this client optimization pass.
+
+The offscreen/device gates passed for sparse OES ordinal sampling (2 tests), R32F conditioner
+differential/production shapes (2), reliable-history parity (2), classifier ownership/expiry/lazy
+packing (4), real native inference/cache/fallback (1), and archive retention/corruption (1).
+The additional opt-in classifier timing fixture also passed. Its supplied depth-state flags isolate
+classifier behavior; it does not establish a full decoded-video temporal trajectory.
+
+The initial native test used a real 672×384 production model, asymmetric RGBA8 textures, shared EGL
+contexts, and the actual JNI fence protocol. It verifies all-pixel RGB packing with the vertical
+row conversion, untouched input on EXACT, bit-identical cross-slot raw output, replacement real
+owners, same-slot retention, and fresh packing after malformed authentication/reasons, CPU bypass,
+the then-current owner expiry, invalid record ranges, and disabled record reads. The implementation aliases
+the last real output slot, avoiding a separate raw buffer and every-inference copy. Sparse ordinal
+and conditioner tests compare against the preceding dense-sample/RGBA32F horizontal paths.
+
+The archive test uses a uniquely created disposable cache directory, opens the real packaged
+archive only twice for A → B → A, then verifies that corrupted speculative C is extracted again.
+All three final files pass their manifest hashes. The live production cache and saved settings
+are outside that test directory.
+
+At 672×384, 20 native warmups and 50 measured invocations per path with a partial wake lock gave:
+
+| Native path | Median invoke-to-output-ready | p95 |
+| --- | ---: | ---: |
+| Real inference, including deferred pack | 10.927 ms | 11.385 ms |
+| Exact raw reuse, alternating output slots | 0.894 ms | 1.608 ms |
+
+These timings include the JNI/worker/fence path, but exclude classification, matched-color capture,
+depth/profile/geometry processing, and XR presentation. They do not predict whole-stream FPS.
+An earlier run without a wake lock had large inference outliers and is not used for the table.
+Before raw-slot aliasing, the same bounded wake-lock fixture measured 11.588/1.244 ms medians;
+these sequential runs are supporting evidence, not a randomized sustained A/B.
+
+Before exact-input expiry was removed, the separate classifier fixture ran 8 warmups and 32 samples
+per leg, with eager/lazy order reversed
+on its second round. Moving inputs produced 32 INFER decisions in every leg. Identical inputs gave
+6 near, 24 exact, and 2 refresh-infer decisions in every leg under synthetic 30 fps capture clocks.
+Moving eager/lazy medians were 1.568/1.405 ms and 1.617/1.290 ms; identical eager/lazy medians were
+1.251/1.217 ms and 1.254/1.199 ms. These are CPU submission plus `glFinish` wall times, not pure GPU
+times. Input uploads, decision reads, commits, native deferred packing, inference, color, and XR
+are excluded. Do not add measurements from separate fixtures to claim total pipeline latency.
+
+The [model-internal experiment](../tools/zipdepth-output-scatter.md#galaxy-xr-result-2026-09-05-no-measurable-gain)
+replaced only the identity output scatter with `DEPTH_TO_SPACE`. Complete CPU outputs were
+bit-exact on three inputs for each shape; real-frame GPU outputs were also bit-exact on all three
+shapes. Six normal benchmark legs (20 warmups/100 samples, thermal status 0) and two separate
+kernel-profile runs passed. There was no measurable speedup, so the packaged graphs and hashes
+remain unchanged. Profiles prioritize moving the final linear channel projection before resize
+and reducing learned-tail intermediate branches for future experiments; those are not shipped.
+
+Artifacts, logs, numerical-runtime fingerprint, and model outputs are under the ignored
+`build/client-reuse-2026-09-05/`. Every numerical comparison used
+`E:\ApolloDev\modelopt-py312\Scripts\python.exe` (Python 3.12.14, NumPy 2.5.1, Pillow 12.3.0,
+ONNX 1.21.0). Update-install/manual instrumentation preserved the existing app data. The final
+arm64 APK SHA-256 is `34cc88868897e32476dc3403385e93e24f38c080942441280294e400d8019624`.
+
+The Exact/native-cache and classifier-timing methods used for these measurements are retired.
+Use the current correctness filters above through the data-preserving manual procedure below;
+`ClientSbsModelAssetCacheInstrumentedTest` continues to cover archive retention and corruption.
+
+Sustained default-1080p30 streaming, moving-content hit rates, visible depth/cut quality, real panel
+refresh, and headset thermals remain physical live-test work. Canvas/OES SDR/PQ shader coverage
+does not qualify the complete hardware 10-bit HDR decoder path.
+
+## Historical live-log fixes and static-input reuse, 2026-09-05
+
+The 17:20 paused-video retest used the preceding APK. It reported approximately 23 latched
+frames/s, 8 real inferences/s, and 61–69% total reuse, with no steady-state raw-field or flat-output
+faults. Its log format did not include the exact tier or per-texel equality evidence, so those
+records cannot establish why the visible Exact counter remained zero. An owner-age rejection
+does not establish unchanged pixels: the old classifier skipped near comparison after expiry.
+
+The historical diagnostic control added the exact counter and sampled pre-commit equality evidence to
+`ClientSbsPerf`. It passed all 878 non-root debug JVM tests and assembled both APKs. The physical
+Galaxy XR test `ClientSbsGpuDepthProcessorInstrumentedTest#exactReuseHealthCopiesPrecommitEvidenceAndRejectsMissingOrShortProbe`
+passed: the existing asynchronous health readback preserved the copied candidate/owner pair and
+rejected missing or undersized evidence. Update-install and removal of only the test package
+preserved application data. Control arm64 SHA-256:
+`cbc66d29045ff6628051dd1359ded3a30c7009f2aa7e141356720337052cb57e`.
+
+This control also contains the playback backpressure/priority fixes and API-34 window refresh
+fallback. Its successful tests establish request/lifecycle behavior, not achieved panel refresh,
+elimination of live backlog, or thermal improvement.
+
+The subsequent expiry-removal build passed all 879 non-root debug JVM tests and both APK builds.
+Four data-preserving instrumentation invocations passed on the Galaxy XR: the two health-copy
+tests, the classifier decision/ownership class, and the real native model/cache fixture. The
+classifier's opt-in timing method was not enabled. The GPU classifier accepted exact input with
+capture timestamps more than a minute beyond its owner, rejected a one-code RGB change after
+ordinary reuse expired, and retained reset/new-owner/token checks. The native fixture waited
+750 ms without real inference and then required an exact hit, untouched input storage, zero
+LiteRT run time, and bit-identical cached raw depth. Diagnostic copy failure left production depth
+running, and repaired staging recovered only through a fresh sample.
+
+The native fixture's 50 repeated samples measured median/p95 invoke-to-output-ready times of
+10.882/11.323 ms for real inference and 0.935/1.465 ms for exact reuse. These isolated correctness
+fixture timings exclude classification, color, postprocessing, and XR presentation; they are not
+a sustained performance comparison. The final arm64 APK was update-installed and only the test
+package removed. SHA-256:
+`9a1c5e9c428c07b3bf1b61a08ac20155d62cd05d97ad7f9c2392cb3af674c4ff`.
+
+The current reuse policy is owned by
+[the scheduling contract](android-xr-sbs.md#colordepth-scheduling-and-input-reuse). Live paused-input
+pixel evidence, achieved refresh rate, playback stability, and thermal behavior were still
+unverified at installation.
+
+The subsequent 18:12–18:18 live session confirmed static-input memoization on this APK. With the
+user-confirmed paused video, telemetry retained real owner frame 3907 for over 149 seconds,
+reported zero inference and LiteRT call time, 100% exact reuse, and zero changed/nonfinite model
+texels. Current stereo output continued around 21–24 FPS without flat or invalid-depth faults.
+The display service explicitly rejected the 60 Hz window request, and the physical/compositor
+rate remained 90 Hz. Device GPU clock fell from roughly 788 MHz during moving content to 421 MHz
+while static; whole-device busy percentage remained high and thermal status remained SEVERE.
+Those utilization samples include system/XR work and are not a controlled power comparison.
+The user confirmed audio was muted; no recurring backlog error appeared, but sustained audible
+playback remains unqualified. Local evidence is under `build/log-review-2026-09-05-1814/`.
+
+Local build logs, APKs, and the data-preserving device result are under the ignored
+`build/log-review-2026-09-05-1657/`. Raw streaming logs may contain credentials and remain local.
+
+## Hidden-panel idle investigation, 2026-09-05
+
+A saved Perfetto trace spans 18:25:09.546–18:25:19.577 PDT with Stats closed. The app's Android
+RenderThread repainted a 42×42 vector drawable 877 times in 10.031 seconds, while its video GL
+thread drew 231 frames. The drawable size, centered panel bounds, and source hierarchy identify
+the depth-loading spinner: SceneCore hid the entity while the hosted Android root remained
+visible. This panel is also created in Normal 2D. Its visibility lifecycle is now governed by
+[the Spatial UI contract](android-xr-sbs.md#spatial-ui-learnings).
+
+The RenderThread used 1.792 scheduled CPU seconds, compared with 0.625 for the video GL thread.
+Its 7.375 seconds inside named buffer-dequeue slices are inclusive wall waits, not GPU execution.
+The trace has no GPU execution slices, so it cannot assign a fraction of whole-device GPU usage
+to the spinner, inference, or XR compositor. Its overlapping stream log reports 6.2 inferences/s
+and a small number of changed model texels; this is distinct from the earlier zero-inference,
+100% exact-reuse interval. Thermal status was SEVERE. The later Normal 2D sample uses 4K/90
+instead of 1080p/30, so it is a separate workload rather than a matched performance control.
+
+The refresh preference now follows the publicly advertised mode described in
+[the presentation contract](android-xr-sbs.md#reconnect-and-saved-view-contract). GPU diagnostic logs
+also retain six decimal places and a sample count for each stage; unavailable samples report
+`n/a`. The old rounded `depth_cut=0.00` field alone did not establish zero postprocessing cost.
+
+The final JDK-25 build passed all 891 non-root debug JVM tests with no failures or skips and
+assembled both main and instrumentation APKs. Eight spinner lifecycle cases across API 34/35
+verify real drawable start/stop, initially hidden attachment, delayed-show cancellation, mode
+reset, and destruction. The fixture supplies the window-manager visibility event omitted by its
+Robolectric window; it does not stub the ProgressBar's visibility or animation. The refresh
+fixtures now use the suite's default mock engine, removing a mixed-engine registration conflict
+that caused order-dependent failures in unrelated tests. The Wi-Fi fixture uses resettable
+Robolectric network objects instead of framework mocks. The first failing runs remain in the local
+artifact directory alongside the successful gate log.
+
+The main arm64 APK was update-installed at 18:53:35, preserving the existing application data,
+and its installed SHA-256 matches the built artifact:
+`f0583776ca83d3f0496f203c2bd8f193e92633045c794d2f88c562583da11ee4`.
+The preceding installed APK was saved as `control-installed-arm64.apk` and matches the
+expiry-removal hash recorded above; the new build is saved as `treatment-arm64.apk`. No new
+physical GPU or achieved-refresh measurement was taken after this update.
+
+Saved logs, trace, processor provenance, SQL, and derived CPU/frame counts are under the ignored
+`build/static-gpu-review-2026-09-05/`; `perfetto-review.md` records trace health and attribution
+limits. A worn-headset retest must verify the hidden panel stops submitting frames, the achieved
+refresh rate, and idle GPU/thermal behavior with the same scene and settings. A sleeping or
+removed headset is not a valid idle-stream control.
+
+The 19:35:30.395–19:35:40.366 Normal 2D retest verified the specific spinner fix on the installed
+APK: zero 42×42 vector repaints, ten ordinary UI submissions, and 27.134 ms of app RenderThread
+CPU time in 9.971 seconds. The earlier trace had 877 repaints and 1791.824 ms of RenderThread CPU
+time. These are different video modes and thermal conditions, so they establish removal of the
+unwanted animation, not a controlled overall GPU improvement. Normal 4K/90 still received and
+decoded approximately 50 frames/s while the user reported a paused video. The decoder queue
+remained empty. Host mode 0 was active; no host or client depth inference ran in this 2D interval.
+The trace still showed substantial XR system work at about 90 Hz but no GPU execution events.
+Saved evidence is under `build/idle-2d-retest-2026-09-05-1935/`.
+
+The subsequent Client 3D retest logged the window and Surface preferences at 19:44:23, and later
+display state confirmed physical mode 2 at 72.00001 Hz. The initial display snapshot still showed
+90 Hz, so the preference must not be treated as an immediate mode switch. This paused-video
+interval was not pixel-static: sampled model input changed by a few texels, and telemetry still
+reported roughly 6–7 real inferences/s with bounded approximate reuse between them. Device busy
+readings remained substantial at changing GPU frequencies and thermal status SEVERE. This does
+not invalidate the earlier authenticated 100% exact-input interval. Evidence is under
+`build/idle-client3d-retest-2026-09-05-1945/`.
+
+The active performance target is 10% device GPU busy for the paused 2D case, with improvements
+that also preserve moving-video quality and latency. That target is not yet achieved. Further
+measurement must separate repeated frame delivery from the cost of retaining the same XR scene,
+and retain GPU frequency, refresh, resolution, environment, and thermal context rather than
+treating a lower utilization percentage at a higher clock as a power saving.
+
+### Historical publication and environment hold measurements
+
+The temporary debug receiver, decoder-output hold, subtree-hide and black-environment flags used
+for these experiments have been removed. The following evidence describes those historical APKs
+only; there is no active broadcast procedure in the current app. The normal Cinema action retains
+its public-SDK black background with ordinary video publication and exact preference restoration.
+Production opaque video and solid panel backgrounds also remain. SDK readback describes a request,
+not a compositor GPU acknowledgement.
+
+The publication-hold build passed all 907 non-root debug JVM tests (including 16 new policy,
+decoder-ownership, and receiver/lifecycle cases) and both APK builds on JDK 25. The first two
+runs exposed incomplete FragmentActivity setup in the new receiver fixture; restoring saved
+state and attaching its fragment host in the framework's normal order fixed the fixture. The
+final full run has zero failures, errors, or skips. The arm64 APK was update-installed without
+clearing data, and its device SHA-256 matches
+`ad2db0307fa8d796756894f6fa1002d9db47f2da7a2cb8e7636276065f8cd8f3`.
+Evidence is in `build/static-gpu-review-2026-09-05/publish-hold-*`. Physical hold/resume and GPU
+benefit are not yet validated by this build gate.
+
+The subsequent physical Normal 2D 3840×2160/90 Hz test accepted a 20-second hold at
+20:41:43.877 PDT and resumed publication at 20:42:03.877. It discarded 997 outputs; all seven
+interior telemetry windows reported zero render releases and surface presentations while decode
+continued at approximately 49–50 fps. Physical refresh remained 90 Hz. With three-second
+transition exclusions, the independent one-second GPU samples averaged 50.21% before, 46.14%
+during, and 49.33% afterward, all at 421 MHz. The 38–41% dips also occurred before the hold;
+they do not establish a sustained 10–12 percentage-point saving. The short post-trace window has
+only three raw samples, and thermal status moved from LIGHT to MODERATE across the capture.
+
+Most measured GPU load therefore persisted without new video publication. This does not assign
+that remaining load to an individual process, the video quad, or passthrough. The trace has no
+per-process GPU execution data. Its ring buffer overwrote about 49 MB of ftrace data, leaving only
+0.927 seconds of baseline CPU coverage and 2.665 seconds post-hold, so CPU deltas are not robust.
+SystemUI and SurfaceFlinger submissions continued throughout the retained interval. Future paired
+captures must retain complete scheduling windows, and isolate the app subtree from the environment
+before attributing the remaining load. The 10% target remains unmet.
+
+The paired host counters recorded approximately 50 desktop presents and conversions per second,
+with one valid dirty rectangle per present, changing present timestamps, no cursor events, and
+zero heartbeat encodes. These are real desktop update notifications; they do not prove changed
+pixel values. Capture metadata or resized model-input equality cannot authorize dropping the
+complete transmitted image. Evidence and reproducible phase analysis are in
+`build/idle-publish-hold-2026-09-05/publish-hold-review.md`.
+
+The follow-up build adds the bounded whole-subtree variant and avoids calling `setText()` on the
+glance load indicator when the displayed text is unchanged. All 921 non-root debug JVM tests and
+both APK builds pass, including exact-entity restoration, worker-to-main completion, lifecycle
+cancellation, and receiver acceptance-order coverage. Its update-installed arm64 APK matches
+SHA-256 `c826a36286d6a685e5d1ed1a95fc2bdea712f14ff4c3ae826a1ad5129b40a2da`.
+The improved Perfetto configuration uses periodic file writing plus a separate metadata buffer;
+a one-second device smoke test passed from `/data/misc/perfetto-configs`. This is configuration
+validation only, not a performance sample. Whole-subtree GPU qualification remains pending.
+
+The follow-up physical test hid the video and every child panel from 21:02:38.786 to
+21:03:08.787 PDT. The wearer confirmed disappearance and normal restoration. All eleven complete
+interior decoder windows retained approximately 50 fps input/decode with zero publication;
+1,499 outputs were discarded. Physical refresh stayed 90 Hz. Settled GPU samples averaged
+46.63% before, 43.21% hidden, and 52.75% afterward, all at 421 MHz. The restored window has only
+four samples. SystemUI CPU decreased while camera/perception and compositor submissions persisted;
+these CPU figures cannot allocate device GPU busy to individual processes. Scheduling coverage is
+complete and neither trace buffer overwrote data. Full evidence and caveats are in
+`build/idle-scene-hide-2026-09-05/scene-hide-review.md`.
+
+The wearer then closed Moonlight and other open apps and remained at XR Home. The host disconnected
+at 21:07:25.017 PDT, and Moonlight had no running process before or after the baseline capture.
+Thirty independent GPU samples averaged 47.33% (45–51%), all at 421 MHz; thermal status stayed
+MODERATE. XR Home ran at approximately 72 Hz, so this is a separate ambient baseline with different
+foreground UI and refresh, not a matched numerical subtraction from the 90 Hz streaming trials.
+It establishes substantial device-wide GPU activity without Moonlight, network streaming, or
+decoding. It does not prove that the baseline is unavoidable or identify an individual GPU shader.
+Evidence is under `build/idle-xr-home-2026-09-05/`.
+
+The subsequent black-environment diagnostic build passed all 941 non-root debug JVM tests and
+both APK builds, with zero failures, errors, or skips. Focused coverage checks asynchronous
+application, exact preference restoration, partial SDK failures, capability loss, stale callbacks,
+combined scene controls, and activity/decoder lifecycle cancellation. Independent review of the
+cached SceneCore beta02 implementation confirmed main-thread listener delivery and that the empty
+black preference does not start an asynchronous environment-asset load. The arm64 APK was
+update-installed with data preserved and its on-device SHA-256 matched
+`67bdd141431ba8152e52978f3c655918ab648b98a6363336e01ae4bd711b56a2`.
+Build, review, capture scripts, and validation records are under
+`build/idle-publish-hold-2026-09-05/black-environment-*`.
+
+The subsequent matched-build captures retained full scheduling windows, 70 independent GPU samples
+each, physical 90 Hz throughout, and 421 MHz in all 140 samples. Both 30-second holds discarded
+1,500 outputs while hardware decode continued near 50 fps. Black applied after 551 ms; the wearer
+confirmed black behind the visible video/controls and normal environment restoration. With the
+same three-second transition exclusions, settled device GPU means were:
+
+| Capture | Before | Held | Restored |
+|---|---:|---:|---:|
+| Publication only | 35.07% | 32.29% | 36.79% |
+| Publication plus black | 38.64% | 38.92% | 52.21% |
+
+The black-to-restored transition agrees with the wearer's approximately 38% versus 50% observation.
+The initial and separate control baselines varied, and publication resumed at the same time as the
+environment was restored. The pair therefore does not isolate a precise background saving or
+establish a null effect. Camera/perception CPU occupancy also fell during black; this does not
+attribute GPU execution or imply that tracking stopped. Control thermal status remained 3, while
+black changed from 3 to 2. The 38.92% held value remains far above the 10% target.
+
+Both traces retain scheduling across every selected phase and report no per-buffer overwrite,
+ftrace overrun, or error-severity statistics; service-global informational discard counts remain
+documented in the report. No per-process GPU execution records are available. This firmware's
+`perfetto --background-wait` returned no PID, so the first setup stopped before any hold; the actual
+paired scripts accept that behavior and use unique output paths with a bounded final flush wait.
+Reproducible clock alignment, full-phase sensitivity checks, raw artifacts, hashes, and limitations
+are in `build/idle-black-environment-2026-09-05/paired-review.md` and its companion files.
+
+The saved system log additionally exposes a coarse CPM `Compositor` GPU-duration field. Settled
+means were 2.194 ms in the control hold (eight samples), 0.790 ms during black (eight), and
+2.390 ms after restoration (five). This reversible change identifies compositor work affected by
+the environment; it does not separate individual sampling, blending, or reprojection passes.
+The separately reported SystemUI GPU field includes negative values, and its late/drop fields are
+`nan`; do not add these fields into a GPU budget. A targeted `cpm`/`xrp` TrackEvent probe enabled
+additional vendor instrumentation, but ran with the screen OFF and exposed CPU scopes only. It
+cannot qualify the active-rendering instrumentation. Preserve that distinction from the earlier
+finding of no per-process GPU execution records in the ordinary capture configuration.
+
+System-wide auto-spatialization was inactive in both paired captures: the saved runtime policy
+logs contain 30 control and 28 black records with `Auto spatialization active: false`, and no true
+records. The XR Home measurement window also contains ten such inactive policy records.
+A later read-only settings check returned `system auto_spatialization_settings=0`.
+This rules out active system 2D-to-3D conversion as the cause of those recorded GPU readings;
+Moonlight's explicitly selected Client SBS mode remains a separate pipeline.
+
+The historical Cinema integration and opaque diagnostic build passed all 956 non-root debug JVM tests and
+both APK builds, with zero failures, errors, or skips. Seven focused Cinema cases exercise the
+existing size/pose toggle, exact environment restoration, lifecycle reentry, unsupported capabilities,
+and separation from debug ownership. The opaque adapter's cached readback/restoration paths also
+passed focused and independent review. The single initial fixture failure used a mocked preference
+whose empty fields were equal to the black preference; a real geometry-bearing preference corrected
+that fixture. Identity comparison would be wrong because beta02's getter constructs fresh wrappers.
+The update-installed arm64 APK retained app data and matched SHA-256
+`c8bd8e36d62cf0ad3c92cb68547320ea773e6ce6f6b2751af55dfb7f6a072278`.
+Build and validation artifacts are `build/idle-publish-hold-2026-09-05/cinema-opaque-*`.
+This gate does not qualify the opaque experiment's visual behavior or GPU benefit.
+
+The subsequent production opaque-video/solid-panel build passed all 957 non-root debug JVM
+tests and both APK builds, with zero failures, errors, or skips. The focused 133-case rerun also
+passed. Its first run found a drawing-recorder fixture issue: Robolectric's legacy Paint shadow
+does not synchronize its separate alpha field when setting a packed color. Checking the submitted
+color retained the full-bounds draw assertion. SDK review also corrected the dock to use a single
+pixel-size request because beta02's metre-size setter recomputes and overwrites raster dimensions.
+Tests cover opacity request failure/readback, preserved transition visibility, solid panel content,
+and collapse/expand/reveal raster restoration. The temporary opaque diagnostic was removed.
+The arm64 APK was update-installed with app data preserved at 22:36 PDT and its installed SHA-256
+matched `1a298a90e04f64f691091975189018098a5dfa5a2d8aabb3f4805f0e0e360ed6`.
+Artifacts are `build/idle-publish-hold-2026-09-05/solid-opaque-*`. Physical Cinema, opaque video,
+solid-panel layout, mode/HDR transitions, and GPU impact remain unqualified on this build.
+
+The following live session retained Client SBS from 22:38:15 through 22:45:43. The host delivered
+1080p30 without encoder queue drops, and the display service confirmed 72 Hz. Cinema reapplied
+black after 555 ms and restored the prior system environment; the initial opaque startup log had
+already rotated out. This does not qualify visual panel layout or all mode/HDR transitions.
+Thermal status reached SEVERE during the session. Four audio backlog bursts about 122 seconds
+apart aligned with Wi-Fi scan completion; this is a strong diagnostic correlation, not a proven
+radio/driver root cause. The app already holds Android's low-latency Wi-Fi lock.
+
+The user's paused-input Exact counter matched the renderer logs. In the final six retained
+windows, Exact remained zero while total reuse averaged about 15.7 FPS out of 30.0 FPS;
+individual sampled candidate/owner comparisons reported 61,673–77,628 changed model texels of
+258,048, without difference magnitudes. Earlier windows did contain Exact hits. Decision bypass
+counts remained zero as expected for valid monotonic owner tuples; these are not skipped-inference
+counts. No stale Stats binding or duplicate counter drain was found.
+
+An added physical GPU regression,
+`ClientSbsGpuSceneCutDecisionReasonInstrumentedTest#exactRgb8EqualityCoversEveryCodeAndIgnoresOnlyAlpha`,
+passed against the unchanged installed production APK above. It covers all 256 codes in each RGB
+channel, alpha-only changes, single-code RGB changes in the last partial tile, and Exact owners
+older than a day. This did not reproduce the suspected sampler/image normalized-float mismatch;
+the production predicate and Near policy were left unchanged. Only the instrumentation package
+was installed and then removed; main app data remained intact. Saved logs, test artifacts and
+source-linked reviews are under `build/solid-opaque-live-2026-09-05-224605/`. Locating the source
+and magnitude of the reported paused-input changes still requires additional live evidence.
+
 ## Production contract
 
 The current model/runtime, rendering math, and surface-ownership authority is
@@ -221,34 +690,13 @@ collapsed to the final output-convolution bias (`0.088684082`). Tail-padding plu
 workaround, but the retired DA-V2 family ultimately used three naturally C4-aligned graphs. They
 needed no tail padding, used delegated builtin exact GELU, and passed the edge-rich FP16-vs-FP32
 parity gate.
-Execution policy is part of the compiler-cache namespace. Public GL tensors stay packed Float32. A debug-only direct
-external probe forces FP16 buffer storage and uses half4 shaders, but Galaxy XR validation leaves
-pixels unwritten after a fresh output refill and one invocation; automatic texture storage is also
-incompatible with the runtime's GL-buffer interop contract. Direct external mode therefore remains
-rejected rather than becoming a production fallback.
-Release builds always use LiteRT's low GPU-priority hint (`priority = 1`) so sustained inference
-yields to XR composition and UI work. Debug builds can run a controlled low/normal experiment with
-the non-persistent `debug.artemis.sbs_gpu_priority` ADB property. The only accepted values are
-`low` and `normal`; unset or invalid values select low, and high priority is deliberately rejected.
-LiteRT exposes this as a hint and does not report the effective Adreno scheduler priority. Record
-exact-output cadence as well as inference latency: a lower model-call wall time is not a win if
-SurfaceFlinger responsiveness or retained-output cadence regresses.
-
-The hint is read once before `LiteRtCreateCompiledModel()`, so change it only between streams and
-recreate the Client SBS renderer after each change:
-
-```powershell
-& $Adb -s $env:ANDROID_SERIAL shell setprop debug.artemis.sbs_gpu_priority low
-& $Adb -s $env:ANDROID_SERIAL shell getprop debug.artemis.sbs_gpu_priority
-
-# Run the matched Low leg, disconnect/reconnect, then select Normal for the next engine.
-& $Adb -s $env:ANDROID_SERIAL shell setprop debug.artemis.sbs_gpu_priority normal
-& $Adb -s $env:ANDROID_SERIAL shell getprop debug.artemis.sbs_gpu_priority
-```
-
-The property resets on reboot. Explicitly set it back to `low` after an experiment. The Stats panel
-row `LiteRT GPU priority hint` and each `ClientSbsPerf` line are authoritative for which hint the
-new engine accepted; this is not a user-facing Client SBS parameter.
+Execution policy is part of the compiler-cache namespace. Public GL tensors stay packed Float32.
+The temporary half4 direct-external probe failed output completeness on Galaxy XR and has been
+removed along with the async runtime probe and ADB priority override. Debug and release builds use
+the same fixed Low GPU-priority hint (`priority = 1`), allowing inference to yield to XR composition
+and UI work. LiteRT exposes a hint, not an effective Adreno scheduler-priority measurement. Earlier
+Low/Normal and external-storage measurements are historical evidence, not active runtime choices.
+The existing offline production-model benchmark and profiler are retained for controlled evaluation.
 
 LiteRT exposes a CPU/runtime resize API through `LiteRtCompiledModelResizeInputTensor()`, but the
 current Android OpenCL and OpenGL GPU delegates are static-only. The exact dynamic DA-V2 experiment
@@ -359,9 +807,10 @@ per-source-cell reflected aspect-fit mapping described above.
 Reuse follows Apollo's literal decoded-pixel thresholds: `16 x 16` tiles; per-channel absolute
 medium delta `>= 1/64` and strong delta `>= 0.20`; global medium and strong counts no greater than
 10% and 2.5%; and local strong count no greater than 75% for every tile with at least 64 pixels.
-All expected pixels must be finite. The owner must be in the same generation, one through four
-decoder-callback steps behind, and strictly less than 100 ms old. Coalesced callbacks still advance
-that step count, and reuse never advances its owner. The client cannot duplicate Apollo's DDup
+All expected pixels must be finite. The owner must be valid in the same generation, with a positive
+source sequence preceding the candidate and a capture timestamp no later than the candidate's.
+Elapsed time and callback count do not expire it; reuse never advances its owner. Cumulative content
+change is compared against the retained real-inference input. The client cannot duplicate Apollo's DDup
 present-ID/dirty-rectangle/route gates without new host metadata, so decoded-pixel arbitration is
 the documented client boundary.
 
@@ -517,7 +966,6 @@ coordinate-calibration and strict-failure guardrails in addition to the family-a
     --tests "com.limelight.sbs.ClientSbsGpuTimerTest" `
     --tests "com.limelight.sbs.ClientSbsTemporalTuningTest" `
     --tests "com.limelight.binding.video.DecoderModeTransitionGateTest" `
-    --tests "com.limelight.preferences.PreferenceConfigurationPerformanceLoggingTest" `
     --tests "com.limelight.utils.ClientSbsDepthInputShapeTest" `
     --tests "com.limelight.utils.ClientSbsGpuInferenceEngineTest" `
     --tests "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
@@ -562,11 +1010,9 @@ The tests cover:
   different client and negotiated host cadences.
 - `DecoderModeTransitionGateTest`: IDR/serial and presentation-timestamp gating around decoder
   output-surface transitions.
-- `PreferenceConfigurationPerformanceLoggingTest`: performance logging remains independent of the
-  visible Stats panel and defaults off so measurements exercise the normal streaming path.
 - `ClientSbsDepthInputShapeTest`: deterministic nearest-multiplicative-aspect selection across the
   three ZipDepth buckets.
-- `ClientSbsGpuInferenceEngineTest`: compiler-cache identity, GPU priority parsing, infer/reuse
+- `ClientSbsGpuInferenceEngineTest`: compiler-cache identity, fixed Low GPU priority, infer/reuse
   disposition validation, and the process-wide single-model ownership slot.
 - `ClientSbsOutputSurfaceValidationTest`: exact `2W x H` EGL realization and per-eye GL limit
   validation, including packed widths larger than the per-viewport limit.
@@ -658,6 +1104,23 @@ On the physical headset:
 
 The connected-test task is acceptable only on a disposable emulator whose data may be erased.
 
+### Source-exposure and history regression
+
+`com.limelight.utils.ClientSbsSourceOrdinalInstrumentedTest` exercises a real 3840 x 2160
+SurfaceTexture/OES image through production model preprocessing, fused RGB/ordinal packing,
+scene-cut comparison, and GPU history commit. It applies gamma before resizing textured source
+regions. Its former max-of-area-RGB control must propose an appearance cut; the source-point
+ordinal must retain the exposure veto with zero reversed orderings. Both paths use deterministic
+undithered quantization and must produce identical model RGB. This verifies the composed shader
+path rather than treating a model-grid exposure transform as equivalent to source exposure.
+
+Run it with the manual procedure below by selecting that class in `$Classes`. It needs GLES 3.1
+and external-OES support, but does not initialize LiteRT. The companion
+`ClientSbsGpuSceneCutDecisionReasonInstrumentedTest` and
+`ClientSbsGpuReliableHistoryParityInstrumentedTest` classes in `com.limelight.sbs` check decision
+ownership and accepted-history behavior. An emulator pass establishes shader correctness only;
+it does not establish Galaxy XR OpenCL interoperability, PQ decoder behavior, or live performance.
+
 ### Data-preserving manual procedure
 
 ```powershell
@@ -703,8 +1166,8 @@ A pass requires all of the following:
 - Native LiteRT initializes with OpenCL/OpenGL interoperability.
 - Archive validation checks the one ZipDepth TAR/XZ asset, all three complete TAR entries, each
   extracted byte count, and all three final SHA-256 values. It also checks that retired family
-  archives are absent from the APK. Only the selected fixed-shape graph may remain staged in
-  `code_cache/client-sbs-model-assets`.
+  archives are absent from the APK. Only manifest-qualified current graphs may remain staged in
+  `code_cache/client-sbs-model-assets`; already verified aspect buckets are retained.
 - Each original-Base ZipDepth graph reports `163/163` operations in exactly one OpenCL partition;
   partial delegation or more than one partition is a failure.
 - `LiteRtCompiledModelIsFullyAccelerated()` succeeds, and the log confirms CL/GL buffer
@@ -869,7 +1332,8 @@ inferences/s. FP16-stored weights now measure 10.293 / 10.473 ms and 10.909 / 11
 respectively, or 91.20/s. The sub-0.5% differences are noise; the benefit is the 49.8% model-byte
 reduction, not faster FP16 compute.
 
-Experimental LiteRT I/O probes are debug/instrumentation-only and fail closed. The OpenCL async
+The temporary async and direct-external PHWC4 LiteRT I/O probes have been removed. Their historical
+results follow; the failed external path is not a supported runtime option. The OpenCL async
 probe reported `backend_async=no`, with the entire invocation spent in submit and no event-backed
 wait; it cannot overlap two model invocations. The corrected direct-external probe forced BUFFER
 storage, received complete FP16 half4 requirements (`540672` bytes, types `[11,6]`, strides
@@ -925,15 +1389,15 @@ Open the in-headset Stats panel and verify:
   infer plus reuse; latch may be higher while the single-flight transaction is occupied.
 - `Near-identical reuse` reports accepted reuse as a percentage of owner-eligible decisions. Static
   or nearly static material should exercise it; sustained motion or edits should force inference.
-- `Reuse rejects` attributes rejected candidates to content, frame gap, owner age, or invalid
-  evidence, so a low reuse ratio can be diagnosed without interpreting expected skips as faults.
+- `Reuse rejects` attributes rejected candidates to content or invalid ownership/evidence.
+  Retired age/frame-gap and Exact fields must not appear.
 - `Decision read avg / max` measures the existing CPU wall around validation and the authenticated
   32-byte map/copy/unmap. After the first candidate, immutable buffer/range checks are cached; use
   this row to detect an Adreno cross-context synchronization stall rather than inferring cost from
   the record's small byte count.
 - `LiteRT wall avg / max` remains bounded for the selected ZipDepth graph and excludes reuse. `Depth
-  result age avg / max` is the real inference pair's capture-to-adoption age; the reused owner is independently
-  bounded to less than 100 ms and four decoder callbacks.
+  result age avg / max` is the real inference pair's capture-to-adoption age. Near reuse has no
+  age or callback-count expiry; it remains relative to the retained real-inference input.
 - The four true GL GPU averages populate without stalling: model-input pack, matched-color copy,
   depth/cut state, and SBS compose.
 - The `Faults` row keeps `color_busy`, `flat`, invalid raw transactions, and collapsed diagnostic cut
@@ -977,7 +1441,7 @@ submission timings. The retained latency fields are:
   map/copy/unmap plus one-time validation. It exposes synchronization wall time, not transfer
   bandwidth, and is zero/unavailable when no eligible candidate was sampled.
 - `Depth result age avg / max`, which measures the real inference pair's capture-to-adoption freshness
-  rather than one isolated GPU stage. It does not average the bounded cached-depth age of reuses.
+  rather than one isolated GPU stage. It does not average the retained-depth age of reuses.
 - Four GL GPU averages from nonblocking `GL_EXT_disjoint_timer_query`: model render + color cut +
   pack, matched-color copy, depth/cut-state processing, and stereo raw-depth V2
   conditioner/inverse-map/packed draw. These measure actual GLES completion but cannot include
@@ -1003,20 +1467,11 @@ $Package = "com.limelight.moonlight3ddebug"
 Review for `ClientSbsGpu`, `Stereo3DRenderer`, delegate coverage, GL errors, fence failures,
 mailbox/slot failures, and uncaught exceptions. Initialization is expected once per new renderer;
 repeated initialization during a stable stream indicates a surface or lifecycle problem.
-Performance logging is opt-in under XR Diagnostics. While enabled, grep
-`DecoderPerf` in Normal/Host SBS or `ClientSbsPerf` in Client SBS for one typed line per
-approximately two-second window. Both expose
-the complete sender-sequence / receive / decoder-output / render-release / surface-presented chain.
-The Client SBS line also identifies the model/backend/input and reports latch/infer/reuse/output
-FPS, eligible-decision reuse percentage and rejection reasons, decision-read wall average/maximum,
-LiteRT wall average/maximum, depth-result-age average/maximum, the four GLES completion averages,
-the fault row, raw-V2 readiness/current-valid/history state, causal cut diagnostics, app CPU
-core-equivalent load, GPU busy/clock, and
-Android thermal status. Neither line adds per-frame logging or additional GPU synchronization.
-When Stats is closed and explicit performance logging is disabled, timer queries, depth-health PBO
-copies/polling, detailed Client-SBS counter updates, and diagnostic formatting are disabled.
-Reopening Stats starts fresh CPU, Client-SBS, health, and GL timer windows; do not treat hidden time
-as part of the first sample.
+The performance-logging switch and periodic background performance lines are retired. Use the
+visible Stats panel for rates, reuse decisions, wall timings, GPU stage samples, faults and health;
+use operational logs for startup, transitions, errors and bounded playback recovery. Closing Stats
+disables its timer queries, health copies/polling, detailed counters and formatting. Reopening starts
+fresh CPU, Client-SBS, health and GL timer windows; hidden time is not part of the first sample.
 
 ## Sustained comparison
 

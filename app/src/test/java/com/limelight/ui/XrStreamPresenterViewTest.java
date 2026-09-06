@@ -350,8 +350,8 @@ public final class XrStreamPresenterViewTest {
         assertEquals("geometry | event 12 | geometry armed yes | flags 0x00a00", decision);
         assertEquals("total 7 | appearance 2 | geometry 3 | low 2 | proposals 9",
                 XrStreamPresenter.formatClientCutCounts(7L, 2L, 3L, 2L, 9L));
-        assertEquals("content 1 | gap 2 | age 3 | invalid 4",
-                XrStreamPresenter.formatClientReuseRejects(1L, 2L, 3L, 4L));
+        assertEquals("content 1 | invalid 4",
+                XrStreamPresenter.formatClientReuseRejects(1L, 4L));
         assertEquals("color_busy 0 | flat 0 | raw invalid 0 | cut range collapsed 0",
                 XrStreamPresenter.formatClientFaults(0L, 0L, true, 0L, 0L));
 

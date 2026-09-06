@@ -601,7 +601,8 @@ public class XrStreamPresenterVideoModeAckTest {
         state.automaticRequestSucceeded(72);
 
         // A recreated SceneCore surface still votes the durable ceiling, not effective 72.
-        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(state));
+        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+                state, XrStreamPresenter.PresenterMode.HOST_SBS_AI));
     }
 
     @Test
@@ -611,7 +612,43 @@ public class XrStreamPresenterVideoModeAckTest {
 
         state.userRequestSucceeded(60);
 
-        assertEquals(60, XrStreamPresenter.durableSurfaceFrameRateVoteHz(state));
+        assertEquals(60, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+                state, XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+    }
+
+    @Test
+    public void clientDefaultRequestsSeventyTwoHzPanelWithoutRaisingThirtyFpsStream() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(30);
+
+        assertEquals(72, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertTrue(XrStreamPresenter.shouldPreferClientPanelRate(
+                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        state.observe(72.00001f);
+        assertEquals(-1, state.nextTarget(30, false));
+        assertEquals(30, state.getUserCeilingHz());
+        assertEquals(30, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+                state, XrStreamPresenter.PresenterMode.NORMAL));
+    }
+
+    @Test
+    public void clientPanelPreferenceTracksDurableCeilingAcrossTemporaryThrottling() {
+        XrStreamPresenter.PanelRefreshRateState state =
+                new XrStreamPresenter.PanelRefreshRateState(72);
+        state.observe(60);
+
+        assertEquals(72, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertTrue(XrStreamPresenter.shouldPreferClientPanelRate(
+                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+
+        state.userRequestSucceeded(90);
+
+        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+        assertFalse(XrStreamPresenter.shouldPreferClientPanelRate(
+                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
     }
 
     @Test

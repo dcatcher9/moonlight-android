@@ -1,6 +1,6 @@
 # Portable presentation contracts
 
-Run the production presentation transaction and swap proof with their existing JUnit tests,
+Run the production presentation transaction, decoder drain admission, and swap proof with their JUnit tests,
 without Android SDK, model assets, native libraries, or a device. Use JDK 25 and the repository
 wrapper from the repository root:
 

@@ -389,8 +389,6 @@
     <string name="summary_checkbox_onscreen_style_official">Выберите этот вариант, если предпочитаете старый стиль виртуального геймпада. Форма кнопок может быть квадратной при выборе нижней виртуальной кнопки [Обычные кнопки - квадратные]</string>
     <string name="title_checkbox_enable_perf_overlay_lite">Включить упрощённый режим</string>
     <string name="summary_checkbox_enable_perf_overlay_lite">Отображать упрощённую информацию: скорость сети / задержка / декодирование / потеря пакетов / FPS</string>
-    <string name="title_checkbox_enable_perf_logging">Включить логирование производительности</string>
-    <string name="summary_checkbox_enable_perf_logging">Сохраняет данные производительности по конфигурациям (только офлайн)</string>
     <string name="title_checkbox_enable_perf_overlay_lite_dialog">В упрощенном режиме нажмите, чтобы открыть быстрые опции.</string>
     <string name="summary_checkbox_enable_perf_overlay_lite_dialog">Заменяет логику кнопки Back, открывая быстрое меню игры.</string>
     <string name="title_show_overlay_zoom_toggle_button">Показать кнопку переключения масш. панели</string>

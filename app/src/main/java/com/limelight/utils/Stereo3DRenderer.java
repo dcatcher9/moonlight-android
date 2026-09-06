@@ -102,6 +102,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private int activeClientSbsGeneration;
     /** Last actual depth observation; reuse never advances the cut detector's source-step age. */
     private long lastDepthObservationFrameSequence;
+    private long lastModelInferenceFrameSequence;
+    private long lastModelInferenceCapturedAtNs;
 
     private volatile boolean clientSbs;
     /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
@@ -166,7 +168,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     /** Client-SBS generation associated with the coalesced callback; guarded by frameLock. */
     private int pendingFrameGeneration = -1;
     /** Coalesces decoder callbacks into one GL-thread latch event without forcing an EGL swap. */
-    private final AtomicBoolean frameDrainQueued = new AtomicBoolean(false);
+    private final ClientSbsFrameDrainScheduler frameDrainScheduler =
+            new ClientSbsFrameDrainScheduler();
     /** Invalidates queued latch events across mode/surface generations. */
     private final AtomicLong frameDrainToken = new AtomicLong(0L);
     /** Ticket payload for {@link #frameDrainRunnable}; all three fields are guarded by frameLock. */
@@ -253,6 +256,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private int modelInputPackProgram;
     private int simple3dProgram;
     private int videoTextureId;
+    /** Context-owned point sampling for ordinal evidence; RGB keeps its existing linear sampler. */
+    private int ordinalPointSampler;
     private QuadProgramBindings simpleProgramBindings;
     private QuadProgramBindings modelInputProgramBindings;
     private GpuPackProgramBindings gpuPackProgramBindings;
@@ -296,7 +301,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final int[] gpuTimerSampleCounters =
             new int[ClientSbsGpuTimer.Stage.values().length];
     private int gpuTelemetryPollCounter;
-    /** Diagnostics are active only while XR Stats or explicit performance logging consumes them. */
+    /** Sampling is active only while XR Stats is visible. */
     private volatile boolean performanceSamplingEnabled;
     /** Rejects in-flight timings that cross a hidden/visible sampling boundary. */
     private final AtomicLong performanceSamplingEpoch = new AtomicLong(1L);
@@ -304,16 +309,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final AtomicBoolean performanceGlStateResetRequested = new AtomicBoolean(true);
     private int depthHealthRetryPollsRemaining;
     private int depthHealthConsecutiveFailures;
-    /** Retained across GL context loss and depth-processor reconstruction. */
-    private volatile boolean statsPanelVisible;
-    /** GL-thread cache preventing redundant focus writes to the current processor. */
+    /** GL-thread cache preventing redundant sampling writes to the current processor. */
     private ClientSbsGpuDepthProcessor healthFocusProcessor;
     private boolean appliedHealthSamplingEnabled;
-    private boolean appliedHealthSamplingFocused;
     /**
-     * Recent history for the metrics a single reading cannot explain. It begins when Stats or
-     * explicit performance logging is enabled, keeping normal streaming free of GPU-to-CPU health
-     * maps while retaining the higher-rate history needed by active diagnostics.
+     * Recent history begins when Stats opens, keeping hidden Stats free of GPU-to-CPU health maps.
      */
     private final SbsDepthTelemetryHistory depthTelemetryHistory =
             new SbsDepthTelemetryHistory();
@@ -351,8 +351,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final AtomicLong perfNearIdenticalCandidates = new AtomicLong();
     private final AtomicLong perfNearIdenticalReuses = new AtomicLong();
     private final AtomicLong perfNearIdenticalContentRejects = new AtomicLong();
-    private final AtomicLong perfNearIdenticalOwnerFrameGapRejects = new AtomicLong();
-    private final AtomicLong perfNearIdenticalOwnerAgeRejects = new AtomicLong();
     private final AtomicLong perfNearIdenticalInvalidRejects = new AtomicLong();
     private final AtomicLong perfGlOutputSubmits = new AtomicLong();
     private final AtomicLong perfColorSlotBusySkips = new AtomicLong();
@@ -369,8 +367,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             perfGlLatches, perfDepthAdopts,
             perfNearIdenticalCandidates, perfNearIdenticalReuses,
             perfNearIdenticalContentRejects,
-            perfNearIdenticalOwnerFrameGapRejects,
-            perfNearIdenticalOwnerAgeRejects,
             perfNearIdenticalInvalidRejects,
             perfGlOutputSubmits,
             perfColorSlotBusySkips, perfFlatSbsOutputs,
@@ -598,7 +594,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             }
             if (!shuttingDown.get() && clientSbs
                     && clientSbsGeneration.get() == scheduledGeneration) {
-                glSurfaceView.requestRender();
+                requestPriorityRender();
             }
         };
         this.onSurfaceReadyListener = listener;
@@ -827,8 +823,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         public final float depthReuseRatio;
         /** Candidate fallbacks classified by the already-mapped GPU decision record. */
         public final long nearIdenticalContentRejects;
-        public final long nearIdenticalOwnerFrameGapRejects;
-        public final long nearIdenticalOwnerAgeRejects;
         public final long nearIdenticalInvalidRejects;
         public final float glOutputSubmitFps;
 
@@ -919,10 +913,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             long depthReuses = owner.perfNearIdenticalReuses.getAndSet(0L);
             this.nearIdenticalContentRejects =
                     owner.perfNearIdenticalContentRejects.getAndSet(0L);
-            this.nearIdenticalOwnerFrameGapRejects =
-                    owner.perfNearIdenticalOwnerFrameGapRejects.getAndSet(0L);
-            this.nearIdenticalOwnerAgeRejects =
-                    owner.perfNearIdenticalOwnerAgeRejects.getAndSet(0L);
             this.nearIdenticalInvalidRejects =
                     owner.perfNearIdenticalInvalidRejects.getAndSet(0L);
             long glOutputSubmits = owner.perfGlOutputSubmits.getAndSet(0L);
@@ -1053,15 +1043,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    /**
-     * Raises the health sample rate while the stats panel is on screen, so the history plots can
-     * resolve events shorter than the background interval. The value is retained when no processor
-     * exists so a later mode switch or GL-context replacement inherits the focused cadence.
-     */
-    public void setStatsPanelVisible(boolean visible) {
-        statsPanelVisible = visible;
-    }
-
     public void setPerformanceSamplingEnabled(boolean enabled) {
         boolean changed;
         synchronized (performanceSampleLock) {
@@ -1077,7 +1058,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             resetDepthTelemetryEra();
             performanceGlStateResetRequested.set(true);
             if (!shuttingDown.get()) {
-                glSurfaceView.requestRender();
+                requestPriorityRender();
             }
         }
     }
@@ -1181,10 +1162,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
         if (ClientSbsNearIdenticalPolicy.isContentRejectionReason(reason)) {
             perfNearIdenticalContentRejects.incrementAndGet();
-        } else if (reason == ClientSbsNearIdenticalPolicy.REASON_OWNER_FRAME_GAP) {
-            perfNearIdenticalOwnerFrameGapRejects.incrementAndGet();
-        } else if (reason == ClientSbsNearIdenticalPolicy.REASON_OWNER_AGE) {
-            perfNearIdenticalOwnerAgeRejects.incrementAndGet();
         } else {
             perfNearIdenticalInvalidRejects.incrementAndGet();
         }
@@ -1234,7 +1211,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     }
 
     private void pollGpuTelemetry() {
-        // Both timer queries and the 224-byte GPU-to-CPU health ring are diagnostics. Normal
+        // Both timer queries and the GPU-to-CPU health/evidence ring are diagnostics. Normal
         // streaming does neither; explicit logging uses the 30-frame cadence and visible Stats
         // sharpens it to 5 frames.
         int pollCounter = gpuTelemetryPollCounter++;
@@ -1319,18 +1296,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         if (processor == null) {
             healthFocusProcessor = null;
             appliedHealthSamplingEnabled = false;
-            appliedHealthSamplingFocused = false;
             return;
         }
         boolean enabled = performanceSamplingEnabled;
-        boolean focused = enabled && statsPanelVisible;
-        if (healthFocusProcessor != processor || appliedHealthSamplingEnabled != enabled
-                || appliedHealthSamplingFocused != focused) {
+        if (healthFocusProcessor != processor || appliedHealthSamplingEnabled != enabled) {
             processor.setHealthSamplingEnabled(enabled);
-            processor.setHealthSamplingFocused(focused);
             healthFocusProcessor = processor;
             appliedHealthSamplingEnabled = enabled;
-            appliedHealthSamplingFocused = focused;
         }
     }
 
@@ -1501,6 +1473,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         // may still execute, but no EGL context is current by then, so explicit glDelete* calls
         // are invalid. EGL releases all of these context-owned objects when its GL thread exits.
         // Context-loss reinitialization is handled separately in onSurfaceCreated().
+        ordinalPointSampler = 0;
 
         prefConfig = null;
         activeInferenceBackend = "Unavailable";
@@ -1656,7 +1629,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
                 }
             }
-            glSurfaceView.requestRender();
+            requestPriorityRender();
         }
     }
 
@@ -1734,7 +1707,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 pendingFrameGeneration = -1;
                 pendingFrameCallbackSequence = 0L;
             }
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return transitionGeneration;
         }
     }
@@ -1976,7 +1949,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 outputSurfaceValidationEpoch, completion);
         if (token == 0L) return false;
         try {
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return true;
         } catch (RuntimeException error) {
             presentationCompletion.cancel(token);
@@ -1995,7 +1968,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             }
         }
         try {
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return true;
         } catch (RuntimeException error) {
             LimeLog.warning("Unable to request Client SBS presentation proof: " + error);
@@ -2107,6 +2080,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             this.outputWidthOverride = width;
             this.outputHeightOverride = height;
         }
+        invalidateQueuedFrameDrain();
         // StreamContainer sets the initial override before GLSurfaceView.setRenderer(), when
         // requestRender() would dereference GLSurfaceView's not-yet-created GLThread. Initial
         // surface creation and later decoder/onResume events already schedule a draw.
@@ -2135,7 +2109,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             pendingFrameGeneration = callbackGeneration;
             pendingFrameCallbackSequence = decoderFrameCallbackSequence;
             // Publish and enqueue under one lock. Otherwise an old-generation callback could
-            // enqueue after the resize invalidates drains, claim frameDrainQueued, and prevent the
+            // enqueue after the resize invalidates drains, claim drain admission, and prevent the
             // first new-generation callback from scheduling the event that would re-arm latching.
             queueFrameDrain(surfaceTexture, callbackGeneration);
         }
@@ -2202,7 +2176,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private void invalidateQueuedFrameDrain() {
         synchronized (frameLock) {
             frameDrainToken.incrementAndGet();
-            frameDrainQueued.set(false);
+            frameDrainScheduler.invalidate();
             clearQueuedFrameDrainTicketLocked();
         }
         queuedPostSwapCaptureTicket.set(0L);
@@ -2313,8 +2287,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
 
     private void queueFrameDrain(SurfaceTexture expectedTexture, int expectedGeneration) {
         synchronized (frameLock) {
-            if (shuttingDown.get() || !clientSbs
-                    || !frameDrainQueued.compareAndSet(false, true)) {
+            if (shuttingDown.get() || !clientSbs || !surfaceLifecycleReady
+                    || !outputSurfaceValidated || !frameDrainScheduler.tryQueueDrain()) {
                 return;
             }
             long token = frameDrainToken.incrementAndGet();
@@ -2325,7 +2299,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 glSurfaceView.queueEvent(frameDrainRunnable);
             } catch (RuntimeException error) {
                 if (frameDrainToken.get() == token) {
-                    frameDrainQueued.set(false);
+                    frameDrainScheduler.cancelQueuedDrain();
                 }
                 if (queuedFrameDrainToken == token) {
                     clearQueuedFrameDrainTicketLocked();
@@ -2334,7 +2308,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 // Keep the notification pending so the next lifecycle-driven draw can latch it.
                 LimeLog.warning("Client SBS decoder latch event deferred: " + error.getMessage());
                 if (!shuttingDown.get() && clientSbs) {
-                    glSurfaceView.requestRender();
+                    requestPriorityRender();
                 }
             }
         }
@@ -2368,7 +2342,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         if (frameDrainToken.get() != token) {
             return;
         }
-        frameDrainQueued.set(false);
+        // GLSurfaceView runs all queued events before a dirty draw. Once a result, deadline,
+        // or lifecycle boundary needs that draw, this existing event must also yield and must not
+        // re-arm callbacks. The draw itself will latch the newest metadata left in frameAvailable.
+        if (!frameDrainScheduler.beginDrain()) {
+            return;
+        }
         if (shuttingDown.get() || !clientSbs
                 || videoSurfaceTexture != expectedTexture
                 || clientSbsGeneration.get() != expectedGeneration) {
@@ -2378,11 +2357,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 || EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) == EGL14.EGL_NO_SURFACE) {
             // GLSurfaceView may execute queued events while paused, before an EGL window is
             // current. Leave frameAvailable set and let the next real draw perform the latch.
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return;
         }
         if (activeClientSbsGeneration != expectedGeneration) {
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return;
         }
         if (!latchPendingVideoFrame()) {
@@ -2397,14 +2376,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         if (shouldPresentCurrentFlatForStaleDepth(System.nanoTime())) {
             // A real draw/swap is required to replace SceneCore's retained packed image with the
             // current decoded color duplicated flat. The in-flight inference remains untouched.
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return;
         }
 
         if (!matchedOutputPresented || !hasPresentableDepth()
                 || activeClientSbsGeneration != clientSbsGeneration.get()
                 || gpuShutdownRequested.get()) {
-            glSurfaceView.requestRender();
+            requestPriorityRender();
             return;
         }
 
@@ -2474,7 +2453,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             // A dirty render requested here cannot begin until the current draw returns. Its
             // ordinary no-adoption path will retry capture after the same swap boundary.
             try {
-                glSurfaceView.requestRender();
+                requestPriorityRender();
             } catch (RuntimeException fallbackError) {
                 LimeLog.warning("Unable to request Client SBS post-swap capture retry: "
                         + fallbackError);
@@ -2498,7 +2477,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     == EGL14.EGL_NO_SURFACE) {
                 // A pause may drain queued events without a window. Preserve the uncaptured
                 // frame; the next lifecycle draw retries it through the no-adoption path.
-                glSurfaceView.requestRender();
+                requestPriorityRender();
                 return;
             }
             captureLatestFrameIfReady();
@@ -2740,6 +2719,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         shuttingDown.set(false);
         invalidateQueuedFrameDrain();
         lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
+        // onSurfaceCreated denotes a new context: abandon the previous sampler name rather than
+        // deleting it through a context that may already have reused the same integer.
+        ordinalPointSampler = createOrdinalPointSampler();
         videoTextureId = createExternalOESTexture();
         videoSurfaceTexture = new SurfaceTexture(videoTextureId);
         decoderSurfaceGeneration = requestedDecoderSurfaceGeneration;
@@ -2842,7 +2824,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             gpuDisparityProcessor = null;
         }
         gpuSceneCutResetPending = false;
-        if (modelInputTargetReady) {
+        if (modelInputTargetReady && ordinalPointSampler != 0
+                && modelInputProgramBindings != null
+                && modelInputProgramBindings.ordinalTexture >= 0) {
             try {
                 gpuSceneCutDetector = new ClientSbsGpuSceneCutDetector(
                         modelInputWidth, modelInputHeight);
@@ -3120,6 +3104,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     }
 
     private void onDrawFrameLocked(GL10 gl) {
+        // Acknowledge the framework draw even if it returns early (for example, a first-frame
+        // timeout). Later decoder callbacks can then wake recovery. The admission path separately
+        // rejects unvalidated surfaces; a new request racing this draw keeps its priority.
+        frameDrainScheduler.onDrawStarted();
         // This acknowledgement must run before the normal lifecycle early-return. An inference
         // failure can race shutdown after its worker transferred shared fences but before native
         // LiteRT teardown; only this thread can prove the renderer context is fully drained.
@@ -3254,7 +3242,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                         && clientSbs && outputSurfaceValidated) {
                     // Events also run after failed swaps. They only request a new draw;
                     // successful presentation is committed exclusively inside onDrawFrame.
-                    glSurfaceView.requestRender();
+                    requestPriorityRender();
                 }
             });
         } catch (RuntimeException error) {
@@ -3318,8 +3306,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 // raw V2 conditioner. A client-only prefilter changes silhouettes and rounds the
                 // model field to half precision before subtracting the R32F shot mean.
                 gpuParallaxTextureId = disparityProcessor.process(
-                        gpuDepthTextureId, gpuProfileTextureId,
-                        colorFrameWidth, colorFrameHeight);
+                        gpuDepthTextureId, gpuProfileTextureId);
                 contractiveDisparityValid = gpuParallaxTextureId != 0;
                 if (!contractiveDisparityValid) {
                     disableContractiveDisparity("processor published an empty field");
@@ -3426,7 +3413,48 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             }
         }
 
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        boolean ordinalInput = bindings.ordinalTexture >= 0;
+        boolean restoreDither = ordinalInput && GLES20.glIsEnabled(GLES20.GL_DITHER);
+        if (ordinalInput) {
+            // One source texture, two sampling policies. Only alpha uses the nearest source-cell
+            // sample; the model's area-filtered RGB continues to use texture unit zero unchanged.
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+            GLES20.glBindTexture(GL_TEXTURE_EXTERNAL_OES, videoTextureId);
+            GLES30.glBindSampler(1, ordinalPointSampler);
+            GLES20.glUniform1i(bindings.ordinalTexture, 1);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            if (restoreDither) GLES20.glDisable(GLES20.GL_DITHER);
+        }
+        try {
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        } finally {
+            if (ordinalInput) {
+                GLES30.glBindSampler(1, 0);
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                if (restoreDither) GLES20.glEnable(GLES20.GL_DITHER);
+            }
+        }
+    }
+
+    private int createOrdinalPointSampler() {
+        int[] samplers = new int[1];
+        drainGlErrors();
+        GLES30.glGenSamplers(1, samplers, 0);
+        int sampler = samplers[0];
+        if (sampler != 0) {
+            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        }
+        int error = GLES20.glGetError();
+        if (sampler == 0 || error != GLES20.GL_NO_ERROR) {
+            if (sampler != 0) GLES30.glDeleteSamplers(1, samplers, 0);
+            LimeLog.warning("Client SBS ordinal point sampler unavailable: GL=0x"
+                    + Integer.toHexString(error) + "; using depth-only cut evidence");
+            return 0;
+        }
+        return sampler;
     }
 
     private static final class RendererFinishRequest {
@@ -3453,6 +3481,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         final boolean sceneCutAvailable;
         final ClientSbsGpuSceneCutDetector sceneCutDetector;
         final boolean nearIdenticalCandidate;
+        final int modelInputTextureId;
         final int nearIdenticalDecisionBufferId;
         final int nearIdenticalDecisionByteOffset;
         final long performanceEpoch;
@@ -3463,7 +3492,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                      long inferenceClaimToken, boolean sceneCutAvailable,
                      ClientSbsGpuSceneCutDetector sceneCutDetector,
                      boolean nearIdenticalCandidate, int nearIdenticalDecisionBufferId,
-                     int nearIdenticalDecisionByteOffset, long performanceEpoch) {
+                     int nearIdenticalDecisionByteOffset, long performanceEpoch,
+                     int modelInputTextureId) {
             this.inputReadyFence = inputReadyFence;
             this.previousOutputConsumedFence = previousOutputConsumedFence;
             this.bufferSlot = bufferSlot;
@@ -3473,6 +3503,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             this.sceneCutAvailable = sceneCutAvailable;
             this.sceneCutDetector = sceneCutDetector;
             this.nearIdenticalCandidate = nearIdenticalCandidate;
+            this.modelInputTextureId = modelInputTextureId;
             this.nearIdenticalDecisionBufferId = nearIdenticalDecisionBufferId;
             this.nearIdenticalDecisionByteOffset = nearIdenticalDecisionByteOffset;
             this.performanceEpoch = performanceEpoch;
@@ -3489,6 +3520,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             this.sceneCutAvailable = false;
             this.sceneCutDetector = null;
             this.nearIdenticalCandidate = false;
+            this.modelInputTextureId = 0;
             this.nearIdenticalDecisionBufferId = 0;
             this.nearIdenticalDecisionByteOffset = 0;
             this.performanceEpoch = 0L;
@@ -3580,6 +3612,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         boolean nearIdenticalCandidate = sceneCutDetector != null
                 && sceneCutDetector.hasCommittedInferenceHistory()
                 && hasPresentableDepth();
+        if (nearIdenticalCandidate && !couldHaveReusableModelOwner(
+                lastModelInferenceFrameSequence, lastModelInferenceCapturedAtNs,
+                colorFrameLease.getFrameSequence(), colorFrameLease.getCapturedAtNs())) {
+            // Negative-only upper bound: the GPU's reliable owner may be older or invalid, but
+            // cannot be newer than our newest real model observation. GPU still owns acceptance.
+            nearIdenticalCandidate = false;
+        }
+        boolean lazyInputPacking = engine.supportsLazyInputPacking() && sceneCutDetector != null;
         int nearIdenticalDecisionBufferId = 0;
         int nearIdenticalDecisionByteOffset = 0;
 
@@ -3607,7 +3647,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                                 gpuDepthProcessor.getSceneCutMailboxByteOffset(bufferSlot),
                                 nearIdenticalCandidate, inferenceClaimToken, bufferSlot,
                                 colorFrameLease.getFrameSequence(),
-                                colorFrameLease.getCapturedAtNs());
+                                colorFrameLease.getCapturedAtNs(), lazyInputPacking);
                         tensorPackedWithSceneCut = true;
                         sceneCutFramePending = true;
                         if (nearIdenticalCandidate) {
@@ -3682,7 +3722,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     tensorPackedWithSceneCut && nearIdenticalCandidate,
                     tensorPackedWithSceneCut ? nearIdenticalDecisionBufferId : 0,
                     tensorPackedWithSceneCut ? nearIdenticalDecisionByteOffset : 0,
-                    performanceEpoch);
+                    performanceEpoch, tensorPackedWithSceneCut && lazyInputPacking ? fboTextureId : 0);
             if (!inferenceInputQueue.offer(task)) {
                 GLES30.glDeleteSync(inputReadyFence);
                 restoreGpuOutputConsumedFence(bufferSlot, previousOutputFence);
@@ -3724,10 +3764,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
+    /** Requests presentation priority before touching GLSurfaceView's event-first queue. */
+    private void requestPriorityRender() {
+        frameDrainScheduler.requestDraw();
+        glSurfaceView.requestRender();
+    }
+
     /** A worker has produced something immediately actionable; do not add a timer quantum. */
     private void requestReadyRender() {
         if (!shuttingDown.get() && clientSbs) {
-            glSurfaceView.requestRender();
+            requestPriorityRender();
         }
     }
 
@@ -3775,7 +3821,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             // requestReadyRender() intentionally suppresses lifecycle-shutdown renders. This
             // handshake must still be offered while the EGL surface exists, even after shutdown
             // has begun, so request the GL thread directly.
-            glSurfaceView.requestRender();
+            requestPriorityRender();
         } catch (Throwable error) {
             LimeLog.severe("Unable to request Client SBS renderer finish: "
                     + error.getMessage());
@@ -4027,6 +4073,18 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
 
     private void resetSourceFrameAgeTracking() {
         lastDepthObservationFrameSequence = 0L;
+        lastModelInferenceFrameSequence = 0L;
+        lastModelInferenceCapturedAtNs = 0L;
+    }
+
+    static boolean couldHaveReusableModelOwner(long ownerFrame, long ownerCapturedAtNs,
+                                                long frame, long capturedAtNs) {
+        if (ownerFrame <= 0 || frame <= ownerFrame || capturedAtNs < ownerCapturedAtNs) {
+            return false;
+        }
+        // Admission cannot authorize reuse: the GPU compares each candidate against the fixed
+        // real-inference input. Elapsed time alone does not make matching content obsolete.
+        return true;
     }
 
     /** Lets the GPU advance only the histories authorized by this exact depth result. */
@@ -4259,9 +4317,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             matchedOutputPresented = false;
 
             // This copy/commit is ordered after valid depth postprocessing and before the output
-            // consumer fence. The next candidate therefore compares only against an actual,
-            // usable inference owner. Reused frames never reach this path.
+            // consumer fence. Only real inference advances the retained comparison owner.
             commitActualInferenceHistory(result);
+            lastModelInferenceFrameSequence = result.colorFrameLease.getFrameSequence();
+            lastModelInferenceCapturedAtNs = result.colorFrameLease.getCapturedAtNs();
 
             // The depth processor and history commit have now submitted every read from this
             // slot. Transfer that complete dependency back to the inference context.
@@ -5057,6 +5116,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         /** Source pixels per model texel, per axis; drives the model-input box filter. */
         final int downsampleRatio;
         final int sourceSize;
+        final int ordinalTexture;
 
         QuadProgramBindings(int program) {
             position = GLES20.glGetAttribLocation(program, "a_Position");
@@ -5069,6 +5129,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             sourceAspect = GLES20.glGetUniformLocation(program, "u_sourceAspect");
             downsampleRatio = GLES20.glGetUniformLocation(program, "u_downsampleRatio");
             sourceSize = GLES20.glGetUniformLocation(program, "u_sourceSize");
+            ordinalTexture = GLES20.glGetUniformLocation(program, "u_OrdinalTexture");
         }
     }
 
@@ -5188,7 +5249,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                                 renderResult.nearIdenticalCandidate,
                                 renderResult.nearIdenticalDecisionBufferId,
                                 renderResult.nearIdenticalDecisionByteOffset,
-                                renderResult.inferenceClaimToken);
+                                renderResult.sceneCutAvailable ? renderResult.inferenceClaimToken : 0L,
+                                renderResult.modelInputTextureId);
                         ClientSbsGpuInferenceEngine.RunDisposition disposition =
                                 gpuEngine.getLastRunDisposition(renderResult.bufferSlot);
                         if (samplePerformance && renderResult.nearIdenticalCandidate) {
@@ -5219,10 +5281,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                             releaseInferenceClaim(renderResult.inferenceClaimToken);
                             handedToRenderer = true;
                             requestReadyRender();
-                            if (terminating) {
-                                break;
-                            }
-                            continue;
+                            break;
                         }
 
                         GpuInferenceResult gpuResult = new GpuInferenceResult(

@@ -22,6 +22,7 @@ sourceSets {
         java {
             setSrcDirs(['../../app/src/main/java'])
             include 'com/limelight/utils/ClientSbsPresentationTransaction.java'
+            include 'com/limelight/utils/ClientSbsFrameDrainScheduler.java'
             include 'com/limelight/utils/ClientSbsSwapProof.java'
         }
     }
@@ -29,6 +30,7 @@ sourceSets {
         java {
             setSrcDirs(['../../app/src/test/java'])
             include 'com/limelight/utils/ClientSbsPresentationTransactionTest.java'
+            include 'com/limelight/utils/ClientSbsFrameDrainSchedulerTest.java'
             include 'com/limelight/utils/ClientSbsSwapProofTest.java'
         }
     }

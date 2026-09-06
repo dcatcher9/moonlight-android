@@ -109,7 +109,7 @@ public class ClientSbsNearIdenticalPolicyTest {
     }
 
     @Test
-    public void ownerAllowsFrameGapsOneThroughFourOnly() {
+    public void ownerAcceptsAnyForwardFrameButRejectsMissingOrRegressedIdentity() {
         ClientSbsNearIdenticalPolicy.TileEvidence[] quiet = quietTiles();
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
                 ClientSbsNearIdenticalPolicy.decide(
@@ -120,16 +120,25 @@ public class ClientSbsNearIdenticalPolicyTest {
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
                 ClientSbsNearIdenticalPolicy.decide(
                         WIDTH, HEIGHT, quiet, 100L, 100L, 0L));
-        assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
                 ClientSbsNearIdenticalPolicy.decide(
                         WIDTH, HEIGHT, quiet, 100L, 105L, 0L));
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
+                ClientSbsNearIdenticalPolicy.decide(
+                        WIDTH, HEIGHT, quiet, 100L, Long.MAX_VALUE, 0L));
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
+                ClientSbsNearIdenticalPolicy.decide(
+                        WIDTH, HEIGHT, quiet, 100L, 99L, 0L));
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
+                ClientSbsNearIdenticalPolicy.decide(
+                        WIDTH, HEIGHT, quiet, -1L, 1L, 0L));
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
                 ClientSbsNearIdenticalPolicy.decide(
                         WIDTH, HEIGHT, quiet, 0L, 1L, 0L));
     }
 
     @Test
-    public void ownerAgeAllowsZeroThroughOneNanosecondBelowOneHundredMilliseconds() {
+    public void ownerAgeDoesNotExpireButBackwardCaptureStillFailsClosed() {
         ClientSbsNearIdenticalPolicy.TileEvidence[] quiet = quietTiles();
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
                 ClientSbsNearIdenticalPolicy.decide(
@@ -140,15 +149,24 @@ public class ClientSbsNearIdenticalPolicyTest {
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
                 ClientSbsNearIdenticalPolicy.decide(
                         WIDTH, HEIGHT, quiet, 100L, 101L, -1L));
-        assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
                 ClientSbsNearIdenticalPolicy.decide(
                         WIDTH, HEIGHT, quiet, 100L, 101L, 100_000_000L));
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
+                ClientSbsNearIdenticalPolicy.decide(
+                        WIDTH, HEIGHT, quiet, 100L, 1_000_000L, 86_401_000_000_000L));
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
+                ClientSbsNearIdenticalPolicy.decide(
+                        WIDTH, HEIGHT, quiet, 100L, Long.MAX_VALUE, Long.MAX_VALUE));
     }
 
     @Test
     public void decisionTagsAndTokenWordsHaveStableFailClosedRoundTrips() {
         assertEquals(0, ClientSbsNearIdenticalPolicy.Decision.REUSE.getTag());
         assertEquals(1, ClientSbsNearIdenticalPolicy.Decision.INFER.getTag());
+        // Retired tag 3 must not revive the removed raw-model memoization path.
+        assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
+                ClientSbsNearIdenticalPolicy.Decision.fromTagFailClosed(3));
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.REUSE,
                 ClientSbsNearIdenticalPolicy.Decision.fromTagFailClosed(0));
         assertEquals(ClientSbsNearIdenticalPolicy.Decision.INFER,
@@ -173,7 +191,10 @@ public class ClientSbsNearIdenticalPolicyTest {
         assertTrue(ClientSbsNearIdenticalPolicy.isKnownReason(
                 ClientSbsNearIdenticalPolicy.REASON_RECORD_INVALID));
         assertFalse(ClientSbsNearIdenticalPolicy.isKnownReason(-1));
+        assertFalse(ClientSbsNearIdenticalPolicy.isKnownReason(3));
+        assertFalse(ClientSbsNearIdenticalPolicy.isKnownReason(4));
         assertFalse(ClientSbsNearIdenticalPolicy.isKnownReason(10));
+        assertFalse(ClientSbsNearIdenticalPolicy.isKnownReason(11));
 
         assertTrue(ClientSbsNearIdenticalPolicy.isContentRejectionReason(
                 ClientSbsNearIdenticalPolicy.REASON_CONTENT_MEDIUM));
@@ -182,7 +203,7 @@ public class ClientSbsNearIdenticalPolicyTest {
         assertTrue(ClientSbsNearIdenticalPolicy.isContentRejectionReason(
                 ClientSbsNearIdenticalPolicy.REASON_CONTENT_LOCAL));
         assertFalse(ClientSbsNearIdenticalPolicy.isContentRejectionReason(
-                ClientSbsNearIdenticalPolicy.REASON_OWNER_AGE));
+                ClientSbsNearIdenticalPolicy.REASON_OWNER_INVALID));
     }
 
     private static ClientSbsNearIdenticalPolicy.Decision decide(

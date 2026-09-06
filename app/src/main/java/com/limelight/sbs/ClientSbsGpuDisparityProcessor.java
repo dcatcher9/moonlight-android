@@ -45,7 +45,6 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
     private int verticalFinishEnvelopeUniform;
     private int horizontalForwardVerticalUniform;
     private int horizontalFinishVerticalUniform;
-    private int horizontalFinishEnvelopeUniform;
     private boolean validateDispatches = true;
     private boolean released;
 
@@ -95,13 +94,10 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
      * Submits the complete conditioner and returns its linearly sampled R32F output texture.
      * Commands remain asynchronous and ordered in the caller's current renderer context.
      */
-    public int process(int depthTexture, int profileTexture, int sourceWidth, int sourceHeight) {
+    public int process(int depthTexture, int profileTexture) {
         assertOwnerContext();
         if (depthTexture == 0 || profileTexture == 0) {
             throw new IllegalArgumentException("Depth and profile textures must be valid");
-        }
-        if (sourceWidth <= 0 || sourceHeight <= 0) {
-            throw new IllegalArgumentException("Source dimensions must be positive");
         }
 
         if (validateDispatches) {
@@ -109,30 +105,32 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
         }
         try {
             GLES20.glUseProgram(verticalForwardProgram);
-            bindTexture(0, depthTexture, verticalForwardDepthUniform);
-            bindTexture(1, profileTexture, verticalForwardProfileUniform);
-            GLES20.glUniform1f(verticalForwardInverseRawCoordinateScaleUniform,
-                    inverseRawCoordinateScale);
+            bindTexture(0, depthTexture);
+            bindTexture(1, profileTexture);
             bindWriteImage(envelopeTexture, GLES30.GL_RGBA32F);
             dispatch(groups(width), "vertical forward envelope");
             imageToTextureBarrier();
 
             GLES20.glUseProgram(verticalFinishProgram);
-            bindTexture(0, envelopeTexture, verticalFinishEnvelopeUniform);
+            bindTexture(0, envelopeTexture);
             bindWriteImage(verticalTexture, GLES30.GL_R32F);
             dispatch(groups(width), "vertical reverse envelope");
             imageToTextureBarrier();
 
             GLES20.glUseProgram(horizontalForwardProgram);
-            bindTexture(0, verticalTexture, horizontalForwardVerticalUniform);
-            bindWriteImage(envelopeTexture, GLES30.GL_RGBA32F);
+            bindTexture(0, verticalTexture);
+            // The vertical phase needs RGB envelope scratch, but the horizontal forward
+            // phase carries only one float. Reuse final storage without another allocation.
+            bindWriteImage(finalTexture, GLES30.GL_R32F);
             dispatch(groups(height), "horizontal forward majorant");
             imageToTextureBarrier();
 
             GLES20.glUseProgram(horizontalFinishProgram);
-            bindTexture(0, verticalTexture, horizontalFinishVerticalUniform);
-            bindTexture(1, envelopeTexture, horizontalFinishEnvelopeUniform);
-            bindWriteImage(finalTexture, GLES30.GL_R32F);
+            bindTexture(0, verticalTexture);
+            // Each row owner reads its forward value through imageLoad before replacing it.
+            // The original vertical candidates remain in a distinct sampled texture.
+            GLES31.glBindImageTexture(IMAGE_BINDING, finalTexture, 0, false, 0,
+                    GLES31.GL_READ_WRITE, GLES30.GL_R32F);
             dispatch(groups(height), "horizontal reverse majorant");
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
                     | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
@@ -205,8 +203,17 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
                 horizontalForwardProgram, "uVerticalConditioned");
         horizontalFinishVerticalUniform = requiredUniform(
                 horizontalFinishProgram, "uVerticalConditioned");
-        horizontalFinishEnvelopeUniform = requiredUniform(
-                horizontalFinishProgram, "uEnvelopeScratch");
+
+        // Programs are private to this immutable processor and are never relinked. Set fixed
+        // sampler units and model calibration once, without changing the caller's current program.
+        GLES31.glProgramUniform1i(verticalForwardProgram, verticalForwardDepthUniform, 0);
+        GLES31.glProgramUniform1i(verticalForwardProgram, verticalForwardProfileUniform, 1);
+        GLES31.glProgramUniform1f(verticalForwardProgram,
+                verticalForwardInverseRawCoordinateScaleUniform, inverseRawCoordinateScale);
+        GLES31.glProgramUniform1i(verticalFinishProgram, verticalFinishEnvelopeUniform, 0);
+        GLES31.glProgramUniform1i(horizontalForwardProgram, horizontalForwardVerticalUniform, 0);
+        GLES31.glProgramUniform1i(horizontalFinishProgram, horizontalFinishVerticalUniform, 0);
+        checkGlError("initialize contractive disparity uniforms");
     }
 
     private int createTexture(int internalFormat, int filtering) {
@@ -261,10 +268,9 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
         return (length + LOCAL_SIZE - 1) / LOCAL_SIZE;
     }
 
-    private static void bindTexture(int unit, int texture, int uniform) {
+    private static void bindTexture(int unit, int texture) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + unit);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-        GLES20.glUniform1i(uniform, unit);
     }
 
     private static void bindWriteImage(int texture, int format) {

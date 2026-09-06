@@ -39,6 +39,8 @@ final class ClientSbsModelAssetCache {
 
     private static final int MODEL_IO_BUFFER_BYTES = 64 * 1024;
     private static final Object CACHE_LOCK = new Object();
+    // UI-side request admission must never wait for archive I/O or file publication.
+    private static final Object PRESTAGE_LOCK = new Object();
     private static final Set<String> VERIFIED_MODELS = new HashSet<>();
     private static final Set<String> AUTHORITATIVELY_VERIFIED_MODELS = new HashSet<>();
     private static final Set<String> ASYNC_PRESTAGES = new HashSet<>();
@@ -53,8 +55,8 @@ final class ClientSbsModelAssetCache {
     /**
      * Starts one nonfatal, CPU-only production-cache pre-stage for this immutable graph.
      *
-     * <p>Speculative staging deliberately retains other verified buckets. A later authoritative
-     * engine initialization prunes the production directory to its selected graph.</p>
+     * <p>Staging retains current manifest buckets on disk. Authoritative initialization removes
+     * obsolete files, independently of the one-model GPU residency guard.</p>
      */
     static void prestageProductionModelAsync(Context context,
                                              ClientSbsModelManifest manifest) {
@@ -75,48 +77,61 @@ final class ClientSbsModelAssetCache {
         }
         String requestKey = codeCacheDirectory.getAbsolutePath() + ':'
                 + manifest.getAssetName() + ':' + manifest.getAssetSha256();
-        synchronized (CACHE_LOCK) {
-            if (!ASYNC_PRESTAGES.add(requestKey)) {
-                return;
-            }
-        }
-
-        Thread prestageThread = new Thread(() -> {
-            try {
-                try {
-                    Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
-                } catch (RuntimeException ignored) {
-                    // Thread priority is only an optimization; cache integrity is independent.
-                }
-                long startedNs = System.nanoTime();
-                LimeLog.info("Client SBS model asset pre-stage started: " + manifest.getId());
-                File stagedFile = prepareVerifiedModelFile(
-                        storageContext, storageContext.getAssets(), manifest,
-                        PRODUCTION_MODEL_CACHE, false);
-                LimeLog.info("Client SBS model asset pre-staged: " + manifest.getId()
-                        + " bytes=" + stagedFile.length() + " elapsed="
-                        + String.format(java.util.Locale.ROOT, "%.1f ms",
-                        Math.max(0L, System.nanoTime() - startedNs) / 1_000_000.0));
-            } catch (IOException | RuntimeException error) {
-                // Normal and Host SBS remain independent. Authoritative Client SBS initialization
-                // reports its own failure if the user later requests the unavailable path.
-                LimeLog.info("Client SBS model asset pre-stage deferred: "
-                        + error.getMessage());
-            } finally {
-                synchronized (CACHE_LOCK) {
-                    ASYNC_PRESTAGES.remove(requestKey);
-                }
-            }
-        }, "ClientSbsModelPrestage");
         try {
-            prestageThread.setDaemon(true);
-            prestageThread.start();
+            startPrestage(requestKey, () -> {
+                try {
+                    try {
+                        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+                    } catch (RuntimeException ignored) {
+                        // Thread priority is only an optimization; cache integrity is independent.
+                    }
+                    long startedNs = System.nanoTime();
+                    LimeLog.info("Client SBS model asset pre-stage started: " + manifest.getId());
+                    File stagedFile = prepareVerifiedModelFile(
+                            storageContext, storageContext.getAssets(), manifest,
+                            PRODUCTION_MODEL_CACHE, false);
+                    LimeLog.info("Client SBS model asset pre-staged: " + manifest.getId()
+                            + " bytes=" + stagedFile.length() + " elapsed="
+                            + String.format(java.util.Locale.ROOT, "%.1f ms",
+                            Math.max(0L, System.nanoTime() - startedNs) / 1_000_000.0));
+                } catch (IOException | RuntimeException error) {
+                    // Normal and Host SBS remain independent. Authoritative Client SBS initialization
+                    // reports its own failure if the user later requests the unavailable path.
+                    LimeLog.info("Client SBS model asset pre-stage deferred: "
+                            + error.getMessage());
+                }
+            });
         } catch (RuntimeException error) {
-            synchronized (CACHE_LOCK) {
-                ASYNC_PRESTAGES.remove(requestKey);
-            }
             LimeLog.info("Client SBS model asset pre-stage could not start: "
                     + error.getMessage());
+        }
+    }
+
+    /** Admit a background request independently of the worker's cache-integrity lock. */
+    static boolean startPrestage(String requestKey, Runnable staging) {
+        synchronized (PRESTAGE_LOCK) {
+            if (!ASYNC_PRESTAGES.add(requestKey)) {
+                return false;
+            }
+        }
+        try {
+            Thread prestageThread = new Thread(() -> {
+                try {
+                    staging.run();
+                } finally {
+                    synchronized (PRESTAGE_LOCK) {
+                        ASYNC_PRESTAGES.remove(requestKey);
+                    }
+                }
+            }, "ClientSbsModelPrestage");
+            prestageThread.setDaemon(true);
+            prestageThread.start();
+            return true;
+        } catch (RuntimeException error) {
+            synchronized (PRESTAGE_LOCK) {
+                ASYNC_PRESTAGES.remove(requestKey);
+            }
+            throw error;
         }
     }
 
@@ -149,8 +164,7 @@ final class ClientSbsModelAssetCache {
                 throw new IOException("Unable to create Client SBS model staging directory");
             }
             String safeId = modelId.replaceAll("[^A-Za-z0-9._-]", "_");
-            File verifiedFile = new File(modelDirectory, safeId + '-'
-                    + expectedSha256.substring(0, 16) + ".tflite");
+            File verifiedFile = new File(modelDirectory, stagedFileName(modelId, expectedSha256));
             if (pruneOtherModels) {
                 pruneStagedModelDirectory(modelDirectory, verifiedFile);
             }
@@ -246,7 +260,26 @@ final class ClientSbsModelAssetCache {
         }
     }
 
-    /** Keeps authoritative initialization bounded to its selected verified graph. */
+    static String stagedFileName(String modelId, String sha256) {
+        return modelId.replaceAll("[^A-Za-z0-9._-]", "_") + '-'
+                + sha256.substring(0, 16) + ".tflite";
+    }
+
+    /** A bounded manifest whitelist; retaining a file never substitutes for digest validation. */
+    private static boolean isCurrentProductionModelFile(String name) {
+        ClientSbsModelManifest[] models = {
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9};
+        for (ClientSbsModelManifest model : models) {
+            if (name.equals(stagedFileName(model.getId(), model.getAssetSha256()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Removes obsolete/partial files while retaining all current on-disk aspect buckets. */
     private static void pruneStagedModelDirectory(File modelDirectory, File selectedFile) {
         File[] stagedFiles = modelDirectory.listFiles();
         if (stagedFiles == null) {
@@ -258,6 +291,7 @@ final class ClientSbsModelAssetCache {
             }
             String name = stagedFile.getName();
             if (stagedFile.isFile()
+                    && !isCurrentProductionModelFile(name)
                     && (name.endsWith(".partial") || name.endsWith(".tflite"))
                     && !stagedFile.delete()) {
                 LimeLog.warning("Unable to prune stale Client SBS model cache file: " + name);

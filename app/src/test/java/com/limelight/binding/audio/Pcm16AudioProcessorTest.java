@@ -12,7 +12,7 @@ public final class Pcm16AudioProcessorTest {
         short[] samples = {Short.MIN_VALUE, -12345, -1, 0, 1, 12345, Short.MAX_VALUE};
         short[] expected = samples.clone();
 
-        new Pcm16AudioProcessor(0, 48_000, 2).process(samples, samples.length);
+        new Pcm16AudioProcessor(0).process(samples, samples.length);
 
         assertArrayEquals(expected, samples);
     }
@@ -21,7 +21,7 @@ public final class Pcm16AudioProcessorTest {
     public void threeDbDefaultRaisesNormalContent() {
         short[] samples = {8_000, -8_000};
 
-        new Pcm16AudioProcessor(3, 48_000, 2).process(samples, samples.length);
+        new Pcm16AudioProcessor(3).process(samples, samples.length);
 
         assertEquals(11_300, samples[0], 2);
         assertEquals(-11_300, samples[1], 2);
@@ -31,7 +31,7 @@ public final class Pcm16AudioProcessorTest {
     public void sixDbSoftLimiterNeverWrapsHotSamples() {
         short[] samples = {Short.MAX_VALUE, Short.MIN_VALUE, 20_000, -20_000};
 
-        new Pcm16AudioProcessor(6, 48_000, 2).process(samples, samples.length);
+        new Pcm16AudioProcessor(6).process(samples, samples.length);
 
         assertTrue(samples[0] > 32_000);
         assertTrue(samples[1] < -32_000);
@@ -43,7 +43,7 @@ public final class Pcm16AudioProcessorTest {
     public void processorTouchesOnlyValidDecodedSamples() {
         short[] samples = {8_000, 8_000, 12_345, -12_345};
 
-        new Pcm16AudioProcessor(3, 48_000, 2).process(samples, 2);
+        new Pcm16AudioProcessor(3).process(samples, 2);
 
         assertEquals(11_300, samples[0], 2);
         assertEquals(11_300, samples[1], 2);

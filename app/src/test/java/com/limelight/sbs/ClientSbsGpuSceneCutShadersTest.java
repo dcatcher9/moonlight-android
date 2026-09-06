@@ -9,7 +9,7 @@ import org.junit.Test;
 
 public class ClientSbsGpuSceneCutShadersTest {
     @Test
-    public void fusedPackAndDownsampleUsesOneFetchAndPersistentGpuImage() {
+    public void fusedPackAndDownsampleSharesModelTextureAndPersistentGpuImage() {
         String shader = ClientSbsGpuSceneCutShaders.createPackAndDownsampleLuma(350, 196);
         assertTrue(shader.contains("layout(local_size_x = 16, local_size_y = 16)"));
         assertTrue(shader.contains("binding = 2) buffer InputTensor"));
@@ -29,7 +29,43 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("uint packedBlock = blockLuma | (ordinalMedian << 8u)"));
         assertFalse(shader.contains("currentLumaSquaredSum"));
         assertFalse(shader.contains("imageStore(uCurrentLuma, point"));
-        assertTrue(occurrences(shader, "texelFetch(") == 1);
+        assertTrue(shader.contains("vec4 sourceSample = texelFetch("));
+        assertTrue(shader.contains("float sourceOrdinal = sourceSample.a"));
+        assertFalse(shader.contains("uint(max(rgb.r"));
+        // Packing, color evidence and Near share the same fetched current RGB values.
+        assertEquals(1, occurrences(shader, "texelFetch(uCurrentColor"));
+    }
+
+    @Test
+    public void sourceGammaBeforeAreaResizeNeedsIndependentPointOrdinals() {
+        // Each synthetic model cell covers a 2x2 source footprint. Constant .58 alternates
+        // with a .15/.85 checkerboard. Gamma is applied to source cells BEFORE averaging.
+        int width = 12, height = 10;
+        int[] previousModel = new int[width * height];
+        int[] currentModel = new int[width * height];
+        int[] previousPoint = new int[width * height];
+        int[] currentPoint = new int[width * height];
+        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
+            double[] source = ((x + y) & 1) == 0
+                    ? new double[] {.58, .58, .58, .58}
+                    : new double[] {.15, .85, .85, .15};
+            double sum = 0, exposedSum = 0;
+            for (double value : source) { sum += value; exposedSum += value * value; }
+            int i = y * width + x;
+            previousModel[i] = (int) Math.round(255 * sum / source.length);
+            currentModel[i] = (int) Math.round(255 * exposedSum / source.length);
+            previousPoint[i] = (int) Math.round(255 * source[3]);
+            currentPoint[i] = (int) Math.round(255 * source[3] * source[3]);
+        }
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE,
+                referenceEvidence(previousModel, currentModel, width));
+        int fixed = referenceClassification(previousModel, currentModel,
+                previousPoint, currentPoint, width, false, false, true).evidence;
+        assertEquals(ClientSbsShotCutPolicy.SCENE_EVIDENCE_EXPOSURE_LIKE, fixed);
+        assertFalse(ClientSbsShotCutPolicy.acceptsShotCut(
+                true, ClientSbsShotCutPolicy.CUT_STATE_READY,
+                false, true, 1.0f, 1.0f, true, 0.05f,
+                ClientSbsShotCutPolicy.CUT_SETTLE_VALID_DEPTH_UPDATES));
     }
 
     @Test
@@ -40,11 +76,12 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("uniform uvec2 uCurrentFrameSequence"));
         assertTrue(shader.contains("uniform uvec2 uCurrentCapturedAtNs"));
         assertTrue(shader.contains("nearOwnerValid == 0u"));
-        assertTrue(shader.contains("frameDelta.x <= 4u"));
-        assertTrue(shader.contains("age.x < 100000000u"));
+        assertTrue(shader.contains("!lessThan64(nearOwnerFrameSequence, uCurrentFrameSequence)"));
+        assertTrue(shader.contains("lessThan64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs)"));
+        assertTrue(shader.contains("all(equal(nearOwnerFrameSequence, uvec2(0u)))"));
+        assertFalse(shader.contains("subtract64("));
         assertTrue(shader.contains("if (inBounds && effectiveNearIdenticalCandidate)"));
-        assertTrue(shader.contains("memoryBarrierBuffer()"));
-        assertTrue(shader.contains("vec3 currentRgb = vec3(tensorValues[firstValue]"));
+        assertTrue(shader.contains("vec3 currentRgb = tensorRgb"));
         assertTrue(shader.contains("previousTensorValues[firstValue]"));
         assertTrue(shader.contains("const float MEDIUM_DELTA = 0.015625"));
         assertTrue(shader.contains("const float STRONG_DELTA = 0.2"));
@@ -56,16 +93,13 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("uvec4(packedBlock, nearEvidence.x"));
 
         int modelWrite = shader.indexOf("tensorValues[firstValue + 2u] = tensorRgb.b");
-        int bufferBarrier = shader.indexOf("memoryBarrierBuffer()", modelWrite);
-        int workgroupBarrier = shader.indexOf("barrier()", bufferBarrier);
         int candidateBranch = shader.indexOf(
                 "if (inBounds && effectiveNearIdenticalCandidate)");
-        int committedRead = shader.indexOf("tensorValues[firstValue]", candidateBranch);
+        int currentValues = shader.indexOf("vec3 currentRgb = tensorRgb", candidateBranch);
         int previousRead = shader.indexOf("previousTensorValues[firstValue]", candidateBranch);
         int branchEnd = shader.indexOf("        }", previousRead);
-        assertTrue(modelWrite >= 0 && bufferBarrier > modelWrite
-                && workgroupBarrier > bufferBarrier && candidateBranch > workgroupBarrier
-                && committedRead > candidateBranch && previousRead > committedRead
+        assertTrue(modelWrite >= 0 && candidateBranch > modelWrite
+                && currentValues > candidateBranch && previousRead > currentValues
                 && branchEnd > previousRead);
         assertFalse(shader.substring(0, candidateBranch).contains(
                 "previousTensorValues[firstValue]"));
@@ -85,8 +119,8 @@ public class ClientSbsGpuSceneCutShadersTest {
         assertTrue(shader.contains("evidence.y * 10u <= evidence.x"));
         assertTrue(shader.contains("evidence.z * 40u <= evidence.x"));
         assertTrue(shader.contains("uint ownerRejectionReason()"));
-        assertTrue(shader.contains("return REASON_OWNER_FRAME_GAP"));
-        assertTrue(shader.contains("return REASON_OWNER_AGE"));
+        assertTrue(shader.contains("return REASON_OWNER_INVALID"));
+        assertFalse(shader.contains("subtract64("));
         assertTrue(shader.contains("if (!complete) reason = REASON_EVIDENCE_INVALID"));
         assertTrue(shader.contains("else if (rejected.y != 0u) reason = REASON_CONTENT_LOCAL"));
         assertTrue(shader.contains("else if (!strongQuiet) reason = REASON_CONTENT_STRONG"));
@@ -552,6 +586,14 @@ public class ClientSbsGpuSceneCutShadersTest {
     private static ReferenceClassification referenceClassification(
             int[] previous, int[] current, int width, boolean historyGapPending,
             boolean lowStructureScene, boolean historyStructureSupported) {
+        return referenceClassification(previous, current, previous, current, width,
+                historyGapPending, lowStructureScene, historyStructureSupported);
+    }
+
+    private static ReferenceClassification referenceClassification(
+            int[] previous, int[] current, int[] previousOrdinal, int[] currentOrdinal,
+            int width, boolean historyGapPending, boolean lowStructureScene,
+            boolean historyStructureSupported) {
         if (previous.length == 0 || previous.length != current.length
                 || width <= 0 || previous.length % width != 0) {
             throw new IllegalArgumentException("Comparable luma grids must have equal size");
@@ -571,7 +613,7 @@ public class ClientSbsGpuSceneCutShadersTest {
             int x = index % width;
             int y = index / width;
             OrdinalEvidence ordinal =
-                    ordinalEvidence(previous, current, width, height, x, y);
+                    ordinalEvidence(previousOrdinal, currentOrdinal, width, height, x, y);
             if (ordinal.currentComparisons >= 4) {
                 currentStructuralSupportCount++;
             }

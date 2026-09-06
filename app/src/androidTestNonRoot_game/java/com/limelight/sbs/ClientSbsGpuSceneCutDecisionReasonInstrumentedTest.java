@@ -24,12 +24,13 @@ import java.nio.ByteOrder;
 /** Device gate for the GPU-published near-identical rejection reason in decision word 7. */
 @RunWith(AndroidJUnit4.class)
 public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
-    private static final int WIDTH = 32;
-    private static final int HEIGHT = 32;
+    // Exercise a partial tile in both dimensions, including a final tile smaller than 64 texels.
+    private static final int WIDTH = 35;
+    private static final int HEIGHT = 19;
     private static final int EGL_OPENGL_ES3_BIT_KHR = 0x0040;
 
     @Test
-    public void decisionRecordDistinguishesContentFrameGapOwnerAgeAndCollapsedOwner() {
+    public void decisionRecordDistinguishesContentMonotonicIdentityAndCollapsedOwner() {
         try (EglFixture ignored = EglFixture.create();
              ClientSbsGpuSceneCutDetector detector =
                      new ClientSbsGpuSceneCutDetector(WIDTH, HEIGHT)) {
@@ -50,15 +51,16 @@ public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
                         readDecisionReason(detector, 0));
                 detector.discardPendingFrame();
 
+                // Repeated/regressed source identities cannot borrow the retained result.
                 process(detector, texture, inputBuffers[0], true,
-                        3L, 105L, 1_033_000_000L);
-                assertEquals(ClientSbsNearIdenticalPolicy.REASON_OWNER_FRAME_GAP,
+                        3L, 100L, 1_033_000_000L);
+                assertEquals(ClientSbsNearIdenticalPolicy.REASON_OWNER_INVALID,
                         readDecisionReason(detector, 0));
                 detector.discardPendingFrame();
 
                 process(detector, texture, inputBuffers[0], true,
-                        4L, 101L, 1_100_000_000L);
-                assertEquals(ClientSbsNearIdenticalPolicy.REASON_OWNER_AGE,
+                        4L, 101L, 999_999_999L);
+                assertEquals(ClientSbsNearIdenticalPolicy.REASON_OWNER_INVALID,
                         readDecisionReason(detector, 0));
                 detector.discardPendingFrame();
 
@@ -91,6 +93,128 @@ public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
         }
     }
 
+    @Test
+    public void longLivedNearReuseKeepsRealOwnerAndRejectsCumulativeChange() {
+        try (EglFixture ignored = EglFixture.create();
+             ClientSbsGpuSceneCutDetector detector =
+                     new ClientSbsGpuSceneCutDetector(WIDTH, HEIGHT)) {
+            int texture = createTexture(64);
+            int[] inputs = createInputBuffers();
+            int state = createProcessorStateBuffer();
+            final long ownerFrame = 0x1_0000_0064L;
+            final long ownerTime = 1_000_000_000L;
+            final long firstToken = 0x7654_3210_fedc_ba98L;
+            try {
+                process(detector, texture, inputs[0], false,
+                        firstToken, ownerFrame, ownerTime);
+                detector.commitAcceptedFrame(state);
+                fillInputWithSentinel(inputs[1]);
+
+                for (int step = 0; step < 4; step++) {
+                    updateTexture(texture, 64 + step);
+                    processLazy(detector, texture, inputs[1], firstToken + 1L + step,
+                            ownerFrame + 0x1_0000_0000L + step,
+                            ownerTime + 86_401_000_000_000L + step);
+                    assertDecision(detector, ClientSbsNearIdenticalPolicy.DECISION_REUSE_TAG,
+                            ClientSbsNearIdenticalPolicy.REASON_REUSE, firstToken + 1L + step);
+                    assertInputSentinelUnchanged(inputs[1]);
+                    // Reused frames never commit a replacement inference reference.
+                    detector.discardPendingFrame();
+                }
+
+                // Each preceding step changed only one code. Against the actual owner (64),
+                // this is four codes everywhere and must infer; a chained 67 owner would reuse.
+                updateTexture(texture, 68);
+                processLazy(detector, texture, inputs[1], firstToken + 5L,
+                        ownerFrame + 0x1_0000_0004L, ownerTime + 86_401_000_000_004L);
+                assertDecision(detector, ClientSbsNearIdenticalPolicy.DECISION_INFER_TAG,
+                        ClientSbsNearIdenticalPolicy.REASON_CONTENT_MEDIUM, firstToken + 5L);
+                assertInputSentinelUnchanged(inputs[1]);
+                detector.discardPendingFrame();
+
+                // A successful new real result replaces the content reference.
+                process(detector, texture, inputs[0], false,
+                        firstToken + 6L, ownerFrame + 0x1_0000_0005L,
+                        ownerTime + 86_401_000_000_005L);
+                detector.commitAcceptedFrame(state);
+                processLazy(detector, texture, inputs[1], firstToken + 7L,
+                        ownerFrame + 0x1_0000_0006L, ownerTime + 172_802_000_000_000L);
+                assertDecision(detector, ClientSbsNearIdenticalPolicy.DECISION_REUSE_TAG,
+                        ClientSbsNearIdenticalPolicy.REASON_REUSE, firstToken + 7L);
+                detector.discardPendingFrame();
+
+                detector.reset();
+                processLazy(detector, texture, inputs[1], firstToken + 8L,
+                        ownerFrame + 0x1_0000_0007L, ownerTime + 172_802_000_000_001L);
+                assertDecision(detector, ClientSbsNearIdenticalPolicy.DECISION_INFER_TAG,
+                        ClientSbsNearIdenticalPolicy.REASON_NOT_CANDIDATE, firstToken + 8L);
+                detector.discardPendingFrame();
+            } finally {
+                GLES20.glDeleteTextures(1, new int[] {texture}, 0);
+                GLES30.glDeleteBuffers(inputs.length, inputs, 0);
+                GLES30.glDeleteBuffers(1, new int[] {state}, 0);
+            }
+        }
+    }
+
+    private static void processLazy(ClientSbsGpuSceneCutDetector detector, int texture,
+                                    int inputBuffer, long token, long frame, long capturedAtNs) {
+        detector.processRendererOwnedAndPack(texture, inputBuffer,
+                detector.getSceneCutBufferId(), detector.getSceneCutByteOffset(),
+                true, token, 0, frame, capturedAtNs, true);
+        GLES20.glFinish();
+        assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+    }
+
+    private static void assertDecision(ClientSbsGpuSceneCutDetector detector,
+                                       int tag, int reason, long token) {
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER,
+                detector.getNearIdenticalDecisionBufferId());
+        Buffer mapped = GLES30.glMapBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER, 0,
+                ClientSbsGpuSceneCutDetector.NEAR_IDENTICAL_DECISION_RECORD_BYTES,
+                GLES30.GL_MAP_READ_BIT);
+        assertTrue(mapped instanceof ByteBuffer);
+        ByteBuffer words = ((ByteBuffer) mapped).order(ByteOrder.nativeOrder());
+        assertEquals(tag, words.getInt(0));
+        assertEquals(reason, words.getInt(7 * Integer.BYTES));
+        assertEquals(tag ^ ClientSbsNearIdenticalPolicy.DECISION_COOKIE,
+                words.getInt(Integer.BYTES));
+        assertEquals((int) token, words.getInt(2 * Integer.BYTES));
+        assertEquals((int) (token >>> 32), words.getInt(3 * Integer.BYTES));
+        assertEquals((int) token ^ ClientSbsNearIdenticalPolicy.TOKEN_LOW_COOKIE,
+                words.getInt(4 * Integer.BYTES));
+        assertEquals((int) (token >>> 32) ^ ClientSbsNearIdenticalPolicy.TOKEN_HIGH_COOKIE,
+                words.getInt(5 * Integer.BYTES));
+        assertEquals(ClientSbsNearIdenticalPolicy.PROPOSAL_MAGIC,
+                words.getInt(6 * Integer.BYTES));
+        assertTrue(GLES30.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER));
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    private static void fillInputWithSentinel(int inputBuffer) {
+        ByteBuffer sentinel = ByteBuffer.allocateDirect(WIDTH * HEIGHT * 3 * Float.BYTES)
+                .order(ByteOrder.nativeOrder());
+        while (sentinel.hasRemaining()) sentinel.putInt(0x7fc12345);
+        sentinel.flip();
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, inputBuffer);
+        GLES30.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, sentinel.capacity(), sentinel);
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
+    private static void assertInputSentinelUnchanged(int inputBuffer) {
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, inputBuffer);
+        Buffer mapped = GLES30.glMapBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER, 0,
+                WIDTH * HEIGHT * 3 * Float.BYTES, GLES30.GL_MAP_READ_BIT);
+        assertTrue(mapped instanceof ByteBuffer);
+        ByteBuffer words = ((ByteBuffer) mapped).order(ByteOrder.nativeOrder());
+        for (int index = 0; index < WIDTH * HEIGHT * 3; index++) {
+            assertEquals("Lazy classifier wrote input word " + index,
+                    0x7fc12345, words.getInt(index * Integer.BYTES));
+        }
+        assertTrue(GLES30.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER));
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
     private static void process(ClientSbsGpuSceneCutDetector detector, int texture,
                                 int inputBuffer, boolean candidate, long token,
                                 long frameSequence, long capturedAtNs) {
@@ -102,6 +226,10 @@ public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
     }
 
     private static int readDecisionReason(ClientSbsGpuSceneCutDetector detector, int slot) {
+        return readDecisionWord(detector, slot, 7);
+    }
+
+    private static int readDecisionWord(ClientSbsGpuSceneCutDetector detector, int slot, int word) {
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER,
                 detector.getNearIdenticalDecisionBufferId());
         int offset = detector.getNearIdenticalDecisionByteOffset(slot);
@@ -109,12 +237,12 @@ public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
                 offset, ClientSbsGpuSceneCutDetector.NEAR_IDENTICAL_DECISION_RECORD_BYTES,
                 GLES30.GL_MAP_READ_BIT);
         assertTrue(mapped instanceof ByteBuffer);
-        int reason = ((ByteBuffer) mapped).order(ByteOrder.nativeOrder())
-                .getInt(7 * Integer.BYTES);
+        int value = ((ByteBuffer) mapped).order(ByteOrder.nativeOrder())
+                .getInt(word * Integer.BYTES);
         assertTrue(GLES30.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER));
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0);
         assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
-        return reason;
+        return value;
     }
 
     private static int createTexture(int channel) {
@@ -145,7 +273,8 @@ public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
             pixels.put((byte) channel);
             pixels.put((byte) channel);
             pixels.put((byte) channel);
-            pixels.put((byte) 255);
+            // Fixture RGB is already source-point grayscale; alpha carries its ordinal.
+            pixels.put((byte) channel);
         }
         pixels.flip();
         if (update) {
@@ -180,6 +309,7 @@ public final class ClientSbsGpuSceneCutDecisionReasonInstrumentedTest {
                 .order(ByteOrder.nativeOrder());
         state.putInt(18 * Integer.BYTES,
                 ClientSbsShotCutPolicy.FRAME_STATE_HISTORY_ADVANCES
+                        | ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_DEPTH_VALID
                         | ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_V2_VALID);
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer[0]);
         GLES30.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, state.capacity(), state,

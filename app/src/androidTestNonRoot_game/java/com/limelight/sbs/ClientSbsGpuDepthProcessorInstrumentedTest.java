@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import android.opengl.EGL14;
@@ -21,6 +22,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.lang.reflect.Field;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -36,6 +38,208 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
     private static final int HEIGHT = 32;
 
     @Test
+    public void fixedUniformsAreReadyBeforeDispatchAndSurviveOtherProcessorsAndReset()
+            throws Exception {
+        try (EglFixture ignored = EglFixture.create()) {
+            int rawBuffer = createRawBuffer(0.0f, false);
+            try (ClientSbsGpuDepthProcessor first = new ClientSbsGpuDepthProcessor(
+                    WIDTH, HEIGHT, 1.0f, false, 60.0f);
+                 ClientSbsGpuDisparityProcessor disparity = new ClientSbsGpuDisparityProcessor(
+                         WIDTH, HEIGHT, 0.05f);
+                 TextureProbe probe = new TextureProbe()) {
+                assertFixedDepthUniforms(first, WIDTH, HEIGHT);
+                assertFixedDisparityUniforms(disparity, 0.05f);
+                first.setHealthSamplingEnabled(false);
+                int firstRaw = first.processRendererOwned(
+                        rawBuffer, 0, Float.BYTES, false).getDepthTextureId();
+                float before = probe.readRed(firstRaw, 7, 11);
+
+                // Uniform state is per program, so a second shape/calibration must not overwrite
+                // the first processor, even with interleaved rendering and readback programs.
+                try (ClientSbsGpuDepthProcessor other = new ClientSbsGpuDepthProcessor(
+                        16, 8, 2.0f, false, 60.0f);
+                     ClientSbsGpuDisparityProcessor otherDisparity =
+                             new ClientSbsGpuDisparityProcessor(16, 8, 0.10f)) {
+                    assertFixedDepthUniforms(other, 16, 8);
+                    assertFixedDisparityUniforms(otherDisparity, 0.10f);
+                    assertFixedDepthUniforms(first, WIDTH, HEIGHT);
+                    assertFixedDisparityUniforms(disparity, 0.05f);
+                }
+                first.resetTemporalState();
+                assertFixedDepthUniforms(first, WIDTH, HEIGHT);
+                ClientSbsGpuDepthProcessor.Result after = first.processRendererOwned(
+                        rawBuffer, 0, Float.BYTES, false);
+                assertEquals(before, probe.readRed(after.getDepthTextureId(), 7, 11), 0.0f);
+                disparity.process(after.getDepthTextureId(), after.getProfileTextureId());
+                assertFixedDisparityUniforms(disparity, 0.05f);
+                assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+            } finally {
+                GLES30.glDeleteBuffers(1, new int[] {rawBuffer}, 0);
+            }
+        }
+    }
+
+    private static void assertFixedDepthUniforms(ClientSbsGpuDepthProcessor processor,
+                                                  int width, int height) throws Exception {
+        for (String program : new String[] {
+                "rawMinMaxProgram", "rawHistogramProgram", "temporalProgram"}) {
+            assertUniform(processor, program, "uTensorSize", width, height);
+            assertUniform(processor, program, "uOutputSize", width, height);
+            assertUnsignedUniform(processor, program, "uRawPixelStrideBytes", Float.BYTES);
+        }
+        assertUniform(processor, "rawMinMaxProgram", "uPreviousTemporalDepth", 0);
+        assertUniform(processor, "resolveRawProgram", "uExpectedPixelCount", width * height);
+        assertUniform(processor, "resolveRawProgram", "uRawGroupCount",
+                ((width + 15) / 16) * ((height + 15) / 16));
+        assertUniform(processor, "temporalProgram", "uPreviousDepth", 0);
+        assertUniform(processor, "temporalProgram", "uReliableDepth", 1);
+        assertUniform(processor, "temporalProgram", "uSpatialThresholdScale",
+                ClientSbsTemporalTuning.spatialThresholdScale(width, height));
+    }
+
+    private static void assertFixedDisparityUniforms(ClientSbsGpuDisparityProcessor processor,
+                                                      float rawScale) throws Exception {
+        assertUniform(processor, "verticalForwardProgram", "uDepthTexture", 0);
+        assertUniform(processor, "verticalForwardProgram", "uProfileTexture", 1);
+        assertUniform(processor, "verticalForwardProgram", "uInverseRawCoordinateScale",
+                1.0f / rawScale);
+        assertUniform(processor, "verticalFinishProgram", "uEnvelopeScratch", 0);
+        assertUniform(processor, "horizontalForwardProgram", "uVerticalConditioned", 0);
+        assertUniform(processor, "horizontalFinishProgram", "uVerticalConditioned", 0);
+    }
+
+    private static int processorProgram(Object processor, String programField) throws Exception {
+        Field field = processor.getClass().getDeclaredField(programField);
+        field.setAccessible(true);
+        return field.getInt(processor);
+    }
+
+    private static void assertUniform(Object processor, String programField,
+                                      String uniform, int... expected) throws Exception {
+        assertIntegerUniform(processor, programField, uniform, false, expected);
+    }
+
+    private static void assertUnsignedUniform(Object processor, String programField,
+                                              String uniform, int... expected) throws Exception {
+        assertIntegerUniform(processor, programField, uniform, true, expected);
+    }
+
+    private static void assertIntegerUniform(Object processor, String programField,
+                                             String uniform, boolean unsigned,
+                                             int[] expected) throws Exception {
+        int program = processorProgram(processor, programField);
+        int location = GLES20.glGetUniformLocation(program, uniform);
+        assertTrue(programField + ": " + uniform, location >= 0);
+        int[] actual = new int[4];
+        // Sampler units are integer state. Query integer/unsigned uniforms in their declared
+        // representation instead of relying on the driver's float-query conversion path.
+        if (unsigned) {
+            GLES30.glGetUniformuiv(program, location, actual, 0);
+        } else {
+            GLES20.glGetUniformiv(program, location, actual, 0);
+        }
+        assertEquals(programField + ": query " + uniform,
+                GLES20.GL_NO_ERROR, GLES20.glGetError());
+        for (int index = 0; index < expected.length; index++) {
+            assertEquals(programField + ": " + uniform + "[" + index + "]",
+                    expected[index], actual[index]);
+        }
+    }
+
+    private static void assertUniform(Object processor, String programField,
+                                      String uniform, float... expected) throws Exception {
+        int program = processorProgram(processor, programField);
+        int location = GLES20.glGetUniformLocation(program, uniform);
+        assertTrue(programField + ": " + uniform, location >= 0);
+        float[] actual = new float[4];
+        GLES20.glGetUniformfv(program, location, actual, 0);
+        assertEquals(programField + ": query " + uniform,
+                GLES20.GL_NO_ERROR, GLES20.glGetError());
+        for (int index = 0; index < expected.length; index++) {
+            assertEquals(programField + ": " + uniform + "[" + index + "]",
+                    expected[index], actual[index], 0.0f);
+        }
+    }
+
+    @Test
+    public void failedUnmapRejectsCopiedHealthAndSuccessfulReadbackCanRecover() {
+        ByteBuffer state = ByteBuffer.allocate(ClientSbsGpuDepthProcessor.STATE_BYTES)
+                .order(ByteOrder.nativeOrder());
+        state.putFloat(136, WIDTH * HEIGHT);
+        ClientSbsGpuDepthProcessor.HealthSnapshot health =
+                new ClientSbsGpuDepthProcessor.HealthSnapshot();
+        health.updateFromState(state, 77L, WIDTH * HEIGHT);
+        assertEquals(WIDTH * HEIGHT, health.getValidRawSamples());
+
+        assertThrows(IllegalStateException.class,
+                () -> ClientSbsGpuDepthProcessor.requireValidHealthReadback(health, false));
+        assertEquals(0L, health.getFrameSequence());
+        assertEquals(0, health.getValidRawSamples());
+
+        health.updateFromState(state, 78L, WIDTH * HEIGHT);
+        ClientSbsGpuDepthProcessor.requireValidHealthReadback(health, true);
+        assertEquals(78L, health.getFrameSequence());
+        assertEquals(WIDTH * HEIGHT, health.getValidRawSamples());
+    }
+
+    @Test
+    public void failedDiagnosticCopyPreservesDepthAndRecoversWithFreshHealth() throws Exception {
+        try (EglFixture ignored = EglFixture.create()) {
+            int rawBuffer = createRawBuffer(0.0f, false);
+            try (ClientSbsGpuDepthProcessor processor = new ClientSbsGpuDepthProcessor(
+                    WIDTH, HEIGHT, 1.0f, false, 60.0f)) {
+                Field slotsField = ClientSbsGpuDepthProcessor.class
+                        .getDeclaredField("healthReadbackSlots");
+                slotsField.setAccessible(true);
+                Object firstSlot = ((Object[]) slotsField.get(processor))[0];
+                Field bufferField = firstSlot.getClass().getDeclaredField("buffer");
+                bufferField.setAccessible(true);
+                int stagingBuffer = bufferField.getInt(firstSlot);
+
+                GLES30.glBindBuffer(GLES30.GL_COPY_WRITE_BUFFER, stagingBuffer);
+                int[] size = new int[1];
+                GLES30.glGetBufferParameteriv(GLES30.GL_COPY_WRITE_BUFFER,
+                        GLES20.GL_BUFFER_SIZE, size, 0);
+                assertEquals(224, ClientSbsGpuDepthProcessor.STATE_BYTES);
+                assertEquals(ClientSbsGpuDepthProcessor.STATE_BYTES, size[0]);
+
+                // Only the optional staging copy is invalid. Production state/textures stay
+                // intact, so this produces GL_INVALID_VALUE without a device or context fault.
+                GLES30.glBufferData(GLES30.GL_COPY_WRITE_BUFFER, 1, null, GLES30.GL_STREAM_READ);
+                GLES30.glBindBuffer(GLES30.GL_COPY_WRITE_BUFFER, 0);
+
+                ClientSbsGpuDepthProcessor.Result first = processor.processRendererOwned(
+                        rawBuffer, 0, Float.BYTES, false, 1);
+                assertTrue(first.isValidFrame());
+                assertTrue(first.getDepthTextureId() != 0);
+                assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+                // While the error awaits polling, subsequent depth work must also continue.
+                assertTrue(processor.processRendererOwned(
+                        rawBuffer, 0, Float.BYTES, false, 1).isValidFrame());
+                assertThrows(IllegalStateException.class, processor::pollHealthSnapshot);
+                assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+
+                GLES30.glBindBuffer(GLES30.GL_COPY_WRITE_BUFFER, stagingBuffer);
+                GLES30.glBufferData(GLES30.GL_COPY_WRITE_BUFFER,
+                        ClientSbsGpuDepthProcessor.STATE_BYTES,
+                        null, GLES30.GL_STREAM_READ);
+                GLES30.glBindBuffer(GLES30.GL_COPY_WRITE_BUFFER, 0);
+                ClientSbsGpuDepthProcessor.Result recovered = processor.processRendererOwned(
+                        rawBuffer, 0, Float.BYTES, false, 1);
+                assertTrue(recovered.isValidFrame());
+                GLES20.glFinish();
+                ClientSbsGpuDepthProcessor.HealthSnapshot health = processor.pollHealthSnapshot();
+                assertNotNull(health);
+                assertEquals(recovered.getFrameSequence(), health.getFrameSequence());
+                assertEquals(WIDTH * HEIGHT, health.getValidRawSamples());
+                assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+            } finally {
+                GLES30.glDeleteBuffers(1, new int[] {rawBuffer}, 0);
+            }
+        }
+    }
+
+    @Test
     public void heldGeometryCandidatePublishesCurrentRawWithoutAdvancingReliableHistory()
             throws Exception {
         try (EglFixture ignored = EglFixture.create()) {
@@ -44,19 +248,15 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
             try (ClientSbsGpuDepthProcessor processor = new ClientSbsGpuDepthProcessor(
                     WIDTH, HEIGHT, 1.0f, false, 60.0f);
                  TextureProbe probe = new TextureProbe()) {
-                processor.setHealthSamplingFocused(true);
 
                 ClientSbsGpuDepthProcessor.Result baselineResult = null;
                 // The ninth source update crosses the geometry arming guard. Keeping the same
                 // field here also makes the retained normalized texture deterministic.
                 for (int frame = 1; frame <= 9; frame++) {
-                    baselineResult = processor.processRendererOwnedWithGpuSceneCut(
-                            rawBuffer, 0, Float.BYTES, sceneCutBuffer, 0);
+                    baselineResult = processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 }
-                GLES20.glFinish();
                 ClientSbsGpuDepthProcessor.HealthSnapshot baselineHealth =
-                        processor.pollHealthSnapshot();
-                assertNotNull(baselineHealth);
+                        readCompletedHealth(processor, 5L);
                 assertTrue(baselineHealth.isCurrentGeometryReady());
                 assertTrue(baselineHealth.didHistoryAdvance());
                 assertNotNull(baselineResult);
@@ -79,14 +279,11 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 updateRawBufferReversed(rawBuffer, heldOffset);
                 updateSceneCutBuffer(sceneCutBuffer, 4);
                 ClientSbsGpuDepthProcessor.Result heldResult =
-                        processor.processRendererOwnedWithGpuSceneCut(
-                                rawBuffer, 0, Float.BYTES, sceneCutBuffer, 0);
-                GLES20.glFinish();
+                        processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 ClientSbsGpuDepthProcessor.HealthSnapshot heldHealth =
-                        processor.pollHealthSnapshot();
-                assertNotNull(heldHealth);
+                        readCompletedHealth(processor, heldResult.getFrameSequence());
                 assertTrue(heldHealth.isCurrentDepthValid());
-                assertFalse(heldHealth.didHistoryAdvance());
+                assertFalse(describeHealth(heldHealth), heldHealth.didHistoryAdvance());
                 assertTrue(heldHealth.isCurrentGeometryReady());
                 assertTrue((heldHealth.getCutDecisionFlags()
                         & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE) != 0);
@@ -154,7 +351,6 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
             int rawBuffer = createRawBuffer(0.0f, false);
             try (ClientSbsGpuDepthProcessor processor = new ClientSbsGpuDepthProcessor(
                     WIDTH, HEIGHT, 1.0f, false, 60.0f)) {
-                processor.setHealthSamplingFocused(true);
 
                 float firstMean = expectedMean(0.0f);
                 ClientSbsGpuDepthProcessor.Result first =
@@ -216,7 +412,6 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
             int rawBuffer = createRawBuffer(0.0f, false);
             try (ClientSbsGpuDepthProcessor processor = new ClientSbsGpuDepthProcessor(
                     WIDTH, HEIGHT, 1.0f, false, 60.0f)) {
-                processor.setHealthSamplingFocused(true);
 
                 updateRawBufferConstant(rawBuffer, 2.0f);
                 processor.processRendererOwned(rawBuffer, 0, Float.BYTES, false);
@@ -249,33 +444,28 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
     }
 
     @Test
-    public void geometryCutNeedsOrdinalStructureAndEventSurvivesSparseHealthCopy() {
+    public void geometryCutNeedsOrdinalStructureAndEventSurvivesSparseHealthCopy()
+            throws Exception {
         try (EglFixture ignored = EglFixture.create()) {
             int rawBuffer = createRawBuffer(0.0f, false);
             int sceneCutBuffer = createSceneCutBuffer(0);
             try (ClientSbsGpuDepthProcessor processor = new ClientSbsGpuDepthProcessor(
                     WIDTH, HEIGHT, 1.0f, false, 60.0f)) {
-                processor.setHealthSamplingFocused(true);
 
                 // Initialize and advance through the eight-source-step arming guard.
                 for (int frame = 1; frame <= 9; frame++) {
-                    processor.processRendererOwnedWithGpuSceneCut(rawBuffer, 0, Float.BYTES,
-                            sceneCutBuffer, 0);
+                    processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 }
-                GLES20.glFinish();
-                assertNotNull(processor.pollHealthSnapshot());
+                readCompletedHealth(processor, 5L);
 
                 // Reverse the depth field so nearly every normalized sample changes. With no
                 // independent ordinal reversal, Apollo's structural gate must reject the trigger.
                 updateRawBufferReversed(rawBuffer);
                 updateSceneCutBuffer(sceneCutBuffer, 0);
-                processor.processRendererOwnedWithGpuSceneCut(rawBuffer, 0, Float.BYTES,
-                        sceneCutBuffer, 0);
-                GLES20.glFinish();
+                processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 ClientSbsGpuDepthProcessor.HealthSnapshot rejected =
-                        processor.pollHealthSnapshot();
-                assertNotNull(rejected);
-                assertTrue((rejected.getCutDecisionFlags()
+                        readCompletedHealth(processor, 10L);
+                assertTrue(describeHealth(rejected), (rejected.getCutDecisionFlags()
                         & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER) != 0);
                 assertFalse((rejected.getCutDecisionFlags()
                         & ClientSbsGpuDepthProcessor
@@ -287,20 +477,17 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 long rejectedEventSequence = rejected.getCutEventSequence();
                 int rejectedDecisionFlags = rejected.getCutDecisionFlags();
 
-                // Four non-notable transactions plus the fifth focused-cadence sample must not
+                // Four non-notable transactions plus the fifth visible-Stats sample must not
                 // erase the intervening rejection evidence. Make the current depth invalid so the
                 // temporal depth texture cannot spend these rapid synthetic calls converging on
                 // the reversed field and legitimately produce a new depth-trigger rejection on
                 // every call.
                 updateRawBuffer(rawBuffer, 0.0f, true);
                 for (int frame = 0; frame < 5; frame++) {
-                    processor.processRendererOwnedWithGpuSceneCut(rawBuffer, 0, Float.BYTES,
-                            sceneCutBuffer, 0);
+                    processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 }
-                GLES20.glFinish();
                 ClientSbsGpuDepthProcessor.HealthSnapshot retained =
-                        processor.pollHealthSnapshot();
-                assertNotNull(retained);
+                        readCompletedHealth(processor, 15L);
                 assertEquals(rejectedEventSequence, retained.getCutEventSequence());
                 assertEquals(rejectedDecisionFlags, retained.getCutDecisionFlags());
 
@@ -316,19 +503,14 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 // and immediate temporal depth continue to advance.
                 updateRawBuffer(rawBuffer, 10.0f, false);
                 updateSceneCutBuffer(sceneCutBuffer, 0, false);
-                processor.processRendererOwnedWithGpuSceneCut(rawBuffer, 0, Float.BYTES,
-                        sceneCutBuffer, 0);
-                processor.processRendererOwnedWithGpuSceneCut(rawBuffer, 0, Float.BYTES,
-                        sceneCutBuffer, 0);
+                processReferenceStep(processor, rawBuffer, sceneCutBuffer);
+                processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 updateSceneCutBuffer(sceneCutBuffer, 0);
                 for (int frame = 0; frame < 3; frame++) {
-                    processor.processRendererOwnedWithGpuSceneCut(rawBuffer, 0, Float.BYTES,
-                            sceneCutBuffer, 0);
+                    processReferenceStep(processor, rawBuffer, sceneCutBuffer);
                 }
-                GLES20.glFinish();
                 ClientSbsGpuDepthProcessor.HealthSnapshot accepted =
-                        processor.pollHealthSnapshot();
-                assertNotNull(accepted);
+                        readCompletedHealth(processor, 20L);
                 assertEquals(3L, accepted.getCutEventSequence());
                 assertEquals(1L, accepted.getAcceptedGeometryCutCount());
                 assertTrue((accepted.getCutDecisionFlags()
@@ -346,6 +528,41 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 GLES30.glDeleteBuffers(2, new int[] {rawBuffer, sceneCutBuffer}, 0);
             }
         }
+    }
+
+    /**
+     * Exercise the cut FSM at its reference update interval, independently of driver/CPU speed.
+     * Zero resets only the CPU interval measurement so the production coefficient helper selects
+     * one reference update. GPU range, temporal history, shot camera and source age remain intact.
+     */
+    private static ClientSbsGpuDepthProcessor.Result processReferenceStep(
+            ClientSbsGpuDepthProcessor processor, int rawBuffer, int sceneCutBuffer)
+            throws Exception {
+        Field lastProcessAtNs = ClientSbsGpuDepthProcessor.class
+                .getDeclaredField("lastProcessAtNs");
+        lastProcessAtNs.setAccessible(true);
+        lastProcessAtNs.setLong(processor, 0L);
+        return processor.processRendererOwnedWithGpuSceneCut(
+                rawBuffer, 0, Float.BYTES, sceneCutBuffer, 0);
+    }
+
+    private static ClientSbsGpuDepthProcessor.HealthSnapshot readCompletedHealth(
+            ClientSbsGpuDepthProcessor processor, long expectedFrameSequence) {
+        // Blocking is confined to this GPU fixture. The production poll still uses zero timeout.
+        GLES20.glFinish();
+        ClientSbsGpuDepthProcessor.HealthSnapshot health = processor.pollHealthSnapshot();
+        assertNotNull("No completed health copy for frame " + expectedFrameSequence, health);
+        assertEquals(describeHealth(health), expectedFrameSequence, health.getFrameSequence());
+        return health;
+    }
+
+    private static String describeHealth(ClientSbsGpuDepthProcessor.HealthSnapshot health) {
+        return "frame=" + health.getFrameSequence() + " event=" + health.getCutEventSequence()
+                + " flags=" + health.getCutDecisionFlags()
+                + " armed=" + health.isGeometryCutArmed()
+                + " change=" + health.getChangeFraction()
+                + " latestChange=" + health.getLatestDepthChangeFraction()
+                + " shift=" + health.getLatestRangeShift();
     }
 
     private static float expectedMean(float offset) {

@@ -121,6 +121,7 @@ final class ClientSbsGpuSceneCutShaders {
             "layout(rgba32ui, binding = 1) uniform writeonly highp uimage2D uCurrentLuma;",
             "uniform highp sampler2D uCurrentColor;",
             "uniform int uNearIdenticalCandidate;",
+            "uniform int uLazyInputPacking;",
             "uniform uvec2 uCurrentFrameSequence;",
             "uniform uvec2 uCurrentCapturedAtNs;",
             "layout(std430, binding = 2) buffer InputTensor {",
@@ -137,29 +138,22 @@ final class ClientSbsGpuSceneCutShaders {
             "const float STRONG_DELTA = "
                     + ClientSbsNearIdenticalPolicy.STRONG_DELTA + ";",
             "shared uvec2 blockTotals[256];",
-            // One max-RGB sample per model-input texel. Lane zero later gathers a fixed 3x3
-            // lattice and takes its median. An order statistic commutes with any shared monotone
-            // per-channel exposure curve, including clamp-created ties.
+            // Alpha carries an independent source-point max-RGB sample before tone mapping or
+            // model resize. Max/median after spatial averaging is not exposure invariant.
             "shared uint blockOrdinalValues[256];",
             // (admitted, medium, strong, non-finite) evidence for the exact same 16x16 tile.
             "shared uvec4 nearIdenticalTotals[256];",
             "bool lessThan64(uvec2 left, uvec2 right) {",
             "    return left.y < right.y || (left.y == right.y && left.x < right.x);",
             "}",
-            "uvec2 subtract64(uvec2 larger, uvec2 smaller) {",
-            "    uint borrow = larger.x < smaller.x ? 1u : 0u;",
-            "    return uvec2(larger.x - smaller.x, larger.y - smaller.y - borrow);",
-            "}",
             "bool nearOwnerEligible() {",
             "    if (nearOwnerValid == 0u",
+            "            || all(equal(nearOwnerFrameSequence, uvec2(0u)))",
+            "            || nearOwnerFrameSequence.y >= 0x80000000u",
+            "            || uCurrentFrameSequence.y >= 0x80000000u",
             "            || !lessThan64(nearOwnerFrameSequence, uCurrentFrameSequence)",
             "            || lessThan64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs)) return false;",
-            "    uvec2 frameDelta = subtract64(uCurrentFrameSequence, nearOwnerFrameSequence);",
-            "    uvec2 age = subtract64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs);",
-            "    return frameDelta.y == 0u && frameDelta.x <= "
-                    + ClientSbsNearIdenticalPolicy.MAX_INFER_OWNER_FRAME_GAP + "u",
-            "            && age.y == 0u && age.x < "
-                    + ClientSbsNearIdenticalPolicy.MAX_INFER_OWNER_AGE_NS + "u;",
+            "    return true;",
             "}",
             "void main() {",
             "    uint lane = gl_LocalInvocationIndex;",
@@ -169,16 +163,20 @@ final class ClientSbsGpuSceneCutShaders {
             "    nearIdenticalTotals[lane] = uvec4(0u);",
             "    bool inBounds = all(lessThan(point, INPUT_SIZE));",
             "    uint firstValue = 0u;",
+            "    vec3 tensorRgb = vec3(0.0);",
             "    if (inBounds) {",
-            "        vec3 sourceRgb = texelFetch(uCurrentColor, ivec2(point), 0).rgb;",
+            "        vec4 sourceSample = texelFetch(uCurrentColor, ivec2(point), 0);",
+            "        vec3 sourceRgb = sourceSample.rgb;",
             // Preserve the former pack shader exactly: clamp only, and flip GL's source row into
             // the model's top-first NHWC destination row.
-            "        vec3 tensorRgb = clamp(sourceRgb, vec3(0.0), vec3(1.0));",
+            "        tensorRgb = clamp(sourceRgb, vec3(0.0), vec3(1.0));",
             "        uint tensorY = TENSOR_HEIGHT - 1u - point.y;",
             "        firstValue = (tensorY * TENSOR_WIDTH + point.x) * 3u;",
-            "        tensorValues[firstValue] = tensorRgb.r;",
-            "        tensorValues[firstValue + 1u] = tensorRgb.g;",
-            "        tensorValues[firstValue + 2u] = tensorRgb.b;",
+            "        if (uLazyInputPacking == 0) {",
+            "            tensorValues[firstValue] = tensorRgb.r;",
+            "            tensorValues[firstValue + 1u] = tensorRgb.g;",
+            "            tensorValues[firstValue + 2u] = tensorRgb.b;",
+            "        }",
             // Preserve the detector's independent non-finite sanitization and luma quantization.
             "        vec3 rgb = sourceRgb;",
             "        if (any(isnan(rgb)) || any(isinf(rgb))) rgb = vec3(0.0);",
@@ -186,20 +184,19 @@ final class ClientSbsGpuSceneCutShaders {
             "        float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));",
             "        uint quantizedLuma = uint(luma * 255.0 + 0.5);",
             "        blockTotals[lane] = uvec2(quantizedLuma, 1u);",
-            "        blockOrdinalValues[lane] = uint(max(rgb.r, max(rgb.g, rgb.b))",
+            "        float sourceOrdinal = sourceSample.a;",
+            "        if (isnan(sourceOrdinal) || isinf(sourceOrdinal)) sourceOrdinal = 0.0;",
+            "        blockOrdinalValues[lane] = uint(clamp(sourceOrdinal, 0.0, 1.0)",
             "                * 255.0 + 0.5);",
             "    }",
-            // Observe the exact words committed to the model-input SSBO, rather than relying on
-            // a compiler-retained source value. Every lane participates before any history read.
-            "    memoryBarrierBuffer();",
-            "    barrier();",
             // The candidate branch is the only place that reads actual-inference history. A
             // disabled candidate therefore has zero evidence and no history dependency.
             "    bool effectiveNearIdenticalCandidate = uNearIdenticalCandidate != 0",
             "            && nearOwnerEligible();",
             "    if (inBounds && effectiveNearIdenticalCandidate) {",
-            "        vec3 currentRgb = vec3(tensorValues[firstValue],",
-            "                tensorValues[firstValue + 1u], tensorValues[firstValue + 2u]);",
+            // Compare the same local values used by eager packing. Lazy arbitration therefore
+            // also avoids reading a stale tensor slot or fetching current RGB a second time.
+            "        vec3 currentRgb = tensorRgb;",
             "        vec3 previousRgb = vec3(previousTensorValues[firstValue],",
             "                previousTensorValues[firstValue + 1u],",
             "                previousTensorValues[firstValue + 2u]);",
@@ -418,10 +415,6 @@ final class ClientSbsGpuSceneCutShaders {
                         + ClientSbsNearIdenticalPolicy.REASON_NOT_CANDIDATE + "u;",
                 "const uint REASON_OWNER_INVALID = "
                         + ClientSbsNearIdenticalPolicy.REASON_OWNER_INVALID + "u;",
-                "const uint REASON_OWNER_FRAME_GAP = "
-                        + ClientSbsNearIdenticalPolicy.REASON_OWNER_FRAME_GAP + "u;",
-                "const uint REASON_OWNER_AGE = "
-                        + ClientSbsNearIdenticalPolicy.REASON_OWNER_AGE + "u;",
                 "const uint REASON_CONTENT_MEDIUM = "
                         + ClientSbsNearIdenticalPolicy.REASON_CONTENT_MEDIUM + "u;",
                 "const uint REASON_CONTENT_STRONG = "
@@ -437,24 +430,14 @@ final class ClientSbsGpuSceneCutShaders {
                 "bool lessThan64(uvec2 left, uvec2 right) {",
                 "    return left.y < right.y || (left.y == right.y && left.x < right.x);",
                 "}",
-                "uvec2 subtract64(uvec2 larger, uvec2 smaller) {",
-                "    uint borrow = larger.x < smaller.x ? 1u : 0u;",
-                "    return uvec2(larger.x - smaller.x, larger.y - smaller.y - borrow);",
-                "}",
                 "uint ownerRejectionReason() {",
                 "    if (nearOwnerValid == 0u",
+                "            || all(equal(nearOwnerFrameSequence, uvec2(0u)))",
+                "            || nearOwnerFrameSequence.y >= 0x80000000u",
+                "            || uCurrentFrameSequence.y >= 0x80000000u",
                 "            || !lessThan64(nearOwnerFrameSequence, uCurrentFrameSequence)",
                 "            || lessThan64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs))",
                 "        return REASON_OWNER_INVALID;",
-                "    uvec2 frameDelta = subtract64(uCurrentFrameSequence,",
-                "            nearOwnerFrameSequence);",
-                "    if (frameDelta.y != 0u || frameDelta.x > "
-                        + ClientSbsNearIdenticalPolicy.MAX_INFER_OWNER_FRAME_GAP + "u)",
-                "        return REASON_OWNER_FRAME_GAP;",
-                "    uvec2 age = subtract64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs);",
-                "    if (age.y != 0u || age.x >= "
-                        + ClientSbsNearIdenticalPolicy.MAX_INFER_OWNER_AGE_NS + "u)",
-                "        return REASON_OWNER_AGE;",
                 "    return REASON_REUSE;",
                 "}",
                 "void main() {",
@@ -667,12 +650,10 @@ final class ClientSbsGpuSceneCutShaders {
                 "layout(std430, binding = 1) readonly buffer ProcessorState {",
                 "    uint processorStateWords[];",
                 "};",
-                "layout(std430, binding = 2) readonly buffer CurrentInputTensor {",
-                "    float currentTensorValues[];",
-                "};",
                 "layout(std430, binding = 3) writeonly buffer PreviousInputTensor {",
                 "    float previousTensorValues[];",
                 "};",
+                "uniform highp sampler2D uCurrentColor;",
                 "uniform ivec2 uBlockGrid;",
                 "uniform uvec2 uCurrentFrameSequence;",
                 "uniform uvec2 uCurrentCapturedAtNs;",
@@ -722,9 +703,14 @@ final class ClientSbsGpuSceneCutShaders {
                 "    }",
                 "    if (all(lessThan(point, TENSOR_SIZE))) {",
                 "        uint tensorIndex = uint(point.y * TENSOR_SIZE.x + point.x) * 3u;",
-                "        previousTensorValues[tensorIndex] = currentTensorValues[tensorIndex];",
-                "        previousTensorValues[tensorIndex + 1u] = currentTensorValues[tensorIndex + 1u];",
-                "        previousTensorValues[tensorIndex + 2u] = currentTensorValues[tensorIndex + 2u];",
+                // The current texture is retained through commit and supplies the same
+                // top-first RGB history with eager or native deferred tensor packing.
+                "        ivec2 texturePoint = ivec2(point.x, TENSOR_SIZE.y - 1 - point.y);",
+                "        vec3 rgb = clamp(texelFetch(uCurrentColor, texturePoint, 0).rgb,",
+                "                vec3(0.0), vec3(1.0));",
+                "        previousTensorValues[tensorIndex] = rgb.r;",
+                "        previousTensorValues[tensorIndex + 1u] = rgb.g;",
+                "        previousTensorValues[tensorIndex + 2u] = rgb.b;",
                 "    }",
                 "    bool currentStructureSupported = fractionAtLeast(",
                 "            currentStructuralSupportCount, currentBlockCount, 5u);",

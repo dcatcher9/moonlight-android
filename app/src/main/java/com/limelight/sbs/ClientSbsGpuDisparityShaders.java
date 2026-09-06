@@ -91,21 +91,21 @@ final class ClientSbsGpuDisparityShaders {
         validateSize(width, height);
         return header(width, height)
                 + "uniform highp sampler2D uVerticalConditioned;\n"
-                + "layout(rgba32f, binding = 0) uniform writeonly highp image2D "
-                + "uEnvelopeScratch;\n"
+                + "layout(r32f, binding = 0) uniform writeonly highp image2D "
+                + "uFinalParallax;\n"
                 + "void main() {\n"
                 + "  int y = int(gl_GlobalInvocationID.x);\n"
                 + "  if (y >= FIELD_HEIGHT) return;\n"
                 + "  float step = " + floatLiteral(MAX_HORIZONTAL_SLOPE)
                 + " / float(FIELD_WIDTH);\n"
                 + "  float forward = texelFetch(uVerticalConditioned, ivec2(0, y), 0).r;\n"
-                + "  imageStore(uEnvelopeScratch, ivec2(0, y), "
+                + "  imageStore(uFinalParallax, ivec2(0, y), "
                 + "vec4(forward, 0.0, 0.0, 0.0));\n"
                 + "  for (int x = 1; x < FIELD_WIDTH; x++) {\n"
                 + "    float candidate = texelFetch(uVerticalConditioned, "
                 + "ivec2(x, y), 0).r;\n"
                 + "    forward = max(candidate, forward - step);\n"
-                + "    imageStore(uEnvelopeScratch, ivec2(x, y), "
+                + "    imageStore(uFinalParallax, ivec2(x, y), "
                 + "vec4(forward, 0.0, 0.0, 0.0));\n"
                 + "  }\n"
                 + "}\n";
@@ -115,10 +115,12 @@ final class ClientSbsGpuDisparityShaders {
         validateSize(width, height);
         return header(width, height)
                 + "uniform highp sampler2D uVerticalConditioned;\n"
-                + "uniform highp sampler2D uEnvelopeScratch;\n"
-                + "layout(r32f, binding = 0) uniform writeonly highp image2D uFinalParallax;\n"
+                // The preceding dispatch publishes the forward R32F field. This invocation
+                // owns one complete row and reads each forward pixel before replacing it;
+                // no other invocation reads or writes that pixel during this reverse pass.
+                + "layout(r32f, binding = 0) uniform highp image2D uFinalParallax;\n"
                 + "void storeFinal(int x, int y, float backward) {\n"
-                + "  float forward = texelFetch(uEnvelopeScratch, ivec2(x, y), 0).r;\n"
+                + "  float forward = imageLoad(uFinalParallax, ivec2(x, y)).r;\n"
                 + "  imageStore(uFinalParallax, ivec2(x, y), "
                 + "vec4(max(forward, backward), 0.0, 0.0, 1.0));\n"
                 + "}\n"

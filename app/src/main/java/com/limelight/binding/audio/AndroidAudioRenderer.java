@@ -10,15 +10,16 @@ import android.media.AudioTrack;
 import android.media.audiofx.AudioEffect;
 import android.os.Build;
 import android.os.SystemClock;
+import android.os.Process;
 
 import com.limelight.LimeLog;
+import com.limelight.binding.PlaybackThreadPriority;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 
 public class AndroidAudioRenderer implements AudioRenderer {
-    private static final int MAX_PENDING_AUDIO_MS = 40;
     private static final long DROP_LOG_INTERVAL_MS = 5_000;
-    private static final int MAX_ZERO_LENGTH_WRITES = 3;
+    private static final int MAX_WRITE_WAIT_MS = AudioBacklogPolicy.MAX_PENDING_AUDIO_MS;
 
     private final Context context;
     private final boolean enableAudioFx;
@@ -26,18 +27,38 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private final AudioManager audioManager;
     private final Object stateLock = new Object();
     private volatile AudioTrack track;
+    // Written only by the single native AudioDec callback owner. Never follows a replacement.
+    private AudioTrack writingTrack;
+    private long writingGeneration;
+    private volatile long playbackGeneration;
+    private volatile boolean started;
+    private volatile boolean hasAudioFocus;
+    private final PlaybackThreadPriority playbackPriority =
+            new PlaybackThreadPriority(Process.THREAD_PRIORITY_AUDIO);
     private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener =
             this::handleAudioFocusChange;
     private final PcmWriter trackWriter = (audioData, offset, shortCount) -> {
-        AudioTrack activeTrack = track;
-        if (activeTrack == null) {
-            return AudioTrack.ERROR_INVALID_OPERATION;
+        synchronized (stateLock) {
+            if (!started || !hasAudioFocus || track != writingTrack || writingTrack == null
+                    || playbackGeneration != writingGeneration) {
+                return 0;
+            }
+            // A nonblocking write keeps stop/focus callbacks and overload recovery independent
+            // of a stalled mixer. The lock covers only the immediate write, never a retry wait.
+            return writingTrack.write(audioData, offset, shortCount, AudioTrack.WRITE_NON_BLOCKING);
         }
-        return activeTrack.write(audioData, offset, shortCount, AudioTrack.WRITE_BLOCKING);
+    };
+    private final WriteControl writeControl = new WriteControl() {
+        @Override public boolean canContinue() {
+            // A mid-write overload must keep recovery active for subsequent callbacks too.
+            return started && hasAudioFocus && writingTrack != null && track == writingTrack
+                    && playbackGeneration == writingGeneration
+                    && !backlogPolicy.shouldDrop(MoonBridge.getPendingAudioDuration());
+        }
+        @Override public long nowMs() { return SystemClock.uptimeMillis(); }
+        @Override public void awaitRetry() throws InterruptedException { Thread.sleep(1L); }
     };
 
-    private volatile boolean started;
-    private volatile boolean hasAudioFocus;
     private AudioFocusRequest audioFocusRequest;
     private boolean audioFocusRequested;
     private boolean audioFxSessionOpen;
@@ -48,6 +69,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private int selectedBufferSize;
     private boolean selectedLowLatency;
     private Pcm16AudioProcessor audioProcessor;
+    private AudioBacklogPolicy backlogPolicy;
 
     private long droppedAudioBlocks;
     private long droppedAudioDurationMs;
@@ -156,14 +178,18 @@ public class AndroidAudioRenderer implements AudioRenderer {
                     throw new IllegalStateException("AudioTrack failed to initialize");
                 }
 
-                track = candidate;
+                synchronized (stateLock) {
+                    playbackGeneration++;
+                    track = candidate;
+                }
                 selectedChannelConfig = channelConfig;
                 selectedChannelCount = audioConfiguration.channelCount;
                 selectedSampleRate = sampleRate;
                 selectedBufferSize = bufferSize;
                 selectedLowLatency = lowLatency;
-                audioProcessor = new Pcm16AudioProcessor(audioBoostDb, sampleRate,
-                        audioConfiguration.channelCount);
+                audioProcessor = new Pcm16AudioProcessor(audioBoostDb);
+                backlogPolicy = new AudioBacklogPolicy((int) (bufferSize * 1000L
+                        / ((long) sampleRate * audioConfiguration.channelCount * 2)));
                 LimeLog.info("Audio track configuration: " + bufferSize + " " + lowLatency
                         + ", client boost " + audioBoostDb + " dB");
                 break;
@@ -185,9 +211,19 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     @Override
     public void playDecodedAudio(short[] audioData, int validShortCount) {
-        if (!started || !hasAudioFocus || track == null || audioData == null) {
-            return;
+        final AudioTrack failedTrack;
+        final Pcm16AudioProcessor processor;
+        final long generation;
+        synchronized (stateLock) {
+            if (!started || !hasAudioFocus || track == null || audioData == null
+                    || selectedChannelCount <= 0 || audioProcessor == null || backlogPolicy == null) {
+                return;
+            }
+            failedTrack = track;
+            processor = audioProcessor;
+            generation = playbackGeneration;
         }
+        playbackPriority.apply();
 
         int boundedShortCount = Math.min(Math.max(validShortCount, 0), audioData.length);
         if (boundedShortCount != validShortCount && !invalidShortCountLogged) {
@@ -195,20 +231,40 @@ public class AndroidAudioRenderer implements AudioRenderer {
             LimeLog.warning("Invalid decoded audio length " + validShortCount
                     + " for buffer of " + audioData.length + " shorts; clamping");
         }
+        // Never submit a partial interleaved channel frame, including a malformed callback.
+        boundedShortCount -= boundedShortCount % selectedChannelCount;
         if (boundedShortCount == 0) {
             return;
         }
 
         int pendingDurationMs = MoonBridge.getPendingAudioDuration();
-        if (pendingDurationMs >= MAX_PENDING_AUDIO_MS) {
+        if (backlogPolicy.shouldDrop(pendingDurationMs)) {
             recordDroppedAudio(boundedShortCount, pendingDurationMs);
             return;
         }
-        logBacklogRecoveryIfNeeded(pendingDurationMs);
-
-        audioProcessor.process(audioData, boundedShortCount);
-        AudioTrack failedTrack = track;
-        int writeResult = writeFully(audioData, boundedShortCount, trackWriter);
+        processor.process(audioData, boundedShortCount);
+        writingTrack = failedTrack;
+        writingGeneration = generation;
+        int writeResult;
+        try {
+            writeResult = writeFully(audioData, boundedShortCount, selectedChannelCount,
+                    trackWriter, writeControl);
+        } finally {
+            writingTrack = null;
+        }
+        if (writeResult >= 0
+                && started && hasAudioFocus && track == failedTrack
+                && playbackGeneration == generation) {
+            if (writeResult < boundedShortCount) {
+                recordDroppedAudio(boundedShortCount - writeResult, MoonBridge.getPendingAudioDuration());
+            }
+            else {
+                // Reaching the native queue target alone does not establish playback recovery:
+                // an incomplete write can immediately begin another discard. Retain the episode
+                // totals until this generation completes a PCM write, without another queue read.
+                logBacklogRecoveryIfNeeded(pendingDurationMs);
+            }
+        }
         if (writeResult < 0) {
             LimeLog.warning("AudioTrack.write failed with " + writeResult
                     + "; dropping the unwritten remainder");
@@ -237,11 +293,12 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
     }
 
-    private void logBacklogRecoveryIfNeeded(int pendingDurationMs) {
+    private void logBacklogRecoveryIfNeeded(int admissionPendingDurationMs) {
         if (droppedAudioBlocks == 0) {
             return;
         }
-        LimeLog.warning("Audio backlog recovered at " + pendingDurationMs + " ms after dropping "
+        LimeLog.warning("Audio backlog recovered after a complete PCM write; queue before write: "
+                + admissionPendingDurationMs + " ms; dropped "
                 + droppedAudioBlocks + " blocks (~" + droppedAudioDurationMs + " ms)");
         resetDropCounters();
     }
@@ -334,7 +391,11 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 }
             }
             else {
+                playbackGeneration++;
                 pauseAndFlush(track);
+                if (backlogPolicy != null) {
+                    backlogPolicy.reset();
+                }
                 LimeLog.info("Audio focus lost (" + focusChange + "); playback paused");
             }
         }
@@ -349,6 +410,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
             started = false;
             hasAudioFocus = false;
+            playbackGeneration++;
+            if (backlogPolicy != null) {
+                backlogPolicy.reset();
+            }
             abandonFocus = audioFocusRequested;
             audioFocusRequested = false;
             closeAudioEffectSessionLocked();
@@ -385,6 +450,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
         AudioTrack activeTrack;
         synchronized (stateLock) {
             activeTrack = track;
+            playbackGeneration++;
             track = null;
             audioProcessor = null;
         }
@@ -404,6 +470,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
 
             closeAudioEffectSessionLocked();
+            playbackGeneration++;
             try {
                 failedTrack.release();
             }
@@ -468,24 +535,41 @@ public class AndroidAudioRenderer implements AudioRenderer {
         int write(short[] audioData, int offset, int shortCount);
     }
 
-    static int writeFully(short[] audioData, int validShortCount, PcmWriter writer) {
+    interface WriteControl {
+        boolean canContinue();
+        long nowMs();
+        void awaitRetry() throws InterruptedException;
+    }
+
+    static int writeFully(short[] audioData, int validShortCount, int channelCount,
+                          PcmWriter writer, WriteControl control) {
+        if (channelCount <= 0 || validShortCount % channelCount != 0) {
+            return AudioTrack.ERROR_BAD_VALUE;
+        }
         int offset = 0;
-        int zeroLengthWrites = 0;
+        long startedAtMs = control.nowMs();
         while (offset < validShortCount) {
+            if (!control.canContinue() || control.nowMs() - startedAtMs >= MAX_WRITE_WAIT_MS) {
+                return offset;
+            }
             int remaining = validShortCount - offset;
             int written = writer.write(audioData, offset, remaining);
-            if (written > remaining) {
+            if (written > remaining || (written > 0 && written % channelCount != 0)) {
                 return AudioTrack.ERROR_BAD_VALUE;
             }
             if (written > 0) {
                 offset += written;
-                zeroLengthWrites = 0;
             }
             else if (written < 0) {
                 return written;
             }
-            else if (++zeroLengthWrites >= MAX_ZERO_LENGTH_WRITES) {
-                return AudioTrack.ERROR_INVALID_OPERATION;
+            else {
+                try {
+                    control.awaitRetry();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return offset;
+                }
             }
         }
         return offset;

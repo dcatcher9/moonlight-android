@@ -249,9 +249,8 @@ public final class XrPreferenceWidgetsTest {
         activity.getSupportFragmentManager().executePendingTransactions();
         fragment = (StreamSettings.SettingsFragment) activity.getSupportFragmentManager()
                 .findFragmentById(R.id.settings_container);
-        assertTrue(fragment.findPreference(
-                PreferenceConfiguration.ENABLE_PERF_LOGGING_PREF_STRING)
-                instanceof SwitchPreferenceCompat);
+        assertTrue(fragment.findPreference("pref_debug_info") != null);
+        assertTrue(fragment.findPreference("checkbox_enable_perf_logging") == null);
     }
 
     private XrChoiceGroup bindChoices(InlineListPreference preference) {

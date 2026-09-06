@@ -19,6 +19,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +29,40 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ClientSbsModelAssetCacheTest {
     @Rule
     public final TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+    @Test
+    public void authoritativePruneRetainsOnlyCurrentProductionBucketNames() throws Exception {
+        File cache = temporaryFolder.newFolder("production-buckets");
+        ClientSbsModelManifest[] models = {
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
+                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9};
+        for (ClientSbsModelManifest model : models) {
+            Files.write(new File(cache, ClientSbsModelAssetCache.stagedFileName(
+                    model.getId(), model.getAssetSha256())).toPath(), new byte[] {7});
+        }
+        File obsolete = new File(cache, "zipdepth-base-static-672x384-oldhash.tflite");
+        File partial = new File(cache, ClientSbsModelAssetCache.stagedFileName(
+                models[1].getId(), models[1].getAssetSha256()) + ".partial");
+        Files.write(obsolete.toPath(), new byte[] {8});
+        Files.write(partial.toPath(), new byte[] {9});
+        File unrelated = new File(cache, "notes.txt");
+        Files.write(unrelated.toPath(), new byte[] {10});
+        byte[] modelBytes = {1, 2, 3};
+        byte[] archive = createArchive("test.model", modelBytes);
+        ClientSbsModelAssetCache.prepareVerifiedModelFile(cache, "test", "test.model",
+                sha256(modelBytes), () -> new ByteArrayInputStream(archive), true);
+        for (ClientSbsModelManifest model : models) {
+            File retained = new File(cache, ClientSbsModelAssetCache.stagedFileName(
+                    model.getId(), model.getAssetSha256()));
+            assertTrue(retained.isFile());
+            // Retention is not proof of integrity. Authoritative initialization still hashes it.
+            assertFalse(ClientSbsModelAssetCache.digestMatches(retained, model.getAssetSha256()));
+        }
+        assertFalse(obsolete.exists());
+        assertFalse(partial.exists());
+        assertTrue(unrelated.isFile());
+    }
 
     @Test
     public void speculativeStageRetainsOtherBucketButAuthoritativeReusePrunesIt()
@@ -127,6 +163,67 @@ public class ClientSbsModelAssetCacheTest {
             assertTrue(partials != null && partials.length == 0);
         } finally {
             executor.shutdownNow();
+        }
+    }
+
+    @Test
+    public void asyncAdmissionReturnsWhileExtractionOwnsTheCacheLock() throws Exception {
+        File cacheDirectory = temporaryFolder.newFolder("blocked-cache");
+        byte[] model = new byte[] {1, 2, 3, 4};
+        byte[] archive = createArchive("selected.model", model);
+        String digest = sha256(model);
+        String requestKey = cacheDirectory.getAbsolutePath() + ':' + digest;
+        CountDownLatch extractionEntered = new CountDownLatch(1);
+        CountDownLatch releaseExtraction = new CountDownLatch(1);
+        AtomicInteger archiveOpens = new AtomicInteger();
+        CompletableFuture<File> staged = new CompletableFuture<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<File> authoritative = executor.submit(() ->
+                    ClientSbsModelAssetCache.prepareVerifiedModelFile(
+                            cacheDirectory, "selected", "selected.model", digest,
+                            () -> {
+                                archiveOpens.incrementAndGet();
+                                extractionEntered.countDown();
+                                try {
+                                    if (!releaseExtraction.await(10, TimeUnit.SECONDS)) {
+                                        throw new IOException("Test did not release extraction");
+                                    }
+                                } catch (InterruptedException error) {
+                                    Thread.currentThread().interrupt();
+                                    throw new IOException(error);
+                                }
+                                return new ByteArrayInputStream(archive);
+                            }, true));
+            assertTrue(extractionEntered.await(5, TimeUnit.SECONDS));
+
+            // This is the same admission operation called by UI-side renderer construction.
+            // The worker must wait for cache integrity, but the caller must already have returned.
+            Future<Boolean> admitted = executor.submit(() -> ClientSbsModelAssetCache.startPrestage(
+                    requestKey, () -> {
+                        try {
+                            staged.complete(ClientSbsModelAssetCache.prepareVerifiedModelFile(
+                                    cacheDirectory, "selected", "selected.model", digest,
+                                    () -> {
+                                        archiveOpens.incrementAndGet();
+                                        return new ByteArrayInputStream(archive);
+                                    }, false));
+                        } catch (Throwable error) {
+                            staged.completeExceptionally(error);
+                        }
+                    }));
+            assertTrue(admitted.get(2, TimeUnit.SECONDS));
+            assertFalse(staged.isDone());
+            assertFalse(ClientSbsModelAssetCache.startPrestage(requestKey,
+                    () -> { throw new AssertionError("Duplicate staging was admitted"); }));
+
+            releaseExtraction.countDown();
+            assertEquals(authoritative.get(5, TimeUnit.SECONDS), staged.get(5, TimeUnit.SECONDS));
+            assertEquals(1, archiveOpens.get());
+        } finally {
+            releaseExtraction.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
         }
     }
 

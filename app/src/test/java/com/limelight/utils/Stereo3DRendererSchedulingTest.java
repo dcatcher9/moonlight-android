@@ -19,6 +19,24 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class Stereo3DRendererSchedulingTest {
     @Test
+    public void cpuReuseGateOnlyRejectsWhenBothGpuOwnerTiersAreImpossible() {
+        long owner = 2_000_000_000L;
+        assertFalse(Stereo3DRenderer.couldHaveReusableModelOwner(0, owner, 10, owner));
+        assertFalse(Stereo3DRenderer.couldHaveReusableModelOwner(10, owner, 10, owner));
+        assertFalse(Stereo3DRenderer.couldHaveReusableModelOwner(10, owner, 11, owner - 1));
+        assertTrue(Stereo3DRenderer.couldHaveReusableModelOwner(10, owner, 11, owner));
+        // Neither elapsed time nor callback count expires a content-matching owner.
+        assertTrue(Stereo3DRenderer.couldHaveReusableModelOwner(
+                10, owner, 1000, owner + 499_999_999L));
+        assertTrue(Stereo3DRenderer.couldHaveReusableModelOwner(
+                10, owner, 1000, owner + 500_000_000L));
+        assertTrue(Stereo3DRenderer.couldHaveReusableModelOwner(
+                10, owner, 100_000, owner + 60_000_000_000L));
+        assertTrue(Stereo3DRenderer.couldHaveReusableModelOwner(
+                10, owner, Long.MAX_VALUE, Long.MAX_VALUE));
+    }
+
+    @Test
     public void refinementDoublesOnlyTheHorizontalWarpMapLattice() {
         assertEquals(2, Stereo3DRenderer.WARP_MAP_HORIZONTAL_SCALE);
         assertEquals(1, Stereo3DRenderer.WARP_MAP_VERTICAL_SCALE);
@@ -353,6 +371,21 @@ public class Stereo3DRendererSchedulingTest {
         assertFalse(Stereo3DRenderer.offerControlMessage(
                 queue, "shutdown", 1, TimeUnit.MILLISECONDS));
         assertEquals("frame", queue.poll());
+    }
+
+    @Test
+    public void drawAdmissionReopensBeforeAnyEarlyReturnOrFirstFrameWait() throws IOException {
+        String source = rendererSource();
+        String draw = source.substring(source.indexOf("private void onDrawFrameLocked"),
+                source.indexOf("/** Clears the proof during a handoff"));
+        int acknowledge = draw.indexOf("frameDrainScheduler.onDrawStarted()");
+        assertTrue(acknowledge >= 0);
+        assertTrue(acknowledge < draw.indexOf("serviceRendererFinishRequest()"));
+        assertTrue(acknowledge < draw.indexOf("awaitFirstModeEntryFrameIfNeeded()"));
+        String admission = source.substring(source.indexOf("private void queueFrameDrain("),
+                source.indexOf("private void drainQueuedFrameWithoutSwap()"));
+        assertTrue(admission.contains("!surfaceLifecycleReady"));
+        assertTrue(admission.contains("!outputSurfaceValidated"));
     }
 
     private static String rendererSource() throws IOException {

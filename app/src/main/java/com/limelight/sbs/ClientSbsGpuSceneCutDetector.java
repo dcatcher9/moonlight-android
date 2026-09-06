@@ -12,8 +12,9 @@ import com.limelight.LimeLog;
  * GPU-only hard color-cut detector for the Client-SBS model-input texture.
  *
  * <p>The input is the renderer's model-sized SDR {@link GLES20#GL_TEXTURE_2D}. Each compute
- * workgroup reduces a 16x16 tile to average integer Rec.709 luma plus the median max-RGB value of
- * a fixed 3x3 sample lattice. Partial tiles at the right and bottom edges contain only in-bounds
+ * workgroup reduces a 16x16 tile to average integer Rec.709 luma plus the median of a fixed
+ * 3x3 lattice of source-point max-RGB ordinals carried in alpha. Model RGB remains the independently
+ * resized/tone-mapped tensor input. Partial tiles at the right and bottom edges contain only in-bounds
  * samples. A second pass compares the resulting grid with persistent GPU history, and a final pass
  * combines spatially broad luma change with reliable local ordinal-structure change. The ordinal
  * cue rejects a shared global monotone exposure transform, including clamp-created ties, while
@@ -34,7 +35,7 @@ import com.limelight.LimeLog;
  * in-flight frames must use different output records.</p>
  *
  * <p>This is a renderer-owned hot path: it does not query or restore prior GL state. On return,
- * program, SSBO bindings 0/1/2/3, image bindings 0/1, copy-buffer bindings, and texture unit 0's
+ * program, SSBO bindings 0/1/2/3, image bindings 0/1/2, copy-buffer bindings, and texture unit 0's
  * 2D binding are zero; texture unit 0 is active. No other binding is changed.</p>
  */
 public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
@@ -89,11 +90,12 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private int outputBuffer;
     private int previousInputBuffer;
     private int nearIdenticalDecisionBuffer;
-    private int pendingPackedFloatSsbo;
+    private int pendingModelInputTexture;
     private long pendingFrameSequence;
     private long pendingCapturedAtNs;
     private int packAndDownsampleColorUniform;
     private int packAndDownsampleNearIdenticalCandidateUniform;
+    private int packAndDownsampleLazyInputPackingUniform;
     private int packAndDownsampleFrameSequenceUniform;
     private int packAndDownsampleCapturedAtNsUniform;
     private int compareBlockGridUniform;
@@ -102,6 +104,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private int commitBlockGridUniform;
     private int commitFrameSequenceUniform;
     private int commitCapturedAtNsUniform;
+    private int commitColorUniform;
     private int resetOutputWordOffsetUniform;
     private int resetClearHistoryUniform;
     private int resolveOutputWordOffsetUniform;
@@ -201,6 +204,26 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
                                                int decisionSlot,
                                                long sourceFrameSequence,
                                                long capturedAtNs) {
+        return processRendererOwnedAndPack(modelInputTexture, packedFloatSsbo,
+                sceneCutOutputSsbo, sceneCutOutputByteOffset, nearIdenticalCandidate,
+                decisionToken, decisionSlot, sourceFrameSequence, capturedAtNs, false);
+    }
+
+    /**
+     * With lazy packing, classification reads RGB directly from the retained model texture and
+     * does not write the tensor slot. Native must pack that exact texture for every INFER outcome,
+     * including a failed or malformed decision read. The texture must remain unchanged until
+     * this transaction is committed or discarded.
+     */
+    public Result processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo,
+                                               int sceneCutOutputSsbo,
+                                               int sceneCutOutputByteOffset,
+                                               boolean nearIdenticalCandidate,
+                                               long decisionToken,
+                                               int decisionSlot,
+                                               long sourceFrameSequence,
+                                               long capturedAtNs,
+                                               boolean lazyInputPacking) {
         assertOwnerContext();
         if (modelInputTexture == 0) {
             throw new IllegalArgumentException("modelInputTexture must be a valid GL texture");
@@ -244,6 +267,8 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
             GLES20.glUniform1i(packAndDownsampleColorUniform, 0);
             GLES20.glUniform1i(packAndDownsampleNearIdenticalCandidateUniform,
                     effectiveNearIdenticalCandidate ? 1 : 0);
+            GLES20.glUniform1i(packAndDownsampleLazyInputPackingUniform,
+                    lazyInputPacking ? 1 : 0);
             GLES30.glUniform2ui(packAndDownsampleFrameSequenceUniform,
                     (int) sourceFrameSequence, (int) (sourceFrameSequence >>> 32));
             GLES30.glUniform2ui(packAndDownsampleCapturedAtNsUniform,
@@ -304,7 +329,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
             // frame still identifies the exact failing dispatch; steady state checks once here.
             checkGlError("color-cut pack/compare pipeline");
             validateDispatchesIndividually = false;
-            pendingPackedFloatSsbo = packedFloatSsbo;
+            pendingModelInputTexture = modelInputTexture;
             pendingFrameSequence = sourceFrameSequence;
             pendingCapturedAtNs = capturedAtNs;
             submitted = true;
@@ -312,7 +337,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
             unbindRendererOwnedState();
             if (!submitted) {
                 frameTransaction.discardPendingFrame();
-                pendingPackedFloatSsbo = 0;
+                pendingModelInputTexture = 0;
                 pendingFrameSequence = 0L;
                 pendingCapturedAtNs = 0L;
             }
@@ -328,7 +353,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     public void commitAcceptedFrame(int processorStateBuffer) {
         assertOwnerContext();
         frameTransaction.requirePendingFrame();
-        if (pendingPackedFloatSsbo == 0) {
+        if (pendingModelInputTexture == 0) {
             throw new IllegalStateException("No packed model input is pending");
         }
         if (processorStateBuffer == 0) {
@@ -337,9 +362,11 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         try {
             bindSsbo(STATS_SSBO_BINDING, statsBuffer);
             bindSsbo(OUTPUT_SSBO_BINDING, processorStateBuffer);
-            bindSsbo(INPUT_TENSOR_SSBO_BINDING, pendingPackedFloatSsbo);
             bindSsbo(PREVIOUS_INPUT_TENSOR_SSBO_BINDING, previousInputBuffer);
             GLES20.glUseProgram(commitProgram);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, pendingModelInputTexture);
+            GLES20.glUniform1i(commitColorUniform, 0);
             GLES20.glUniform2i(commitBlockGridUniform, blockGridWidth, blockGridHeight);
             GLES30.glUniform2ui(commitFrameSequenceUniform,
                     (int) pendingFrameSequence, (int) (pendingFrameSequence >>> 32));
@@ -359,7 +386,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         } finally {
             unbindRendererOwnedState();
         }
-        pendingPackedFloatSsbo = 0;
+        pendingModelInputTexture = 0;
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
         frameTransaction.commitAcceptedFrame();
@@ -370,7 +397,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     public void discardPendingFrame() {
         assertOwnerContext();
         frameTransaction.discardPendingFrame();
-        pendingPackedFloatSsbo = 0;
+        pendingModelInputTexture = 0;
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
         result.frameSequence = frameTransaction.getFrameSequence();
@@ -384,7 +411,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         assertOwnerContext();
         validateDispatchesIndividually = true;
         frameTransaction.reset();
-        pendingPackedFloatSsbo = 0;
+        pendingModelInputTexture = 0;
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
         result.frameSequence = 0L;
@@ -486,6 +513,8 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
                 packAndDownsampleProgram, "uCurrentColor");
         packAndDownsampleNearIdenticalCandidateUniform = requiredUniform(
                 packAndDownsampleProgram, "uNearIdenticalCandidate");
+        packAndDownsampleLazyInputPackingUniform = requiredUniform(
+                packAndDownsampleProgram, "uLazyInputPacking");
         packAndDownsampleFrameSequenceUniform = requiredUniform(
                 packAndDownsampleProgram, "uCurrentFrameSequence");
         packAndDownsampleCapturedAtNsUniform = requiredUniform(
@@ -498,6 +527,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
                 commitProgram, "uCurrentFrameSequence");
         commitCapturedAtNsUniform = requiredUniform(
                 commitProgram, "uCurrentCapturedAtNs");
+        commitColorUniform = requiredUniform(commitProgram, "uCurrentColor");
         resetOutputWordOffsetUniform = requiredUniform(resetProgram, "uOutputWordOffset");
         resetClearHistoryUniform = requiredUniform(resetProgram, "uClearHistory");
         resolveOutputWordOffsetUniform = requiredUniform(
@@ -747,7 +777,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         outputBuffer = 0;
         previousInputBuffer = 0;
         nearIdenticalDecisionBuffer = 0;
-        pendingPackedFloatSsbo = 0;
+        pendingModelInputTexture = 0;
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
         validatedOutputBuffer = 0;

@@ -30,6 +30,18 @@ public class XrStreamPresenterLayoutTest {
     }
 
     @Test
+    public void gpuLogDistinguishesMissingZeroAndShortCompletedQueries() {
+        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(0.0f, 0L));
+        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(1.25f, 0L));
+        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(Float.NaN, 4L));
+        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(Float.POSITIVE_INFINITY, 4L));
+        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(-0.1f, 4L));
+        assertEquals("0.000000", XrStreamPresenter.formatGpuStageForLog(0.0f, 4L));
+        assertEquals("0.000125", XrStreamPresenter.formatGpuStageForLog(0.000125f, 4L));
+        assertEquals("1.250000", XrStreamPresenter.formatGpuStageForLog(1.25f, 4L));
+    }
+
+    @Test
     public void statsTitleNamesIndependentStreamAndClientSbsWindows() {
         assertEquals("Stats | Client SBS AI | stream 1.0 s | SBS 1.8 s",
                 XrStreamPresenter.formatStatsTitle(

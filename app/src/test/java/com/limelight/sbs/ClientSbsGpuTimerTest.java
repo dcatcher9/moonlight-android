@@ -66,6 +66,37 @@ public class ClientSbsGpuTimerTest {
         assertEquals(3_000_000_000L, output.totalNs);
     }
 
+    @Test
+    public void depthQueriesKeepTheirOwnResultsBetweenRasterStages() {
+        FakeGl gl = new FakeGl();
+        ClientSbsGpuTimer timer = new ClientSbsGpuTimer(gl, 1);
+        ClientSbsGpuTimer.Stage[] stages = ClientSbsGpuTimer.Stage.values();
+        long[] elapsedNs = {1_420_000L, 180_000L, 125L, 740_000L};
+        for (int i = 0; i < stages.length; i++) {
+            assertTrue(timer.begin(stages[i]));
+            assertFalse("Only one elapsed-time query can be active",
+                    timer.begin(ClientSbsGpuTimer.Stage.DEPTH_PROFILE));
+            timer.end();
+            gl.completeAll(elapsedNs[i]);
+        }
+        timer.poll();
+        for (int i = 0; i < stages.length; i++) {
+            ClientSbsGpuTimer.Snapshot snapshot = timer.drain(stages[i]);
+            assertEquals(1L, snapshot.samples);
+            assertEquals(elapsedNs[i], snapshot.totalNs);
+            assertEquals(0L, timer.drain(stages[i]).samples);
+        }
+
+        // A driver-reported zero is still an available sample, not an unused stage.
+        assertTrue(timer.begin(ClientSbsGpuTimer.Stage.DEPTH_PROFILE));
+        timer.end();
+        gl.completeAll(0L);
+        timer.poll();
+        ClientSbsGpuTimer.Snapshot zero = timer.drain(ClientSbsGpuTimer.Stage.DEPTH_PROFILE);
+        assertEquals(1L, zero.samples);
+        assertEquals(0L, zero.totalNs);
+    }
+
     private static final class FakeGl implements ClientSbsGpuTimer.GlApi {
         private static final int QUERY_AVAILABLE = 0x8867;
         private int nextId = 1;

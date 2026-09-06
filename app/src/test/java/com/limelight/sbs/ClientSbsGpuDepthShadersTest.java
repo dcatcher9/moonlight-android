@@ -11,32 +11,19 @@ import java.nio.ByteOrder;
 
 public class ClientSbsGpuDepthShadersTest {
     @Test
-    public void healthReadbackSchedulingContinuesAtBackgroundCadence() {
-        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, 29L));
-        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                true, 1L));
-        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, 30L));
+    public void visibleStatsSamplesEveryFiveObservationsAndOnDemand() {
+        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(true, false, 4L));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(true, false, 5L));
+        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(true, false, 6L));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(true, false, 10L));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(true, true, 1L));
     }
 
     @Test
-    public void openingTheStatsPanelSharpensTheHealthSampleRate() {
-        // Background cadence is sized for a HUD. Cut retriggering happens at sub-second scale, so
-        // at 30-frame spacing a burst inside one second reads as a single sample or none; the
-        // history plots need to outpace the events they are meant to reveal.
-        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, 5L, false));
-        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, 5L, true));
-        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, 30L, false));
-        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                true, 1L, false));
-        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                false, true, 1L, true));
-        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(
-                true, true, 1L, false));
+    public void disabledStatsDoesNotScheduleEvenRequestedOrPeriodicSamples() {
+        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(false, false, 5L));
+        assertFalse(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(false, true, 1L));
+        assertTrue(ClientSbsGpuDepthProcessor.shouldScheduleHealthReadback(true, true, 1L));
     }
 
     @Test
@@ -83,9 +70,6 @@ public class ClientSbsGpuDepthShadersTest {
             assertFalse(shader.contains("sampleValid.x = tensorRaw"));
             assertFalse(shader.contains("vec4 bilinearWeight"));
         }
-        String legacyAccumulate = ClientSbsGpuDepthShaders.legacyAccumulateProfile(false);
-        assertFalse(legacyAccumulate.contains("buffer RawDepth"));
-        assertFalse(legacyAccumulate.contains("sourceAlignedRaw"));
     }
 
     @Test
@@ -603,23 +587,9 @@ public class ClientSbsGpuDepthShadersTest {
     }
 
     @Test
-    public void legacyBestv2HelpersAreNotPartOfTheProductionProfileShader() {
+    public void productionProfileHasNoLegacyBestv2Mapping() {
         String production = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
-        String legacyAccumulator = ClientSbsGpuDepthShaders.LEGACY_ACCUMULATE_PROFILE;
-        String legacyResolver = ClientSbsGpuDepthShaders.LEGACY_RESOLVE_PROFILE;
 
-        assertTrue(legacyAccumulator.contains("localDepthHistogram"));
-        assertTrue(legacyAccumulator.contains("localSubjectHistogram"));
-        assertTrue(legacyAccumulator.contains("referenceGradient"));
-        assertTrue(legacyResolver.contains("subjectNearPercentile"));
-        assertTrue(legacyResolver.contains("depthPercentile(0.02"));
-        assertTrue(legacyResolver.contains("depthPercentile(0.98"));
-        assertTrue(legacyResolver.contains("stretchLow"));
-        assertTrue(legacyResolver.contains("subjectDepth"));
-        assertTrue(legacyResolver.contains("classifiedEdgeFraction"));
-        assertTrue(legacyResolver.contains("smoothstep(0.04, 0.20"));
-
-        assertFalse(production.equals(legacyResolver));
         assertFalse(production.contains("ProfileStats"));
         assertFalse(production.contains("depthHistogram"));
         assertFalse(production.contains("subjectHistogram"));

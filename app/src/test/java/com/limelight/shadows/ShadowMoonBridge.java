@@ -35,6 +35,7 @@ public class ShadowMoonBridge {
 
     public static int CAPABILITY_SLICES_PER_FRAME(byte s) { return 0; }
 
+    @Implementation
     public static int getPendingAudioDuration() { return 0; }
 
     private static final List<Integer> hostSbsTelemetryResults = new ArrayList<>();

@@ -45,28 +45,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         }
     }
 
-    enum GpuPriorityHint {
-        LOW(1, "Low"),
-        NORMAL(2, "Normal");
-
-        final int wireValue;
-        final String label;
-
-        GpuPriorityHint(int wireValue, String label) {
-            this.wireValue = wireValue;
-            this.label = label;
-        }
-
-        static GpuPriorityHint fromNativeValue(int value) {
-            for (GpuPriorityHint hint : values()) {
-                if (hint.wireValue == value) {
-                    return hint;
-                }
-            }
-            throw new IllegalStateException("Unknown native LiteRT GPU priority hint: " + value);
-        }
-    }
-
     private static final boolean NATIVE_BRIDGE_AVAILABLE = loadNativeBridge();
     private static final Object DEFERRED_CLOSES_LOCK = new Object();
     private static final Set<ClientSbsGpuInferenceEngine> DEFERRED_CLOSES = new HashSet<>();
@@ -76,8 +54,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private static final long PROCESS_MODEL_SLOT_RETRY_MILLIS = 250L;
     private static final String PRODUCTION_COMPILER_CACHE = "client-sbs-litert-gpu";
     private static final String BENCHMARK_COMPILER_CACHE = "client-sbs-benchmark-litert-gpu";
-    private static final String BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE =
-            "client-sbs-benchmark-litert-gpu-external-phwc4";
 
     private long nativeHandle;
     private volatile boolean initialized;
@@ -86,9 +62,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private boolean processModelSlotClaimed;
     private volatile long lastAssetVerificationNanos;
     private volatile long lastNativeInitializationNanos;
-    private volatile GpuPriorityHint gpuPriorityHint = GpuPriorityHint.LOW;
-    private volatile boolean gpuPriorityHintOverridden;
-    private volatile boolean directExternalPhwc4Mode;
+    private volatile boolean lazyInputPackingSupported;
     // Immutable for one compiled engine. Cache these JNI results once so the renderer's per-frame
     // pack/postprocess path only binds GL objects and never crosses JNI for buffer metadata.
     private final int[] inputBufferIds = new int[BUFFER_SLOT_COUNT];
@@ -261,7 +235,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Production Client SBS inference supports only ZipDepth Base");
         }
-        initialize(context, context.getAssets(), manifest, false, false);
+        initialize(context, context.getAssets(), manifest, false);
     }
 
     /**
@@ -271,23 +245,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
      */
     void initializeForBenchmark(Context runtimeContext, AssetManager modelAssets,
                                 ClientSbsModelManifest manifest) throws IOException {
-        initialize(runtimeContext, modelAssets, manifest, true, false);
-    }
-
-    /**
-     * Debug-instrumentation-only direct external-PHWC4 capability probe. The probe forces FP16
-     * buffer storage and exposes physical half4 GL buffers. Production callers have no
-     * flag-bearing entry point and always retain packed Float32 NHWC public GL tensors.
-     */
-    void initializeForBenchmark(Context runtimeContext, AssetManager modelAssets,
-                                ClientSbsModelManifest manifest,
-                                boolean directExternalPhwc4Probe) throws IOException {
-        if (directExternalPhwc4Probe && !BuildConfig.DEBUG) {
-            throw new SecurityException(
-                    "Direct external PHWC4 requires a debug instrumentation build");
-        }
-        initialize(runtimeContext, modelAssets, manifest, true,
-                directExternalPhwc4Probe);
+        initialize(runtimeContext, modelAssets, manifest, true);
     }
 
     /**
@@ -332,17 +290,12 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         lastAssetVerificationNanos = Math.max(0L,
                 System.nanoTime() - verificationStartedNs);
         initializePreparedModel(runtimeContext, canonicalModel, manifest,
-                BENCHMARK_COMPILER_CACHE, enableDiagnosticProfiling, false);
+                BENCHMARK_COMPILER_CACHE, enableDiagnosticProfiling);
     }
 
     private void initialize(Context runtimeContext, AssetManager modelAssets,
-                            ClientSbsModelManifest manifest, boolean benchmarkCache,
-                            boolean directExternalPhwc4Probe)
+                            ClientSbsModelManifest manifest, boolean benchmarkCache)
             throws IOException {
-        if (directExternalPhwc4Probe && (!benchmarkCache || !BuildConfig.DEBUG)) {
-            throw new SecurityException(
-                    "Direct external PHWC4 is restricted to debug benchmarks");
-        }
         if (!beginInitialization()) {
             return;
         }
@@ -351,16 +304,15 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         String modelCacheName = benchmarkCache
                 ? ClientSbsModelAssetCache.BENCHMARK_MODEL_CACHE
                 : ClientSbsModelAssetCache.PRODUCTION_MODEL_CACHE;
-        String compilerCacheName = directExternalPhwc4Probe
-                ? BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE
-                : (benchmarkCache ? BENCHMARK_COMPILER_CACHE : PRODUCTION_COMPILER_CACHE);
+        String compilerCacheName = benchmarkCache
+                ? BENCHMARK_COMPILER_CACHE : PRODUCTION_COMPILER_CACHE;
         File modelFile = ClientSbsModelAssetCache.prepareVerifiedModelFile(
                 runtimeContext, modelAssets, manifest, modelCacheName, true);
         lastAssetVerificationNanos = Math.max(0L,
                 System.nanoTime() - verificationStartedNs);
 
         initializePreparedModel(runtimeContext, modelFile, manifest, compilerCacheName,
-                false, directExternalPhwc4Probe);
+                false);
     }
 
     private synchronized boolean beginInitialization() {
@@ -392,8 +344,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private void initializePreparedModel(Context runtimeContext, File modelFile,
                                          ClientSbsModelManifest manifest,
                                          String compilerCacheName,
-                                         boolean enableDiagnosticProfiling,
-                                         boolean directExternalPhwc4Probe) throws IOException {
+                                         boolean enableDiagnosticProfiling) throws IOException {
         File codeCacheRoot = runtimeContext.getCodeCacheDir();
         File cacheRoot = new File(codeCacheRoot, compilerCacheName);
         // Compute precision is part of the key, so a model can never reuse an artifact compiled
@@ -422,15 +373,13 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                         modelFile.length(),
                         runtimeContext.getApplicationInfo().nativeLibraryDir,
                         cacheDirectory.getAbsolutePath(),
-                        BuildConfig.DEBUG,
                         manifest.getGpuExecutionPolicy().forcesFp32Compute(),
                         manifest.hasDynamicSpatialShape(),
                         manifest.getInputWidth(), manifest.getInputHeight(),
                         manifest.getInputTensor().getChannels(),
                         manifest.getOutputWidth(), manifest.getOutputHeight(),
                         manifest.getOutputTensor().getChannels(),
-                        enableDiagnosticProfiling,
-                        directExternalPhwc4Probe);
+                        enableDiagnosticProfiling);
                 if (!success) {
                     throw new IllegalStateException(nativeGetLastError(nativeHandle));
                 }
@@ -446,15 +395,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                     + nativeSlotCount + "/" + BUFFER_SLOT_COUNT);
         }
 
-        gpuPriorityHint = GpuPriorityHint.fromNativeValue(
-                nativeGetGpuPriorityHint(nativeHandle));
-        gpuPriorityHintOverridden = nativeIsGpuPriorityHintOverridden(nativeHandle);
-        directExternalPhwc4Mode = nativeIsDirectExternalPhwc4Mode(nativeHandle);
-        if (directExternalPhwc4Mode != directExternalPhwc4Probe) {
-            throw new IllegalStateException("Native Client SBS tensor-I/O mode mismatch: "
-                    + directExternalPhwc4Mode + "/" + directExternalPhwc4Probe);
-        }
-
         for (int slot = 0; slot < BUFFER_SLOT_COUNT; slot++) {
             inputBufferIds[slot] = nativeGetInputBufferId(nativeHandle, slot);
             outputBufferIds[slot] = nativeGetOutputBufferId(nativeHandle, slot);
@@ -464,27 +404,19 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             outputPixelStrides[slot] = nativeGetOutputPixelStrideBytes(nativeHandle, slot);
         }
 
-        int expectedInputBytes = directExternalPhwc4Mode
-                ? phwc4Fp16ByteSize(manifest.getInputTensor())
-                : manifest.getInputTensor().getByteSize();
-        int expectedOutputBytes = directExternalPhwc4Mode
-                ? phwc4Fp16ByteSize(manifest.getOutputTensor())
-                : manifest.getOutputTensor().getByteSize();
-        int expectedInputStride = directExternalPhwc4Mode ? 4 * Short.BYTES
-                : Math.multiplyExact(manifest.getInputTensor().getChannels(), Float.BYTES);
-        int expectedOutputStride = directExternalPhwc4Mode ? 4 * Short.BYTES
-                : Math.multiplyExact(manifest.getOutputTensor().getChannels(), Float.BYTES);
-        // Production remains packed Float32 NHWC. The explicit benchmark probe instead exposes
-        // the same logical tensors through C4-padded FP16 PHWC4 physical storage.
+        int expectedInputBytes = manifest.getInputTensor().getByteSize();
+        int expectedOutputBytes = manifest.getOutputTensor().getByteSize();
+        int expectedInputStride = Math.multiplyExact(
+                manifest.getInputTensor().getChannels(), Float.BYTES);
+        int expectedOutputStride = Math.multiplyExact(
+                manifest.getOutputTensor().getChannels(), Float.BYTES);
         for (int slot = 0; slot < BUFFER_SLOT_COUNT; slot++) {
             if (getInputBufferId(slot) == 0 || getOutputBufferId(slot) == 0
                     || getInputBufferSize(slot) < expectedInputBytes
                     || getOutputBufferSize(slot) < expectedOutputBytes
                     || getInputPixelStrideBytes(slot) != expectedInputStride
                     || getOutputPixelStrideBytes(slot) != expectedOutputStride) {
-                throw new IllegalStateException("Invalid "
-                        + (directExternalPhwc4Mode ? "external FP16 PHWC4" : "packed")
-                        + " tensor allocation for slot "
+                throw new IllegalStateException("Invalid packed tensor allocation for slot "
                         + slot + ": input=" + getInputBufferId(slot) + "/"
                         + getInputBufferSize(slot) + "/" + expectedInputBytes
                         + " output=" + getOutputBufferId(slot) + "/"
@@ -493,20 +425,18 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                         + getOutputPixelStrideBytes(slot));
             }
         }
+        lazyInputPackingSupported = nativeSupportsLazyInputPacking(nativeHandle);
         initialized = true;
         LimeLog.info("Client SBS GPU ready: model=" + manifest.getId()
                 + " tensor=" + manifest.getInputWidth() + "x" + manifest.getInputHeight()
                 + " fully-delegated OpenCL "
                 + manifest.getGpuExecutionPolicy().getComputePrecisionLabel()
-                + (directExternalPhwc4Mode
-                ? " + benchmark-only direct external FP16 PHWC4 GL buffer"
-                : " + packed GL") + ", verify="
+                + " + packed GL, verify="
                 + String.format(java.util.Locale.ROOT, "%.1f ms",
                         lastAssetVerificationNanos / 1_000_000.0)
                 + " compile/init=" + String.format(java.util.Locale.ROOT, "%.1f ms",
                         lastNativeInitializationNanos / 1_000_000.0)
-                + ", GPU priority hint=" + gpuPriorityHint.label
-                + (gpuPriorityHintOverridden ? " (ADB debug override)" : " (default)")
+                + ", GPU priority hint=Low"
                 + ", slots=" + BUFFER_SLOT_COUNT + " input GL buffers="
                 + getInputBufferId(0) + ","
                 + getInputBufferId(1) + " (" + getInputBufferSize(0)
@@ -515,23 +445,11 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                 + " bytes each), pixel stride=" + getOutputPixelStrideBytes(0));
     }
 
-    private static int phwc4Fp16ByteSize(ClientSbsModelManifest.TensorSpec tensor) {
-        int[] shape = tensor.getShape();
-        if (shape.length != 4 || shape[0] != 1 || shape[3] <= 0 || shape[3] > 4) {
-            throw new IllegalArgumentException(
-                    "Direct external PHWC4 requires [1,H,W,C<=4]");
-        }
-        return Math.multiplyExact(Math.multiplyExact(shape[1], shape[2]),
-                4 * Short.BYTES);
-    }
-
     /** Deletes only the dedicated benchmark namespaces after every benchmark engine is closed. */
     static boolean clearBenchmarkCaches(Context context) {
         File codeCache = context.getCodeCacheDir();
         return ClientSbsModelAssetCache.clearBenchmarkModelCache(context)
-                && deleteExactCodeCacheChild(codeCache, BENCHMARK_COMPILER_CACHE)
-                && deleteExactCodeCacheChild(
-                codeCache, BENCHMARK_EXTERNAL_PHWC4_COMPILER_CACHE);
+                && deleteExactCodeCacheChild(codeCache, BENCHMARK_COMPILER_CACHE);
     }
 
     private static boolean deleteExactCodeCacheChild(File codeCache, String childName) {
@@ -705,6 +623,14 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence,
              boolean nearIdenticalCandidate, int decisionBufferId,
              int decisionByteOffset, long decisionToken) {
+        return run(slotIndex, inputReadyFence, previousOutputConsumedFence,
+                nearIdenticalCandidate, decisionBufferId, decisionByteOffset, decisionToken, 0);
+    }
+
+    /** A nonzero model texture defers exact RGB tensor packing to native on INFER only. */
+    long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence,
+             boolean nearIdenticalCandidate, int decisionBufferId,
+             int decisionByteOffset, long decisionToken, int modelInputTextureId) {
         validateSlotIndex(slotIndex);
         if (!isInitialized()) {
             throw new IllegalStateException("Native GPU engine is not initialized");
@@ -721,7 +647,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         }
         long resultFence = nativeRun(nativeHandle, slotIndex, inputReadyFence,
                 previousOutputConsumedFence, nearIdenticalCandidate,
-                decisionBufferId, decisionByteOffset, decisionToken);
+                decisionBufferId, decisionByteOffset, decisionToken, modelInputTextureId);
         if (resultFence == 0L) {
             throw new IllegalStateException(nativeGetLastError(nativeHandle));
         }
@@ -735,6 +661,10 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         }
         return RunDisposition.fromNativeValue(
                 nativeGetLastRunDisposition(nativeHandle, slotIndex));
+    }
+
+    boolean supportsLazyInputPacking() {
+        return isInitialized() && lazyInputPackingSupported;
     }
 
     /**
@@ -792,16 +722,9 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         return lastNativeInitializationNanos;
     }
 
+    /** Fixed native scheduling preference, shown in the Stats panel. */
     String getGpuPriorityHintLabel() {
-        return gpuPriorityHint.label;
-    }
-
-    boolean isGpuPriorityHintOverridden() {
-        return gpuPriorityHintOverridden;
-    }
-
-    boolean isDirectExternalPhwc4Mode() {
-        return isInitialized() && directExternalPhwc4Mode;
+        return "Low";
     }
 
     private static void validateSlotIndex(int slotIndex) {
@@ -865,7 +788,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         boolean firstAttempt = !closeStarted;
         closeStarted = true;
         initialized = false;
-        directExternalPhwc4Mode = false;
         for (int slot = 0; slot < BUFFER_SLOT_COUNT; slot++) {
             inputBufferIds[slot] = 0;
             outputBufferIds[slot] = 0;
@@ -928,22 +850,21 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private static native long nativeCreateSharedContext();
     private static native boolean nativeInitialize(long handle, int modelFd,
                                                     long modelOffset, long modelLength,
-                                                     String nativeLibraryDir, String cacheDir,
-                                                     boolean allowDebugGpuPriorityOverride,
-                                                     boolean forceGpuFp32Compute,
-                                                     boolean dynamicShape,
+                                                    String nativeLibraryDir, String cacheDir,
+                                                    boolean forceGpuFp32Compute,
+                                                    boolean dynamicShape,
                                                     int inputWidth, int inputHeight,
                                                     int inputChannels,
                                                     int outputWidth, int outputHeight,
                                                     int outputChannels,
-                                                    boolean enableDiagnosticProfiling,
-                                                    boolean directExternalPhwc4Probe);
+                                                    boolean enableDiagnosticProfiling);
     private static native long nativeRun(long handle, int slotIndex, long inputReadyFence,
                                          long previousOutputConsumedFence,
                                          boolean nearIdenticalCandidate,
                                          int decisionBufferId, int decisionByteOffset,
-                                         long decisionToken);
+                                         long decisionToken, int modelInputTextureId);
     private static native int nativeGetBufferSlotCount();
+    private static native boolean nativeSupportsLazyInputPacking(long handle);
     private static native int nativeGetInputBufferId(long handle, int slotIndex);
     private static native int nativeGetOutputBufferId(long handle, int slotIndex);
     private static native int nativeGetInputBufferSize(long handle, int slotIndex);
@@ -958,9 +879,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private static native int nativeGetLastRunDisposition(long handle, int slotIndex);
     private static native boolean nativeStartDiagnosticProfiler(long handle);
     private static native String nativeStopDiagnosticProfilerAndGetReport(long handle);
-    private static native int nativeGetGpuPriorityHint(long handle);
-    private static native boolean nativeIsGpuPriorityHintOverridden(long handle);
-    private static native boolean nativeIsDirectExternalPhwc4Mode(long handle);
     private static native String nativeGetLastError(long handle);
     private static native boolean nativeDestroy(long handle,
                                                  long slotZeroLastConsumerFence,

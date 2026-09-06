@@ -2,20 +2,27 @@ package com.limelight.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
 import android.net.wifi.WifiInfo;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowConnectivityManager;
+import org.robolectric.shadows.ShadowNetworkInfo;
+import org.robolectric.shadows.ShadowWifiInfo;
+import org.robolectric.util.ReflectionHelpers;
+import org.robolectric.util.ReflectionHelpers.ClassParameter;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
@@ -23,8 +30,7 @@ public final class WifiLinkSpeedTest {
     @Test
     public void wifiReceiveAndTransmitRatesMapToDownloadAndUpload() {
         Fixture fixture = new Fixture();
-        when(fixture.wifiInfo.getRxLinkSpeedMbps()).thenReturn(1200);
-        when(fixture.wifiInfo.getTxLinkSpeedMbps()).thenReturn(866);
+        fixture.setLinkSpeeds(2400, 1200, 866);
 
         WifiLinkSpeed.Snapshot speed = WifiLinkSpeed.read(fixture.context);
 
@@ -36,9 +42,7 @@ public final class WifiLinkSpeedTest {
     @Test
     public void missingDirectionalRateIsNotPresentedAsFalseSymmetry() {
         Fixture fixture = new Fixture();
-        when(fixture.wifiInfo.getLinkSpeed()).thenReturn(2400);
-        when(fixture.wifiInfo.getRxLinkSpeedMbps()).thenReturn(1200);
-        when(fixture.wifiInfo.getTxLinkSpeedMbps()).thenReturn(-1);
+        fixture.setLinkSpeeds(2400, 1200, -1);
 
         WifiLinkSpeed.Snapshot speed = WifiLinkSpeed.read(fixture.context);
 
@@ -49,10 +53,9 @@ public final class WifiLinkSpeedTest {
     @Test
     public void nonWifiActiveRouteDoesNotExposeAnAssociatedWifiLink() {
         Fixture fixture = new Fixture();
-        when(fixture.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
-                .thenReturn(false);
-        when(fixture.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
-                .thenReturn(true);
+        fixture.setLinkSpeeds(2400, 1200, 866);
+        Shadows.shadowOf(fixture.capabilities).removeTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+        Shadows.shadowOf(fixture.capabilities).addTransportType(NetworkCapabilities.TRANSPORT_VPN);
 
         WifiLinkSpeed.Snapshot speed = WifiLinkSpeed.read(fixture.context);
 
@@ -62,19 +65,35 @@ public final class WifiLinkSpeedTest {
     }
 
     private static final class Fixture {
-        final Context context = mock(Context.class);
-        final ConnectivityManager connectivityManager = mock(ConnectivityManager.class);
-        final Network network = mock(Network.class);
-        final NetworkCapabilities capabilities = mock(NetworkCapabilities.class);
-        final WifiInfo wifiInfo = mock(WifiInfo.class);
+        final Context context = RuntimeEnvironment.getApplication();
+        final ConnectivityManager connectivityManager =
+                (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        final NetworkCapabilities capabilities = new NetworkCapabilities();
+        final WifiInfo wifiInfo = ShadowWifiInfo.newInstance();
 
         Fixture() {
-            when(context.getSystemService(Context.CONNECTIVITY_SERVICE))
-                    .thenReturn(connectivityManager);
-            when(connectivityManager.getActiveNetwork()).thenReturn(network);
-            when(connectivityManager.getNetworkCapabilities(network)).thenReturn(capabilities);
-            when(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)).thenReturn(true);
-            when(capabilities.getTransportInfo()).thenReturn(wifiInfo);
+            // Use the Android objects and Robolectric's resettable network service. Mixing
+            // inline/subclass Mockito makers for transformed framework classes made the old
+            // first Context stub depend on which other fixture had registered a maker first.
+            ShadowConnectivityManager shadow = Shadows.shadowOf(connectivityManager);
+            shadow.setDefaultNetworkActive(true);
+            shadow.setActiveNetworkInfo(ShadowNetworkInfo.newInstance(
+                    NetworkInfo.DetailedState.CONNECTED, ConnectivityManager.TYPE_WIFI,
+                    0, true, true));
+            Network network = connectivityManager.getActiveNetwork();
+            assertNotNull(network);
+            Shadows.shadowOf(capabilities).addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+            Shadows.shadowOf(capabilities).setTransportInfo(wifiInfo);
+            shadow.setNetworkCapabilities(network, capabilities);
+        }
+
+        void setLinkSpeeds(int fallback, int receive, int transmit) {
+            Shadows.shadowOf(wifiInfo).setLinkSpeed(fallback);
+            // Directional setters are framework APIs absent from the public SDK stub.
+            ReflectionHelpers.callInstanceMethod(wifiInfo, "setRxLinkSpeedMbps",
+                    ClassParameter.from(int.class, receive));
+            ReflectionHelpers.callInstanceMethod(wifiInfo, "setTxLinkSpeedMbps",
+                    ClassParameter.from(int.class, transmit));
         }
     }
 }

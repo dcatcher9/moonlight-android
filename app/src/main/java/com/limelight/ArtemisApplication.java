@@ -10,6 +10,5 @@ public class ArtemisApplication extends Application {
         super.onCreate();
         LegacyProfileMigration.migrateActiveProfile(this);
         LegacyProfileMigration.retireClientSbsModelSelection(this);
-        LegacyProfileMigration.retireDebugPerformanceLoggingDefault(this);
     }
 }

@@ -117,6 +117,8 @@ final class ClientSbsShaders {
                     + MODEL_INPUT_MAX_AREA_SOURCE_CELLS + ";",
             "uniform vec2 u_downsampleRatio;",
             "uniform vec2 u_sourceSize;",
+            // Same decoder image, separate NEAREST/CLAMP sampler: ordinals never mix texels.
+            "uniform highp samplerExternalOES u_OrdinalTexture;",
             "varying vec2 v_TexCoord;",
             "uniform highp samplerExternalOES u_Texture;",
             "uniform mat4 u_TextureTransform;",
@@ -166,6 +168,31 @@ final class ClientSbsShaders {
             "      * vec4(logicalUv, 0.0, 1.0)).xy;",
             "  return toModelColor(texture2D(u_Texture, transformedUv).rgb);",
             "}",
+            "float sourcePointOrdinal(vec2 logicalSourceUv) {",
+            "  ivec2 sourceCell = ivec2(floor(logicalSourceUv * u_sourceSize));",
+            "  vec2 logicalUv = sourceCellUv(sourceCell);",
+            "  vec2 transformedUv = (u_TextureTransform",
+            "      * vec4(logicalUv, 0.0, 1.0)).xy;",
+            // max() commutes with a common monotone curve in SDR or PQ codes. Tone mapping
+            // and area integration do not, so neither may feed this separate signal.
+            "  vec3 encoded = clamp(texture2D(u_OrdinalTexture, transformedUv).rgb,",
+            "      vec3(0.0), vec3(1.0));",
+            "  return max(encoded.r, max(encoded.g, encoded.b));",
+            "}",
+            "bool isOrdinalAnchor(ivec2 targetPixel) {",
+            // The detector consumes only the 3x3 point stencil of each 16x16 tile. Match its
+            // lower middle index and clipped last index, including duplicate edge anchors.
+            // Recover the integer FBO extent from existing stream/resize uniforms; rounding
+            // avoids a quotient just below an integer on non-integral downsample ratios.
+            "  vec2 tensorSize = floor(u_sourceSize / u_downsampleRatio + vec2(0.5));",
+            "  vec2 tileOrigin = floor(vec2(targetPixel) / 16.0) * 16.0;",
+            "  vec2 local = vec2(targetPixel) - tileOrigin;",
+            "  vec2 last = min(vec2(16.0), tensorSize - tileOrigin) - vec2(1.0);",
+            "  vec2 middle = floor(last * 0.5);",
+            "  bool anchorX = local.x == 0.0 || local.x == middle.x || local.x == last.x;",
+            "  bool anchorY = local.y == 0.0 || local.y == middle.y || local.y == last.y;",
+            "  return anchorX && anchorY;",
+            "}",
             "vec3 sampleModelColorBilinear(vec2 centerUv) {",
             "  vec2 sourcePosition = centerUv * u_sourceSize - vec2(0.5);",
             "  ivec2 lo = ivec2(floor(sourcePosition));",
@@ -212,7 +239,10 @@ final class ClientSbsShaders {
             "  } else {",
             "    color = sampleModelFootprint(sourceLo, sourceHi);",
             "  }",
-            "  gl_FragColor = vec4(color, 1.0);",
+            // Alpha is private metadata, never presented or packed into the RGB tensor.
+            "  float ordinal = 0.0;",
+            "  if (isOrdinalAnchor(targetPixel)) ordinal = sourcePointOrdinal(sourceUv);",
+            "  gl_FragColor = vec4(color, ordinal);",
             "}");
     }
 

@@ -9,6 +9,7 @@ import com.limelight.LimeLog;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvHTTP;
 
+import java.io.File;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.LinkedList;
@@ -87,8 +88,14 @@ public class LegacyDatabaseReader {
     }
 
     public static List<ComputerDetails> migrateAllComputers(Context c) {
+        File databasePath = c.getDatabasePath(COMPUTER_DB_NAME);
+        if (!databasePath.exists()) {
+            // A fresh install or an already migrated install has no legacy database.
+            return new LinkedList<>();
+        }
+
         try (final SQLiteDatabase computerDb = SQLiteDatabase.openDatabase(
-                c.getDatabasePath(COMPUTER_DB_NAME).getPath(),
+                databasePath.getPath(),
                 null, SQLiteDatabase.OPEN_READONLY)
         ) {
             // Open the existing database

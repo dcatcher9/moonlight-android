@@ -35,6 +35,20 @@ public class ClientSbsGpuDisparityShadersTest {
     }
 
     @Test
+    public void horizontalScratchReusesFinalR32fWithoutAliasingTheVerticalInput() {
+        String forward = ClientSbsGpuDisparityShaders.horizontalForward(33, 17);
+        String reverse = ClientSbsGpuDisparityShaders.horizontalFinish(33, 17);
+        assertTrue(forward.contains("layout(r32f, binding = 0)"));
+        assertTrue(forward.contains("imageStore(uFinalParallax"));
+        assertFalse(forward.contains("rgba32f"));
+        assertFalse(reverse.contains("uEnvelopeScratch"));
+        assertTrue(reverse.contains("imageLoad(uFinalParallax, ivec2(x, y)).r"));
+        assertTrue(reverse.contains("texelFetch(uVerticalConditioned"));
+        assertTrue(reverse.contains("int y = int(gl_GlobalInvocationID.x)"));
+        assertFalse(reverse.contains("writeonly"));
+    }
+
+    @Test
     public void cpuReferenceMakesASevereCliffContractiveInBothAxes() {
         float[][] candidate = new float[4][64];
         for (int y = 0; y < candidate.length; y++) {

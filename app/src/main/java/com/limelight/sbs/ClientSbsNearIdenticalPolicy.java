@@ -6,7 +6,7 @@ package com.limelight.sbs;
  * <p>The GPU producer owns per-pixel comparison and emits one {@link TileEvidence} record for
  * every 16x16 tile. All evidence is derived locally from decoded client frames; no Sunshine or
  * Apollo wire signal is required. This class is the CPU reference for the fixed Apollo thresholds
- * and the final owner-age gate. Every malformed or incomplete input fails closed to
+ * and the final owner-identity gate. Every malformed or incomplete input fails closed to
  * {@link Decision#INFER}.</p>
  */
 public final class ClientSbsNearIdenticalPolicy {
@@ -16,9 +16,6 @@ public final class ClientSbsNearIdenticalPolicy {
 
     public static final float MEDIUM_DELTA = 1.0f / 64.0f;
     public static final float STRONG_DELTA = 0.20f;
-
-    public static final int MAX_INFER_OWNER_FRAME_GAP = 4;
-    public static final long MAX_INFER_OWNER_AGE_NS = 100_000_000L;
 
     /** Stable tags shared with the GPU decision word. */
     public static final int DECISION_REUSE_TAG = 0;
@@ -34,8 +31,7 @@ public final class ClientSbsNearIdenticalPolicy {
     public static final int REASON_REUSE = 0;
     public static final int REASON_NOT_CANDIDATE = 1;
     public static final int REASON_OWNER_INVALID = 2;
-    public static final int REASON_OWNER_FRAME_GAP = 3;
-    public static final int REASON_OWNER_AGE = 4;
+    // Retired freshness-limit reason values 3 and 4 remain unassigned.
     public static final int REASON_CONTENT_MEDIUM = 5;
     public static final int REASON_CONTENT_STRONG = 6;
     public static final int REASON_CONTENT_LOCAL = 7;
@@ -93,7 +89,7 @@ public final class ClientSbsNearIdenticalPolicy {
     }
 
     /**
-     * Resolves evidence and owner freshness using Apollo's fixed production bounds.
+     * Resolves evidence against the retained inference owner using fixed pixel-change bounds.
      *
      * <p>Global medium change is accepted at or below 10%, global strong change at or below
      * 2.5%, and a tile with at least 64 admitted texels is accepted at or below 75% strong
@@ -110,15 +106,11 @@ public final class ClientSbsNearIdenticalPolicy {
         return Decision.REUSE;
     }
 
-    /** Owner frame gap must be 1..4 and its observation age must be in [0, 100 ms). */
+    /** Content owns reuse lifetime; source identity must advance without a backward clock. */
     public static boolean isOwnerEligible(long ownerFrameSequence, long currentFrameSequence,
                                           long ownerAgeNs) {
-        if (ownerFrameSequence <= 0L || currentFrameSequence <= ownerFrameSequence
-                || ownerAgeNs < 0L || ownerAgeNs >= MAX_INFER_OWNER_AGE_NS) {
-            return false;
-        }
-        long frameGap = currentFrameSequence - ownerFrameSequence;
-        return frameGap > 0L && frameGap <= MAX_INFER_OWNER_FRAME_GAP;
+        return ownerFrameSequence > 0L && currentFrameSequence > ownerFrameSequence
+                && ownerAgeNs >= 0L;
     }
 
     /** Evidence-only reference used by shader and policy tests. */
@@ -189,6 +181,7 @@ public final class ClientSbsNearIdenticalPolicy {
     }
 
     public static boolean isKnownReason(int reason) {
-        return reason >= REASON_REUSE && reason <= REASON_RECORD_INVALID;
+        return (reason >= REASON_REUSE && reason <= REASON_OWNER_INVALID)
+                || (reason >= REASON_CONTENT_MEDIUM && reason <= REASON_RECORD_INVALID);
     }
 }

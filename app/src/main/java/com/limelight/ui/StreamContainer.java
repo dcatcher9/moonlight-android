@@ -248,23 +248,16 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (mStereoRenderer != null) {
             // Visibility is retained by this container before the renderer/processor exists and
             // republished after every Client-SBS GL generation.
-            mStereoRenderer.setStatsPanelVisible(mClientSbsStatsVisible);
             // Normal and Host SBS don't execute this pipeline. In Client SBS, both timer queries
-            // and the health-readback ring stay off unless Stats or explicit perf logging consumes
-            // them, avoiding hidden per-stage counter contention and GPU-to-CPU maps.
+            // and the health-readback ring stay off unless Stats is visible.
             mStereoRenderer.setPerformanceSamplingEnabled(
-                    clientSbsDiagnosticsEnabled() && mStereoRenderer.isClientSbs());
+                    mClientSbsStatsVisible && mStereoRenderer.isClientSbs());
         }
-    }
-
-    private boolean clientSbsDiagnosticsEnabled() {
-        return mClientSbsStatsVisible
-                || (prefConfig != null && prefConfig.enablePerfLogging);
     }
 
     /** Drain one coherent Client-SBS performance window for the XR stats panel. */
     public Stereo3DRenderer.ClientSbsPerformanceSnapshot sampleClientSbsPerformance() {
-        return clientSbsDiagnosticsEnabled()
+        return mClientSbsStatsVisible
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs()
                 ? mStereoRenderer.sampleClientSbsPerformance() : null;
     }

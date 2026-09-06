@@ -1,7 +1,5 @@
 package com.limelight.binding.video;
 
-import android.os.SystemClock;
-
 import java.util.Arrays;
 
 class VideoStats {
@@ -142,22 +140,4 @@ class VideoStats {
         return DECODER_QUEUE_HISTOGRAM_OVERFLOW_MS;
     }
 
-    VideoStatsFps getFps() {
-        float elapsed = (SystemClock.uptimeMillis() - this.measurementStartTimestamp) / (float) 1000;
-
-        VideoStatsFps fps = new VideoStatsFps();
-        if (elapsed > 0) {
-            fps.totalFps = this.totalFrames / elapsed;
-            fps.receivedFps = this.totalFramesReceived / elapsed;
-            fps.renderedFps = this.totalFramesRendered / elapsed;
-        }
-        return fps;
-    }
-}
-
-class VideoStatsFps {
-
-    float totalFps;
-    float receivedFps;
-    float renderedFps;
 }

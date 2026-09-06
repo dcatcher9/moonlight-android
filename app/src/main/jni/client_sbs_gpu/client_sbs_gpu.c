@@ -3,7 +3,6 @@
 #include <EGL/egl.h>
 #include <GLES3/gl31.h>
 #include <android/log.h>
-#include <sys/system_properties.h>
 
 #include <inttypes.h>
 #include <stdarg.h>
@@ -12,12 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <time.h>
 
 #include "litert/c/litert_compiled_model.h"
 #include "litert/c/litert_environment.h"
-#include "litert/c/litert_event.h"
 #include "litert/c/litert_model.h"
 #include "litert/c/litert_opaque_options.h"
 #include "litert/c/litert_options.h"
@@ -34,10 +31,7 @@
 // This is one aggregate deadline for every fence and the local inference-context drain.
 #define CLIENT_SBS_GPU_CLOSE_BUDGET_NS 750000000ULL
 #define CLIENT_SBS_GPU_FAILED_RUN_FENCE_COUNT 2
-#define CLIENT_SBS_GPU_PRIORITY_PROPERTY "debug.artemis.sbs_gpu_priority"
-#define CLIENT_SBS_GPU_ASYNC_PROBE_PROPERTY "debug.artemis.sbs_gpu_async_probe"
 #define CLIENT_SBS_GPU_PRIORITY_LOW 1
-#define CLIENT_SBS_GPU_PRIORITY_NORMAL 2
 #define CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN 0
 #define CLIENT_SBS_GPU_RUN_DISPOSITION_INFER 1
 #define CLIENT_SBS_GPU_RUN_DISPOSITION_REUSE 2
@@ -51,8 +45,6 @@
 #define CLIENT_SBS_NEAR_IDENTICAL_REASON_REUSE 0u
 #define CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE 1u
 #define CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_INVALID 2u
-#define CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_FRAME_GAP 3u
-#define CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_AGE 4u
 #define CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_MEDIUM 5u
 #define CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_STRONG 6u
 #define CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_LOCAL 7u
@@ -77,6 +69,11 @@ typedef struct ClientSbsGpuEngine {
 
     GLuint input_buffers[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
     GLuint output_buffers[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    GLuint lazy_pack_program;
+    GLuint validated_model_texture;
+    GLint lazy_pack_texture_uniform;
+    int input_width;
+    int input_height;
     size_t input_buffer_size;
     size_t output_buffer_size;
     size_t input_pixel_stride;
@@ -115,19 +112,11 @@ typedef struct ClientSbsGpuEngine {
 
     char* native_library_dir;
     char* cache_dir;
-    int gpu_priority_hint;
-    bool gpu_priority_hint_overridden;
-    // Debug-only capability probe. OpenCL may legally execute the Async API synchronously.
-    // When it does return an event, the probe waits and clears it before publishing the ordinary
-    // GL output fence, so enabling the probe never weakens production ownership semantics.
-    bool async_probe_enabled;
-    bool async_probe_reported;
-    // Explicit debug/instrumentation-only capability probe. Production always leaves the public
-    // model I/O packed NHWC and lets LiteRT perform its internal PHWC4 conversion.
-    bool direct_external_phwc4_mode;
     char last_error[768];
     bool initialized;
 } ClientSbsGpuEngine;
+
+static bool initialize_lazy_pack(ClientSbsGpuEngine* engine);
 
 static ClientSbsGpuEngine* from_handle(jlong handle) {
     return (ClientSbsGpuEngine*) (uintptr_t) handle;
@@ -215,6 +204,11 @@ static void release_litert_resources(ClientSbsGpuEngine* engine) {
     }
     glDeleteBuffers(CLIENT_SBS_GPU_BUFFER_SLOT_COUNT, engine->input_buffers);
     glDeleteBuffers(CLIENT_SBS_GPU_BUFFER_SLOT_COUNT, engine->output_buffers);
+    if (engine->lazy_pack_program != 0) {
+        glDeleteProgram(engine->lazy_pack_program);
+    }
+    engine->lazy_pack_program = 0;
+    engine->validated_model_texture = 0;
     memset(engine->input_buffers, 0, sizeof(engine->input_buffers));
     memset(engine->output_buffers, 0, sizeof(engine->output_buffers));
     memset(engine->last_litert_run_wall_ns, 0,
@@ -326,47 +320,7 @@ static jstring new_diagnostic_report(JNIEnv* env, const char* report) {
     return (*env)->NewStringUTF(env, report == NULL ? "" : report);
 }
 
-static int select_gpu_priority_hint(bool allow_debug_override, bool* overridden) {
-    *overridden = false;
-    if (!allow_debug_override) {
-        return CLIENT_SBS_GPU_PRIORITY_LOW;
-    }
-
-    char value[PROP_VALUE_MAX] = {0};
-    if (__system_property_get(CLIENT_SBS_GPU_PRIORITY_PROPERTY, value) <= 0) {
-        return CLIENT_SBS_GPU_PRIORITY_LOW;
-    }
-    if (strcasecmp(value, "low") == 0) {
-        *overridden = true;
-        return CLIENT_SBS_GPU_PRIORITY_LOW;
-    }
-    if (strcasecmp(value, "normal") == 0) {
-        *overridden = true;
-        return CLIENT_SBS_GPU_PRIORITY_NORMAL;
-    }
-
-    LOGW("Ignoring invalid %s=%s; expected low or normal",
-         CLIENT_SBS_GPU_PRIORITY_PROPERTY, value);
-    return CLIENT_SBS_GPU_PRIORITY_LOW;
-}
-
-static bool debug_property_enabled(bool allow_debug_override, const char* property) {
-    if (!allow_debug_override) {
-        return false;
-    }
-    char value[PROP_VALUE_MAX] = {0};
-    if (__system_property_get(property, value) <= 0) {
-        return false;
-    }
-    return strcasecmp(value, "1") == 0
-            || strcasecmp(value, "true") == 0
-            || strcasecmp(value, "yes") == 0
-            || strcasecmp(value, "on") == 0;
-}
-
-static bool add_gpu_options(ClientSbsGpuEngine* engine, bool allow_debug_override,
-                            bool force_fp32_compute,
-                            bool direct_external_phwc4_probe) {
+static bool add_gpu_options(ClientSbsGpuEngine* engine, bool force_fp32_compute) {
     // LiteRT's GPU option helper symbols are not exported by the shipped Android runtime, but
     // the generic opaque-options ABI is. The payload syntax is the exact TOML emitted by
     // LrtGetOpaqueGpuOptionsData(). Keep public tensors in packed Float32 NHWC. LiteRT performs
@@ -378,37 +332,18 @@ static bool add_gpu_options(ClientSbsGpuEngine* engine, bool allow_debug_overrid
     // Do not set hint_fully_delegated_to_single_delegate here. It is an advanced allocation-
     // elision hint, not a delegation requirement; Artemis verifies full acceleration after
     // compilation instead. The Galaxy XR path must retain every intermediate allocation.
-    // Direct external PHWC4 is only selectable by an explicit debug benchmark. It remains off for
-    // every production call until that probe proves that the runtime writes bound GL output.
-    if (direct_external_phwc4_probe && !allow_debug_override) {
-        set_error(engine, "Direct external PHWC4 is restricted to debug benchmarks");
-        return false;
-    }
-    if (direct_external_phwc4_probe && force_fp32_compute) {
-        set_error(engine,
-                  "Direct external PHWC4 benchmark requires FP16 compute/storage");
-        return false;
-    }
-    engine->direct_external_phwc4_mode = direct_external_phwc4_probe;
-    engine->gpu_priority_hint = select_gpu_priority_hint(
-            allow_debug_override, &engine->gpu_priority_hint_overridden);
-    engine->async_probe_enabled = debug_property_enabled(
-            allow_debug_override, CLIENT_SBS_GPU_ASYNC_PROBE_PROPERTY);
     const int precision = force_fp32_compute
             ? kLiteRtDelegatePrecisionFp32
             : kLiteRtDelegatePrecisionFp16;
     char options_toml[320];
     int options_length = snprintf(
             options_toml, sizeof(options_toml),
-            "external_tensors_mode = %s\n"
+            "external_tensors_mode = false\n"
             "backend = 1\n"
             "precision = %d\n"
-            "%s"
             "priority = %d\n",
-            direct_external_phwc4_probe ? "true" : "false",
             precision,
-            direct_external_phwc4_probe ? "buffer_storage_type = 1\n" : "",
-            engine->gpu_priority_hint);
+            CLIENT_SBS_GPU_PRIORITY_LOW);
     if (options_length < 0 || (size_t) options_length >= sizeof(options_toml)) {
         set_error(engine, "Unable to format LiteRT GPU options");
         return false;
@@ -431,15 +366,10 @@ static bool add_gpu_options(ClientSbsGpuEngine* engine, bool allow_debug_overrid
         LiteRtDestroyOpaqueOptions(opaque_options);
         return check_status(engine, status, "LiteRtAddOpaqueOptions(gpu)");
     }
-    LOGI("GPU options: OpenCL %s compute, %s priority hint%s, %s internal storage, %s",
+    LOGI("GPU options: OpenCL %s compute, low priority hint, automatic internal storage, "
+         "packed Float32 GL tensors",
          precision == kLiteRtDelegatePrecisionFp32 ? "FP32"
-                  : (precision == kLiteRtDelegatePrecisionFp16 ? "FP16" : "DEFAULT"),
-         engine->gpu_priority_hint == CLIENT_SBS_GPU_PRIORITY_NORMAL ? "normal" : "low",
-         engine->gpu_priority_hint_overridden ? " (ADB debug override)" : " (default)",
-         direct_external_phwc4_probe ? "forced buffer" : "automatic",
-         direct_external_phwc4_probe
-                 ? "benchmark-only direct FP16 PHWC4 GL tensors"
-                 : "packed Float32 GL tensors");
+                  : (precision == kLiteRtDelegatePrecisionFp16 ? "FP16" : "DEFAULT"));
     return true;
 }
 
@@ -788,130 +718,6 @@ static bool validate_packed_float_requirement(
     return true;
 }
 
-/**
- * Validates LiteRT's experimental direct external-tensor contract for the benchmark probe.
- *
- * The GPU accelerator publishes one stride entry per supported buffer type, not one per logical
- * tensor dimension. For forced BUFFER storage on the FP16 delegate, the OpenCL representation is
- * a PHWC4 half4 buffer and the GL alternative has an unspecified (zero) type-specific stride.
- * Keep the public tensor type logical Float32 NHWC; only its shared GL allocation is physical
- * FP16 PHWC4. Automatic storage is intentionally forbidden here because LiteRT 2.2.0 advertises
- * a GL buffer beside an OpenCL texture, which cannot be bound directly as a CL image.
- */
-static bool validate_external_phwc4_fp16_buffer_requirement(
-        ClientSbsGpuEngine* engine, LiteRtTensorBufferRequirements requirements,
-        const char* role, LiteRtRankedTensorType* type, size_t* buffer_size,
-        size_t* pixel_stride) {
-    const int32_t* dimensions = type->layout.dimensions;
-    if (type->element_type != kLiteRtElementTypeFloat32 || type->layout.rank != 4
-            || dimensions[0] <= 0 || dimensions[1] <= 0 || dimensions[2] <= 0
-            || dimensions[3] <= 0 || dimensions[3] > 4) {
-        set_error(engine,
-                  "%s direct FP16 PHWC4 requires logical Float32 [N,H,W,C<=4]",
-                  role);
-        return false;
-    }
-
-    if (!check_status(engine,
-                      LiteRtGetTensorBufferRequirementsBufferSize(requirements, buffer_size),
-                      "LiteRtGetTensorBufferRequirementsBufferSize")) {
-        return false;
-    }
-
-    int type_count = 0;
-    if (!check_status(engine,
-                      LiteRtGetNumTensorBufferRequirementsSupportedBufferTypes(
-                              requirements, &type_count),
-                      "GetNumTensorBufferRequirementsSupportedBufferTypes")
-            || type_count <= 0) {
-        if (type_count <= 0) {
-            set_error(engine, "%s direct FP16 PHWC4 returned no buffer types", role);
-        }
-        return false;
-    }
-    int gl_type_index = -1;
-    bool supports_opencl_fp16_buffer = false;
-    bool advertises_opencl_texture = false;
-    for (int index = 0; index < type_count; index++) {
-        LiteRtTensorBufferType buffer_type = kLiteRtTensorBufferTypeUnknown;
-        if (!check_status(engine,
-                          LiteRtGetTensorBufferRequirementsSupportedTensorBufferType(
-                                  requirements, index, &buffer_type),
-                          "GetTensorBufferRequirementsSupportedTensorBufferType")) {
-            return false;
-        }
-        supports_opencl_fp16_buffer = supports_opencl_fp16_buffer
-                || buffer_type == kLiteRtTensorBufferTypeOpenClBufferFp16;
-        advertises_opencl_texture = advertises_opencl_texture
-                || buffer_type == kLiteRtTensorBufferTypeOpenClTexture
-                || buffer_type == kLiteRtTensorBufferTypeOpenClTextureFp16;
-        if (buffer_type == kLiteRtTensorBufferTypeGlBuffer) {
-            gl_type_index = index;
-        }
-    }
-    if (!supports_opencl_fp16_buffer || gl_type_index < 0 || advertises_opencl_texture) {
-        set_error(engine,
-                  "%s direct FP16 PHWC4 requires forced OpenCL FP16 buffer + GL buffer "
-                  "without texture storage (fp16_buffer=%s gl_index=%d texture=%s)",
-                  role, supports_opencl_fp16_buffer ? "yes" : "no", gl_type_index,
-                  advertises_opencl_texture ? "yes" : "no");
-        return false;
-    }
-
-    int stride_count = 0;
-    const uint32_t* strides = NULL;
-    if (!check_status(engine,
-                      LiteRtGetTensorBufferRequirementsStrides(
-                              requirements, &stride_count, &strides),
-                      "LiteRtGetTensorBufferRequirementsStrides")) {
-        return false;
-    }
-    if (stride_count != type_count || strides == NULL
-            || gl_type_index >= stride_count || strides[gl_type_index] != 0) {
-        set_error(engine,
-                  "%s direct FP16 PHWC4 type-stride metadata mismatch: types=%d strides=%d "
-                  "gl_index=%d gl_stride=%u",
-                  role, type_count, stride_count, gl_type_index,
-                  strides != NULL && gl_type_index >= 0 && gl_type_index < stride_count
-                          ? strides[gl_type_index] : UINT32_MAX);
-        return false;
-    }
-
-    size_t physical_elements = 1;
-    for (unsigned int index = 0; index < 3; index++) {
-        if (dimensions[index] <= 0
-                || physical_elements > SIZE_MAX / (size_t) dimensions[index]) {
-            set_error(engine, "%s external PHWC4 tensor size overflow", role);
-            return false;
-        }
-        physical_elements *= (size_t) dimensions[index];
-    }
-    if (physical_elements > SIZE_MAX / 4U
-            || physical_elements * 4U > SIZE_MAX / sizeof(uint16_t)) {
-        set_error(engine, "%s external PHWC4 tensor byte size overflow", role);
-        return false;
-    }
-    physical_elements *= 4U;
-    const size_t expected_size = physical_elements * sizeof(uint16_t);
-    if (*buffer_size < expected_size) {
-        set_error(engine,
-                  "%s direct FP16 PHWC4 allocation is undersized: %zu < %zu",
-                  role, *buffer_size, expected_size);
-        return false;
-    }
-
-    // Requirement strides are indexed by supported buffer type. They are not logical NHWC
-    // strides and must never be copied into LiteRtRankedTensorType::layout.
-    type->layout.has_strides = false;
-    memset(type->layout.strides, 0, sizeof(type->layout.strides));
-    *pixel_stride = 4U * sizeof(uint16_t);
-    LOGI("%s direct external FP16 PHWC4 buffer layout: logical_channels=%d expected=%zu "
-         "allocated=%zu pixel_stride=%zu types=%d gl_index=%d gl_stride=%u",
-         role, dimensions[3], expected_size, *buffer_size, *pixel_stride,
-         type_count, gl_type_index, strides[gl_type_index]);
-    return true;
-}
-
 JNIEXPORT jlong JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeCreateSharedContext(
         JNIEnv* env, jclass clazz) {
@@ -981,13 +787,12 @@ JNIEXPORT jboolean JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
         JNIEnv* env, jclass clazz, jlong handle, jint model_fd,
         jlong model_offset, jlong model_length, jstring native_library_dir,
-        jstring cache_dir, jboolean allow_debug_gpu_priority_override,
+        jstring cache_dir,
         jboolean force_gpu_fp32_compute,
         jboolean dynamic_shape,
         jint input_width, jint input_height, jint input_channels,
         jint output_width, jint output_height, jint output_channels,
-        jboolean diagnostic_profiling,
-        jboolean direct_external_phwc4_probe) {
+        jboolean diagnostic_profiling) {
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
     if (engine == NULL) {
@@ -1008,12 +813,6 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
         return JNI_FALSE;
     }
     const bool dynamic_spatial = dynamic_shape == JNI_TRUE;
-    const bool direct_external_phwc4 = direct_external_phwc4_probe == JNI_TRUE;
-    if (direct_external_phwc4 && dynamic_spatial) {
-        set_error(engine,
-                  "Direct external PHWC4 benchmark requires a packaged static model shape");
-        return JNI_FALSE;
-    }
     if (dynamic_spatial && ((input_width % 14) != 0 || (input_height % 14) != 0)) {
         set_error(engine, "Dynamic DA-V2 shape must be divisible by 14: %dx%d",
                   input_width, input_height);
@@ -1080,10 +879,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
                       "LiteRtCreateModelFromFd") ||
         !check_status(engine, LiteRtCreateOptions(&engine->options),
                       "LiteRtCreateOptions") ||
-         !add_gpu_options(engine,
-                          allow_debug_gpu_priority_override == JNI_TRUE,
-                          force_gpu_fp32_compute == JNI_TRUE,
-                          direct_external_phwc4) ||
+        !add_gpu_options(engine, force_gpu_fp32_compute == JNI_TRUE) ||
         !add_runtime_profiling_options(engine,
                                        diagnostic_profiling == JNI_TRUE) ||
         !check_status(engine,
@@ -1195,24 +991,18 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
         release_litert_resources(engine);
         return JNI_FALSE;
     }
-    bool input_layout_ok = direct_external_phwc4
-            ? validate_external_phwc4_fp16_buffer_requirement(
-                    engine, input_requirements, "input", &input_type,
-                    &engine->input_buffer_size, &engine->input_pixel_stride)
-            : validate_packed_float_requirement(
-                    engine, input_requirements, "input", &input_type,
-                    &engine->input_buffer_size, &engine->input_pixel_stride);
-    bool output_layout_ok = direct_external_phwc4
-            ? validate_external_phwc4_fp16_buffer_requirement(
-                    engine, output_requirements, "output", &output_type,
-                    &engine->output_buffer_size, &engine->output_pixel_stride)
-            : validate_packed_float_requirement(
-                    engine, output_requirements, "output", &output_type,
-                    &engine->output_buffer_size, &engine->output_pixel_stride);
+    bool input_layout_ok = validate_packed_float_requirement(
+            engine, input_requirements, "input", &input_type,
+            &engine->input_buffer_size, &engine->input_pixel_stride);
+    bool output_layout_ok = validate_packed_float_requirement(
+            engine, output_requirements, "output", &output_type,
+            &engine->output_buffer_size, &engine->output_pixel_stride);
     if (!input_layout_ok || !output_layout_ok) {
         release_litert_resources(engine);
         return JNI_FALSE;
     }
+    engine->input_width = input_width;
+    engine->input_height = input_height;
 
     // Discard unrelated errors before attributing allocation failures to these buffers.
     for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
@@ -1270,12 +1060,13 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
 
     // Publish shared object creation to the renderer context before Java exposes the GL names.
     glFlush();
+    if (input_channels == 3) {
+        // Optional: if this shader is unavailable, the renderer keeps its original eager pack.
+        initialize_lazy_pack(engine);
+    }
     engine->initialized = true;
     snprintf(engine->last_error, sizeof(engine->last_error), "OK");
-    LOGI("LiteRT GPU %s engine initialized; slots=%d input=%zu output=%zu",
-         direct_external_phwc4
-                 ? "benchmark-only direct external FP16 PHWC4 buffer"
-                 : "packed Float32",
+    LOGI("LiteRT GPU packed Float32 engine initialized; slots=%d input=%zu output=%zu",
          CLIENT_SBS_GPU_BUFFER_SLOT_COUNT,
          engine->input_buffer_size, engine->output_buffer_size);
     return JNI_TRUE;
@@ -1624,8 +1415,10 @@ static bool near_identical_record_requests_reuse(ClientSbsGpuEngine* engine,
             (decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE
                     && reason == CLIENT_SBS_NEAR_IDENTICAL_REASON_REUSE)
             || (decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_INFER
-                    && reason >= CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE
-                    && reason <= CLIENT_SBS_NEAR_IDENTICAL_REASON_EVIDENCE_INVALID);
+                    && (reason == CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE
+                            || reason == CLIENT_SBS_NEAR_IDENTICAL_REASON_OWNER_INVALID
+                            || (reason >= CLIENT_SBS_NEAR_IDENTICAL_REASON_CONTENT_MEDIUM
+                                    && reason <= CLIENT_SBS_NEAR_IDENTICAL_REASON_EVIDENCE_INVALID)));
     const bool valid =
             (decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE
                     || decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_INFER)
@@ -1794,6 +1587,97 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeStopDiagnosticProfile
     return new_diagnostic_report(env, report);
 }
 
+static bool initialize_lazy_pack(ClientSbsGpuEngine* engine) {
+    char source[1536];
+    snprintf(source, sizeof(source),
+            "#version 310 es\n"
+            "precision highp float; precision highp int;\n"
+            "layout(local_size_x=8,local_size_y=8) in;\n"
+            "uniform highp sampler2D uInput;\n"
+            "layout(std430,binding=0) writeonly buffer Input { float rgb[]; };\n"
+            "void main() { uvec2 p=gl_GlobalInvocationID.xy;\n"
+            "if(p.x>=%uu || p.y>=%uu) return;\n"
+            "vec3 c=clamp(texelFetch(uInput,ivec2(p),0).rgb,0.0,1.0);\n"
+            "uint i=((%uu-1u-p.y)*%uu+p.x)*3u;\n"
+            "rgb[i]=c.r; rgb[i+1u]=c.g; rgb[i+2u]=c.b; }\n",
+            (unsigned) engine->input_width, (unsigned) engine->input_height,
+            (unsigned) engine->input_height,
+            (unsigned) engine->input_width);
+    const char* source_pointer = source;
+    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(shader, 1, &source_pointer, NULL);
+    glCompileShader(shader);
+    GLint compiled = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    GLuint program = 0;
+    GLint linked = GL_FALSE;
+    if (compiled == GL_TRUE) {
+        program = glCreateProgram();
+        glAttachShader(program, shader);
+        glLinkProgram(program);
+        glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    }
+    glDeleteShader(shader);
+    GLint uniform_location = linked == GL_TRUE ? glGetUniformLocation(program, "uInput") : -1;
+    GLenum error = glGetError();
+    if (linked != GL_TRUE || uniform_location < 0 || error != GL_NO_ERROR) {
+        if (program != 0) glDeleteProgram(program);
+        LOGW("Native conditional input pack unavailable; retaining eager pack (GL=0x%x)", error);
+        return false;
+    }
+    engine->lazy_pack_program = program;
+    engine->lazy_pack_texture_uniform = uniform_location;
+    return true;
+}
+
+/** Called for EVERY native INFER outcome, including damaged/unavailable decision records. */
+static bool pack_current_model_texture(ClientSbsGpuEngine* engine, int slot, GLuint texture) {
+    if (texture == 0) return true; // Legacy/eager callers already populated this exact slot.
+    if (engine->lazy_pack_program == 0) {
+        set_error(engine, "Deferred input pack requested without a valid pack program");
+        return false;
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    if (engine->validated_model_texture != texture) {
+        GLint width = 0, height = 0, format = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
+        if (width != engine->input_width || height != engine->input_height
+                || format != GL_RGBA8 || glGetError() != GL_NO_ERROR) {
+            set_error(engine, "Deferred input texture does not match immutable RGBA8 model input");
+            glBindTexture(GL_TEXTURE_2D, 0);
+            return false;
+        }
+        engine->validated_model_texture = texture;
+    }
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+    glUseProgram(engine->lazy_pack_program);
+    glUniform1i(engine->lazy_pack_texture_uniform, 0);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, engine->input_buffers[slot]);
+    glDispatchCompute((engine->input_width + 7) / 8, (engine->input_height + 7) / 8, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        set_error(engine, "Deferred model input pack failed: 0x%x", error);
+        return false;
+    }
+    return true;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeSupportsLazyInputPacking(
+        JNIEnv* env, jclass clazz, jlong handle) {
+    (void) env;
+    (void) clazz;
+    ClientSbsGpuEngine* engine = from_handle(handle);
+    return engine != NULL && engine->initialized && engine->lazy_pack_program != 0;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         JNIEnv* env, jclass clazz, jlong handle, jint slot_index,
@@ -1802,7 +1686,8 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         jboolean near_identical_candidate,
         jint decision_buffer_id,
         jint decision_byte_offset,
-        jlong decision_token) {
+        jlong decision_token,
+        jint model_input_texture_id) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
@@ -1908,8 +1793,8 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
     engine->output_requires_consumed_fence[slot_index] = false;
     if (reuse) {
         // The worker has synchronously consumed the tiny proposal after the input dependency. A
-        // fence keeps this no-output transaction inside the same per-slot ownership protocol as
-        // inference, so stale-generation and teardown paths remain identical.
+        // fence keeps retained near state inside the same per-slot ownership protocol as
+        // inference, including stale generations and teardown. Neither tensor slot is written.
         GLsync reuse_ready = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         if (reuse_ready == NULL) {
             set_error(engine, "glFenceSync(reuse) failed: 0x%x", glGetError());
@@ -1922,62 +1807,19 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         return (jlong) (uintptr_t) reuse_ready;
     }
 
+    if (!pack_current_model_texture(engine, slot_index, (GLuint) model_input_texture_id)) {
+        return fail_native_run(engine);
+    }
+
     LiteRtTensorBuffer inputs[] = {engine->input_tensor_buffers[slot_index]};
     LiteRtTensorBuffer outputs[] = {engine->output_tensor_buffers[slot_index]};
     const uint64_t run_started_ns = monotonic_time_ns();
-    uint64_t async_submit_ns = 0;
-    uint64_t async_wait_ns = 0;
-    LiteRtEventType async_event_type = LiteRtEventTypeUnknown;
-    bool ran_async = false;
-    LiteRtStatus run_status;
-    if (engine->async_probe_enabled) {
-        const uint64_t submit_started_ns = monotonic_time_ns();
-        run_status = LiteRtRunCompiledModelAsync(
-                engine->compiled_model, 0, 1, inputs, 1, outputs, &ran_async);
-        async_submit_ns = elapsed_ns(submit_started_ns, monotonic_time_ns());
-        if (run_status == kLiteRtStatusOk && ran_async) {
-            bool has_event = false;
-            LiteRtEvent output_event = NULL;
-            LiteRtStatus event_status = LiteRtHasTensorBufferEvent(
-                    outputs[0], &has_event);
-            if (event_status == kLiteRtStatusOk && has_event) {
-                event_status = LiteRtGetTensorBufferEvent(outputs[0], &output_event);
-            }
-            if (event_status == kLiteRtStatusOk && output_event != NULL) {
-                // Event type is diagnostic only; failure to name it must not hide a usable event.
-                LiteRtGetEventEventType(output_event, &async_event_type);
-                const uint64_t wait_started_ns = monotonic_time_ns();
-                event_status = LiteRtWaitEvent(output_event, 5000);
-                async_wait_ns = elapsed_ns(wait_started_ns, monotonic_time_ns());
-            } else if (event_status == kLiteRtStatusOk) {
-                event_status = kLiteRtStatusErrorRuntimeFailure;
-            }
-            // The tensor buffer owns the returned event. Clear it exactly once after the wait,
-            // including on a failed wait, before this reusable slot can be invoked again.
-            LiteRtStatus clear_status = LiteRtClearTensorBufferEvent(outputs[0]);
-            if (event_status != kLiteRtStatusOk) {
-                run_status = event_status;
-            } else if (clear_status != kLiteRtStatusOk) {
-                run_status = clear_status;
-            }
-        }
-        if (!engine->async_probe_reported) {
-            LOGI("Async probe: requested=yes backend_async=%s event_type=%d "
-                 "submit=%.3f ms wait=%.3f ms",
-                 ran_async ? "yes" : "no", (int) async_event_type,
-                 (double) async_submit_ns / 1000000.0,
-                 (double) async_wait_ns / 1000000.0);
-            engine->async_probe_reported = true;
-        }
-    } else {
-        run_status = LiteRtRunCompiledModel(
-                engine->compiled_model, 0, 1, inputs, 1, outputs);
-    }
+    LiteRtStatus run_status = LiteRtRunCompiledModel(
+            engine->compiled_model, 0, 1, inputs, 1, outputs);
     const uint64_t run_finished_ns = monotonic_time_ns();
     engine->last_litert_run_wall_ns[slot_index] =
             elapsed_ns(run_started_ns, run_finished_ns);
-    if (!check_status(engine, run_status, engine->async_probe_enabled
-            ? "LiteRtRunCompiledModelAsync(probe)" : "LiteRtRunCompiledModel")) {
+    if (!check_status(engine, run_status, "LiteRtRunCompiledModel")) {
         return fail_native_run(engine);
     }
 
@@ -2106,35 +1948,6 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastRunDisposition
     return engine == NULL || !valid_slot(slot_index)
             ? CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN
             : (jint) engine->last_run_disposition[slot_index];
-}
-
-JNIEXPORT jint JNICALL
-Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetGpuPriorityHint(
-        JNIEnv* env, jclass clazz, jlong handle) {
-    (void) env;
-    (void) clazz;
-    ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL ? 0 : (jint) engine->gpu_priority_hint;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeIsGpuPriorityHintOverridden(
-        JNIEnv* env, jclass clazz, jlong handle) {
-    (void) env;
-    (void) clazz;
-    ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine != NULL && engine->gpu_priority_hint_overridden
-            ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeIsDirectExternalPhwc4Mode(
-        JNIEnv* env, jclass clazz, jlong handle) {
-    (void) env;
-    (void) clazz;
-    ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine != NULL && engine->initialized && engine->direct_external_phwc4_mode
-            ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jstring JNICALL

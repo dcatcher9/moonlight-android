@@ -20,7 +20,6 @@ import com.limelight.BuildConfig;
 import com.limelight.DebugInfoActivity;
 import com.limelight.PcView;
 import com.limelight.R;
-import com.limelight.utils.PerformanceDataTracker;
 import com.limelight.utils.UiHelper;
 
 
@@ -144,17 +143,6 @@ public class StreamSettings extends AppCompatActivity {
         }
 
         private void configureDiagnostics() {
-            Preference logging = findPreference("checkbox_enable_perf_logging");
-            if (logging != null) {
-                logging.setOnPreferenceChangeListener((preference, newValue) -> {
-                    if (!((Boolean) newValue)) {
-                        new PerformanceDataTracker().clearLogs(preference.getContext());
-                    }
-                    return true;
-                });
-            }
-
-
             Preference debugInfo = findPreference("pref_debug_info");
             if (debugInfo != null) {
                 debugInfo.setOnPreferenceClickListener(preference -> {

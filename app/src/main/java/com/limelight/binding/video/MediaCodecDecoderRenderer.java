@@ -21,12 +21,12 @@ import org.jcodec.codecs.h264.io.model.VUIParameters;
 import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.R;
+import com.limelight.binding.PlaybackThreadPriority;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.TrafficStatsHelper;
 
-import android.annotation.SuppressLint;
 import android.util.LongSparseArray;
 import android.annotation.TargetApi;
 import android.app.Activity;
@@ -150,9 +150,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    // Expensive per-frame timing is opt-in. The Stats panel and explicit performance logging are
-    // diagnostic tools; normal streaming must not pay for timestamp maps or their cross-thread
-    // lock contention.
+    // Only the visible Stats panel needs expensive per-frame timing; normal streaming must not
+    // pay for timestamp maps or their cross-thread lock contention.
     private volatile boolean performanceTelemetryEnabled;
     // Decode latency tracking: map PTS(us) -> enqueue time (ns)
     private final LongSparseArray<Long> enqueueNsByPtsUs = new LongSparseArray<>();
@@ -324,6 +323,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // decoder thread and bounded queue instead. The selected hardware decoder and its low-latency
     // MediaFormat options are unchanged.
     private static final boolean ENABLE_DIRECT_SUBMIT = false;
+    // The native VideoDec callback thread otherwise inherits ordinary app scheduling priority.
+    private final PlaybackThreadPriority inputThreadPriority =
+            new PlaybackThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
     private static final int DECODER_MAX_INPUT_SIZE_BYTES = 16 * 1024 * 1024;
 
     // Used on versions < 5.0
@@ -372,14 +374,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean extendedAdaptiveEnvelope = true;
     private boolean invertResolution;
     private int videoFormat;
-    private Surface renderTarget;
+    private volatile Surface renderTarget;
     private volatile boolean stopping;
     private final AtomicBoolean stopPrepared = new AtomicBoolean();
     private CrashListener crashListener;
     private boolean reportedCrash;
     private int consecutiveCrashCount;
     private String glRenderer;
-    private boolean foreground = true;
+    private volatile boolean foreground = true;
     private PerfOverlayListener perfListener;
 
     private static final int CR_MAX_TRIES = 10;
@@ -443,7 +445,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int EXCEPTION_REPORT_DELAY_MS = 3000;
 
     private VideoStats activeWindowVideoStats;
-    private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
     private final Object videoStatsLock = new Object();
 
@@ -460,9 +461,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean intentionalInputDiscontinuityPending;
     private int refreshRate;
     private PreferenceConfiguration prefs;
-
-    private float minDecodeTime = Float.MAX_VALUE;
-    private String minDecodeTimeFullLog = "";
 
     private long lastNetDataNum;
     private long lastNetDataSampleTimestampMs;
@@ -746,7 +744,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         activeVideoFormatListener = listener;
     }
 
-    /** Enables per-frame timing only for the visible Stats panel or explicit perf logging. */
+    /** Enables per-frame timing only for the visible Stats panel. */
     public void setPerformanceTelemetryEnabled(boolean enabled) {
         synchronized (videoStatsLock) {
             if (performanceTelemetryEnabled == enabled) {
@@ -757,7 +755,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             enqueueNsByPtsUs.clear();
             if (enabled) {
                 restartPerformanceTelemetryWindow(
-                        activeWindowVideoStats, lastWindowVideoStats, globalVideoStats,
+                        activeWindowVideoStats, globalVideoStats,
                         SystemClock.uptimeMillis());
             }
 
@@ -767,7 +765,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     static void restartPerformanceTelemetryWindow(VideoStats activeWindow,
-                                                  VideoStats lastWindow,
                                                   VideoStats globalStats,
                                                   long nowMs) {
         if (activeWindow.measurementStartTimestamp != 0) {
@@ -776,8 +773,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         activeWindow.clear();
         activeWindow.measurementStartTimestamp = nowMs;
-        // The first enabled sample must not average against a telemetry-disabled window.
-        lastWindow.clear();
+    }
+
+    /** Close a window under videoStatsLock; only visible Stats needs an immutable copy. */
+    static VideoStats completePerformanceTelemetryWindow(VideoStats activeWindow,
+                                                         VideoStats globalStats,
+                                                         long nowMs,
+                                                         boolean snapshotRequested) {
+        VideoStats completedWindow = null;
+        if (snapshotRequested) {
+            completedWindow = new VideoStats();
+            completedWindow.copy(activeWindow);
+        }
+        globalStats.add(activeWindow);
+        activeWindow.clear();
+        activeWindow.measurementStartTimestamp = nowMs;
+        return completedWindow;
     }
 
     /** Samples this process's combined RX+TX throughput using the exact interval between reads. */
@@ -951,8 +962,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         int configuredFpsCeiling = Float.isFinite(prefs.fps) && prefs.fps > 0f
                 ? Math.round(prefs.fps) : 60;
         streamFrameRateState.initialize(configuredFpsCeiling, configuredFpsCeiling);
-        this.performanceTelemetryEnabled = shouldDispatchPerformanceSnapshot(
-                prefs.enablePerfOverlay, prefs.enablePerfLogging);
+        this.performanceTelemetryEnabled = prefs.enablePerfOverlay;
         this.crashListener = crashListener;
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
@@ -960,7 +970,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.invertResolution = invertResolution;
 
         this.activeWindowVideoStats = new VideoStats();
-        this.lastWindowVideoStats = new VideoStats();
         this.globalVideoStats = new VideoStats();
 
         avcDecoder = findAvcDecoder();
@@ -1954,11 +1963,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 && !applyingHdrMetadata;
     }
 
-    static boolean shouldDispatchPerformanceSnapshot(boolean overlayEnabled,
-                                                     boolean loggingEnabled) {
-        return overlayEnabled || loggingEnabled;
-    }
-
     static boolean shouldUseDirectSubmit(boolean decoderSupportsDirectSubmit) {
         return ENABLE_DIRECT_SUBMIT && decoderSupportsDirectSubmit;
     }
@@ -2940,10 +2944,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // releasing the codec, so teardown still serializes with an in-flight native call.
         codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED);
 
-        // No frame callback is useful after stopping becomes visible. Request looper shutdown now
-        // and let it finish asynchronously; UI-triggered surface teardown must not join this
-        // per-frame callback thread.
-        shutdownFrameRenderedCallbackThread();
+        // Native codec events can still arrive until cleanup unregisters the listener and releases
+        // the codec. Keep their looper alive until then; stopping already makes callbacks no-ops.
 
         // Post a quit message to the Choreographer looper (if we have one)
         Handler handler = choreographerHandler;
@@ -3019,7 +3021,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 LimeLog.warning("Failed to release decoder during cleanup: " + e);
             }
         }
-        // setup() failures can reach cleanup() without a normal stop transaction.
+        // Shut down only after the codec can no longer post events to this looper. This also covers
+        // setup() failures that reach cleanup() without a normal stop transaction.
         shutdownFrameRenderedCallbackThread();
     }
 
@@ -3195,6 +3198,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Don't bother if we're stopping
             return MoonBridge.DR_OK;
         }
+        inputThreadPriority.apply();
 
         long decoderQueueTimeMs = -1;
         int pendingDecoderFrames = -1;
@@ -3238,9 +3242,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         long statsNowMs = SystemClock.uptimeMillis();
         VideoStats completedWindowVideoStats = null;
-        VideoStats lastTwo = null;
-        boolean collectPerformance = performanceTelemetryEnabled;
+        boolean collectPerformance;
         synchronized (videoStatsLock) {
+            collectPerformance = performanceTelemetryEnabled;
             int missingFrames = countMissingFrames(lastFrameNumber, frameNumber,
                     intentionalInputDiscontinuityPending);
             if (lastFrameNumber == 0) {
@@ -3257,20 +3261,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
 
             if (statsNowMs >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
-                completedWindowVideoStats = new VideoStats();
-                completedWindowVideoStats.copy(activeWindowVideoStats);
-
-                if (collectPerformance) {
-                    lastTwo = new VideoStats();
-                    lastTwo.add(lastWindowVideoStats);
-                    lastTwo.add(completedWindowVideoStats);
+                completedWindowVideoStats = completePerformanceTelemetryWindow(
+                        activeWindowVideoStats, globalVideoStats, statsNowMs, collectPerformance);
+                if (collectPerformance && enqueueNsByPtsUs.size() != 0) {
+                    pruneStaleDecodeTimestampsLocked(System.nanoTime());
                 }
-
-                globalVideoStats.add(completedWindowVideoStats);
-                lastWindowVideoStats.copy(completedWindowVideoStats);
-                activeWindowVideoStats.clear();
-                activeWindowVideoStats.measurementStartTimestamp = statsNowMs;
-                pruneStaleDecodeTimestampsLocked(System.nanoTime());
             }
         }
 
@@ -3287,7 +3282,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // and decoding continue while the listener consumes it.
         if (completedWindowVideoStats != null) {
             if (collectPerformance) {
-                float smoothedFps = lastTwo.getFps().totalFps;
                 String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
@@ -3300,18 +3294,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = "(unknown)";
                 }
 
-                float decodeTimeMs = lastTwo.decoderLatencySamples > 0
-                        ? (float) (lastTwo.decoderTimeNs / 1_000_000.0)
-                        / lastTwo.decoderLatencySamples
-                        : Float.NaN;
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
                 int estimatedRttMs = rttInfo == -1L
                         ? StreamPerformanceSnapshot.INT_UNAVAILABLE
                         : (int) (rttInfo >>> 32);
                 float bandwidthMbps = sampleAppNetworkThroughputMbps(statsNowMs);
 
-                // The XR panel consumes the just-completed active window. The overlapping
-                // two-window average above remains only for selecting a stable best-latency sample.
+                // The XR panel consumes the just-completed active window.
                 long activeElapsedMs = Math.max(0L,
                         statsNowMs - completedWindowVideoStats.measurementStartTimestamp);
                 float activeSeconds = activeElapsedMs > 0
@@ -3380,76 +3369,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         directSubmit,
                         describeOutputPacing(prefs.framePacing),
                         actualVideoRange);
-                boolean targetFpsMatched = ((int) smoothedFps == (int) prefs.fps);
-                boolean newBestDecodeSample = minDecodeTime > decodeTimeMs && targetFpsMatched;
-                String fullLog = "";
-                if (newBestDecodeSample) {
-                    VideoStatsFps fps = lastTwo.getFps();
-                    float legacyNetworkLossPercent = lastTwo.totalFrames > 0
-                            ? (float) lastTwo.framesLost / lastTwo.totalFrames * 100.0f
-                            : Float.NaN;
-                    int estimatedRttVarianceMs = rttInfo == -1L
-                            ? StreamPerformanceSnapshot.INT_UNAVAILABLE
-                            : (int) rttInfo;
-                    StringBuilder sb = new StringBuilder();
-                if(prefs.enablePerfOverlayLite){
-                    if (Float.isFinite(bandwidthMbps)) {
-                        sb.append(context.getString(R.string.perf_overlay_lite_bandwidth))
-                                .append(": ")
-                                .append(String.format("%.2f Mbps\t ", bandwidthMbps));
-                    }
-//                    sb.append("分辨率：");
-//                    sb.append(initialWidth + "x" + initialHeight);
-                    sb.append(context.getString(R.string.perf_overlay_lite_network_decoding_delay) + ": ");
-                    sb.append(context.getString(R.string.perf_overlay_lite_net, estimatedRttMs));
-                    sb.append(" / ");
-                    sb.append(context.getString(R.string.perf_overlay_lite_dectime,decodeTimeMs));
-                    sb.append("\t");
-                    sb.append(context.getString(R.string.perf_overlay_lite_packet_loss) + ": ");
-                    sb.append(context.getString(R.string.perf_overlay_lite_netdrops,
-                            legacyNetworkLossPercent));
-                    sb.append("\t FPS：");
-                    sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
-                    sb.append("\t Range: ");
-                    sb.append(describeActualColorRange());
-                }else{
-                    sb.append(context.getString(R.string.perf_overlay_streamdetails,
-                            initialWidth + "x" + initialHeight, fps.totalFps));
-                    sb.append('\n');
-                    sb.append(context.getString(
-                            R.string.perf_overlay_video_range,
-                            describeActualColorRange())).append('\n');
-                    sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
-                    sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
-                    sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
-                    sb.append(context.getString(R.string.perf_overlay_netdrops,
-                            legacyNetworkLossPercent)).append('\n');
-                    if (Float.isFinite(bandwidthMbps)) {
-                        sb.append(context.getString(R.string.perf_overlay_lite_bandwidth))
-                                .append(": ")
-                                .append(String.format("%.2f Mbps\n", bandwidthMbps));
-                    }
-                    if (estimatedRttMs != StreamPerformanceSnapshot.INT_UNAVAILABLE) {
-                        sb.append(context.getString(R.string.perf_overlay_netlatency,
-                                estimatedRttMs, estimatedRttVarianceMs)).append('\n');
-                    }
-                    if (lastTwo.framesWithHostProcessingLatency > 0) {
-                        sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
-                                (float)lastTwo.minHostProcessingLatency / 10,
-                                (float)lastTwo.maxHostProcessingLatency / 10,
-                                (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
-                    }
-                    sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
-                }
-                    fullLog = sb.toString();
-                }
                 if (performanceTelemetryEnabled) {
                     perfListener.onPerfUpdate(performanceSnapshot, "");
-                }
-                // Best latency is only met at requested highest fps, rest can be ignored
-                if (newBestDecodeSample) {
-                    minDecodeTime = decodeTimeMs;
-                    minDecodeTimeFullLog = fullLog;
                 }
             }
         }
@@ -3848,19 +3769,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return (int)(globalVideoStats.decoderTimeNs
                     / globalVideoStats.decoderLatencySamples / 1_000_000L);
         }
-    }
-
-    public Boolean performanceWasTracked() {
-        return minDecodeTime < Float.MAX_VALUE;
-    }
-
-    @SuppressLint("DefaultLocale")
-    public String getMinDecoderLatency() {
-        return String.format("%1$.2f", minDecodeTime);
-    }
-
-    public String getMinDecoderLatencyFullLog() {
-        return minDecodeTimeFullLog;
     }
 
     static class DecoderHungException extends IllegalStateException {

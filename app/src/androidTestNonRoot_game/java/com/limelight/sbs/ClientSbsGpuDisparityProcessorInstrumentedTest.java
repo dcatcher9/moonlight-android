@@ -11,6 +11,7 @@ import android.opengl.EGLDisplay;
 import android.opengl.EGLSurface;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
+import android.opengl.GLES31;
 import android.util.Log;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -19,6 +20,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.nio.ByteBuffer;
+import java.nio.Buffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Locale;
@@ -31,13 +33,176 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
     private static final int MEASURED_DISPATCHES = 20;
 
     @Test
+    public void reusedR32fScratchMatchesPriorRgbaHorizontalPassesBitForBit() throws Exception {
+        try (EglFixture ignored = EglFixture.create()) {
+            int profile = createProfileTexture();
+            try {
+                for (int[] size : new int[][] {
+                        {1, 1}, {1, 7}, {7, 1}, {33, 17},
+                        {672, 384}, {896, 384}, {928, 384}}) {
+                    comparePriorHorizontalPasses(size[0], size[1], profile);
+                }
+            } finally {
+                GLES20.glDeleteTextures(1, new int[] {profile}, 0);
+            }
+        }
+    }
+
+    private static void comparePriorHorizontalPasses(int width, int height, int profile)
+            throws Exception {
+        int depth = createDepthTexture(width, height);
+        int forwardScratch = createTexture(width, height, GLES30.GL_RGBA32F, GLES30.GL_RGBA, null);
+        int referenceOutput = createTexture(width, height, GLES30.GL_R32F, GLES30.GL_RED, null);
+        // Restore only the previous production storage operations. Its recurrence, indexing,
+        // boundary handling and Float32 arithmetic remain the exact production shader source.
+        String oldForward = ClientSbsGpuDisparityShaders.horizontalForward(width, height)
+                .replace("layout(r32f, binding = 0)", "layout(rgba32f, binding = 0)")
+                .replace("uFinalParallax", "uEnvelopeScratch");
+        String oldReverse = ClientSbsGpuDisparityShaders.horizontalFinish(width, height)
+                .replace("layout(r32f, binding = 0) uniform highp image2D uFinalParallax;",
+                        "uniform highp sampler2D uEnvelopeScratch;\n"
+                                + "layout(r32f, binding = 0) uniform writeonly highp image2D uFinalParallax;")
+                .replace("imageLoad(uFinalParallax, ivec2(x, y)).r",
+                        "texelFetch(uEnvelopeScratch, ivec2(x, y), 0).r");
+        assertTrue(oldForward.contains("layout(rgba32f, binding = 0)"));
+        assertTrue(oldReverse.contains("texelFetch(uEnvelopeScratch"));
+        int forward = createComputeProgram(oldForward);
+        int reverse = createComputeProgram(oldReverse);
+        int readback = createComputeProgram("#version 310 es\n"
+                + "precision highp float; precision highp int;\n"
+                + "layout(local_size_x=16, local_size_y=16) in;\n"
+                + "uniform highp sampler2D uField;\n"
+                + "layout(std430, binding=0) writeonly buffer Out { uint words[]; };\n"
+                + "void main() { ivec2 p=ivec2(gl_GlobalInvocationID.xy);\n"
+                + "if(p.x >= " + width + " || p.y >= " + height + ") return;\n"
+                + "words[p.y * " + width + " + p.x] = floatBitsToUint(texelFetch(uField,p,0).r); }\n");
+        int[] readbackBuffer = new int[1];
+        GLES30.glGenBuffers(1, readbackBuffer, 0);
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, readbackBuffer[0]);
+        GLES30.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, width * height * Float.BYTES,
+                null, GLES30.GL_STREAM_READ);
+        try (ClientSbsGpuDisparityProcessor processor = new ClientSbsGpuDisparityProcessor(
+                width, height, width >= 672 ? rawScaleForWidth(width) : 0.04864449f)) {
+            java.lang.reflect.Field verticalField = ClientSbsGpuDisparityProcessor.class
+                    .getDeclaredField("verticalTexture");
+            verticalField.setAccessible(true);
+            int vertical = verticalField.getInt(processor);
+            int previousOutput = 0;
+            for (int frame = 0; frame < 4; frame++) {
+                // Repeated target reuse, opposing cliffs, a plane and an invalid profile expose
+                // accidental reads of last frame's final output instead of this frame's forward scan.
+                FloatBuffer values = ByteBuffer.allocateDirect(width * height * Float.BYTES)
+                        .order(ByteOrder.nativeOrder()).asFloatBuffer();
+                for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
+                    float value = frame == 2 ? 0.5f
+                            : ((((x / 3 + y / 2 + frame) & 1) == 0) ? 0.0f : 1.0f);
+                    values.put(value);
+                }
+                values.flip();
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depth);
+                GLES30.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                        GLES30.GL_RED, GLES20.GL_FLOAT, values);
+                FloatBuffer camera = ByteBuffer.allocateDirect(4 * Float.BYTES)
+                        .order(ByteOrder.nativeOrder()).asFloatBuffer();
+                camera.put(new float[] {0.5f, 0, 0, frame == 3 ? 0 : 1}).flip();
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, profile);
+                GLES30.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 1, 1,
+                        GLES30.GL_RGBA, GLES20.GL_FLOAT, camera);
+
+                int actual = processor.process(depth, profile);
+                if (frame > 0) assertEquals("Final texture allocation must be reused", previousOutput, actual);
+                previousOutput = actual;
+                dispatchReference(forward, vertical, 0, forwardScratch, GLES30.GL_RGBA32F, height);
+                dispatchReference(reverse, vertical, forwardScratch, referenceOutput, GLES30.GL_R32F, height);
+                int[] expected = readTextureWords(readback, readbackBuffer[0], referenceOutput, width, height);
+                int[] observed = readTextureWords(readback, readbackBuffer[0], actual, width, height);
+                for (int pixel = 0; pixel < expected.length; pixel++) {
+                    if (expected[pixel] != observed[pixel]) {
+                        throw new AssertionError("R32F scratch differs from prior RGBA32F at "
+                                + width + "x" + height + " frame=" + frame + " pixel=" + pixel
+                                + " expectedBits=" + expected[pixel] + " actualBits=" + observed[pixel]);
+                    }
+                    assertTrue("Published parallax must be finite",
+                            Float.isFinite(Float.intBitsToFloat(observed[pixel])));
+                }
+            }
+        } finally {
+            GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_R32F);
+            GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0);
+            GLES20.glUseProgram(0);
+            GLES20.glDeleteProgram(forward);
+            GLES20.glDeleteProgram(reverse);
+            GLES20.glDeleteProgram(readback);
+            GLES30.glDeleteBuffers(1, readbackBuffer, 0);
+            GLES20.glDeleteTextures(3, new int[] {depth, forwardScratch, referenceOutput}, 0);
+        }
+    }
+
+    private static void dispatchReference(int program, int vertical, int scratch,
+                                          int output, int format, int height) {
+        GLES20.glUseProgram(program);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, vertical);
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uVerticalConditioned"), 0);
+        if (scratch != 0) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, scratch);
+            GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uEnvelopeScratch"), 1);
+        }
+        GLES31.glBindImageTexture(0, output, 0, false, 0, GLES31.GL_WRITE_ONLY, format);
+        assertEquals("Reference shader image binding", GLES20.GL_NO_ERROR, GLES20.glGetError());
+        GLES31.glDispatchCompute((height + 31) / 32, 1, 1);
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
+                | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
+        assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+    }
+
+    private static int[] readTextureWords(int program, int buffer, int texture,
+                                           int width, int height) {
+        GLES20.glUseProgram(program);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uField"), 0);
+        GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, buffer);
+        GLES31.glDispatchCompute((width + 15) / 16, (height + 15) / 16, 1);
+        GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT);
+        GLES20.glFinish();
+        GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, buffer);
+        Buffer mapped = GLES30.glMapBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER,
+                0, width * height * Float.BYTES, GLES30.GL_MAP_READ_BIT);
+        assertTrue(mapped instanceof ByteBuffer);
+        ByteBuffer bytes = ((ByteBuffer) mapped).order(ByteOrder.nativeOrder());
+        int[] words = new int[width * height];
+        for (int i = 0; i < words.length; i++) words[i] = bytes.getInt(i * Integer.BYTES);
+        assertTrue(GLES30.glUnmapBuffer(GLES31.GL_SHADER_STORAGE_BUFFER));
+        assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
+        return words;
+    }
+
+    private static int createComputeProgram(String source) {
+        int shader = GLES20.glCreateShader(GLES31.GL_COMPUTE_SHADER);
+        GLES20.glShaderSource(shader, source);
+        GLES20.glCompileShader(shader);
+        int[] status = new int[1];
+        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0);
+        assertEquals(GLES20.glGetShaderInfoLog(shader), GLES20.GL_TRUE, status[0]);
+        int program = GLES20.glCreateProgram();
+        GLES20.glAttachShader(program, shader);
+        GLES20.glLinkProgram(program);
+        GLES20.glDeleteShader(shader);
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0);
+        assertEquals(GLES20.glGetProgramInfoLog(program), GLES20.GL_TRUE, status[0]);
+        return program;
+    }
+
+    @Test
     public void allProductionShapesCompileAndDispatchOnDevice() {
         try (EglFixture ignored = EglFixture.create()) {
             int profileTexture = createProfileTexture();
             try {
-                runShape(672, 384, 1920, 1080, profileTexture);
-                runShape(896, 384, 2560, 1080, profileTexture);
-                runShape(928, 384, 3840, 1080, profileTexture);
+                runShape(672, 384, profileTexture);
+                runShape(896, 384, profileTexture);
+                runShape(928, 384, profileTexture);
             } finally {
                 GLES20.glDeleteTextures(1, new int[] {profileTexture}, 0);
             }
@@ -45,8 +210,7 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
         }
     }
 
-    private static void runShape(int width, int height, int sourceWidth, int sourceHeight,
-                                 int profileTexture) {
+    private static void runShape(int width, int height, int profileTexture) {
         int depthTexture = createDepthTexture(width, height);
         try {
             long initializationStartedNs = System.nanoTime();
@@ -58,8 +222,7 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
             double repeatedDispatchMs;
             try (ClientSbsGpuDisparityProcessor processor = created) {
                 long firstDispatchStartedNs = System.nanoTime();
-                int outputTexture = processor.process(
-                        depthTexture, profileTexture, sourceWidth, sourceHeight);
+                int outputTexture = processor.process(depthTexture, profileTexture);
                 assertNotEquals("Processor must publish its R32F parallax texture", 0,
                         outputTexture);
                 GLES20.glFinish();
@@ -69,7 +232,7 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
 
                 long repeatedStartedNs = System.nanoTime();
                 for (int iteration = 0; iteration < MEASURED_DISPATCHES; iteration++) {
-                    processor.process(depthTexture, profileTexture, sourceWidth, sourceHeight);
+                    processor.process(depthTexture, profileTexture);
                 }
                 GLES20.glFinish();
                 assertEquals("Repeated contractive dispatch failed for " + width + "x" + height,
@@ -143,8 +306,13 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
                 GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T,
                 GLES20.GL_CLAMP_TO_EDGE);
-        GLES30.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, internalFormat, width, height, 0,
-                format, GLES20.GL_FLOAT, values);
+        // The reference scratch/output are bound as shader images. ES 3.1 requires
+        // immutable image storage, matching the production processor's allocation.
+        GLES30.glTexStorage2D(GLES20.GL_TEXTURE_2D, 1, internalFormat, width, height);
+        if (values != null) {
+            GLES30.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                    format, GLES20.GL_FLOAT, values);
+        }
         assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
         return texture[0];
     }

@@ -112,17 +112,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             SCENE_CUT_MAILBOX_SLOT_COUNT
                     * ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_BYTES;
     private static final int HEALTH_READBACK_SLOT_COUNT = 3;
-    /**
-     * Background cadence: enough to keep a HUD current at negligible cost (~2.4 Hz at 72 fps),
-     * since each sample is one tiny state copy plus a fence.
-     */
-    private static final int HEALTH_SAMPLE_INTERVAL_FRAMES = 30;
-    /**
-     * Cadence while the stats panel is open. History is the reason: cut retriggering happens at
-     * sub-second scale, so at the background rate a burst of three cuts inside one second shows up
-     * as a single sample or none at all. Sampling has to outpace the thing being sampled.
-     */
-    private static final int HEALTH_SAMPLE_INTERVAL_FRAMES_FOCUSED = 5;
+    /** Visible Stats cadence; no health copies run while its consumer is disabled. */
+    private static final int HEALTH_SAMPLE_INTERVAL_FRAMES = 5;
     /** LiteRT exposes two immutable output SSBOs that alternate as inference slots. */
     private static final int RAW_BUFFER_VALIDATION_CACHE_SIZE = 2;
 
@@ -193,10 +184,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private int healthGeneration = 1;
     /** Requests one prompt sample after construction/reset, before the periodic cadence begins. */
     private boolean healthSampleRequested = true;
-    /** False when neither Stats nor explicit performance logging consumes diagnostic health. */
+    /** Delivered by polling so optional staging failures never fail depth production. */
+    private RuntimeException pendingHealthReadbackFailure;
+    /** The renderer disables this when Stats is hidden; isolated tooling can request samples. */
     private boolean healthSamplingEnabled = true;
-    /** Raised while the stats panel is visible; see the focused sample interval. */
-    private volatile boolean healthSamplingFocused;
     /** Successful process submission time used to preserve Apollo's wall-time EMA response. */
     private long lastProcessAtNs;
     /** First frame after construction/reset keeps per-dispatch diagnostics; steady state batches. */
@@ -407,10 +398,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             shaderStorageBarrier();
 
             GLES20.glUseProgram(rawMinMaxProgram);
-            applyRawUniforms(rawMinMaxUniforms, rawByteOffset, rawPixelStrideBytes);
+            GLES30.glUniform1ui(rawMinMaxUniforms.rawByteOffset, rawByteOffset);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextures[currentDepthIndex]);
-            GLES20.glUniform1i(rawMinMaxPreviousUniform, 0);
             GLES31.glBindImageTexture(RELIABLE_DEPTH_IMAGE_BINDING, reliableDepthTexture, 0,
                     false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32F);
             dispatchCurrent(groups(outputWidth), groups(outputHeight), 1, "raw min/max");
@@ -421,7 +411,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                     false, 0, GLES31.GL_READ_ONLY, GLES30.GL_R32F);
 
             GLES20.glUseProgram(rawHistogramProgram);
-            applyRawUniforms(rawHistogramUniforms, rawByteOffset, rawPixelStrideBytes);
+            GLES30.glUniform1ui(rawHistogramUniforms.rawByteOffset, rawByteOffset);
             dispatchCurrent(groups(outputWidth), groups(outputHeight), 1, "raw histogram");
             shaderStorageBarrier();
 
@@ -430,25 +420,19 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             bindSsbo(RAW_SSBO_BINDING, rawStatsBuffer);
             GLES20.glUseProgram(resolveRawProgram);
             GLES20.glUniform1f(resolveRawRangeAlphaUniform, rangeAlpha);
-            GLES20.glUniform1i(resolveRawExpectedPixelCountUniform,
-                    outputWidth * outputHeight);
-            GLES20.glUniform1i(resolveRawGroupCountUniform, rawGroupCount);
             dispatchCurrent(1, 1, 1, "resolve raw range");
             shaderStorageBarrier();
 
             bindSsbo(RAW_SSBO_BINDING, packedFloatSsbo);
             bindSsbo(RAW_STATS_SSBO_BINDING, rawStatsBuffer);
             GLES20.glUseProgram(temporalProgram);
-            applyRawUniforms(temporalRawUniforms, rawByteOffset, rawPixelStrideBytes);
+            GLES30.glUniform1ui(temporalRawUniforms.rawByteOffset, rawByteOffset);
             GLES20.glUniform1f(temporalDepthAlphaUniform, depthAlpha);
             GLES20.glUniform1f(temporalMovingDepthAlphaUniform, movingDepthAlpha);
-            GLES20.glUniform1f(temporalSpatialScaleUniform, spatialThresholdScale);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTextures[currentDepthIndex]);
-            GLES20.glUniform1i(temporalPreviousUniform, 0);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, reliableDepthTexture);
-            GLES20.glUniform1i(temporalReliableUniform, 1);
             GLES31.glBindImageTexture(DEPTH_IMAGE_BINDING, depthTextures[nextDepthIndex], 0,
                     false, 0, GLES31.GL_WRITE_ONLY, depthInternalFormat);
             GLES31.glBindImageTexture(RAW_DEPTH_IMAGE_BINDING, rawDepthTexture, 0,
@@ -527,6 +511,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             result.validFrame = false;
             healthGeneration = healthGeneration == Integer.MAX_VALUE ? 1 : healthGeneration + 1;
             healthSampleRequested = true;
+            pendingHealthReadbackFailure = null;
             healthSnapshot.reset();
         } finally {
             GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, STATE_SSBO_BINDING, 0);
@@ -549,6 +534,20 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         if (!healthSamplingEnabled) {
             return null;
         }
+        try {
+            if (pendingHealthReadbackFailure != null) {
+                RuntimeException failure = pendingHealthReadbackFailure;
+                pendingHealthReadbackFailure = null;
+                throw failure;
+            }
+            return pollHealthSnapshotInternal();
+        } catch (RuntimeException failure) {
+            invalidateHealthReadbacks();
+            throw failure;
+        }
+    }
+
+    private HealthSnapshot pollHealthSnapshotInternal() {
         HealthReadbackSlot newestReady = null;
         for (HealthReadbackSlot slot : healthReadbackSlots) {
             if (slot.fence == 0L) {
@@ -556,9 +555,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             }
             int waitResult = GLES30.glClientWaitSync(slot.fence, 0, 0L);
             if (waitResult == GLES30.GL_WAIT_FAILED) {
-                LimeLog.warning("Client SBS GPU health fence wait failed");
-                recycleHealthReadbackSlot(slot);
-                continue;
+                throw new IllegalStateException("Client SBS GPU health fence wait failed");
             }
             if (waitResult != GLES30.GL_ALREADY_SIGNALED
                     && waitResult != GLES30.GL_CONDITION_SATISFIED) {
@@ -590,25 +587,21 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             healthSnapshot.updateFromState(((ByteBuffer) mapped).order(ByteOrder.nativeOrder()),
                     newestReady.frameSequence, outputWidth * outputHeight);
         } finally {
-            if (!GLES30.glUnmapBuffer(GLES30.GL_COPY_READ_BUFFER)) {
-                LimeLog.warning("Client SBS GPU health staging buffer became invalid while mapped");
+            try {
+                requireValidHealthReadback(healthSnapshot,
+                        GLES30.glUnmapBuffer(GLES30.GL_COPY_READ_BUFFER));
+            } finally {
+                GLES30.glBindBuffer(GLES30.GL_COPY_READ_BUFFER, oldCopyReadBuffer);
+                recycleHealthReadbackSlot(newestReady);
             }
-            GLES30.glBindBuffer(GLES30.GL_COPY_READ_BUFFER, oldCopyReadBuffer);
-            recycleHealthReadbackSlot(newestReady);
         }
         recycleCompletedStaleHealthReadbacks(newestReady);
         checkGlError("poll GPU depth health");
         return healthSnapshot;
     }
 
-    /** Raises the sample rate while someone is watching the history plots. */
-    public void setHealthSamplingFocused(boolean focused) {
-        healthSamplingFocused = focused;
-    }
-
     /**
-     * Enables the diagnostic GPU-to-CPU health ring only while Stats or explicit perf logging is
-     * consuming it. Disabling retires every queued staging fence; re-enabling requests a fresh
+     * Enables the GPU-to-CPU health ring only while Stats consumes it. Disabling retires every queued staging fence; re-enabling requests a fresh
      * sample, so a newly opened panel never maps stale pre-boundary state.
      */
     public void setHealthSamplingEnabled(boolean enabled) {
@@ -623,6 +616,7 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 recycleHealthReadbackSlot(slot);
             }
             healthSnapshot.reset();
+            pendingHealthReadbackFailure = null;
         }
     }
 
@@ -750,6 +744,21 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 temporalProgram, "uSpatialThresholdScale");
         resolveReferenceFrameAdvanceUniform = requiredUniform(
                 resolveProfileProgram, "uReferenceFrameAdvance");
+
+        // Every program belongs to this fixed-shape processor. Uniforms survive glUseProgram
+        // and temporal resets; only source offsets, evidence and timing alphas vary per frame.
+        initializeRawUniformConstants(rawMinMaxProgram, rawMinMaxUniforms);
+        initializeRawUniformConstants(rawHistogramProgram, rawHistogramUniforms);
+        initializeRawUniformConstants(temporalProgram, temporalRawUniforms);
+        GLES31.glProgramUniform1i(rawMinMaxProgram, rawMinMaxPreviousUniform, 0);
+        GLES31.glProgramUniform1i(resolveRawProgram, resolveRawExpectedPixelCountUniform,
+                outputWidth * outputHeight);
+        GLES31.glProgramUniform1i(resolveRawProgram, resolveRawGroupCountUniform, rawGroupCount);
+        GLES31.glProgramUniform1i(temporalProgram, temporalPreviousUniform, 0);
+        GLES31.glProgramUniform1i(temporalProgram, temporalReliableUniform, 1);
+        GLES31.glProgramUniform1f(temporalProgram, temporalSpatialScaleUniform,
+                spatialThresholdScale);
+        checkGlError("initialize GPU depth uniforms");
     }
 
     private int createBuffer(int bytes) {
@@ -855,14 +864,12 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
     }
 
-    private void applyRawUniforms(RawUniforms uniforms, int rawByteOffset,
-                                  int rawPixelStrideBytes) {
-        GLES30.glUniform1ui(uniforms.rawByteOffset, rawByteOffset);
-        GLES30.glUniform1ui(uniforms.rawPixelStrideBytes, rawPixelStrideBytes);
-        GLES20.glUniform2i(uniforms.tensorSize, tensorWidth, tensorHeight);
-        GLES20.glUniform2i(uniforms.outputSize, outputWidth, outputHeight);
+    private void initializeRawUniformConstants(int program, RawUniforms uniforms) {
+        GLES31.glProgramUniform1ui(program, uniforms.rawPixelStrideBytes, Float.BYTES);
+        GLES31.glProgramUniform2i(program, uniforms.tensorSize, tensorWidth, tensorHeight);
+        GLES31.glProgramUniform2i(program, uniforms.outputSize, outputWidth, outputHeight);
         if (uniforms.contentScale >= 0) {
-            GLES20.glUniform2f(uniforms.contentScale, contentScaleX, contentScaleY);
+            GLES31.glProgramUniform2f(program, uniforms.contentScale, contentScaleX, contentScaleY);
         }
     }
 
@@ -877,9 +884,12 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     }
 
     private void scheduleHealthReadbackIfDue() {
+        if (pendingHealthReadbackFailure != null) {
+            return;
+        }
         if (!shouldScheduleHealthReadback(
                 healthSamplingEnabled, healthSampleRequested,
-                frameSequence, healthSamplingFocused)) {
+                frameSequence)) {
             return;
         }
         HealthReadbackSlot available = null;
@@ -894,7 +904,19 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
 
         try {
-            GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT);
+            scheduleHealthReadback(available);
+        } catch (RuntimeException failure) {
+            // Production depth has already passed its error check. Retire only diagnostics and
+            // deliver the failure through polling's existing renderer backoff on the next poll.
+            invalidateHealthReadbacks();
+            pendingHealthReadbackFailure = failure;
+        }
+    }
+
+    private void scheduleHealthReadback(HealthReadbackSlot available) {
+        try {
+            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT
+                    | GLES31.GL_BUFFER_UPDATE_BARRIER_BIT);
             GLES30.glBindBuffer(GLES30.GL_COPY_READ_BUFFER, stateBuffer);
             GLES30.glBindBuffer(GLES30.GL_COPY_WRITE_BUFFER, available.buffer);
             GLES30.glCopyBufferSubData(GLES30.GL_COPY_READ_BUFFER, GLES30.GL_COPY_WRITE_BUFFER,
@@ -915,27 +937,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
     }
 
-    static boolean shouldScheduleHealthReadback(boolean sampleRequested, long frameSequence) {
-        return shouldScheduleHealthReadback(sampleRequested, frameSequence, false);
-    }
-
-    /**
-     * @param focused true while the stats panel is visible, which raises the sample rate so the
-     *                history plots can resolve events shorter than the background interval
-     */
-    static boolean shouldScheduleHealthReadback(boolean sampleRequested, long frameSequence,
-                                                boolean focused) {
-        return shouldScheduleHealthReadback(true, sampleRequested, frameSequence, focused);
-    }
-
     static boolean shouldScheduleHealthReadback(boolean enabled, boolean sampleRequested,
-                                                long frameSequence, boolean focused) {
-        if (!enabled) {
-            return false;
-        }
-        int interval = focused
-                ? HEALTH_SAMPLE_INTERVAL_FRAMES_FOCUSED : HEALTH_SAMPLE_INTERVAL_FRAMES;
-        return sampleRequested || frameSequence % interval == 0L;
+                                                long frameSequence) {
+        return enabled && (sampleRequested || frameSequence % HEALTH_SAMPLE_INTERVAL_FRAMES == 0L);
     }
 
     private void recycleCompletedStaleHealthReadbacks(HealthReadbackSlot except) {
@@ -944,10 +948,36 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                 continue;
             }
             int waitResult = GLES30.glClientWaitSync(slot.fence, 0, 0L);
+            if (waitResult == GLES30.GL_WAIT_FAILED) {
+                throw new IllegalStateException("Client SBS GPU health fence wait failed");
+            }
             if (waitResult == GLES30.GL_ALREADY_SIGNALED
-                    || waitResult == GLES30.GL_CONDITION_SATISFIED
-                    || waitResult == GLES30.GL_WAIT_FAILED) {
+                    || waitResult == GLES30.GL_CONDITION_SATISFIED) {
                 recycleHealthReadbackSlot(slot);
+            }
+        }
+    }
+
+    /** The CPU copy has no diagnostic authority when GL reports corrupt mapped storage. */
+    static void requireValidHealthReadback(HealthSnapshot snapshot, boolean valid) {
+        if (!valid) {
+            snapshot.reset();
+            throw new IllegalStateException(
+                    "Client SBS GPU health staging buffer became invalid while mapped");
+        }
+    }
+
+    private void invalidateHealthReadbacks() {
+        healthSnapshot.reset();
+        healthSampleRequested = true;
+        for (HealthReadbackSlot slot : healthReadbackSlots) {
+            recycleHealthReadbackSlot(slot);
+        }
+        // Consume errors from the failed diagnostic operation and its cleanup so they cannot
+        // contaminate the next valid production dispatch. This runs only on failure.
+        for (int remaining = 8; remaining > 0; remaining--) {
+            if (GLES20.glGetError() == GLES20.GL_NO_ERROR) {
+                break;
             }
         }
     }

@@ -73,6 +73,20 @@ public class ShaderUtilsTest {
     }
 
     @Test
+    public void ordinalFetchIsRestrictedToTheDetectorStencilWithoutChangingRgbIntegration() {
+        for (boolean direct : new boolean[] {true, false}) {
+            String shader = ClientSbsShaders.createModelInputFragment(direct);
+            assertTrue(shader.contains("bool isOrdinalAnchor(ivec2 targetPixel)"));
+            assertTrue(shader.contains("tensorSize = floor(u_sourceSize / u_downsampleRatio"));
+            assertTrue(shader.contains("min(vec2(16.0), tensorSize - tileOrigin)"));
+            assertTrue(shader.contains("vec2 middle = floor(last * 0.5)"));
+            assertTrue(shader.contains("if (isOrdinalAnchor(targetPixel)) ordinal = sourcePointOrdinal(sourceUv)"));
+            assertTrue(shader.contains("color = sampleModelFootprint(sourceLo, sourceHi)"));
+            assertTrue(shader.contains("color = sampleModelColorBilinear(sourceUv)"));
+        }
+    }
+
+    @Test
     public void modelInputUsesDirectResizeAndTonemapsHdrOnlyForInference() {
         String shader = ClientSbsShaders.createModelInputFragment(true);
         assertTrue(shader.contains("vec2 sourceUv = v_TexCoord;"));
