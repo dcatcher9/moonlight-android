@@ -7,6 +7,7 @@ import static org.junit.Assert.assertSame;
 import android.content.Context;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.AudioTrack;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -18,6 +19,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowAudioManager;
+import org.robolectric.util.ReflectionHelpers;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, shadows = {
@@ -45,6 +47,16 @@ public final class AndroidAudioRendererFocusTest {
                 focusRequest.audioFocusRequest.getFocusGain());
         assertEquals(AudioAttributes.USAGE_GAME,
                 focusRequest.audioFocusRequest.getAudioAttributes().getUsage());
+        AudioTrack track = ReflectionHelpers.getField(renderer, "track");
+        AudioAttributes focusAttributes = focusRequest.audioFocusRequest.getAudioAttributes();
+        AudioAttributes trackAttributes = track.getAudioAttributes();
+        assertEquals(trackAttributes.getUsage(), focusAttributes.getUsage());
+        assertEquals(trackAttributes.getContentType(), focusAttributes.getContentType());
+        assertEquals(trackAttributes.getSpatializationBehavior(),
+                focusAttributes.getSpatializationBehavior());
+        assertEquals(AudioAttributes.CONTENT_TYPE_MOVIE, focusAttributes.getContentType());
+        assertEquals(AudioAttributes.SPATIALIZATION_BEHAVIOR_AUTO,
+                focusRequest.audioFocusRequest.getAudioAttributes().getSpatializationBehavior());
 
         renderer.stop();
         assertSame(focusRequest.audioFocusRequest,

@@ -309,4 +309,37 @@
 
     <string name="title_edit_profile">Profil bearbeiten</string>
 
+    <string name="xr_stats_host_source_repeats">Host-bestätigte Wiederholungen</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | beibehaltenes Bild</string>
+    <string name="xr_stats_host_sample">Host-Datenstand</string>
+    <string name="xr_stats_host_sample_value">%1$d | vor %2$.1f s empfangen</string>
+    <string name="xr_stats_host_performance">Host-Leistung</string>
+    <string name="xr_stats_host_enable_diagnostics">Host-Diagnose für Leistungsdaten aktivieren</string>
+    <string name="xr_stats_host_decision_rates">Inferenz / Wiederverwendung / ungültig FPS</string>
+    <string name="xr_stats_host_reuse_ratio">Wiederverwendung fast identischer Eingaben</string>
+    <string name="xr_stats_host_reuse_ratio_value">%1$.1f%% der Inferenz- und Wiederverwendungsentscheidungen</string>
+    <string name="xr_stats_host_no_eligible_decisions">Keine geeigneten Entscheidungen gemessen</string>
+    <string name="xr_stats_host_decision_sample">Kopie der GPU-Entscheidungen</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | vor %2$.1f s empfangen</string>
+    <string name="xr_stats_host_output_rates">Verzerrung / SBS-Wiederholung / flach FPS</string>
+    <string name="xr_stats_host_stage_averages">Mittelwerte je Stufe</string>
+    <string name="xr_stats_host_stage_averages_value">Seit Moduswechsel; CPU/GPU-Stufen überlappen sich</string>
+    <string name="xr_stats_host_conversion_cpu">Konvertierungsdauer (CPU)</string>
+    <string name="xr_stats_host_encode_cpu">Kodier- / Abrufdauer (CPU)</string>
+    <string name="xr_stats_host_content_age">Inhaltsalter der neuen Ausgabe</string>
+    <string name="xr_stats_host_warp_gpu">Verzerrung (GPU)</string>
+    <string name="xr_stats_host_preprocess_gpu">Vorverarbeitung (GPU)</string>
+    <string name="xr_stats_host_conditional_gpu">Modell / Wiederverwendungszweig (GPU)</string>
+    <string name="xr_stats_host_postprocess_gpu">Nachverarbeitung (GPU)</string>
+    <string name="xr_stats_host_output_gpu">Ausgabe (GPU)</string>
+    <string name="xr_stats_host_waiting_rates">Warten auf zwei neue Messwerte</string>
+    <string name="xr_stats_host_stage_value">%1$.2f ms | %2$d Messungen</string>
+    <string name="xr_stats_host_not_sampled">Nicht gemessen</string>
+    <string name="xr_cinema_environment">Kinoumgebung</string>
+    <string name="xr_cinema_environment_summary">Hintergrund beim Wechsel in den Kinomodus</string>
+    <string name="xr_cinema_environment_black">Schwarz</string>
+    <string name="xr_cinema_environment_system">Systemumgebung</string>
+    <string name="xr_cinema_environment_passthrough">Passthrough</string>
+    <string name="xr_cinema_environment_hint">Die Systemumgebung in den Headset-Einstellungen auswählen.</string>
+    <string name="xr_cinema_exit">Kinomodus verlassen</string>
 </resources>

@@ -30,7 +30,6 @@ import androidx.xr.scenecore.PanelEntity;
 
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
-import com.limelight.ui.xrcontrols.XrControlPanelLayout;
 
 import org.junit.After;
 import org.junit.Before;
@@ -117,7 +116,7 @@ public class XrSolidPanelTest {
     }
 
     @Test
-    public void collapseAndExpansionRestoreTheInitialRasterWithoutOverridingSdkPixelDensity() {
+    public void collapseAndRevealRestoreTheInitialRasterWithoutOverridingSdkPixelDensity() {
         PanelEntity panel = mock(PanelEntity.class);
         when(panel.getSizeInPixels()).thenReturn(new IntSize2d(2000, 200));
         LinearLayout row = new LinearLayout(controller.get());
@@ -136,8 +135,6 @@ public class XrSolidPanelTest {
         ReflectionHelpers.setField(presenter, "dockRevealPill", pill);
         ReflectionHelpers.setField(presenter, "glanceRoot", glance);
         ReflectionHelpers.setField(presenter, "panelHeightMeters", 1.5f);
-        XrControlPanelLayout fullLayout = ReflectionHelpers.callInstanceMethod(presenter,
-                "controlBarLayout", ClassParameter.from(float.class, 1.5f));
 
         setCollapsed(true);
         assertEquals(View.GONE, row.getVisibility());
@@ -165,26 +162,9 @@ public class XrSolidPanelTest {
         verify(panel, never()).setEnabled(anyBoolean());
 
         clearInvocations(panel);
-        ReflectionHelpers.callInstanceMethod(presenter, "setSecondaryActionsExpanded",
-                ClassParameter.from(boolean.class, true));
-        XrControlPanelLayout expandedLayout = ReflectionHelpers.callInstanceMethod(presenter,
-                "controlBarLayout", ClassParameter.from(float.class, 1.5f));
-        verify(panel).setSizeInPixels(pixels.capture());
-        assertEquals(Math.round(2000 * expandedLayout.widthMeters / fullLayout.widthMeters),
-                pixels.getValue().getWidth());
-        assertTrue(pixels.getValue().getWidth() > 2000);
-        assertEquals(200, pixels.getValue().getHeight());
-        verify(panel, never()).setSize(any());
-
-        clearInvocations(panel);
-        ReflectionHelpers.callInstanceMethod(presenter, "setSecondaryActionsExpanded",
-                ClassParameter.from(boolean.class, false));
-        verify(panel).setSizeInPixels(pixels.capture());
-        assertEquals(2000, pixels.getValue().getWidth());
-        assertEquals(200, pixels.getValue().getHeight());
         setCollapsed(true);
         setCollapsed(false);
-        verify(panel, times(3)).setSizeInPixels(pixels.capture());
+        verify(panel, times(2)).setSizeInPixels(pixels.capture());
         assertEquals(2000, pixels.getValue().getWidth());
         assertEquals(200, pixels.getValue().getHeight());
         verify(panel, never()).setSize(any());

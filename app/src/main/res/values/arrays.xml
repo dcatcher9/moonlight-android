@@ -294,4 +294,15 @@
         <item>right</item>
     </string-array>
 
+    <string-array name="xr_cinema_environment_names">
+        <item>@string/xr_cinema_environment_black</item>
+        <item>@string/xr_cinema_environment_system</item>
+        <item>@string/xr_cinema_environment_passthrough</item>
+    </string-array>
+    <string-array name="xr_cinema_environment_values" translatable="false">
+        <item>black</item>
+        <item>system</item>
+        <item>passthrough</item>
+    </string-array>
+
 </resources>

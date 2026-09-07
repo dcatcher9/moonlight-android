@@ -12,16 +12,16 @@ import java.util.Arrays;
 
 public final class HostSbsTelemetrySnapshotTest {
     @Test
-    public void parsesExactLittleEndianV1Body() {
+    public void parsesExactLittleEndianV2Body() {
         byte[] body = stateBody(0xBEEF, 0xFEDCBA98L, 0x89ABCDEFL, 1.75f);
         HostSbsTelemetrySnapshot parsed = HostSbsTelemetrySnapshot.parse(body);
 
-        assertEquals(1, parsed.version);
+        assertEquals(2, parsed.version);
         assertEquals(HostSbsTelemetrySnapshot.STATUS_OK, parsed.status);
         assertEquals(0xBEEF, parsed.requestId);
         assertEquals(0xFEDCBA98L, parsed.generation);
         assertEquals(0x89ABCDEFL, parsed.sequence);
-        assertEquals(SbsDepthTelemetrySnapshot.VALID_ALL, parsed.validFields);
+        assertEquals(((1 << 11) - 1), parsed.validFields);
         assertEquals(1036, parsed.depthWidth);
         assertEquals(584, parsed.depthHeight);
         assertEquals(2, parsed.zeroPlaneMode);
@@ -47,13 +47,13 @@ public final class HostSbsTelemetrySnapshotTest {
         assertThrows(IllegalArgumentException.class,
                 () -> HostSbsTelemetrySnapshot.parse(null));
         assertThrows(IllegalArgumentException.class,
-                () -> HostSbsTelemetrySnapshot.parse(new byte[87]));
+                () -> HostSbsTelemetrySnapshot.parse(new byte[239]));
         assertThrows(IllegalArgumentException.class,
-                () -> HostSbsTelemetrySnapshot.parse(new byte[89]));
+                () -> HostSbsTelemetrySnapshot.parse(new byte[241]));
     }
 
     @Test
-    public void rejectsMalformedV1State() {
+    public void rejectsMalformedV2State() {
         byte[] unknownStatus = stateBody(1, 1, 1, 1.5f);
         unknownStatus[1] = (byte)99;
         assertMalformed(unknownStatus);
@@ -63,11 +63,11 @@ public final class HostSbsTelemetrySnapshotTest {
         assertMalformed(reserved);
 
         byte[] unknownValid = stateBody(1, 1, 1, 1.5f);
-        putInt(unknownValid, 12, SbsDepthTelemetrySnapshot.VALID_ALL | (1 << 20));
+        putInt(unknownValid, 12, ((1 << 11) - 1) | (1 << 21));
         assertMalformed(unknownValid);
 
         byte[] unknownRuntime = stateBody(1, 1, 1, 1.5f);
-        putInt(unknownRuntime, 16, SbsDepthTelemetrySnapshot.RUNTIME_ALL | (1 << 20));
+        putInt(unknownRuntime, 16, SbsDepthTelemetrySnapshot.RUNTIME_ALL | (1 << 21));
         assertMalformed(unknownRuntime);
 
         byte[] unknownMode = stateBody(1, 1, 1, 1.5f);
@@ -80,7 +80,7 @@ public final class HostSbsTelemetrySnapshotTest {
     }
 
     @Test
-    public void rejectsNonfiniteAssertedFloatFieldsForEveryV1Status() {
+    public void rejectsNonfiniteAssertedFloatFieldsForEveryV2Status() {
         int[] floatOffsets = {28, 32, 36, 40, 44, 48, 52, 56, 60};
         for (int offset : floatOffsets) {
             byte[] malformed = stateBody(1, 1, 1, 1.5f);
@@ -96,7 +96,7 @@ public final class HostSbsTelemetrySnapshotTest {
     }
 
     @Test
-    public void permitsUndefinedV1FieldsAndForwardCompatibleUnknownVersions() {
+    public void permitsUndefinedFieldsButRejectsUnknownWireVersions() {
         byte[] unavailable = stateBody(1, 1, 1, 1.5f);
         unavailable[1] = (byte)HostSbsTelemetrySnapshot.STATUS_UNAVAILABLE;
         putInt(unavailable, 12, 0);
@@ -109,15 +109,11 @@ public final class HostSbsTelemetrySnapshotTest {
                         .toDepthTelemetry().availability);
 
         byte[] future = Arrays.copyOf(unavailable, unavailable.length);
-        future[0] = 2;
-        future[1] = (byte)99;
-        putInt(future, 12, 1 << 20);
-        putInt(future, 16, 1 << 20);
-        future[24] = (byte)255;
-        future[25] = 1;
-        assertEquals(SbsDepthTelemetrySnapshot.Availability.UNSUPPORTED,
-                HostSbsTelemetrySnapshot.parse(future)
-                        .toDepthTelemetry().availability);
+        future[0] = 3;
+        assertMalformed(future);
+        future[0] = 1;
+        assertMalformed(future);
+        assertMalformed(Arrays.copyOf(unavailable, 88));
     }
 
     @Test
@@ -156,15 +152,98 @@ public final class HostSbsTelemetrySnapshotTest {
                         .toDepthTelemetry().availability);
     }
 
+    @Test
+    public void parsesAllPerformanceFieldsWithoutLosingUnsignedCounterBits() {
+        byte[] payload = stateBody(3, 7, 11, 1.5f);
+        ByteBuffer body = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+        body.putInt(12, (1 << 21) - 1);
+        body.putInt(88, 0xfedcba98);
+        body.putInt(92, 0x89abcdef);
+        body.putInt(96, 0xf1234567);
+        body.putLong(104, Long.MIN_VALUE);
+        body.putLong(112, -1L);
+        body.putLong(120, 0x123456789abcdef0L);
+        body.putInt(128, 0xf2345678);
+        body.putInt(132, -1);
+        body.putInt(136, 0x89abcdef);
+        body.putInt(140, 0x76543210);
+        for (int index = 0; index < HostSbsTelemetrySnapshot.STAGE_COUNT; index++) {
+            body.putFloat(144 + 12 * index, index + 0.25f);
+            body.putInt(148 + 12 * index, index + 1);
+            body.putInt(152 + 12 * index, 0xfffffff0 + index);
+        }
+        HostSbsTelemetrySnapshot parsed = HostSbsTelemetrySnapshot.parse(payload);
+        assertEquals(0xfedcba98L, parsed.outcomeEpoch);
+        assertEquals(0x89abcdefL, parsed.outcomeSequence);
+        assertEquals(0xf1234567L, parsed.outcomeCopyHostMs);
+        assertEquals(Long.MIN_VALUE, parsed.inferredTotal);
+        assertEquals(-1L, parsed.reusedTotal);
+        assertEquals(0x123456789abcdef0L, parsed.invalidTotal);
+        assertEquals(0xf2345678L, parsed.outputSampleHostMs);
+        assertEquals(0xffffffffL, parsed.warpedTotal);
+        assertEquals(0x89abcdefL, parsed.packedRepeatTotal);
+        assertEquals(0x76543210L, parsed.flatTotal);
+        HostSbsTelemetrySnapshot.Stage[] stages = {parsed.conversionCpu,
+                parsed.encodeRetrieveCpu, parsed.newContentAge, parsed.warpGpu,
+                parsed.preprocessGpu, parsed.modelConditionalGpu,
+                parsed.postprocessGpu, parsed.outputGpu};
+        for (int index = 0; index < stages.length; index++) {
+            assertTrue(stages[index].valid);
+            assertEquals(index + 0.25f, stages[index].meanMs, 0.0001f);
+            assertEquals(index + 1L, stages[index].count);
+            assertEquals(0xfffffff0L + index, stages[index].latestHostMs);
+        }
+        // Stage/outcome/output bits are not misrepresented as depth-health validity.
+        assertEquals((1 << 11) - 1, parsed.toDepthTelemetry().validFields);
+    }
+
+    @Test
+    public void rejectsEveryMalformedAssertedStageAndReservedWord() {
+        for (int index = 0; index < HostSbsTelemetrySnapshot.STAGE_COUNT; index++) {
+            byte[] payload = stateBody(1, 1, 1, 1.5f);
+            ByteBuffer body = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
+            body.putInt(12, HostSbsTelemetrySnapshot.VALID_STAGE_BASE << index);
+            int offset = 144 + 12 * index;
+            body.putFloat(offset, 1.0f);
+            assertMalformed(payload); // A valid measurement cannot have zero samples.
+            body.putInt(offset + 4, 1);
+            for (float invalid : new float[] {Float.NaN, Float.POSITIVE_INFINITY,
+                    Float.NEGATIVE_INFINITY, -0.1f}) {
+                body.putFloat(offset, invalid);
+                assertMalformed(payload);
+            }
+            body.putFloat(offset, 0.0f);
+            HostSbsTelemetrySnapshot.parse(payload); // A measured zero is valid.
+        }
+        for (int offset : new int[] {25, 26, 27, 100, 101, 102, 103}) {
+            byte[] payload = stateBody(1, 1, 1, 1.5f);
+            payload[offset] = 1;
+            assertMalformed(payload);
+        }
+    }
+
+    @Test
+    public void unavailableStagesDoNotMasqueradeAsZeroCostMeasurements() {
+        byte[] payload = stateBody(1, 1, 1, 1.5f);
+        for (int index = 0; index < HostSbsTelemetrySnapshot.STAGE_COUNT; index++) {
+            putFloat(payload, 144 + 12 * index, Float.NaN);
+        }
+        HostSbsTelemetrySnapshot parsed = HostSbsTelemetrySnapshot.parse(payload);
+        assertTrue(!parsed.conversionCpu.valid);
+        assertTrue(Float.isNaN(parsed.conversionCpu.meanMs));
+        assertEquals(0L, parsed.conversionCpu.count);
+        assertTrue(!parsed.outputGpu.valid);
+    }
+
     static byte[] stateBody(int requestId, long generation, long sequence, float effectivePop) {
         ByteBuffer body = ByteBuffer.allocate(HostSbsTelemetrySnapshot.WIRE_SIZE)
                 .order(ByteOrder.LITTLE_ENDIAN);
-        body.put((byte)1);
+        body.put((byte)HostSbsTelemetrySnapshot.VERSION_2);
         body.put((byte)HostSbsTelemetrySnapshot.STATUS_OK);
         body.putShort((short)requestId);
         body.putInt((int)generation);
         body.putInt((int)sequence);
-        body.putInt(SbsDepthTelemetrySnapshot.VALID_ALL);
+        body.putInt(((1 << 11) - 1));
         body.putInt(SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED
                 | SbsDepthTelemetrySnapshot.RUNTIME_ADAPTIVE
                 | SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY

@@ -33,6 +33,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private volatile long playbackGeneration;
     private volatile boolean started;
     private volatile boolean hasAudioFocus;
+    // Guarded by stateLock. Focus ownership does not start an empty MODE_STREAM track.
+    private boolean trackPlaying;
+    private int primedShortCount;
+    private int startThresholdShortCount;
     private final PlaybackThreadPriority playbackPriority =
             new PlaybackThreadPriority(Process.THREAD_PRIORITY_AUDIO);
     private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener =
@@ -45,7 +49,26 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
             // A nonblocking write keeps stop/focus callbacks and overload recovery independent
             // of a stalled mixer. The lock covers only the immediate write, never a retry wait.
-            return writingTrack.write(audioData, offset, shortCount, AudioTrack.WRITE_NON_BLOCKING);
+            int written = writingTrack.write(audioData, offset, shortCount, AudioTrack.WRITE_NON_BLOCKING);
+            if (!trackPlaying && written >= 0 && written <= shortCount
+                    && written % this.selectedChannelCount == 0
+                    && started && hasAudioFocus
+                    && track == writingTrack && playbackGeneration == writingGeneration) {
+                primedShortCount = (int)Math.min(Integer.MAX_VALUE, (long)primedShortCount + written);
+                // A short nonblocking transfer also proves the current route's buffer is full.
+                // This avoids waiting forever if a route change reduced the configured capacity.
+                if (primedShortCount > 0 && (primedShortCount >= startThresholdShortCount
+                        || written < shortCount)) {
+                    try {
+                        writingTrack.play();
+                        trackPlaying = true;
+                    } catch (IllegalStateException e) {
+                        LimeLog.warning("Unable to start primed AudioTrack: " + e.getMessage());
+                        return AudioTrack.ERROR_INVALID_OPERATION;
+                    }
+                }
+            }
+            return written;
         }
     };
     private final WriteControl writeControl = new WriteControl() {
@@ -89,7 +112,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     private AudioAttributes createPlaybackAttributes(boolean lowLatency) {
         AudioAttributes.Builder attributesBuilder = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_GAME);
+                .setUsage(AudioAttributes.USAGE_GAME)
+                // XR uses the content type to distinguish an audiovisual soundtrack from a
+                // positional sound effect, including when USAGE_GAME is retained for focus.
+                .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && lowLatency) {
             attributesBuilder.setFlags(AudioAttributes.FLAG_LOW_LATENCY);
         }
@@ -178,20 +204,20 @@ public class AndroidAudioRenderer implements AudioRenderer {
                     throw new IllegalStateException("AudioTrack failed to initialize");
                 }
 
-                synchronized (stateLock) {
-                    playbackGeneration++;
-                    track = candidate;
-                }
                 selectedChannelConfig = channelConfig;
                 selectedChannelCount = audioConfiguration.channelCount;
                 selectedSampleRate = sampleRate;
                 selectedBufferSize = bufferSize;
                 selectedLowLatency = lowLatency;
+                int actualBufferFrames;
+                synchronized (stateLock) {
+                    playbackGeneration++;
+                    track = candidate;
+                    actualBufferFrames = preparePlaybackLocked(candidate);
+                }
                 audioProcessor = new Pcm16AudioProcessor(audioBoostDb);
-                backlogPolicy = new AudioBacklogPolicy((int) (bufferSize * 1000L
-                        / ((long) sampleRate * audioConfiguration.channelCount * 2)));
-                LimeLog.info("Audio track configuration: " + bufferSize + " " + lowLatency
-                        + ", client boost " + audioBoostDb + " dB");
+                backlogPolicy = new AudioBacklogPolicy((int) (actualBufferFrames * 1000L / sampleRate));
+                logAudioTrackConfiguration(candidate, actualBufferFrames);
                 break;
             }
             catch (Exception e) {
@@ -207,6 +233,33 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
 
         return track != null ? 0 : -2;
+    }
+
+    private void logAudioTrackConfiguration(AudioTrack audioTrack, int actualBufferFrames) {
+        String grantedPerformanceMode = "unavailable";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                switch (audioTrack.getPerformanceMode()) {
+                    case AudioTrack.PERFORMANCE_MODE_LOW_LATENCY:
+                        grantedPerformanceMode = "LOW_LATENCY";
+                        break;
+                    case AudioTrack.PERFORMANCE_MODE_POWER_SAVING:
+                        grantedPerformanceMode = "POWER_SAVING";
+                        break;
+                    case AudioTrack.PERFORMANCE_MODE_NONE:
+                        grantedPerformanceMode = "NONE";
+                        break;
+                }
+            } catch (IllegalStateException e) {
+                // A route or track failure must not turn this one-time report into setup failure.
+            }
+        }
+        LimeLog.info("Audio track configuration: requested buffer " + selectedBufferSize
+                + " bytes, requested low latency " + selectedLowLatency
+                + ", granted performance mode " + grantedPerformanceMode
+                + ", actual buffer " + actualBufferFrames + " frames, start threshold "
+                + startThresholdShortCount / selectedChannelCount + " frames"
+                + ", client boost " + audioBoostDb + " dB");
     }
 
     @Override
@@ -363,6 +416,39 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** Prime the existing device-sized buffer; this never enlarges the track or queues silence. */
+    private int preparePlaybackLocked(AudioTrack audioTrack) {
+        int bufferFrames = Math.max(1, selectedBufferSize / Math.max(1, selectedChannelCount * 2));
+        try {
+            int actualFrames = audioTrack.getBufferSizeInFrames();
+            if (actualFrames > 0) {
+                bufferFrames = actualFrames;
+            }
+        } catch (IllegalStateException e) {
+            LimeLog.warning("AudioTrack buffer size unavailable; using requested size: " + e.getMessage());
+        }
+        int thresholdFrames = bufferFrames;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                int actualThreshold = audioTrack.getStartThresholdInFrames();
+                if (actualThreshold > 0) {
+                    thresholdFrames = Math.min(bufferFrames, actualThreshold);
+                }
+            } catch (IllegalStateException e) {
+                LimeLog.warning("AudioTrack start threshold unavailable; priming its buffer: " + e.getMessage());
+            }
+        }
+        startThresholdShortCount = (int)Math.min(Integer.MAX_VALUE,
+                (long)thresholdFrames * Math.max(1, selectedChannelCount));
+        clearPlaybackPrimingLocked();
+        return bufferFrames;
+    }
+
+    private void clearPlaybackPrimingLocked() {
+        trackPlaying = false;
+        primedShortCount = 0;
+    }
+
     private void handleAudioFocusChange(int focusChange) {
         boolean gainedFocus = focusChange == AudioManager.AUDIOFOCUS_GAIN;
         synchronized (stateLock) {
@@ -382,17 +468,14 @@ public class AndroidAudioRenderer implements AudioRenderer {
             // releasing the lock here could let a stale gain callback restart playback after
             // stop() has already paused and flushed the track.
             if (gainedFocus) {
-                try {
-                    track.play();
-                    LimeLog.info("Audio focus granted");
-                }
-                catch (IllegalStateException e) {
-                    LimeLog.warning("Unable to start AudioTrack after focus gain: " + e.getMessage());
-                }
+                // The native stream may still be in its initial resync/discard interval. Wait
+                // for current-generation PCM before play(), including after pause/flush.
+                LimeLog.info("Audio focus granted");
             }
             else {
                 playbackGeneration++;
                 pauseAndFlush(track);
+                clearPlaybackPrimingLocked();
                 if (backlogPolicy != null) {
                     backlogPolicy.reset();
                 }
@@ -411,6 +494,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
             started = false;
             hasAudioFocus = false;
             playbackGeneration++;
+            clearPlaybackPrimingLocked();
             if (backlogPolicy != null) {
                 backlogPolicy.reset();
             }
@@ -452,6 +536,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
             activeTrack = track;
             playbackGeneration++;
             track = null;
+            clearPlaybackPrimingLocked();
             audioProcessor = null;
         }
         if (activeTrack != null) {
@@ -484,11 +569,12 @@ public class AndroidAudioRenderer implements AudioRenderer {
                     throw new IllegalStateException("replacement AudioTrack failed to initialize");
                 }
                 track = replacement;
-                if (started && hasAudioFocus) {
-                    replacement.play();
-                }
+                int actualBufferFrames = preparePlaybackLocked(replacement);
+                backlogPolicy = new AudioBacklogPolicy((int) (actualBufferFrames * 1000L
+                        / selectedSampleRate));
                 openAudioEffectSessionLocked();
                 LimeLog.info("Recovered dead AudioTrack");
+                logAudioTrackConfiguration(replacement, actualBufferFrames);
             }
             catch (Exception e) {
                 track = null;

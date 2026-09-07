@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -61,6 +62,7 @@ public final class AndroidAudioRendererBackpressureTest {
         ReflectionHelpers.setField(renderer, "track", track);
         ReflectionHelpers.setField(renderer, "started", true);
         ReflectionHelpers.setField(renderer, "hasAudioFocus", true);
+        ReflectionHelpers.setField(renderer, "trackPlaying", true);
         ReflectionHelpers.setField(renderer, "selectedChannelCount", 2);
         ReflectionHelpers.setField(renderer, "selectedSampleRate", 48_000);
         ReflectionHelpers.setField(renderer, "audioProcessor", new Pcm16AudioProcessor(0));
@@ -214,7 +216,7 @@ public final class AndroidAudioRendererBackpressureTest {
         renderer.playDecodedAudio(new short[8], 8);
         verify(track, times(1)).write(any(short[].class), anyInt(), anyInt(), anyInt());
         verify(track).flush();
-        verify(track).play();
+        verify(track, never()).play();
     }
 
     @Test

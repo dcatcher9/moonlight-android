@@ -30,5 +30,27 @@ jobs:
             "$core/src/PlatformCrypto.c" "$core/src/ByteBuffer.c" \
             "$core/src/LinkedBlockingQueue.c" "$core/src/Platform.c" "$core/src/SdpGenerator.c" \
             -lcrypto -pthread -o "$RUNNER_TEMP/video-packet-size-test"
-      - name: Verify legacy negotiation and encrypted HEVC/AV1 recovery at every loss position
+      - name: Verify legacy negotiation and encrypted HEVC/AV1 recovery at selected loss positions
         run: '"$RUNNER_TEMP/video-packet-size-test"'
+      - name: Compile host telemetry control contract test
+        shell: bash
+        run: |
+          core=app/src/main/jni/moonlight-core/moonlight-common-c
+          cc -std=c11 -O2 -flto -DLC_DEBUG -DHAS_SOCKLEN_T -D_POSIX_C_SOURCE=200809L \
+            -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -I "$core/src" -I "$core/reedsolomon" -I "$core/enet/include" \
+            "$core/tests/ControlTelemetryTest.c" "$core/src/ByteBuffer.c" \
+            "$core/src/LinkedBlockingQueue.c" "$core/src/Platform.c" \
+            -pthread -o "$RUNNER_TEMP/control-telemetry-test"
+      - name: Verify telemetry capability, bounds, subscription and latest-state delivery
+        run: '"$RUNNER_TEMP/control-telemetry-test"'
+      - name: Verify JNI video buffer ownership on a persistent native thread
+        shell: bash
+        run: |
+          bridge=app/src/main/jni/moonlight-core
+          cc -std=c11 -O2 -flto -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/linux" \
+            -I app/src/test/native/include -I "$bridge/moonlight-common-c/src" \
+            -I "$bridge/libopus/include" app/src/test/native/VideoJniReferenceTest.c \
+            -pthread -o "$RUNNER_TEMP/video-jni-reference-test"
+          "$RUNNER_TEMP/video-jni-reference-test"

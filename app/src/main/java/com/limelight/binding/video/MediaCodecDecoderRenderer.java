@@ -348,6 +348,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // the atomic transition-admission path does not allocate a capturing lambda for every frame.
     private long pendingInputCommitTimestampUs;
     private int pendingInputCommitCodecFlags;
+    private int pendingInputCommitFrameNumber;
+    private int pendingInputCommitSourceId;
+    private volatile DecodedSourceIdentityTracker decodedSourceIdentityTracker;
     private final DecoderModeTransitionGate.InputCommitter inputCommitter =
             this::commitPendingInputBuffer;
 
@@ -413,6 +416,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // preallocated commit callback from fields guarded by modeTransitionStateLock so the final gate
     // check and MediaCodec release are one allocation-free transaction.
     private int pendingOutputCommitBufferIndex;
+    private long pendingOutputCommitPresentationTimeUs;
     private long pendingOutputCommitRenderTimestampNs;
     private boolean pendingOutputCommitUsesTimestamp;
     private final DecoderModeTransitionGate.OutputCommitter outputCommitter =
@@ -723,7 +727,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * reserved for the GL recovery park that must finish before its retired BufferQueue is freed.
      */
     public void setRenderTarget(Surface renderTarget) {
+        resetDecodedSourceIdentity();
         this.renderTarget = renderTarget;
+    }
+
+    /** Binds the stream's fixed attribution owner before MediaCodec is configured. */
+    public void setDecodedSourceIdentityTracker(DecodedSourceIdentityTracker tracker) {
+        resetDecodedSourceIdentity();
+        decodedSourceIdentityTracker = tracker;
+        resetDecodedSourceIdentity();
+    }
+
+    private void resetDecodedSourceIdentity() {
+        DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
+        if (tracker != null) {
+            tracker.reset();
+        }
     }
 
     /** Called once MediaCodec confirms that the first video frame reached its output surface. */
@@ -1490,6 +1509,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void configureAndStartDecoder(MediaFormat format) {
+        resetDecodedSourceIdentity();
         // Create the callback looper before entering any vendor configure/start call. Recovery can
         // invoke this method on a codec worker, so relying on its implicit Looper would make
         // callback latency and even callback delivery depend on the caller.
@@ -1892,6 +1912,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
             try {
                 Surface previousSurface = renderTarget;
+                resetDecodedSourceIdentity();
                 videoDecoder.setOutputSurface(surface);
                 if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
                         requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
@@ -1946,6 +1967,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             } catch (Exception e) {
                 LimeLog.warning("Decoder output-surface switch failed: " + e);
                 return false;
+            } finally {
+                // Inputs and output releases can race the vendor surface call. Neither side of
+                // that boundary may retain metadata for a buffer delivered to the other surface.
+                resetDecodedSourceIdentity();
             }
         }
     }
@@ -2124,6 +2149,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         DecoderModeTransitionGate.OutputDecision decision;
         synchronized (modeTransitionStateLock) {
             pendingOutputCommitBufferIndex = bufferIndex;
+            pendingOutputCommitPresentationTimeUs = presentationTimeUs;
             pendingOutputCommitUsesTimestamp = usesTimestamp;
             pendingOutputCommitRenderTimestampNs = renderTimestampNs;
             decision = modeTransitionFrameGate.commitOutput(
@@ -2165,12 +2191,37 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     /** Runs only under modeTransitionStateLock and DecoderModeTransitionGate's output monitor. */
     private void commitPendingOutputBufferForRender() {
-        if (pendingOutputCommitUsesTimestamp) {
-            videoDecoder.releaseOutputBuffer(
-                    pendingOutputCommitBufferIndex, pendingOutputCommitRenderTimestampNs);
-        } else {
-            videoDecoder.releaseOutputBuffer(pendingOutputCommitBufferIndex, true);
+        DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
+        if (tracker != null && !stopping) {
+            // Publish first: SurfaceTexture may latch before releaseOutputBuffer returns.
+            tracker.recordOutput(pendingOutputCommitPresentationTimeUs,
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                            ? sourceIdentitySurfaceTimestampNs(
+                                    pendingOutputCommitPresentationTimeUs,
+                                    pendingOutputCommitUsesTimestamp,
+                                    pendingOutputCommitRenderTimestampNs)
+                            : 0L);
         }
+        try {
+            if (pendingOutputCommitUsesTimestamp) {
+                videoDecoder.releaseOutputBuffer(
+                        pendingOutputCommitBufferIndex, pendingOutputCommitRenderTimestampNs);
+            } else {
+                videoDecoder.releaseOutputBuffer(pendingOutputCommitBufferIndex, true);
+            }
+        } catch (RuntimeException e) {
+            resetDecodedSourceIdentity();
+            throw e;
+        }
+    }
+
+    static long sourceIdentitySurfaceTimestampNs(
+            long presentationTimeUs, boolean usesTimestamp, long renderTimestampNs) {
+        if (usesTimestamp) {
+            return renderTimestampNs > 0L ? renderTimestampNs : 0L;
+        }
+        return presentationTimeUs > 0L && presentationTimeUs <= Long.MAX_VALUE / 1000L
+                ? presentationTimeUs * 1000L : 0L;
     }
 
     private static boolean isOutputSurfaceRequestPending(
@@ -2251,6 +2302,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
             // This is the final thread to quiesce, so let's perform the codec recovery now.
             if (codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL) {
+                resetDecodedSourceIdentity();
                 // Input and output buffers are invalidated by stop() and reset().
                 nextInputBuffer = null;
                 nextInputBufferIndex = -1;
@@ -2502,6 +2554,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Returns true if the exception is transient
     private boolean handleDecoderException(IllegalStateException e) {
+        resetDecodedSourceIdentity();
         // Eat decoder exceptions if we're in the process of stopping
         if (stopping) {
             return false;
@@ -2667,6 +2720,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     break;
                 }
             } catch (IllegalStateException ignored) {
+                resetDecodedSourceIdentity();
                 try {
                     // Try to avoid leaking the output buffer by releasing it without rendering
                     if (nextOutputBuffer != null) {
@@ -2929,6 +2983,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
+        resetDecodedSourceIdentity();
         shutdownOutputSurfaceSwitchThread();
         cancelPresentationModeTransitionInternal();
 
@@ -3007,6 +3062,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // an already-running native handoff owns the same monitor and therefore finishes first.
         stopping = true;
         codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED);
+        resetDecodedSourceIdentity();
         shutdownOutputSurfaceSwitchThread();
         MediaCodec decoderToRelease;
         synchronized (codecRecoveryMonitor) {
@@ -3077,7 +3133,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private InputQueueResult queueNextInputBufferForAdmission(
             long timestampUs, int codecFlags, long admissionGeneration,
-            int frameNumber, boolean idrFrame, boolean prepareTransitionIdr) {
+            int frameNumber, int frameSourceId, boolean idrFrame, boolean prepareTransitionIdr) {
         boolean codecRecovered;
         boolean trackDecodeLatency = performanceTelemetryEnabled
                 && (codecFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
@@ -3099,6 +3155,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         try {
             pendingInputCommitTimestampUs = timestampUs;
             pendingInputCommitCodecFlags = codecFlags;
+            pendingInputCommitFrameNumber = frameNumber;
+            pendingInputCommitSourceId = frameSourceId;
             DecoderModeTransitionGate.InputCommitDecision commitDecision =
                     modeTransitionFrameGate.commitInput(
                             admissionGeneration, frameNumber, idrFrame, timestampUs,
@@ -3165,9 +3223,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     /** Runs only under DecoderModeTransitionGate's admission monitor on the input thread. */
     private void commitPendingInputBuffer() {
-        videoDecoder.queueInputBuffer(nextInputBufferIndex,
-                0, nextInputBuffer.position(),
-                pendingInputCommitTimestampUs, pendingInputCommitCodecFlags);
+        DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
+        if (tracker != null && !stopping
+                && (pendingInputCommitCodecFlags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+            tracker.recordInput(pendingInputCommitTimestampUs,
+                    pendingInputCommitFrameNumber, pendingInputCommitSourceId);
+        }
+        try {
+            videoDecoder.queueInputBuffer(nextInputBufferIndex,
+                    0, nextInputBuffer.position(),
+                    pendingInputCommitTimestampUs, pendingInputCommitCodecFlags);
+        } catch (RuntimeException e) {
+            resetDecodedSourceIdentity();
+            throw e;
+        }
         nextInputBufferIndex = -1;
         nextInputBuffer = null;
     }
@@ -3189,11 +3258,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                 int frameNumber, int frameType, char frameHostProcessingLatency,
                                 long receiveTimeMs, long enqueueTimeMs) {
+        return submitDecodeUnit(decodeUnitData, decodeUnitLength, decodeUnitType,
+                frameNumber, frameType, frameHostProcessingLatency, 0,
+                receiveTimeMs, enqueueTimeMs);
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    public int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
+                                int frameNumber, int frameType, char frameHostProcessingLatency,
+                                int frameSourceId, long receiveTimeMs, long enqueueTimeMs) {
         if (stopping) {
             // Don't bother if we're stopping
             return MoonBridge.DR_OK;
@@ -3563,7 +3641,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                     InputQueueResult csdQueueResult = queueNextInputBufferForAdmission(
                             0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
-                            transitionInputAdmission, frameNumber, idrFrame, false);
+                            transitionInputAdmission, frameNumber, 0, idrFrame, false);
                     if (csdQueueResult != InputQueueResult.QUEUED) {
                         if (csdQueueResult == InputQueueResult.TRANSITION_DROPPED) {
                             intentionalInputDiscontinuityPending = true;
@@ -3680,7 +3758,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         InputQueueResult frameQueueResult = queueNextInputBufferForAdmission(
                 queuedTimestampUs, codecFlags, transitionInputAdmission,
-                frameNumber, idrFrame, true);
+                frameNumber, frameSourceId, idrFrame, true);
         if (frameQueueResult == InputQueueResult.TRANSITION_DROPPED) {
             intentionalInputDiscontinuityPending = true;
             return MoonBridge.DR_OK;
@@ -3715,7 +3793,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Queue the new SPS
         InputQueueResult result = queueNextInputBufferForAdmission(
                 0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG,
-                admissionGeneration, frameNumber, idrFrame, false);
+                admissionGeneration, frameNumber, 0, idrFrame, false);
         if (result == InputQueueResult.QUEUED) {
             savedSps = null;
         }

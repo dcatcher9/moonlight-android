@@ -86,7 +86,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeDrStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStart", "()V");
     BridgeDrStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStop", "()V");
     BridgeDrCleanupMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrCleanup", "()V");
-    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICJJ)I");
+    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICIJJ)I");
     BridgeArInitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArInit", "(III)I");
     BridgeArStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStart", "()V");
     BridgeArStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStop", "()V");
@@ -110,6 +110,25 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
             env, clazz, "bridgeClHostSbsTelemetryState", "([B)V");
 }
 
+static jbyteArray CreateGlobalFrameBuffer(JNIEnv* env, jsize size) {
+    jbyteArray localBuffer = (*env)->NewByteArray(env, size);
+    jbyteArray globalBuffer = NULL;
+    if (localBuffer != NULL) {
+        globalBuffer = (*env)->NewGlobalRef(env, localBuffer);
+        // Native video threads stay attached between frames; their local references do not
+        // expire when this callback returns. Release the temporary even if promotion fails.
+        (*env)->DeleteLocalRef(env, localBuffer);
+    }
+    if (globalBuffer == NULL) {
+        // Report the allocation failure through the native result. Do not leave an OOM exception
+        // pending on the attached decoder thread or detach a potentially Java-owned caller.
+        (*env)->ExceptionClear(env);
+        __android_log_print(ANDROID_LOG_ERROR, "moonlight-core",
+                            "Unable to allocate %d-byte decoder buffer", (int)size);
+    }
+    return globalBuffer;
+}
+
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
     JNIEnv* env = GetThreadEnv();
     int err;
@@ -124,7 +143,12 @@ int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* 
     }
 
     // Use a 32K frame buffer that will increase if needed
-    DecodedFrameBuffer = (*env)->NewGlobalRef(env, (*env)->NewByteArray(env, 32768));
+    DecodedFrameBuffer = CreateGlobalFrameBuffer(env, 32768);
+    if (DecodedFrameBuffer == NULL) {
+        // Native startup does not invoke cleanup when the renderer's setup callback fails.
+        (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeDrCleanupMethod);
+        return -1;
+    }
 
     return 0;
 }
@@ -145,6 +169,7 @@ void BridgeDrCleanup(void) {
     JNIEnv* env = GetThreadEnv();
 
     (*env)->DeleteGlobalRef(env, DecodedFrameBuffer);
+    DecodedFrameBuffer = NULL;
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeDrCleanupMethod);
 }
@@ -155,8 +180,13 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
 
     // Increase the size of our frame data buffer if our frame won't fit
     if ((*env)->GetArrayLength(env, DecodedFrameBuffer) < decodeUnit->fullLength) {
+        jbyteArray replacementBuffer = CreateGlobalFrameBuffer(env, decodeUnit->fullLength);
+        if (replacementBuffer == NULL) {
+            // Keep the previous buffer usable. This frame was not submitted, so require an IDR.
+            return DR_NEED_IDR;
+        }
         (*env)->DeleteGlobalRef(env, DecodedFrameBuffer);
-        DecodedFrameBuffer = (*env)->NewGlobalRef(env, (*env)->NewByteArray(env, decodeUnit->fullLength));
+        DecodedFrameBuffer = replacementBuffer;
     }
 
     PLENTRY currentEntry;
@@ -174,6 +204,7 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
             ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                               DecodedFrameBuffer, currentEntry->length, currentEntry->bufferType,
                                               decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
+                                              (jint)decodeUnit->frameSourceId,
                                               (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
             if ((*env)->ExceptionCheck(env)) {
                 // We will crash here
@@ -195,6 +226,7 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                        DecodedFrameBuffer, offset, BUFFER_TYPE_PICDATA,
                                        decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
+                                       (jint)decodeUnit->frameSourceId,
                                        (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
@@ -395,9 +427,8 @@ void BridgeClSetHdrMode(bool enabled) {
 
     // This callback may run on a long-lived native control thread. Give its temporary metadata
     // array an explicit JNI frame so every HDR transition releases it without relying on the
-    // enclosing LiStartConnection() native frame. PopLocalFrame() is also valid for both
-    // Java-owned and AttachCurrentThread() callers, unlike deleting a transition reference
-    // directly on some ART builds.
+    // enclosing LiStartConnection() native frame. This array is owned by this callback, unlike
+    // borrowed object arguments supplied by a Java-to-native transition.
     if ((*env)->PushLocalFrame(env, 1) < 0) {
         return;
     }

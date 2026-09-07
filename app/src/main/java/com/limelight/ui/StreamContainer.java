@@ -18,6 +18,7 @@ import android.widget.FrameLayout;
 
 import com.limelight.Game;
 import com.limelight.LimeLog;
+import com.limelight.binding.video.DecodedSourceIdentityTracker;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 
@@ -130,11 +131,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private Game game;
     private PreferenceConfiguration prefConfig;
     private Stereo3DRenderer mStereoRenderer;
+    private final DecodedSourceIdentityTracker mDecodedSourceIdentityTracker =
+            new DecodedSourceIdentityTracker();
     private XrStreamPresenter mXrPresenter;
     /** UI preference mirrored into the renderer's cross-thread diagnostic gate. */
     private volatile boolean mClientSbsStatsVisible;
 
     private SurfaceView mSurfaceView;
+    /** The holder is needed only to drive GLSurfaceView while Client SBS owns EGL output. */
+    private boolean mClientSbsWindowSurfaceEnabled;
     private Surface mCurrentSurface;
     private volatile Surface mClientSbsSurface;
     private volatile Surface mBoundDecoderSurface;
@@ -253,6 +258,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mStereoRenderer.setPerformanceSamplingEnabled(
                     mClientSbsStatsVisible && mStereoRenderer.isClientSbs());
         }
+    }
+
+    /** One fixed attribution owner shared by the decoder and the Client SBS renderer. */
+    public DecodedSourceIdentityTracker getDecodedSourceIdentityTracker() {
+        return mDecodedSourceIdentityTracker;
     }
 
     /** Drain one coherent Client-SBS performance window for the XR stats panel. */
@@ -453,6 +463,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                             surfaceGeneration, eglAttachGeneration, reason));
                 }
             }, context, prefConfig, false);
+            mStereoRenderer.setDecodedSourceIdentityTracker(mDecodedSourceIdentityTracker);
             updateClientSbsPerformanceSampling();
             // Client SBS renders into a negotiated-size packed XR compositor surface, which is
             // unrelated to this view's on-screen size. Tell the renderer both dimensions explicitly.
@@ -465,6 +476,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // Start paused so EGL doesn't grab the XR surface initially
             glSurfaceView.onPause();
             mSurfaceView = glSurfaceView;
+            setClientSbsWindowSurfaceEnabled(false);
         }
         addView(mSurfaceView, childParams);
 
@@ -580,6 +592,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mCreatedEglAttachGeneration = 0;
             mRequestedEglAttachGeneration = eglOperationGeneration;
             mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
+            // A visible holder supplies GLSurfaceView's create/change lifecycle even though its
+            // EGL factory targets SceneCore. Direct modes leave that unused BLAST layer absent.
+            setClientSbsWindowSurfaceEnabled(true);
             glView.onResume();
         } else {
             // onPause() only requests a pause. Wait for this exact eglDestroySurface() ack.
@@ -859,6 +874,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (success && !completedEnable) {
             mActiveClientSbsDecoderGeneration = 0;
             mClientSbsSurface = null;
+            // The exact EGL detach and direct decoder rebind have both completed. Hiding earlier
+            // could destroy the holder while the Client producer still owns the SceneCore surface.
+            setClientSbsWindowSurfaceEnabled(false);
         }
         // The GL detach/attach acknowledgement can arrive just before Activity teardown and be
         // queued on the main thread behind onDestroy(). Revalidate the generation at execution
@@ -1632,6 +1650,15 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mSurfaceView;
     }
 
+    void setClientSbsWindowSurfaceEnabled(boolean enabled) {
+        mClientSbsWindowSurfaceEnabled = enabled;
+        if (mSurfaceView != null) {
+            // INVISIBLE preserves the input/layout bridge dimensions while SurfaceView removes
+            // its unused compositor surface. GONE would also change measurement and input bounds.
+            mSurfaceView.setVisibility(enabled ? VISIBLE : INVISIBLE);
+        }
+    }
+
     private void notifySurfaceReady() {
         isSurfaceReady = true;
         if (onSurfaceAvailable != null) {
@@ -1641,15 +1668,25 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        game.surfaceCreated(holder);
+        if (!mDestroyed && mClientSbsWindowSurfaceEnabled) {
+            game.surfaceCreated(holder);
+        }
     }
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         // XR route: the video surface is delivered via onStereo3DSurfaceReady, not the holder.
-        game.surfaceChanged(holder, format, width, height);
+        if (!mDestroyed && mClientSbsWindowSurfaceEnabled) {
+            game.surfaceChanged(holder, format, width, height);
+        }
     }
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        // Normal/Host presentation is owned by SceneCore, not this holder. Its deliberate removal
+        // after Client exit must not stop that stream or destroy a renderer needed for re-entry.
+        // Activity stop/destroy still stops the connection through Game's independent lifecycle.
+        if (mDestroyed || !mClientSbsWindowSurfaceEnabled) {
+            return;
+        }
         // Stop native streaming before releasing any decoder/EGL/XR surface it may still use.
         game.surfaceDestroyed(holder);
         game.runAfterConnectionStop(() -> destroyStereoRenderer());
@@ -1706,6 +1743,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             }
         }
         mDestroyed = true;
+        mDecodedSourceIdentityTracker.reset();
         invalidateDecoderSurfaceHandoff(false);
         mClientSbsContextRecoveryParked = false;
         mClientSbsSwitchGeneration++;

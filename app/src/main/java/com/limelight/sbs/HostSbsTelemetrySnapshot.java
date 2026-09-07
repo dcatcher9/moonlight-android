@@ -3,10 +3,32 @@ package com.limelight.sbs;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** Immutable parser result for Apollo's exact 88-byte host SBS telemetry v1 state body. */
+/** Immutable parser result for Apollo's exact 240-byte host SBS telemetry v2 state body. */
 public final class HostSbsTelemetrySnapshot {
-    public static final int WIRE_SIZE = 88;
-    public static final int VERSION_1 = 1;
+    public static final int WIRE_SIZE = 240;
+    public static final int VERSION_2 = 2;
+    public static final int VALID_OUTCOMES = 1 << 11;
+    public static final int VALID_OUTPUT = 1 << 12;
+    public static final int VALID_STAGE_BASE = 1 << 13;
+    public static final int STAGE_COUNT = 8;
+    private static final int VALID_HEALTH = (1 << 11) - 1;
+    private static final int VALID_ALL = (1 << 21) - 1;
+
+    /** One independently sampled stage; unavailable fields never become zero-cost evidence. */
+    public static final class Stage {
+        private static final Stage UNAVAILABLE = new Stage(false, Float.NaN, 0L, 0L);
+        public final boolean valid;
+        public final float meanMs;
+        public final long count;
+        public final long latestHostMs;
+
+        private Stage(boolean valid, float meanMs, long count, long latestHostMs) {
+            this.valid = valid;
+            this.meanMs = meanMs;
+            this.count = count;
+            this.latestHostMs = latestHostMs;
+        }
+    }
 
     public static final int STATUS_OK = 0;
     public static final int STATUS_UNAVAILABLE = 1;
@@ -39,6 +61,25 @@ public final class HostSbsTelemetrySnapshot {
     public final long emptyDepthFrames;
     public final long collapsedDepthFrames;
     public final long sampleFrame;
+    public final long outcomeEpoch;
+    public final long outcomeSequence;
+    public final long outcomeCopyHostMs;
+    // Unsigned 64-bit counters retain their wire bits; consumers use bounded unsigned deltas.
+    public final long inferredTotal;
+    public final long reusedTotal;
+    public final long invalidTotal;
+    public final long outputSampleHostMs;
+    public final long warpedTotal;
+    public final long packedRepeatTotal;
+    public final long flatTotal;
+    public final Stage conversionCpu;
+    public final Stage encodeRetrieveCpu;
+    public final Stage newContentAge;
+    public final Stage warpGpu;
+    public final Stage preprocessGpu;
+    public final Stage modelConditionalGpu;
+    public final Stage postprocessGpu;
+    public final Stage outputGpu;
 
     private HostSbsTelemetrySnapshot(
             int version, int status, int requestId, long generation, long sequence,
@@ -47,7 +88,12 @@ public final class HostSbsTelemetrySnapshot {
             float classifiedEdgeFraction, float changeFraction, float zeroAnchorShiftPx,
             float subjectDepth, float validDepthFraction, float effectiveRangeWidth,
             long sceneAge, long hardCutCount, long externalCutRequests,
-            long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame) {
+            long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame,
+            long outcomeEpoch, long outcomeSequence, long outcomeCopyHostMs,
+            long inferredTotal, long reusedTotal, long invalidTotal,
+            long outputSampleHostMs, long warpedTotal, long packedRepeatTotal, long flatTotal,
+            Stage conversionCpu, Stage encodeRetrieveCpu, Stage newContentAge, Stage warpGpu,
+            Stage preprocessGpu, Stage modelConditionalGpu, Stage postprocessGpu, Stage outputGpu) {
         this.version = version;
         this.status = status;
         this.requestId = requestId;
@@ -73,6 +119,24 @@ public final class HostSbsTelemetrySnapshot {
         this.emptyDepthFrames = emptyDepthFrames;
         this.collapsedDepthFrames = collapsedDepthFrames;
         this.sampleFrame = sampleFrame;
+        this.outcomeEpoch = outcomeEpoch;
+        this.outcomeSequence = outcomeSequence;
+        this.outcomeCopyHostMs = outcomeCopyHostMs;
+        this.inferredTotal = inferredTotal;
+        this.reusedTotal = reusedTotal;
+        this.invalidTotal = invalidTotal;
+        this.outputSampleHostMs = outputSampleHostMs;
+        this.warpedTotal = warpedTotal;
+        this.packedRepeatTotal = packedRepeatTotal;
+        this.flatTotal = flatTotal;
+        this.conversionCpu = conversionCpu;
+        this.encodeRetrieveCpu = encodeRetrieveCpu;
+        this.newContentAge = newContentAge;
+        this.warpGpu = warpGpu;
+        this.preprocessGpu = preprocessGpu;
+        this.modelConditionalGpu = modelConditionalGpu;
+        this.postprocessGpu = postprocessGpu;
+        this.outputGpu = outputGpu;
     }
 
     public static HostSbsTelemetrySnapshot parse(byte[] payload) {
@@ -82,6 +146,9 @@ public final class HostSbsTelemetrySnapshot {
         }
         ByteBuffer body = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
         int version = unsignedByte(body);
+        if (version != VERSION_2) {
+            throw new IllegalArgumentException("Unsupported host SBS telemetry version " + version);
+        }
         int status = unsignedByte(body);
         int requestId = unsignedShort(body);
         long generation = unsignedInt(body);
@@ -110,24 +177,58 @@ public final class HostSbsTelemetrySnapshot {
         long collapsed = unsignedInt(body);
         long sampleFrame = unsignedInt(body);
 
-        // A newer protocol version remains parseable so callers can report it as unsupported
-        // instead of conflating forward evolution with a corrupt v1 packet.
-        if (version == VERSION_1) {
-            validateV1(status, validFields, runtimeFlags, zeroPlaneMode,
-                    reserved0, reserved1, reserved2,
-                    popFloor, popCeiling, effectivePop, edge, change, anchor,
-                    subject, validFraction, rangeWidth);
+        long outcomeEpoch = unsignedInt(body);
+        long outcomeSequence = unsignedInt(body);
+        long outcomeCopyHostMs = unsignedInt(body);
+        if (body.getInt() != 0) {
+            throw new IllegalArgumentException("Host SBS telemetry reserved word must be zero");
         }
+        long inferredTotal = body.getLong();
+        long reusedTotal = body.getLong();
+        long invalidTotal = body.getLong();
+        long outputSampleHostMs = unsignedInt(body);
+        long warpedTotal = unsignedInt(body);
+        long packedRepeatTotal = unsignedInt(body);
+        long flatTotal = unsignedInt(body);
+        Stage conversionCpu = readStage(body, validFields, 0);
+        Stage encodeRetrieveCpu = readStage(body, validFields, 1);
+        Stage newContentAge = readStage(body, validFields, 2);
+        Stage warpGpu = readStage(body, validFields, 3);
+        Stage preprocessGpu = readStage(body, validFields, 4);
+        Stage modelConditionalGpu = readStage(body, validFields, 5);
+        Stage postprocessGpu = readStage(body, validFields, 6);
+        Stage outputGpu = readStage(body, validFields, 7);
+        validateState(status, validFields, runtimeFlags, zeroPlaneMode,
+                reserved0, reserved1, reserved2,
+                popFloor, popCeiling, effectivePop, edge, change, anchor,
+                subject, validFraction, rangeWidth);
 
         return new HostSbsTelemetrySnapshot(
                 version, status, requestId, generation, sequence,
                 validFields, runtimeFlags, depthWidth, depthHeight, zeroPlaneMode,
                 popFloor, popCeiling, effectivePop, edge, change, anchor, subject,
                 validFraction, rangeWidth, sceneAge, cuts, external, empty, collapsed,
-                sampleFrame);
+                sampleFrame, outcomeEpoch, outcomeSequence, outcomeCopyHostMs,
+                inferredTotal, reusedTotal, invalidTotal, outputSampleHostMs,
+                warpedTotal, packedRepeatTotal, flatTotal, conversionCpu, encodeRetrieveCpu,
+                newContentAge, warpGpu, preprocessGpu, modelConditionalGpu, postprocessGpu, outputGpu);
     }
 
-    private static void validateV1(
+    private static Stage readStage(ByteBuffer body, int validFields, int stageIndex) {
+        float meanMs = body.getFloat();
+        long count = unsignedInt(body);
+        long latestHostMs = unsignedInt(body);
+        if ((validFields & (VALID_STAGE_BASE << stageIndex)) == 0) {
+            return Stage.UNAVAILABLE;
+        }
+        if (!Float.isFinite(meanMs) || meanMs < 0.0f || count == 0L) {
+            throw new IllegalArgumentException("Valid host SBS stage " + stageIndex
+                    + " requires a nonnegative finite duration and nonzero count");
+        }
+        return new Stage(true, meanMs, count, latestHostMs);
+    }
+
+    private static void validateState(
             int status, int validFields, int runtimeFlags, int zeroPlaneMode,
             int reserved0, int reserved1, int reserved2,
             float popFloor, float popCeiling, float effectivePop,
@@ -135,28 +236,28 @@ public final class HostSbsTelemetrySnapshot {
             float validFraction, float rangeWidth) {
         if (status < STATUS_OK || status > STATUS_FAILED) {
             throw new IllegalArgumentException(
-                    "Unknown host SBS telemetry v1 status " + status);
+                    "Unknown host SBS telemetry v2 status " + status);
         }
         if (reserved0 != 0 || reserved1 != 0 || reserved2 != 0) {
             throw new IllegalArgumentException(
-                    "Host SBS telemetry v1 reserved bytes must be zero");
+                    "Host SBS telemetry v2 reserved bytes must be zero");
         }
-        if ((validFields & ~SbsDepthTelemetrySnapshot.VALID_ALL) != 0) {
+        if ((validFields & ~VALID_ALL) != 0) {
             throw new IllegalArgumentException(
-                    "Host SBS telemetry v1 contains unknown valid-field bits");
+                    "Host SBS telemetry v2 contains unknown valid-field bits");
         }
         if ((runtimeFlags & ~SbsDepthTelemetrySnapshot.RUNTIME_ALL) != 0) {
             throw new IllegalArgumentException(
-                    "Host SBS telemetry v1 contains unknown runtime-flag bits");
+                    "Host SBS telemetry v2 contains unknown runtime-flag bits");
         }
         if (zeroPlaneMode < 0 || zeroPlaneMode > 3) {
             throw new IllegalArgumentException(
-                    "Host SBS telemetry v1 contains an unknown zero-plane mode");
+                    "Host SBS telemetry v2 contains an unknown zero-plane mode");
         }
         if ((validFields & SbsDepthTelemetrySnapshot.VALID_CONFIG) != 0
                 && zeroPlaneMode == 0) {
             throw new IllegalArgumentException(
-                    "Host SBS telemetry v1 must report a configured zero-plane mode");
+                    "Host SBS telemetry v2 must report a configured zero-plane mode");
         }
         requireFinite(validFields, SbsDepthTelemetrySnapshot.VALID_CONFIG,
                 "pop floor", popFloor);
@@ -182,12 +283,12 @@ public final class HostSbsTelemetrySnapshot {
             int validFields, int field, String name, float value) {
         if ((validFields & field) != 0 && !Float.isFinite(value)) {
             throw new IllegalArgumentException(
-                    "Host SBS telemetry v1 " + name + " must be finite when valid");
+                    "Host SBS telemetry v2 " + name + " must be finite when valid");
         }
     }
 
     public SbsDepthTelemetrySnapshot toDepthTelemetry() {
-        if (version != VERSION_1 || status == STATUS_UNSUPPORTED_VERSION) {
+        if (version != VERSION_2 || status == STATUS_UNSUPPORTED_VERSION) {
             return SbsDepthTelemetrySnapshot.unavailable(
                     SbsDepthTelemetrySnapshot.Availability.UNSUPPORTED);
         }
@@ -200,7 +301,7 @@ public final class HostSbsTelemetrySnapshot {
                     SbsDepthTelemetrySnapshot.Availability.FAILED);
         }
         return SbsDepthTelemetrySnapshot.available(
-                validFields, runtimeFlags, depthWidth, depthHeight, zeroPlaneMode,
+                validFields & VALID_HEALTH, runtimeFlags, depthWidth, depthHeight, zeroPlaneMode,
                 popFloor, popCeiling,
                 // Already absolute on the wire. Never multiply by floor or a local ratio.
                 effectivePop,

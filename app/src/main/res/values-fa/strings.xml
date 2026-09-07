@@ -1,2 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources></resources>
+<resources>
+    <string name="xr_stats_host_source_repeats">فریم‌های تکراری تأییدشده توسط میزبان</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | حفظ تصویر قبلی</string>
+    <string name="xr_stats_host_sample">انتشار میزبان</string>
+    <string name="xr_stats_host_sample_value">%1$d | دریافت‌شده در %2$.1f ثانیه پیش</string>
+    <string name="xr_stats_host_performance">کارایی میزبان</string>
+    <string name="xr_stats_host_enable_diagnostics">برای نمایش کارایی، عیب‌یابی میزبان را فعال کنید</string>
+    <string name="xr_stats_host_decision_rates">استنتاج / استفادهٔ مجدد / نامعتبر FPS</string>
+    <string name="xr_stats_host_reuse_ratio">استفادهٔ مجدد از ورودی تقریباً یکسان</string>
+    <string name="xr_stats_host_reuse_ratio_value">%1$.1f%% از تصمیم‌های استنتاج و استفادهٔ مجدد</string>
+    <string name="xr_stats_host_no_eligible_decisions">هیچ تصمیم واجد شرایطی اندازه‌گیری نشده است</string>
+    <string name="xr_stats_host_decision_sample">نسخهٔ تصمیم‌های GPU</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | دریافت‌شده در %2$.1f ثانیه پیش</string>
+    <string name="xr_stats_host_output_rates">وارپ / تکرار فریم SBS / تخت FPS</string>
+    <string name="xr_stats_host_stage_averages">میانگین مراحل</string>
+    <string name="xr_stats_host_stage_averages_value">از زمان تغییر حالت؛ مراحل CPU/GPU هم‌پوشانی دارند</string>
+    <string name="xr_stats_host_conversion_cpu">زمان سپری‌شدهٔ تبدیل (CPU)</string>
+    <string name="xr_stats_host_encode_cpu">زمان سپری‌شدهٔ رمزگذاری / دریافت (CPU)</string>
+    <string name="xr_stats_host_content_age">سن محتوای خروجی جدید</string>
+    <string name="xr_stats_host_warp_gpu">وارپ (GPU)</string>
+    <string name="xr_stats_host_preprocess_gpu">پیش‌پردازش (GPU)</string>
+    <string name="xr_stats_host_conditional_gpu">مدل / شاخهٔ استفادهٔ مجدد (GPU)</string>
+    <string name="xr_stats_host_postprocess_gpu">پس‌پردازش (GPU)</string>
+    <string name="xr_stats_host_output_gpu">خروجی (GPU)</string>
+    <string name="xr_stats_host_waiting_rates">در انتظار دو نمونهٔ تازه</string>
+    <string name="xr_stats_host_stage_value">%1$.2f میلی‌ثانیه | %2$d نمونه</string>
+    <string name="xr_stats_host_not_sampled">نمونه‌برداری نشده</string>
+    <string name="xr_cinema_environment">محیط سینما</string>
+    <string name="xr_cinema_environment_summary">پس‌زمینه هنگام ورود به حالت سینما</string>
+    <string name="xr_cinema_environment_black">سیاه</string>
+    <string name="xr_cinema_environment_system">محیط سیستم</string>
+    <string name="xr_cinema_environment_passthrough">نمای محیط واقعی</string>
+    <string name="xr_cinema_environment_hint">محیط سیستم را در تنظیمات هدست انتخاب کنید.</string>
+    <string name="xr_cinema_exit">خروج از سینما</string>
+</resources>

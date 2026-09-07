@@ -34,7 +34,7 @@ public interface NvConnectionListener {
                         int exactEncodedWidth, int exactEncodedHeight,
                         int appliedFramerateX100, int effectiveEncoderBitrateKbps);
 
-    /** Exact 88-byte Apollo host-SBS telemetry v1 state body. */
+    /** Exact 240-byte Apollo host-SBS telemetry v2 state body. */
     void hostSbsTelemetryState(byte[] payload);
 
     /**

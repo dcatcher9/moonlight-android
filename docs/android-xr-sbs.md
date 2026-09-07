@@ -50,12 +50,12 @@ virtual display. Apollo-3D-only controls (Host SBS AI, host depth telemetry/debu
 video-mode changes) must be capability-gated and must never be sent speculatively to a standard
 host.
 
-Client near-identical reuse is fully local and adds no `serverinfo`, launch, RTSP, or control
-message. It uses the same local path with original Sunshine and Apollo. If host-assisted exact/damage reuse
-is pursued later, it must be a distinct versioned capability advertised by the host; support must
-never be inferred from `hostsessionid` or another unrelated extension. When that capability is
-absent, malformed, or stale, Client SBS must continue with local decoded-pixel arbitration or full
-inference without rejecting the session.
+Client near-identical reuse remains local and works with original Sunshine and Apollo. A separate,
+explicitly negotiated host source-identity capability can identify repeated encoder input. Its wire
+contract is owned by the companion host's
+[Client exact-repeat transport](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/host-sbs.md#client-exact-repeat-transport).
+Neither `hostsessionid`, callback counts, zero latency, nor similar decoded pixels imply support.
+Missing, malformed, ambiguous or retired metadata falls back to the ordinary local pipeline.
 
 Only Raw Full owns a distinct negotiated transport: its `2W x H` stream requires a reconnect when
 entering or leaving that transport, and changing Full/Half while Raw is live likewise reconnects.
@@ -78,18 +78,36 @@ Stopping suppresses MediaCodec frame-rendered callback work immediately but keep
 looper alive until cleanup unregisters the listener and releases the codec. Only then is the looper
 asked to quit asynchronously, so late native events cannot target an already stopped handler.
 
+JNI video storage holds one global byte-array reference across callbacks. Allocation and growth
+release their temporary local references immediately because the native video thread remains
+attached between frames. Failed growth preserves the existing global buffer and requests an IDR;
+initial allocation failure cleans up the Java renderer and fails setup. Frames fitting the current
+buffer add no allocation or reference operations.
+
 Playback callback threads request Android AUDIO priority for PCM and DISPLAY priority for decoder
 input once on their actual native thread; a denied priority request preserves playback. AudioTrack
 writes submit complete interleaved frames nonblockingly, yield for 1 ms on zero progress, and stop
 retrying at the 40 ms write/native-backlog bound. Stop, focus transitions, and track replacement
 invalidate the packet's playback generation so pre-flush PCM cannot resume on a later retry.
 When native pending audio reaches 40 ms, recovery discards stale audio until the queue reaches one
-selected output-buffer duration, capped at 20 ms. Queue and AudioTrack allocation sizes are unchanged.
+actual device output-buffer duration, capped at 20 ms. Audio focus authorizes writes but does not
+start an empty track: current-generation PCM primes the existing device start threshold before
+playback begins. Focus loss, stop, and track replacement reset that priming. This avoids playing
+through the native startup resync/discard interval. Queue and AudioTrack allocation sizes are unchanged.
 Client gain/limiting always applies. Temporary per-sample peak/RMS metering and five-second level
 logs have been removed; bounded backlog-recovery warnings remain operational logs. A recovery
 warning requires a complete PCM write on the same playback generation; reaching the native queue
 target alone does not clear accumulated drops. The warning labels the queue duration sampled before
 that write. Partial/zero-progress attempts retain their drop totals until a complete write succeeds.
+
+AudioTrack and focus requests retain `USAGE_GAME` and identify the decoded audiovisual soundtrack
+as `CONTENT_TYPE_MOVIE`, which lets Android XR preserve stereo/surround channel rendering.
+Spatialization retains the platform default; incoming PCM is not labelled already spatialized.
+An earlier stereo opt-out did not change the Galaxy XR's enforced deep-buffer speaker route and
+was removed after live qualification. Setup and replacement report requested settings separately from the granted
+`AudioTrack.getPerformanceMode()`, actual buffer size and existing start threshold; playback does
+not poll these properties. See [XR stereo/surround audio](https://developer.android.com/develop/xr/jetpack-xr-sdk/add-spatial-audio#add-stereo-and-surround-sound-to-your-app)
+for the media-content classification contract.
 
 ## Direct SceneCore path
 
@@ -118,6 +136,14 @@ The working Galaxy XR sequence is:
 5. Give `surfaceEntity.getSurface()` to
    `MediaCodecDecoderRenderer.setRenderTarget(Surface)`.
 
+Normal, Host AI, and Raw modes keep the Android GLSurfaceView holder INVISIBLE; it has no
+producer on these direct paths and must not leave an empty BLAST layer for the system compositor.
+Client SBS shows the holder only after decoder parking, before resuming EGL, and hides it only
+after acknowledged EGL detach and direct decoder rebind. Intentional holder removal does not own
+stream shutdown. Unexpected holder loss while Client SBS owns it still stops streaming before
+renderer cleanup. StreamContainer retains its measured input bounds, and Game activity stop/destroy
+continues to own session teardown independently of the holder.
+
 Two historical pitfalls remain important:
 
 - An unparented entity is not part of the rendered scene graph and appears as a black/missing quad.
@@ -127,8 +153,11 @@ Media blending and entity visibility have separate ownership. Preserve entity al
 around presentation and HDR transitions; opaque video does not authorize exposing an unfinished
 frame. The beta02 media-blending accessors are Java-public but library-restricted, so one narrow
 adapter contains the lint suppression and handles unavailable runtime support without aborting
-streaming. Its cached readback verifies the SDK request only; it does not prove native compositor
-application or a GPU saving. The retained entity keeps the request across mode changes.
+streaming. The adapter does not read the SDK's cached property or report a boolean success: neither
+can establish native compositor acceptance or a GPU saving. The retained entity keeps the request across mode changes. The Galaxy
+XR runtime in the September 7 capture explicitly reports blending-mode control unsupported on its
+API version 3 even while that SDK getter retains OPAQUE. There is no public per-feature support
+query in beta02; preserve the best-effort request without claiming native blending is disabled.
 
 `CCodec`'s `onWorkDone` message is not a frame counter, and
 `setOutputSurface ... failed to set consumer usage (6/BAD_INDEX)` also appears on working paths.
@@ -286,6 +315,29 @@ engine from the renderer thread. Renderer-side failures must signal the owner th
 releasing every frame-slot lease, inference claim, and GL fence exactly once.
 
 ## Color/depth scheduling and input reuse
+
+Negotiated host source tokens are carried through exact MediaCodec input PTS, output release
+timestamps and the latched `SurfaceTexture` timestamp using two bounded primitive metadata rings.
+They are copied with each of the existing two color-slot leases. Decoder resets, failed vendor
+calls and surface handoffs retire the metadata epoch; renderer generation, output attachment,
+transfer and the OES crop/orientation matrix must also agree before reusing presentation.
+No decoder output is discarded by this optimization: compressed references and SurfaceTexture
+drains continue normally. Only after a valid stereo presentation, with no inference or presentation
+transition pending, may a newer proven source repeat skip model rendering/classification, native
+decision mapping, matched-color copying and composition/swap. SceneCore retains the submitted buffer.
+
+An identical encoder input can still have improving lossy reconstructions. For each new source,
+the initial 500 ms after its first stereo presentation therefore continue ordinary color adoption
+before buffer retention becomes eligible. This is a bounded quality heuristic, not proof of decoded
+pixel equality; later codec-only refinement is held until changed input or a new IDR invalidates
+the source token. Once settled, valid static retention has no expiry and reads no settling clock.
+Neither settling nor retention changes the real inference/comparison owner or Near thresholds.
+Retention also requires one successful GPU-authenticated Near adoption for the current depth owner.
+Every real inference or owner reset clears that confirmation. Allocated textures are insufficient:
+rejected raw depth and geometry-confirmation holds must continue ordinary GPU arbitration until
+valid comparison history exists. A missing or reset-pending detector disables this shortcut.
+The Stats row `Host-proven repeats` counts this work avoidance separately from local Near decisions.
+Transport-token wrap is rejected when the unsigned frame distance cannot exclude a full token cycle.
 
 Every real Client SBS inference remains paired with the captured color slot that produced it.
 Near-identical reuse presents current color with the committed depth, profile, conditioned disparity,
@@ -1073,27 +1125,38 @@ Each setting is a distinct raised card under a strong semantic heading; mode opt
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
 surfaces rather than one undifferentiated row.
 
-Keep the four modes, Settings, Cinema, Library, Stats, and a compact half-width `+` in the permanent
-dock. Library returns directly to the current PC's application library without an intermediate
-machine-selection step, and Stats is a direct one-tap toggle; Stats visibility
-is independent, so it stays open while left-side Settings or the lower mode row opens. The `+`
-widens the same dock inline to reveal **Dump 3D** and **End session**, then becomes `-`; tapping `-`
-hides those secondary tiles and restores the compact width. The right edge stays anchored so the
-`+`/`-` gaze target never moves and a newly revealed destructive action can never replace it under
-the pointer. Expansion never opens another pane or
-masks Stats. The Stats choice is persisted so an in-place
+Keep the four modes, Settings, Cinema, Library, Stats, and **End session** visible in the dock.
+Debug builds append **Dump 3D** immediately after **End session**. All tiles have the same width;
+the panel width follows the actual button count, with no secondary-action expander.
+Library returns directly to the current PC's application library without an intermediate
+machine-selection step, and Stats is a direct one-tap toggle. Stats visibility is independent,
+so it stays open while left-side Settings or the lower mode row opens. The Stats choice is
+persisted so an in-place
 reconnect or activity recreation cannot silently clear it. All controls remain ordinary clickable
 Android `View`s grouped within their respective panel; never create one entity per control.
 
-**Cinema** toggles its existing screen size/pose preset together with an empty black background.
-The public SceneCore environment API owns the background; video decoding and publication continue
-normally. Entering saves the current environment and passthrough preferences, and leaving restores
-them rather than forcing a particular system environment. The override also releases those
-preferences before activity stop, disconnect, and scene teardown. A same-activity foreground return
-reapplies black if Cinema remains selected; the choice is session state, not a new durable setting.
-If environment control is unavailable, the screen preset remains usable. Runtime application is
-asynchronous and is logged separately from the request. Newer environment preferences are not
-overwritten during cleanup. Temporary shell-controlled scene overrides have been removed.
+**Cinema** follows the mode-tile interaction: the first tap enters its screen size/pose preset using
+the saved environment; tapping the active tile toggles its contextual row. The same passive chevron,
+header/card styling, connected choices, scrollable panel and fitting policy are reused. Cinema and
+mode options occupy the same lower `PanelEntity`; Settings remains mutually exclusive and Stats
+remains independent. **Exit Cinema** restores the screen and closes the Cinema row.
+
+The environment choices are **Black** (default), **System environment**, and **Passthrough**.
+`list_cinema_environment` persists this selection and is also available in Global Settings.
+Changing it during Cinema applies the background immediately without changing screen size/pose.
+Black requests an empty non-null app environment and zero passthrough; System environment clears
+the app environment preference and requests zero passthrough, using the environment selected in
+the headset settings. Full passthrough requests opacity one and leaves the environment preference
+untouched. The public [SceneCore environment API](https://developer.android.com/reference/kotlin/androidx/xr/scenecore/SpatialEnvironment)
+does not expose the headset vendor's named environment catalog.
+
+Video decoding and publication continue normally. Each override saves and later restores only the
+preferences it owns, preserving newer external preferences. It releases them before activity stop,
+disconnect and scene teardown; a same-activity foreground return reapplies the saved choice if
+Cinema remains active. Black/System require environment and passthrough control; Passthrough needs
+only passthrough control. If the required capabilities are unavailable, the screen preset remains
+usable. Runtime application is asynchronous. Temporary shell-controlled scene overrides remain
+removed.
 
 Enum values in both Global Settings and the current-session panel are ordinary buttons in one
 connected segmented surface, not radio dialogs or cycle-only rows. Compact choices use equal-width,
@@ -1120,7 +1183,7 @@ pinch reveals the row (with click activation retained for keyboard/controller in
 exposed mode tile can never replace the target beneath the pointer or require a second pinch.
 
 Auto-collapse is allowed only while session controls are enabled, no dock child is hovered or
-focused, secondary session tools are collapsed, no Settings/Stats/mode-options pane is open, no reconnect-required change is pending,
+focused, no Settings/Stats/mode-options pane is open, no reconnect-required change is pending,
 and no mode switch, decoder handoff/IDR gate, or depth-engine transition is active. If any guard
 becomes active, cancel the timer and keep the full dock visible so work and Apply actions cannot be
 hidden. This is a soft visibility policy only; it must not alter the dock pose or presentation mode.
@@ -1132,6 +1195,23 @@ longer enables background sampling or periodic `ClientSbsPerf` / `DecoderPerf` l
 capability, transition, failure, and bounded playback-recovery logs remain available. Closing Stats
 stops its device/CPU sampling, detailed Client-SBS counters, GL timer queries, and asynchronous
 health-copy polling; reopening starts fresh sample windows rather than including hidden time.
+Host SBS depth-health telemetry follows the same visibility rule: hiding Stats unsubscribes,
+cancels subscription retries, and clears its chart history; reopening requests fresh samples at
+100 ms. Late replies cannot restore a hidden subscription. Operational host depth/mode status and
+the host's independent diagnostics switch remain active under their own policies.
+Host Stats uses the current 240-byte telemetry v2 extension. Original Sunshine/Apollo hosts
+without this extension remain supported and report Host telemetry as unsupported. The pane
+reports publication sequence/receive age and GPU-copy sequence/receive age separately: a
+transport heartbeat keeps the connection live without making an old GPU observation fresh.
+With host diagnostics enabled, consecutive cumulative GPU outcome copies provide infer/reuse/
+invalid rates using their host copy timestamps, independent of network delivery jitter. Reuse
+percentage excludes invalid outcomes. Output warp/packed-repeat/flat rates have their own sample
+clock and denominator. Duplicate copies do not manufacture zero rates; absent, stale, reset,
+regressed, or ambiguously wrapped baselines require two fresh samples. Hiding Stats clears these windows.
+Host stage means are explicitly labelled averages since mode change, with sample counts and
+unavailable stages shown as not sampled. CPU conversion/encode wall time, source content age, and
+GPU stage durations overlap and are not a sum of end-to-end latency. Without host diagnostics,
+the pane explains how to enable performance sampling while retaining basic depth health.
 Hidden decoder windows retain aggregate stream/loss accounting without allocating completed-window
 snapshots or histogram copies, and do not sample a pruning clock for absent timing records. Visible
 Stats retain unchanged row text and share one pending panel-sizing callback, cancelled when the
@@ -1143,6 +1223,9 @@ CPU core-equivalent load, device GPU busy/clock, and Android thermal status. Cli
 model/backend/input shape, latch/inference/reuse/output FPS, candidate-map bypasses, reuse ratio,
 content/invalid rejection counts, decision-read wall, LiteRT call wall, real result age, and four
 separate GL GPU averages. Exact reuse and age/frame-gap rejection counters are retired.
+On updated Apollo-3D hosts, host processing latency measures the current conversion pass through
+packet publication; retained encoder-input repeats carry no processing sample. Accurate source
+content age remains a separate host diagnostic measurement, not part of this processing average.
 
 The four GPU regions are model render + color-cut/classification, matched-color copy, raw-V2/cut
 state, and disparity conditioning + inverse maps + packed draw. Nonblocking
@@ -1175,8 +1258,8 @@ compact health state. Retired stretch/recenter/subject/Bestv2 and adaptive-pop s
 Health copies contain the 224-byte depth state only; the Exact evidence tail is gone. Copies,
 fences and maps remain asynchronous, failures back off without disabling valid depth, and recovery
 requires a fresh completed sample. Near reuse freezes postprocess health. Client history advances
-with visible five-observation sampling. Host trends retain their 120 samples at the negotiated
-focused/background cadence. All plots use oldest-left/newest-right sample slots, not an invented
+with visible five-observation sampling. Host trends retain their 120 samples at the visible
+100 ms cadence. All plots use oldest-left/newest-right sample slots, not an invented
 fixed wall-clock axis; repeated host heartbeat publications do not duplicate event points.
 
 GL latches may outpace inference/reuse adoption while the transaction is occupied. Composition
@@ -1305,11 +1388,11 @@ For every mode/surface change, test:
 - The four GL GPU averages receive non-disjoint samples without stalling and remain distinct from
   LiteRT call-wall latency.
 - The glance strip remains passive; the level dock does not move when the upward-pitched mode pane,
-  inward-yawed left Settings pane, or wrapped right Stats pane opens. Expanding secondary session
-  tools changes only the dock width.
+  inward-yawed left Settings pane, or wrapped right Stats pane opens. End session remains visible
+  immediately before Dump 3D in debug builds.
 - After eight idle seconds the dock leaves its reveal/status pill, then expands on the first
   explicit press/pinch.
-  It must remain expanded while a pane, inline session tools, pending Apply, depth preparation,
+  It must remain expanded while a pane, pending Apply, depth preparation,
   mode/decoder transition, or focused/hovered control is active.
 - Repeated disconnect/resume/mode switches do not leak surfaces, entities, EGL contexts, leases, or
   fences and do not recreate LiteRT during a stable stream.

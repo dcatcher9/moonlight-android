@@ -53,12 +53,10 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 0, 0, 0, 0.0f, 0.0f, 0.0f,
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                 12, 4, 2, 0, 0, 0);
-        assertEquals("4 total | scene age 12 frames | geometry armed | appearance armed"
-                        + " | external requests 2",
+        assertEquals("4 total | scene age 12 frames | geometry armed | appearance armed",
                 XrStreamPresenter.formatHostSceneCutStatus(
                         bothArmed.hardCutCount, (int)bothArmed.sceneAge,
-                        bothArmed.isGeometryArmed(), bothArmed.isAppearanceArmed(),
-                        bothArmed.externalCutRequests));
+                        bothArmed.isGeometryArmed(), bothArmed.isAppearanceArmed()));
 
         SbsDepthTelemetrySnapshot appearanceOnly = SbsDepthTelemetrySnapshot.available(
                 SbsDepthTelemetrySnapshot.VALID_SCENE
@@ -67,11 +65,9 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 0, 0, 0, 0.0f, 0.0f, 0.0f,
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                 3, 1, 0, 0, 0, 0);
-        assertEquals("1 total | scene age 3 frames | geometry disarmed | appearance armed"
-                        + " | external requests 0",
+        assertEquals("1 total | scene age 3 frames | geometry disarmed | appearance armed",
                 XrStreamPresenter.formatHostSceneCutStatus(
                         appearanceOnly.hardCutCount, (int)appearanceOnly.sceneAge,
-                        appearanceOnly.isGeometryArmed(), appearanceOnly.isAppearanceArmed(),
-                        appearanceOnly.externalCutRequests));
+                        appearanceOnly.isGeometryArmed(), appearanceOnly.isAppearanceArmed()));
     }
 }

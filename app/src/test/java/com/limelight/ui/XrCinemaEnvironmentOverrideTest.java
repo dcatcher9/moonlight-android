@@ -21,6 +21,7 @@ import androidx.xr.scenecore.SpatialCapability;
 import androidx.xr.scenecore.SpatialEnvironment;
 
 import com.limelight.LimeLog;
+import com.limelight.preferences.PreferenceConfiguration.CinemaEnvironment;
 
 import org.junit.After;
 import org.junit.Before;
@@ -38,10 +39,10 @@ import java.util.function.Consumer;
 /** Separates preference writes from asynchronous runtime state, as the public SDK does. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
-public class XrBlackEnvironmentOverrideTest {
+public class XrCinemaEnvironmentOverrideTest {
     private Scene scene;
     private SpatialEnvironment environment;
-    private XrBlackEnvironmentOverride control;
+    private XrCinemaEnvironmentOverride control;
     private SpatialEnvironment.SpatialEnvironmentPreference preference;
     private float opacityPreference = SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE;
     private float actualOpacity = 1f;
@@ -81,9 +82,13 @@ public class XrBlackEnvironmentOverrideTest {
     }
 
     private void createControl() {
-        control = new XrBlackEnvironmentOverride(scene, () -> owned, () -> {
+        createControl(CinemaEnvironment.BLACK);
+    }
+
+    private void createControl(CinemaEnvironment selection) {
+        control = new XrCinemaEnvironmentOverride(scene, selection, () -> owned, () -> {
             cancellations++;
-            control.restore(true);
+            control.restore(control.belongsTo(scene));
         });
     }
 
@@ -128,6 +133,97 @@ public class XrBlackEnvironmentOverrideTest {
         actualEnvironmentActive = false;
         environmentListener.accept(false);
         assertEquals(1, cancellations);
+        assertNull(preference);
+        assertEquals(SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE, opacityPreference, 0f);
+    }
+
+    @Test
+    public void systemSelectionWaitsForTheDefaultEnvironmentAndRestoresTheOriginal() {
+        SpatialEnvironment.SpatialEnvironmentPreference previous =
+                new SpatialEnvironment.SpatialEnvironmentPreference(null, mock(GltfModel.class));
+        preference = previous;
+        actualEnvironmentActive = true;
+        actualOpacity = 0f;
+        createControl(CinemaEnvironment.SYSTEM);
+        assertTrue(control.begin());
+        assertNull(preference);
+        assertEquals(0f, opacityPreference, 0f);
+        environmentListener.accept(false); // Still active in the SDK; payload alone is not enough.
+        assertEquals(0, cancellations);
+        actualEnvironmentActive = false;
+        environmentListener.accept(false);
+        assertEquals(0, cancellations);
+        actualEnvironmentActive = true;
+        environmentListener.accept(true);
+        assertEquals(1, cancellations);
+        assertSame(previous, preference);
+        assertEquals(SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE, opacityPreference, 0f);
+        verifyListenersRemoved();
+    }
+
+    @Test
+    public void systemSelectionRequiresAppEnvironmentControl() {
+        createControl(CinemaEnvironment.SYSTEM);
+        capabilities.remove(SpatialCapability.APP_ENVIRONMENT);
+        assertFalse(control.hasRequiredCapabilities());
+        assertFalse(control.begin());
+        verify(environment, never()).setPreferredSpatialEnvironment(any());
+        verify(environment, never()).setPreferredPassthroughOpacity(0f);
+    }
+
+    @Test
+    public void passthroughControlsOnlyOpacityAndIgnoresTheOccludedEnvironment() {
+        SpatialEnvironment.SpatialEnvironmentPreference previous =
+                new SpatialEnvironment.SpatialEnvironmentPreference(null, mock(GltfModel.class));
+        preference = previous;
+        opacityPreference = 0.35f;
+        actualOpacity = 0f;
+        capabilities.remove(SpatialCapability.APP_ENVIRONMENT);
+        createControl(CinemaEnvironment.PASSTHROUGH);
+        assertTrue(control.hasRequiredCapabilities());
+        assertTrue(control.begin());
+        assertSame(previous, preference);
+        assertEquals(1f, opacityPreference, 0f);
+        // Neither the hidden environment nor unrelated APP_ENVIRONMENT capability affects this mode.
+        actualEnvironmentActive = true;
+        environmentListener.accept(true);
+        capabilityListener.accept(capabilities);
+        actualOpacity = 1f;
+        opacityListener.accept(1f);
+        actualEnvironmentActive = false;
+        preference = null;
+        environmentListener.accept(false);
+        assertEquals(0, cancellations);
+        actualOpacity = 0.5f;
+        opacityListener.accept(0.5f);
+        assertEquals(1, cancellations);
+        assertNull(preference);
+        assertEquals(0.35f, opacityPreference, 0f);
+        verify(environment, never()).setPreferredSpatialEnvironment(any());
+        verifyListenersRemoved();
+    }
+
+    @Test
+    public void passthroughStillRequiresPassthroughControl() {
+        createControl(CinemaEnvironment.PASSTHROUGH);
+        capabilities.remove(SpatialCapability.PASSTHROUGH_CONTROL);
+        assertFalse(control.hasRequiredCapabilities());
+        assertFalse(control.begin());
+        verify(environment, never()).setPreferredPassthroughOpacity(1f);
+    }
+
+    @Test
+    public void changingSelectionsDoesNotTurnAnOverrideIntoTheRestoredPreference() {
+        assertTrue(control.begin());
+        control.restore(true);
+        createControl(CinemaEnvironment.SYSTEM);
+        assertTrue(control.begin());
+        assertNull(preference);
+        control.restore(true);
+        createControl(CinemaEnvironment.PASSTHROUGH);
+        assertTrue(control.begin());
+        assertEquals(1f, opacityPreference, 0f);
+        control.restore(true);
         assertNull(preference);
         assertEquals(SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE, opacityPreference, 0f);
     }
@@ -209,6 +305,34 @@ public class XrBlackEnvironmentOverrideTest {
     }
 
     @Test
+    public void staleOwnerCannotStartAnOverride() {
+        owned = false;
+        assertFalse(control.begin());
+        verify(environment, never()).setPreferredSpatialEnvironment(any());
+        verify(environment, never()).addPassthroughOpacityChangedListener(any());
+    }
+
+    @Test
+    public void replacedSceneCannotStartAnOverride() {
+        when(scene.getSpatialEnvironment()).thenReturn(mock(SpatialEnvironment.class));
+        assertFalse(control.begin());
+        verify(environment, never()).setPreferredSpatialEnvironment(any());
+        verify(environment, never()).addPassthroughOpacityChangedListener(any());
+    }
+
+    @Test
+    public void replacedSceneReleasesOnAQueuedStateCallback() {
+        assertTrue(control.begin());
+        when(scene.getSpatialEnvironment()).thenReturn(mock(SpatialEnvironment.class));
+        opacityListener.accept(0f);
+        assertEquals(1, cancellations);
+        verify(environment, never()).setPreferredSpatialEnvironment(null);
+        verify(environment, never()).setPreferredPassthroughOpacity(
+                SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE);
+        verifyListenersRemoved();
+    }
+
+    @Test
     public void cancelledOwnerReleasesBeforeQueuedAppliedStateIsAccepted() {
         assertTrue(control.begin());
         owned = false;
@@ -244,6 +368,48 @@ public class XrBlackEnvironmentOverrideTest {
     }
 
     @Test
+    public void firstPreferenceFailureRestoresOnlyTheAttemptedPreference() {
+        doAnswer(invocation -> {
+            preference = invocation.getArgument(0);
+            if (preference != null) throw new IllegalStateException("SDK setter after mutation");
+            return null;
+        }).when(environment).setPreferredSpatialEnvironment(any());
+        assertFalse(control.begin());
+        assertNull(preference);
+        verify(environment, never()).setPreferredPassthroughOpacity(
+                org.mockito.ArgumentMatchers.anyFloat());
+        verifyListenersRemoved();
+    }
+
+    @Test
+    public void ownerLostDuringPreferenceWriteCannotContinueApplyingTheOverride() {
+        doAnswer(invocation -> {
+            preference = invocation.getArgument(0);
+            owned = false;
+            return null;
+        }).when(environment).setPreferredSpatialEnvironment(any());
+        assertFalse(control.begin());
+        assertNull(preference);
+        verify(environment, never()).setPreferredPassthroughOpacity(
+                org.mockito.ArgumentMatchers.anyFloat());
+        verifyListenersRemoved();
+    }
+
+    @Test
+    public void failingInvalidationCallbackStillRemovesListenersAndRunsOnlyOnce() {
+        control = new XrCinemaEnvironmentOverride(scene, CinemaEnvironment.BLACK, () -> owned, () -> {
+            cancellations++;
+            throw new IllegalStateException("owner callback");
+        });
+        assertTrue(control.begin());
+        capabilities.clear();
+        capabilityListener.accept(capabilities);
+        capabilityListener.accept(capabilities);
+        assertEquals(1, cancellations);
+        verifyListenersRemoved();
+    }
+
+    @Test
     public void restoreFailureDoesNotSkipTheOtherPreferenceOrListenerCleanup() {
         assertTrue(control.begin());
         doThrow(new IllegalStateException("SDK restore"))
@@ -265,6 +431,18 @@ public class XrBlackEnvironmentOverrideTest {
         assertSame(newer, preference);
         assertEquals(SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE, opacityPreference, 0f);
         verify(environment, never()).setPreferredSpatialEnvironment(null);
+        verifyListenersRemoved();
+    }
+
+    @Test
+    public void restorePreservesANewerOpacityPreference() {
+        createControl(CinemaEnvironment.PASSTHROUGH);
+        assertTrue(control.begin());
+        opacityPreference = 0.4f;
+        control.restore(true);
+        assertEquals(0.4f, opacityPreference, 0f);
+        verify(environment, never()).setPreferredPassthroughOpacity(
+                SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE);
         verifyListenersRemoved();
     }
 

@@ -684,4 +684,37 @@
 
     <string name="title_checkbox_full_screen">启用全屏</string>
     <string name="summary_checkbox_full_screen">使用沉浸模式隐藏系统状态栏</string>
+    <string name="xr_stats_host_source_repeats">主机确认的重复帧</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | 保持现有画面</string>
+    <string name="xr_stats_host_sample">主机发布数据</string>
+    <string name="xr_stats_host_sample_value">%1$d | %2$.1f 秒前收到</string>
+    <string name="xr_stats_host_performance">主机性能</string>
+    <string name="xr_stats_host_enable_diagnostics">启用主机诊断以查看性能</string>
+    <string name="xr_stats_host_decision_rates">推理 / 复用 / 无效 FPS</string>
+    <string name="xr_stats_host_reuse_ratio">近似相同输入复用</string>
+    <string name="xr_stats_host_reuse_ratio_value">占推理与复用决策的 %1$.1f%%</string>
+    <string name="xr_stats_host_no_eligible_decisions">尚无符合条件的决策测量</string>
+    <string name="xr_stats_host_decision_sample">GPU 决策回读</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | %2$.1f 秒前收到</string>
+    <string name="xr_stats_host_output_rates">变形 / SBS 帧重复 / 平面 FPS</string>
+    <string name="xr_stats_host_stage_averages">各阶段平均值</string>
+    <string name="xr_stats_host_stage_averages_value">自模式切换起；CPU/GPU 阶段时间有重叠</string>
+    <string name="xr_stats_host_conversion_cpu">转换实际耗时（CPU）</string>
+    <string name="xr_stats_host_encode_cpu">编码 / 获取实际耗时（CPU）</string>
+    <string name="xr_stats_host_content_age">新输出的内容时龄</string>
+    <string name="xr_stats_host_warp_gpu">变形（GPU）</string>
+    <string name="xr_stats_host_preprocess_gpu">预处理（GPU）</string>
+    <string name="xr_stats_host_conditional_gpu">模型 / 复用分支（GPU）</string>
+    <string name="xr_stats_host_postprocess_gpu">后处理（GPU）</string>
+    <string name="xr_stats_host_output_gpu">输出（GPU）</string>
+    <string name="xr_stats_host_waiting_rates">等待两个新样本</string>
+    <string name="xr_stats_host_stage_value">%1$.2f ms | %2$d 个样本</string>
+    <string name="xr_stats_host_not_sampled">未采样</string>
+    <string name="xr_cinema_environment">影院环境</string>
+    <string name="xr_cinema_environment_summary">进入影院时使用的背景</string>
+    <string name="xr_cinema_environment_black">黑色</string>
+    <string name="xr_cinema_environment_system">系统环境</string>
+    <string name="xr_cinema_environment_passthrough">透视</string>
+    <string name="xr_cinema_environment_hint">请在头显设置中选择系统环境。</string>
+    <string name="xr_cinema_exit">退出影院</string>
 </resources>

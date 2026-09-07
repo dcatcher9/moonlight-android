@@ -246,10 +246,18 @@ public class MoonBridge {
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
                                                long receiveTimeMs, long enqueueTimeMs) {
+        return bridgeDrSubmitDecodeUnit(decodeUnitData, decodeUnitLength, decodeUnitType,
+                frameNumber, frameType, frameHostProcessingLatency, 0, receiveTimeMs, enqueueTimeMs);
+    }
+
+    public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
+                                               int frameNumber, int frameType, char frameHostProcessingLatency,
+                                               int frameSourceId, long receiveTimeMs, long enqueueTimeMs) {
         BridgeSession session = bridgeSession;
         if (session != null) {
             return session.videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
-                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
+                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency,
+                    frameSourceId, receiveTimeMs, enqueueTimeMs);
         }
         else {
             return DR_OK;
@@ -396,7 +404,7 @@ public class MoonBridge {
         }
     }
 
-    /** Host SBS telemetry v1 state (Apollo extension 0x300A), preserved as its exact wire body. */
+    /** Host SBS telemetry v2 state (Apollo extension 0x300A), preserved as its exact wire body. */
     public static void bridgeClHostSbsTelemetryState(byte[] payload) {
         BridgeSession session = bridgeSession;
         if (session != null) {
@@ -431,6 +439,9 @@ public class MoonBridge {
     public static final int SBS_MODE_OFF = 0; // No host depth; plain W x H frame.
     public static final int SBS_MODE_AI = 1;  // Enable Apollo's selected SBS profile; 2W x H frame.
 
+    /** Host/client-negotiated exact encoder-input identity in frame headers. */
+    public static final int LI_FF_SOURCE_FRAME_ID_V1 = 0x10000000;
+
     /** Host/client-negotiated atomic presentation transaction support. */
     public static final int LI_FF_ATOMIC_PRESENTATION_MODE_V2 = 0x20000000;
 
@@ -461,10 +472,10 @@ public class MoonBridge {
     public static native int getHostFeatureFlags();
 
     /**
-     * Enables, changes cadence, or disables Apollo host SBS telemetry v1.
+     * Enables, changes cadence, or disables Apollo host SBS telemetry v2.
      *
      * @return positive when queued, zero on send failure, or negative when the host did not
-     * advertise LI_FF_HOST_SBS_TELEMETRY_V1
+     * advertise LI_FF_HOST_SBS_TELEMETRY_V2
      */
     public static native int sendHostSbsTelemetrySubscription(
             boolean enabled, boolean focused, int requestId, int intervalMs);

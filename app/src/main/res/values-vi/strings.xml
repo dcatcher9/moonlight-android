@@ -626,4 +626,37 @@
     <!-- New Strings -->
     <string name="title_enable_commit_text">Bật nhập commit-text (vuốt/giọng nói)</string>
     <string name="summary_enable_commit_text">Chuyển tiếp văn bản nhiều ký tự từ bàn phím ảo (gõ vuốt, gợi ý, nhập giọng nói). Có thể gây lỗi với trò chơi yêu cầu nhập từng phím.</string>
+    <string name="xr_stats_host_source_repeats">Khung lặp được máy chủ xác nhận</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | giữ nguyên hình ảnh</string>
+    <string name="xr_stats_host_sample">Bản công bố từ máy chủ</string>
+    <string name="xr_stats_host_sample_value">%1$d | nhận cách đây %2$.1f giây</string>
+    <string name="xr_stats_host_performance">Hiệu năng máy chủ</string>
+    <string name="xr_stats_host_enable_diagnostics">Bật chẩn đoán máy chủ để xem hiệu năng</string>
+    <string name="xr_stats_host_decision_rates">Suy luận / tái sử dụng / không hợp lệ FPS</string>
+    <string name="xr_stats_host_reuse_ratio">Tái sử dụng đầu vào gần như giống nhau</string>
+    <string name="xr_stats_host_reuse_ratio_value">%1$.1f%% quyết định suy luận + tái sử dụng</string>
+    <string name="xr_stats_host_no_eligible_decisions">Chưa đo được quyết định đủ điều kiện</string>
+    <string name="xr_stats_host_decision_sample">Bản sao quyết định GPU</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | nhận cách đây %2$.1f giây</string>
+    <string name="xr_stats_host_output_rates">Biến dạng / lặp khung SBS / phẳng FPS</string>
+    <string name="xr_stats_host_stage_averages">Trung bình từng giai đoạn</string>
+    <string name="xr_stats_host_stage_averages_value">Từ khi đổi chế độ; các giai đoạn CPU/GPU chồng lấn</string>
+    <string name="xr_stats_host_conversion_cpu">Thời gian chuyển đổi (CPU)</string>
+    <string name="xr_stats_host_encode_cpu">Thời gian mã hóa / truy xuất (CPU)</string>
+    <string name="xr_stats_host_content_age">Tuổi nội dung của đầu ra mới</string>
+    <string name="xr_stats_host_warp_gpu">Biến dạng (GPU)</string>
+    <string name="xr_stats_host_preprocess_gpu">Tiền xử lý (GPU)</string>
+    <string name="xr_stats_host_conditional_gpu">Mô hình / nhánh tái sử dụng (GPU)</string>
+    <string name="xr_stats_host_postprocess_gpu">Hậu xử lý (GPU)</string>
+    <string name="xr_stats_host_output_gpu">Đầu ra (GPU)</string>
+    <string name="xr_stats_host_waiting_rates">Đang chờ hai mẫu mới</string>
+    <string name="xr_stats_host_stage_value">%1$.2f ms | %2$d mẫu</string>
+    <string name="xr_stats_host_not_sampled">Chưa lấy mẫu</string>
+    <string name="xr_cinema_environment">Môi trường rạp phim</string>
+    <string name="xr_cinema_environment_summary">Nền sử dụng khi vào chế độ Rạp phim</string>
+    <string name="xr_cinema_environment_black">Đen</string>
+    <string name="xr_cinema_environment_system">Môi trường hệ thống</string>
+    <string name="xr_cinema_environment_passthrough">Nhìn xuyên ra môi trường thực</string>
+    <string name="xr_cinema_environment_hint">Chọn môi trường hệ thống trong phần cài đặt kính.</string>
+    <string name="xr_cinema_exit">Thoát Rạp phim</string>
 </resources>

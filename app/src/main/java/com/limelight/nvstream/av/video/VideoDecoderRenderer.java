@@ -12,6 +12,15 @@ public abstract class VideoDecoderRenderer {
     public abstract int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                          int frameNumber, int frameType, char frameHostProcessingLatency,
                                          long receiveTimeMs, long enqueueTimeMs);
+
+    // Metadata-aware entry point. Renderers that do not consume source identity
+    // retain the existing decode behavior through the legacy overload.
+    public int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
+                                int frameNumber, int frameType, char frameHostProcessingLatency,
+                                int frameSourceId, long receiveTimeMs, long enqueueTimeMs) {
+        return submitDecodeUnit(decodeUnitData, decodeUnitLength, decodeUnitType,
+                frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
+    }
     
     public abstract void cleanup();
 

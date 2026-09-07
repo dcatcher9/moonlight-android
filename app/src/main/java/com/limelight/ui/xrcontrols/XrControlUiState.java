@@ -14,6 +14,7 @@ public final class XrControlUiState {
     public enum Surface {
         NONE,
         MODE_OPTIONS,
+        CINEMA_OPTIONS,
         SESSION_SETTINGS
     }
 

@@ -1,2 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources></resources>
+<resources>
+    <string name="xr_stats_host_source_repeats">دووبارەبوونەوەی پشتڕاستکراوی میواندار</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | وێنەکە هێڵدراوەتەوە</string>
+    <string name="xr_stats_host_sample">بڵاوکراوەی میواندار</string>
+    <string name="xr_stats_host_sample_value">%1$d | پێش %2$.1f چرکە وەرگیرا</string>
+    <string name="xr_stats_host_performance">کارایی میواندار</string>
+    <string name="xr_stats_host_enable_diagnostics">بۆ زانیاری کارایی، دەستنیشانکردنی کێشەی میواندار چالاک بکە</string>
+    <string name="xr_stats_host_decision_rates">ئەنجامگیری / بەکارهێنانەوە / نادروست FPS</string>
+    <string name="xr_stats_host_reuse_ratio">بەکارهێنانەوەی تێدانی نزیکەی یەکسان</string>
+    <string name="xr_stats_host_reuse_ratio_value">%1$.1f%% لە بڕیارەکانی ئەنجامگیری + بەکارهێنانەوە</string>
+    <string name="xr_stats_host_no_eligible_decisions">هیچ بڕیارێکی شیاو پێوانە نەکراوە</string>
+    <string name="xr_stats_host_decision_sample">کۆپی بڕیارەکانی GPU</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | پێش %2$.1f چرکە وەرگیرا</string>
+    <string name="xr_stats_host_output_rates">چەماندنەوە / دووبارەکردنەوەی SBS / تەخت FPS</string>
+    <string name="xr_stats_host_stage_averages">تێکڕای قۆناغەکان</string>
+    <string name="xr_stats_host_stage_averages_value">لە گۆڕینی دۆخەوە؛ قۆناغەکانی CPU/GPU کاتیان هاوبەشە</string>
+    <string name="xr_stats_host_conversion_cpu">ماوەی گۆڕین (CPU)</string>
+    <string name="xr_stats_host_encode_cpu">ماوەی کۆدکردن / وەرگرتن (CPU)</string>
+    <string name="xr_stats_host_content_age">تەمەنی ناوەڕۆکی دەرچووی نوێ</string>
+    <string name="xr_stats_host_warp_gpu">چەماندنەوە (GPU)</string>
+    <string name="xr_stats_host_preprocess_gpu">پێش‌پرۆسەکردن (GPU)</string>
+    <string name="xr_stats_host_conditional_gpu">مۆدێل / لقی بەکارهێنانەوە (GPU)</string>
+    <string name="xr_stats_host_postprocess_gpu">دوای‌پرۆسەکردن (GPU)</string>
+    <string name="xr_stats_host_output_gpu">دەرچوو (GPU)</string>
+    <string name="xr_stats_host_waiting_rates">چاوەڕوانی دوو نموونەی تازە</string>
+    <string name="xr_stats_host_stage_value">%1$.2f میلیچرکە | %2$d نموونە</string>
+    <string name="xr_stats_host_not_sampled">نموونە وەرنەگیراوە</string>
+    <string name="xr_cinema_environment">ژینگەی سینەما</string>
+    <string name="xr_cinema_environment_summary">پاشبنەما کە لە کاتی چوونە ناو سینەما بەکاردێت</string>
+    <string name="xr_cinema_environment_black">ڕەش</string>
+    <string name="xr_cinema_environment_system">ژینگەی سیستەم</string>
+    <string name="xr_cinema_environment_passthrough">بینینی ژینگەی ڕاستەقینە</string>
+    <string name="xr_cinema_environment_hint">ژینگەی سیستەم لە ڕێکخستنەکانی هێدسێت هەڵبژێرە.</string>
+    <string name="xr_cinema_exit">دەرچوون لە سینەما</string>
+</resources>

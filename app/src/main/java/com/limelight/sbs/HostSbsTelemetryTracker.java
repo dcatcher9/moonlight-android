@@ -17,6 +17,9 @@ public final class HostSbsTelemetryTracker {
     private int requestId = -1;
     private HostSbsTelemetrySnapshot latest;
     private long latestReceivedAtMs;
+    private long publicationReceivedAtMs;
+    private final CounterRates outcomes = new CounterRates();
+    private final CounterRates outputs = new CounterRates();
     private long acceptedGeneration = -1L;
     private long acceptedSequence = -1L;
     private boolean staleHistoryCleared;
@@ -50,6 +53,7 @@ public final class HostSbsTelemetryTracker {
         latestReceivedAtMs = 0L;
         fallbackAvailability = availability;
         history.clear();
+        clearRates();
         staleHistoryCleared = true;
     }
 
@@ -72,7 +76,7 @@ public final class HostSbsTelemetryTracker {
         long boundedReceivedAtMs = Math.max(0L, receivedAtMs);
         boolean transportWasStale = latest != null
                 && Math.max(0L, boundedReceivedAtMs - latestReceivedAtMs) > STALE_AFTER_MS;
-        if (snapshot.version == HostSbsTelemetrySnapshot.VERSION_1) {
+        if (snapshot.version == HostSbsTelemetrySnapshot.VERSION_2) {
             if (acceptedGeneration >= 0L) {
                 if (snapshot.generation == acceptedGeneration) {
                     if (snapshot.sequence == acceptedSequence) {
@@ -81,11 +85,15 @@ public final class HostSbsTelemetryTracker {
                         // chart era or a reason to append/clear history.
                         if (transportWasStale) {
                             history.clear();
+                            invalidateRatesAfterGap();
                         }
                         latest = snapshot;
                         latestReceivedAtMs = Math.max(
                                 latestReceivedAtMs, boundedReceivedAtMs);
                         staleHistoryCleared = false;
+                        // Performance is serialized from its generation-owned collector at send
+                        // time. Its copy IDs can advance without another depth-health sample.
+                        acceptPerformance(snapshot, boundedReceivedAtMs);
                         return true;
                     }
                     if (!isNewerUnsigned32(snapshot.sequence, acceptedSequence)) {
@@ -97,6 +105,7 @@ public final class HostSbsTelemetryTracker {
                     }
                     // A new host pipeline/subscription generation is a new chart era.
                     history.clear();
+                    clearRates();
                 }
             }
             acceptedGeneration = snapshot.generation;
@@ -106,19 +115,23 @@ public final class HostSbsTelemetryTracker {
         // at delivery too. Otherwise a fresh sequence would visually bridge an unobserved gap.
         if (transportWasStale) {
             history.clear();
+            invalidateRatesAfterGap();
         }
-        if (snapshot.version != HostSbsTelemetrySnapshot.VERSION_1
+        if (snapshot.version != HostSbsTelemetrySnapshot.VERSION_2
                 || snapshot.status != HostSbsTelemetrySnapshot.STATUS_OK) {
             // Explicit unavailable/unsupported/failed state supersedes old live-looking charts.
             history.clear();
+            clearRates();
         }
 
         latest = snapshot;
+        publicationReceivedAtMs = boundedReceivedAtMs;
         latestReceivedAtMs = Math.max(latestReceivedAtMs, boundedReceivedAtMs);
         staleHistoryCleared = false;
         SbsDepthTelemetrySnapshot sample = snapshot.toDepthTelemetry();
         if (sample.isAvailable()) {
             history.add(sample);
+            acceptPerformance(snapshot, boundedReceivedAtMs);
         }
         return true;
     }
@@ -133,6 +146,7 @@ public final class HostSbsTelemetryTracker {
         if (Math.max(0L, nowMs - latestReceivedAtMs) > STALE_AFTER_MS) {
             if (!staleHistoryCleared) {
                 history.clear();
+                invalidateRatesAfterGap();
                 staleHistoryCleared = true;
             }
             return SbsDepthTelemetrySnapshot.unavailable(
@@ -144,7 +158,21 @@ public final class HostSbsTelemetryTracker {
             history.clear();
             return sample;
         }
-        return history.attach(sample);
+        boolean outcomeFresh = outcomes.isFresh(nowMs);
+        boolean outputFresh = outputs.isFresh(nowMs);
+        return history.attach(sample).withHostPerformance(
+                new SbsDepthTelemetrySnapshot.HostPerformance(latest,
+                        Math.max(0L, nowMs - publicationReceivedAtMs),
+                        outcomes.hasBaseline ? Math.max(0L, nowMs - outcomes.receivedAtMs) : -1L,
+                        outcomeFresh ? outcomes.firstFps : Float.NaN,
+                        outcomeFresh ? outcomes.secondFps : Float.NaN,
+                        outcomeFresh ? outcomes.thirdFps : Float.NaN,
+                        outcomeFresh ? outcomes.reuseRatio : Float.NaN,
+                        outcomeFresh ? outcomes.windowSeconds : Float.NaN,
+                        outputFresh ? outputs.firstFps : Float.NaN,
+                        outputFresh ? outputs.secondFps : Float.NaN,
+                        outputFresh ? outputs.thirdFps : Float.NaN,
+                        outputFresh ? outputs.windowSeconds : Float.NaN));
     }
 
     public boolean isActive() {
@@ -162,6 +190,8 @@ public final class HostSbsTelemetryTracker {
     private void clearSessionState() {
         latest = null;
         latestReceivedAtMs = 0L;
+        publicationReceivedAtMs = 0L;
+        clearRates();
         acceptedGeneration = -1L;
         acceptedSequence = -1L;
         staleHistoryCleared = false;
@@ -172,5 +202,99 @@ public final class HostSbsTelemetryTracker {
     static boolean isNewerUnsigned32(long candidate, long current) {
         long delta = (candidate - current) & U32_MASK;
         return delta != 0L && delta < U32_HALF_RANGE;
+    }
+
+    private void clearRates() {
+        outcomes.clear();
+        outputs.clear();
+    }
+
+    private void acceptPerformance(HostSbsTelemetrySnapshot snapshot, long receivedAtMs) {
+        if (snapshot.status != HostSbsTelemetrySnapshot.STATUS_OK) {
+            clearRates();
+            return;
+        }
+        if ((snapshot.validFields & HostSbsTelemetrySnapshot.VALID_OUTCOMES) != 0) {
+            outcomes.accept(snapshot.outcomeEpoch, snapshot.outcomeSequence,
+                    snapshot.outcomeCopyHostMs, snapshot.inferredTotal,
+                    snapshot.reusedTotal, snapshot.invalidTotal, receivedAtMs);
+        } else {
+            outcomes.clear();
+        }
+        if ((snapshot.validFields & HostSbsTelemetrySnapshot.VALID_OUTPUT) != 0) {
+            outputs.accept(snapshot.generation, snapshot.outputSampleHostMs,
+                    snapshot.outputSampleHostMs, snapshot.warpedTotal,
+                    snapshot.packedRepeatTotal, snapshot.flatTotal, receivedAtMs);
+        } else {
+            outputs.clear();
+        }
+    }
+
+    private void invalidateRatesAfterGap() {
+        outcomes.invalidateBaseline();
+        outputs.invalidateBaseline();
+    }
+
+    /** Bounded cumulative-counter differencing. A discontinuity starts a new baseline. */
+    private static final class CounterRates {
+        boolean hasBaseline, hasIdentity;
+        long epoch, sequence, hostMs, first, second, third, receivedAtMs;
+        float firstFps = Float.NaN, secondFps = Float.NaN, thirdFps = Float.NaN;
+        float reuseRatio = Float.NaN, windowSeconds = Float.NaN;
+
+        void accept(long nextEpoch, long nextSequence, long nextHostMs,
+                    long nextFirst, long nextSecond, long nextThird, long nowMs) {
+            if (hasIdentity && epoch == nextEpoch && sequence == nextSequence
+                    && hostMs == nextHostMs && first == nextFirst
+                    && second == nextSecond && third == nextThird) {
+                return; // Repeated publications cannot manufacture a rate or renew sample age.
+            }
+            long deltaFirst = nextFirst - first;
+            long deltaSecond = nextSecond - second;
+            long deltaThird = nextThird - third;
+            boolean continuous = hasBaseline && epoch == nextEpoch
+                    && nextSequence > sequence && nextHostMs > hostMs
+                    && nowMs - receivedAtMs <= STALE_AFTER_MS
+                    && Long.compareUnsigned(nextFirst, first) >= 0
+                    && Long.compareUnsigned(nextSecond, second) >= 0
+                    && Long.compareUnsigned(nextThird, third) >= 0
+                    && deltaFirst >= 0 && deltaSecond >= 0 && deltaThird >= 0;
+            clearRatesOnly();
+            if (continuous) {
+                windowSeconds = (nextHostMs - hostMs) / 1000.0f;
+                firstFps = deltaFirst / windowSeconds;
+                secondFps = deltaSecond / windowSeconds;
+                thirdFps = deltaThird / windowSeconds;
+                double eligible = (double)deltaFirst + deltaSecond;
+                reuseRatio = eligible > 0.0 ? (float)(deltaSecond / eligible) : Float.NaN;
+            }
+            hasBaseline = true;
+            hasIdentity = true;
+            epoch = nextEpoch;
+            sequence = nextSequence;
+            hostMs = nextHostMs;
+            first = nextFirst;
+            second = nextSecond;
+            third = nextThird;
+            receivedAtMs = nowMs;
+        }
+
+        boolean isFresh(long nowMs) {
+            return hasBaseline && Math.max(0L, nowMs - receivedAtMs) <= STALE_AFTER_MS;
+        }
+
+        void clear() {
+            hasIdentity = false;
+            invalidateBaseline();
+        }
+
+        void invalidateBaseline() {
+            hasBaseline = false;
+            clearRatesOnly();
+        }
+
+        private void clearRatesOnly() {
+            firstFps = secondFps = thirdFps = reuseRatio = windowSeconds = Float.NaN;
+        }
     }
 }

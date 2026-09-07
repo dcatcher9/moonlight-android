@@ -20,6 +20,10 @@ public class XrControlUiStateTest {
         assertEquals(XrControlUiState.Surface.SESSION_SETTINGS, state.getVisibleSurface());
         assertNull(state.getModeOptionsId());
 
+        state.toggle(XrControlUiState.Surface.CINEMA_OPTIONS);
+        assertEquals(XrControlUiState.Surface.CINEMA_OPTIONS, state.getVisibleSurface());
+        assertNull(state.getModeOptionsId());
+
     }
 
     @Test
@@ -32,6 +36,10 @@ public class XrControlUiStateTest {
 
         state.toggle(XrControlUiState.Surface.SESSION_SETTINGS);
         state.toggle(XrControlUiState.Surface.SESSION_SETTINGS);
+        assertEquals(XrControlUiState.Surface.NONE, state.getVisibleSurface());
+
+        state.toggle(XrControlUiState.Surface.CINEMA_OPTIONS);
+        state.toggle(XrControlUiState.Surface.CINEMA_OPTIONS);
         assertEquals(XrControlUiState.Surface.NONE, state.getVisibleSurface());
     }
 
@@ -46,6 +54,10 @@ public class XrControlUiStateTest {
 
         state.toggle(XrControlUiState.Surface.SESSION_SETTINGS);
         assertEquals(XrControlUiState.Surface.SESSION_SETTINGS, state.getVisibleSurface());
+        assertTrue(state.isStatsVisible());
+
+        state.toggle(XrControlUiState.Surface.CINEMA_OPTIONS);
+        assertEquals(XrControlUiState.Surface.CINEMA_OPTIONS, state.getVisibleSurface());
         assertTrue(state.isStatsVisible());
 
         state.close();

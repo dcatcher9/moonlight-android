@@ -1292,6 +1292,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 shouldInvertDecoderResolution,
                 glPrefs.glRenderer,
                 this);
+        if (streamContainer != null) {
+            decoderRenderer.setDecodedSourceIdentityTracker(
+                    streamContainer.getDecodedSourceIdentityTracker());
+        }
         decoderRenderer.setFirstFrameRenderedListener(() -> runOnUiThread(() -> {
             if (streamContainer != null && streamContainer.getXrPresenter() != null) {
                 XrStreamPresenter presenter = streamContainer.getXrPresenter();

@@ -17,7 +17,7 @@ client artifacts into the Apollo checkout.
 
 ## Current reuse and measurement scope
 
-Client SBS now has one content-driven Near reuse path. It compares every admitted finite model
+Client SBS has one local content-driven Near reuse path. It compares every admitted finite model
 pixel with the retained real-inference input using the existing medium/strong/local thresholds.
 Positive source identity must advance and capture time must not move backward relative to that
 owner; neither 100 ms nor four callbacks forces refresh. Reused frames never replace the reference,
@@ -40,6 +40,209 @@ new real-owner replacement, reset invalidation and authenticated decision tokens
 `nearReusePreservesSlotsAndLazyPackingHandlesEveryInferenceFallback` gate checks the corresponding
 slot/fence/fallback path. Build and device qualification for this latest cleanup must be recorded
 separately; the historical test totals and timings below are not results for the new implementation.
+
+## Audio startup and unused XR holder, 2026-09-07
+
+The 11:45 session exposed an empty AudioTrack start during native audio's initial 500 ms
+resync/discard interval. Playback now waits for current-generation PCM to prime the existing
+actual device start threshold. Focus loss, stop and replacement clear priming; backlog recovery
+uses the actual output-buffer duration. No audio buffer, overload ceiling or retry deadline grew.
+The later 11:45:18.182 underrun and 11:45:36.316 backlog recovery are not proven to share this
+startup cause; no matching Wi-Fi scan or causal Cinema event was established.
+
+Normal/Host direct SceneCore presentation no longer exposes the paused, producerless Android
+GLSurfaceView holder. Client SBS enables it after decoder parking and disables it after the
+acknowledged EGL detach/direct rebind. Intentional removal preserves the connection; unexpected
+Client holder loss retains stop-before-cleanup. This addresses the unused layer behind 60 empty
+buffer reports, but requires a fresh live capture to verify runtime behavior and any GPU saving.
+
+A separate native video-array local-reference leak is fixed. Failed growth preserves the prior
+buffer, and allocation failures are reported without leaving a pending exception on the video
+thread. The native fixture passed 512 growth/reuse cycles, allocation failures and final cleanup;
+it is part of the transport-contract CI workflow. All 120 focused JVM tests across 16 suites
+passed with no skips, including audio priming/backpressure/focus, holder lifecycle/ownership,
+connection/input, Cinema, Stats and blending-request regressions. Both debug ABI APKs assembled.
+
+At that initial review, the 261 non-JNI-local-reference warnings remained unresolved: all emitting threads were
+identified as Binder workers, but no warning-site stack identifies the offending library. The
+independent local-reference leak must not be called a fix for those warnings. Device API 3 also
+rejects native media-blending control even when the SDK preference getter retains OPAQUE.
+[SceneCore's release page](https://developer.android.com/jetpack/androidx/releases/xr-scenecore)
+still lists the already-used beta02 as latest on September 7. No warning suppression or speculative
+dependency substitution was introduced.
+
+Build/test/deployment evidence is under `app/build/runtime-audio-fixes-2026-09-07/`. Original logs
+and Binder/native investigation remain under `app/build/log-review-2026-09-07-1148/`. No host,
+model or shader change was needed. Live playback qualification was pending at that build stage;
+the subsequent captures and final qualification are recorded below.
+
+The subsequent update-install verified SHA-256
+`b98c20e80b8b78bd8b9dd1a36ed9c7eee700f78ced144019a4f180b85a551711`. The new Host 3D
+session confirms the unused Android holder is absent and its empty-buffer reports stop; it does
+not quantify GPU savings or qualify physical Client 3D transitions. Startup priming succeeds, but
+the platform explicitly rejects FAST and forces XR_SPATIALIZER deep-buffer output (5130 frames
+at 48 kHz). This is the actual platform buffer, not the 1920-byte/10-ms request. Shared audio/video
+disturbances recur about 120 seconds apart; a separate burst has Wi-Fi scan-completion evidence.
+Neither complete short trace includes a periodic disturbance. A longer attempt began after
+headset doff/sleep and is excluded from playback evidence. The complete system bug report and
+capture qualifications are under `app/build/system-capture-2026-09-07/`; its `capture-summary.md`
+distinguishes finalized healthy traces, partial/asleep traces and the still-pending warning-site
+JNI stack. No production changes were introduced during capture.
+
+After the wearer reconnected, a finalized 150-second trace (host 14:25:59.417–14:28:29.557)
+captured the periodic disturbance at device 14:27:13. Audio and video receive threads wait for
+incoming data together, and Qualcomm packet-delivery threads sleep before waking both receivers.
+The decoder workers are not starved of CPU, the mixer keeps its cadence while queued PCM drains,
+and no overlapping app GC explains the event. The evidence places the pause before application
+decoding but cannot separate host transmission, access-point delivery, or headset radio/firmware.
+See `audio-live-cycle.pftrace` and its companion review in the same capture directory. Two later
+native debugger attempts attached but failed during stop/resume handling; both cleaned up and
+left the app untraced and resumed. They occurred after the timing trace and yielded no JNI stack.
+
+## Audio route request and opacity reporting, 2026-09-07
+
+The first routing experiment preserved game audio usage while identifying the PCM as an audiovisual
+soundtrack. API 32+ stereo opted out of optional platform spatialization; multichannel retained
+platform surround rendering. Setup, fallback, focus and replacement shared these attributes.
+One-time audio configuration logs now separate requests from the native-granted performance
+mode and existing buffer/start threshold. The audio write path and recovery limits are unchanged.
+This targeted the observed forced spatializer/deep-buffer route. The live qualification below
+established its result and the final removal of that experimental opt-out.
+
+The opaque-video adapter no longer reads the cached SDK blending value or returns it as native
+success. It retains the best-effort request and independent visibility transitions. This corrects
+an acceptance assumption; it cannot add the missing media-blending capability to device API 3.
+There is no measured GPU improvement from this change and no warning suppression.
+
+The 58 focused audio, opacity and surface-handoff JVM tests passed with no failures/errors/skips;
+both ABI APKs assembled. The arm64 APK was update-installed and its on-device SHA-256 matched
+`96e057fe520d4d90d159968504190d2fddf2851544c6febbf4051412d1667572`.
+Evidence is under `app/build/runtime-route-fixes-2026-09-07/`. The headset was asleep during
+deployment; live audio route qualification and identification of the JNI warning caller remain
+pending. Host source was not changed in this iteration.
+
+Subsequent inspection of the saved bugreport's audio policy shows a broader platform constraint:
+the built-in Speaker routes through `deep_buffer` or the voice-call path, and the configured
+output profiles expose no FAST/MMAP media output. Output 13 reports `PRIMARY|DEEP_BUFFER` with
+110 ms policy latency. Properties include `audio.deep_buffer.media=true` and
+`vendor.audio.feature.deepbuffer_as_primary.enable=true`. The scoped excerpt is
+`app/build/system-capture-2026-09-07/audio-policy-evidence.txt`. Thus the earlier forced deep-buffer
+observation must not be attributed solely to optional spatialization. The stereo opt-out cannot
+create a missing fast output; the hardware test must report its actual effect. The policy latency
+is not an acoustic end-to-end measurement, and the voice-call path is not a valid media workaround.
+
+The wearer then reconnected on the treatment build. At 15:13:16, the log confirms `NEVER` reached
+the policy, but the granted performance mode stayed `NONE` and the buffer/start threshold stayed
+5130 frames. The active track still used output 13 / XR_SPATIALIZER / PRIMARY|DEEP_BUFFER. The
+snapshot's 194.23 ms track latency versus the earlier 163.47 ms is explained approximately by
+different queued PCM (2906 versus 1424 frames); it does not establish a regression or improvement.
+Output write-latency averages were essentially unchanged (134.50 versus 134.24 ms). The initial
+four-block/~16 ms recovery overlapped HAL speaker initialization, with no subsequent backlog
+warning in the pre-debugger sample and zero current-track underruns in its snapshot. Evidence is
+`app/build/runtime-route-fixes-2026-09-07/live/`.
+
+Because the spatialization opt-out gave no demonstrated route benefit, it was removed. The final
+implementation keeps GAME/MOVIE media classification, platform-default spatialization and truthful
+performance-mode reporting. Its 57 focused tests passed; both ABIs built. The final arm64 APK was
+update-installed and the device hash matched
+`ad0b6eb7f9f04729c97b36214f88851306dd4fce5b17a280e20dc4eea52b8224` at 15:25:47.
+No additional live session was required from the wearer after that cleanup installation; no
+latency or GPU improvement is claimed for the final build.
+
+The warning-site JNI capture succeeded during reconnect in
+`app/build/system-capture-2026-09-07/jni-warning-20260907-152111/`. It identifies the captured
+warning's caller as Impress beta03 `SplitEngineSubspaceManager.nForwardSubspaceTransform`, whose
+cleanup calls `DeleteLocalRef` on its incoming transform-array reference. JNI permits deletion of
+local argument references; ART's transition-reference implementation warns and performs a
+successful no-op here. This establishes the source of this compatibility warning, not a leak or
+use-after-free. The qualified stack/disassembly report is `jni-impress-root-cause.md` in the same
+capture root. No newer published Impress version or supported app control was found. No warning
+suppression, private JNI rebinding or binary patch was introduced. The successful capture took
+63 ms for the raw stack and detached cleanly; cleanup verified `TracerPid: 0` and a running app.
+All debugger intervals are excluded from performance claims.
+
+## Cinema environment subpanel, 2026-09-07
+
+Cinema now follows the existing tile/subpanel pattern: first tap enters using the saved background,
+and an active tile tap toggles the shared lower panel. Its connected choices are Black, System
+environment and Passthrough; Exit Cinema restores the previous transform/preferences and closes
+the panel. The presentation and environment ownership contract lives in `android-xr-sbs.md`.
+
+All 96 focused JVM tests across nine suites passed. They cover the three environment modes,
+capability and asynchronous state changes, partial SDK failures, preference restoration, durable
+defaults, actual subpanel interactions, late/hidden choice callbacks, and shared panel/control
+regressions. Both debug ABI APKs assembled. Seven new strings are synchronized across English and
+all 28 existing translations; XML and array IDs were checked. No model, shader or host change was
+needed for this iteration.
+
+The arm64 APK was update-installed with app data and pairing preserved. Installed/local SHA-256:
+`039604252ef3fd6d1c83e3d692e14fab4c4f8701286be4679f87a34bf35ed1b3`.
+Evidence is under `app/build/cinema-environments-2026-09-07/`. Live headset verification of all
+three backgrounds and the shared panel remains pending; mocked SceneCore tests establish request
+and restoration behavior, not device compositor acceptance.
+
+## Expanded Host Stats and fixed dock, 2026-09-07
+
+The host/client pair now uses one 240-byte version-2 telemetry body. Original Sunshine/Apollo
+connections remain capability-gated; the unpublished custom version-1 format is not supported.
+Stats shows independent GPU infer/reuse/invalid and output rates, publication/copy freshness,
+and eight cumulative CPU/GPU stage means with sample counts. Performance-only updates may advance
+without advancing the health chart. The host contract in `host-sbs.md` owns wire fields and
+measurement semantics; `android-xr-sbs.md` owns client presentation and lifecycle behavior.
+
+The dock has no secondary-action expander. End session stays visible immediately before the debug
+Dump 3D button, and the panel width follows its actual tile count. All 24 new Stats strings are
+translated into the 28 existing locales; the obsolete expander labels were removed. XML, unique
+keys, format placeholders and preservation of unrelated resource entries were checked.
+
+All 93 focused JVM tests across 11 suites passed, including strict V2 parsing, host-clock rates,
+reset/wrap/stale cases, independent health/performance updates, original-host capability gating,
+subscription lifecycle, real Stats tables, dock collapse/reveal and tile sizing. Both debug ABI
+APKs assembled on Temurin 25.0.3+9. Native control and encrypted packet/FEC fixtures passed. The
+companion optimized host built and passed 135 focused tests across 28 suites.
+
+The arm64 APK was update-installed without clearing app data or pairing. Installed and local
+SHA-256 match: `d5cd9957a867f78e16e42e0dddf1abe8cc6e9f99f8100c6dad4a65bfffcf32ee`.
+Evidence is under `app/build/host-stats-2026-09-07/` and
+`app/build/host-stats-v2-2026-09-07/`. The new host executable has not been started; final-pair
+headset layout, telemetry cadence and runtime latency remain to be live-qualified. No shader,
+model or rendering-policy change was made in this telemetry/dock iteration.
+
+## Host Stats and negotiated source repeats, 2026-09-06
+
+Host Stats subscriptions now follow visible Stats ownership. Hiding cancels retries, unsubscribes
+and clears local chart history; reopening requests fresh samples, and late packets cannot restore
+hidden history. The host also fixes its GPU-opaque snapshot admission, repeated cut-pulse reporting
+and the separate processing-latency/content-age fields. Host implementation and wire semantics are
+owned by the companion host documentation.
+
+Client SBS can additionally retain already-presented output for negotiated unchanged encoder input.
+It attributes tokens through exact input PTS and output Surface timestamps, with bounded metadata
+rings and codec/surface epochs. The ordinary decoder and SurfaceTexture drain continue. A valid
+GPU-authenticated Near adoption is required before retention; successful texture allocation cannot
+authorize retention of invalid depth or unresolved geometry history. The initial codec-settling
+heuristic and its lossy-quality limitation are defined in `android-xr-sbs.md`; no recurring Near
+age limit or pixel-equality reduction was restored.
+
+All 156 focused JVM tests across 19 suites passed, covering decoder attribution, epoch/PTS failures,
+long static retention, unknown/changed/cropped sources, GPU-owner validity and presentation conflicts,
+Stats hide/reopen/retry ownership, existing decoder recovery and renderer scheduling. The eight new
+renderer tests exercise the real renderer state with a mocked view. Initial JVM reflection failed
+on unavailable legacy GL types; targeted method-handle lookup fixed test resolution without changing
+production visibility or relaxing assertions. Both debug ABI APKs assembled on Temurin 25.0.3+9.
+The native packet/FEC gate passed encrypted HEVC/AV1, capability negotiation, zero/legacy/long headers,
+short-header truncation and recovery cases. Evidence is under
+`app/build/source-identity-review-2026-09-06/`.
+
+The new Stats row is localized in English and all 28 existing translation files. Both keys and
+format placeholders were validated, existing entries were unchanged, and all 16 relevant UI tests
+passed again after the resource update. The final APKs assembled and the arm64 APK was
+update-installed with app data and pairing preserved. Installed and local SHA-256 match:
+`9daf18937ebeb8a21d8ee5cd5a472889da9a43cbda87a3b51802b925e2d50c4c`.
+
+This qualification does not measure live repeat rate, display quality after stopping motion,
+Host Stats refresh cadence, end-to-end latency or whole-device GPU utilization. A headset stream
+must still confirm those behaviors with the final host/client pair.
 
 ## Processor setup and Stats review, 2026-09-06
 
@@ -1534,7 +1737,7 @@ cadence.
   authentication warning forced inference. Check the candidate count before changing thresholds.
 - **Reuse persists through visible motion or a hard edit:** treat it as a correctness failure. Verify
   the exact packed-input comparison, finite/complete evidence gates, literal global/local bounds,
-  cumulative callback gap, strict age bound, and decision token/cookies. Do not relax scene-cut
+  fixed retained reference, monotonic source identity/capture time, and decision token/cookies. Do not relax scene-cut
   behavior to conceal it.
 - **Good depth with lag:** compare LiteRT wall, depth age, and latch/infer/reuse/output FPS; check
   the exceptional `color_busy` counter before changing model resolution.

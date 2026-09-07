@@ -84,6 +84,46 @@ public final class SbsDepthTelemetrySnapshot {
     public final float[] changeTrend;
     public final float[] cutTrend;
     public final float[] anchorTrend;
+    /** Present only for host samples; rates use host copy timestamps, never packet arrival time. */
+    public final HostPerformance hostPerformance;
+
+    public static final class HostPerformance {
+        public final HostSbsTelemetrySnapshot source;
+        public final long publicationAgeMs;
+        public final long outcomeAgeMs;
+        public final float inferenceFps;
+        public final float reuseFps;
+        public final float invalidFps;
+        public final float reuseRatio;
+        public final float outcomeWindowSeconds;
+        public final float warpedFps;
+        public final float packedRepeatFps;
+        public final float flatFps;
+        public final float outputWindowSeconds;
+
+        HostPerformance(HostSbsTelemetrySnapshot source, long publicationAgeMs,
+                        long outcomeAgeMs, float inferenceFps, float reuseFps,
+                        float invalidFps, float reuseRatio, float outcomeWindowSeconds,
+                        float warpedFps, float packedRepeatFps, float flatFps,
+                        float outputWindowSeconds) {
+            this.source = source;
+            this.publicationAgeMs = publicationAgeMs;
+            this.outcomeAgeMs = outcomeAgeMs;
+            this.inferenceFps = inferenceFps;
+            this.reuseFps = reuseFps;
+            this.invalidFps = invalidFps;
+            this.reuseRatio = reuseRatio;
+            this.outcomeWindowSeconds = outcomeWindowSeconds;
+            this.warpedFps = warpedFps;
+            this.packedRepeatFps = packedRepeatFps;
+            this.flatFps = flatFps;
+            this.outputWindowSeconds = outputWindowSeconds;
+        }
+
+        public boolean hasPerformanceSamples() {
+            return (source.validFields & ~VALID_ALL) != 0;
+        }
+    }
 
     private SbsDepthTelemetrySnapshot(
             Availability availability, int validFields, int runtimeFlags,
@@ -94,7 +134,7 @@ public final class SbsDepthTelemetrySnapshot {
             long sceneAge, long hardCutCount, long externalCutRequests,
             long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame,
             float[] popTrend, float[] edgeTrend, float[] changeTrend,
-            float[] cutTrend, float[] anchorTrend) {
+            float[] cutTrend, float[] anchorTrend, HostPerformance hostPerformance) {
         this.availability = availability;
         this.validFields = validFields;
         this.runtimeFlags = runtimeFlags;
@@ -122,6 +162,7 @@ public final class SbsDepthTelemetrySnapshot {
         this.changeTrend = copy(changeTrend);
         this.cutTrend = copy(cutTrend);
         this.anchorTrend = copy(anchorTrend);
+        this.hostPerformance = hostPerformance;
     }
 
     public static SbsDepthTelemetrySnapshot available(
@@ -139,7 +180,7 @@ public final class SbsDepthTelemetrySnapshot {
                 changeFraction, zeroAnchorShiftPx, subjectDepth, validDepthFraction,
                 effectiveRangeWidth, sceneAge, hardCutCount, externalCutRequests,
                 emptyDepthFrames, collapsedDepthFrames, sampleFrame,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     public static SbsDepthTelemetrySnapshot unavailable(Availability availability) {
@@ -151,7 +192,7 @@ public final class SbsDepthTelemetrySnapshot {
                 Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN,
                 Float.NaN, Float.NaN, Float.NaN, Float.NaN,
                 0L, 0L, 0L, 0L, 0L, 0L,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     public SbsDepthTelemetrySnapshot withTrends(
@@ -164,7 +205,18 @@ public final class SbsDepthTelemetrySnapshot {
                 changeFraction, zeroAnchorShiftPx, subjectDepth, validDepthFraction,
                 effectiveRangeWidth, sceneAge, hardCutCount, externalCutRequests,
                 emptyDepthFrames, collapsedDepthFrames, sampleFrame,
-                popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend);
+                popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend, hostPerformance);
+    }
+
+    public SbsDepthTelemetrySnapshot withHostPerformance(HostPerformance performance) {
+        return new SbsDepthTelemetrySnapshot(
+                availability, validFields, runtimeFlags,
+                depthWidth, depthHeight, zeroPlaneMode,
+                popFloor, popCeiling, effectivePop, classifiedEdgeFraction,
+                changeFraction, zeroAnchorShiftPx, subjectDepth, validDepthFraction,
+                effectiveRangeWidth, sceneAge, hardCutCount, externalCutRequests,
+                emptyDepthFrames, collapsedDepthFrames, sampleFrame,
+                popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend, performance);
     }
 
     public boolean isAvailable() {

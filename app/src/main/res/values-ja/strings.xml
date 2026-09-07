@@ -184,4 +184,37 @@
 \nカスタム解像度を作成することに起因する問題について、私たちは責任を負いません。
 \n
 \nモニターが必要な表示設定をサポートしていない場合もあります。その場合は、仮想モニターを設定してみてください。最後に、デバイスまたはホストPCが特定の解像度またはリフレッシュレートでのストリーミングをサポートしていない場合、残念ながら運が悪かったということになります。</string>
+    <string name="xr_stats_host_source_repeats">ホスト確認済みの重複フレーム</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | 出力画像を維持</string>
+    <string name="xr_stats_host_sample">ホストの公開データ</string>
+    <string name="xr_stats_host_sample_value">%1$d | %2$.1f 秒前に受信</string>
+    <string name="xr_stats_host_performance">ホストのパフォーマンス</string>
+    <string name="xr_stats_host_enable_diagnostics">パフォーマンスを見るにはホストの診断を有効にしてください</string>
+    <string name="xr_stats_host_decision_rates">推論 / 再利用 / 無効 FPS</string>
+    <string name="xr_stats_host_reuse_ratio">ほぼ同一の入力を再利用</string>
+    <string name="xr_stats_host_reuse_ratio_value">推論＋再利用の判定の %1$.1f%%</string>
+    <string name="xr_stats_host_no_eligible_decisions">測定済みの対象判定なし</string>
+    <string name="xr_stats_host_decision_sample">GPU 判定のコピー</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | %2$.1f 秒前に受信</string>
+    <string name="xr_stats_host_output_rates">ワープ / SBS フレーム反復 / 平面 FPS</string>
+    <string name="xr_stats_host_stage_averages">各処理段階の平均</string>
+    <string name="xr_stats_host_stage_averages_value">モード変更以降の値。CPU/GPU の処理時間は重複します</string>
+    <string name="xr_stats_host_conversion_cpu">変換の経過時間（CPU）</string>
+    <string name="xr_stats_host_encode_cpu">エンコード / 取得の経過時間（CPU）</string>
+    <string name="xr_stats_host_content_age">新しい出力のコンテンツ経過時間</string>
+    <string name="xr_stats_host_warp_gpu">ワープ（GPU）</string>
+    <string name="xr_stats_host_preprocess_gpu">前処理（GPU）</string>
+    <string name="xr_stats_host_conditional_gpu">モデル / 再利用分岐（GPU）</string>
+    <string name="xr_stats_host_postprocess_gpu">後処理（GPU）</string>
+    <string name="xr_stats_host_output_gpu">出力（GPU）</string>
+    <string name="xr_stats_host_waiting_rates">新しいサンプル 2 件を待機中</string>
+    <string name="xr_stats_host_stage_value">%1$.2f ms | %2$d サンプル</string>
+    <string name="xr_stats_host_not_sampled">未測定</string>
+    <string name="xr_cinema_environment">シネマの環境</string>
+    <string name="xr_cinema_environment_summary">シネマに入るときに使用する背景</string>
+    <string name="xr_cinema_environment_black">黒</string>
+    <string name="xr_cinema_environment_system">システム環境</string>
+    <string name="xr_cinema_environment_passthrough">パススルー</string>
+    <string name="xr_cinema_environment_hint">ヘッドセットの設定でシステム環境を選択してください。</string>
+    <string name="xr_cinema_exit">シネマを終了</string>
 </resources>

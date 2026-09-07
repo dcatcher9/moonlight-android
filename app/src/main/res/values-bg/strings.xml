@@ -141,4 +141,37 @@
     <!-- commit-text feature -->
     <string name="title_enable_commit_text">Разреши изпращане на текст на блокове (жестово/гласово въвеждане)</string>
     <string name="summary_enable_commit_text">Изпраща текст от софтуерната клавиатура наведнъж (жестово писане, предложения, гласово диктуване). Възможно е да не работи с игри, които разчитат на по-символно въвеждане.</string>
+    <string name="xr_stats_host_source_repeats">Повторения, потвърдени от хоста</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | запазено изображение</string>
+    <string name="xr_stats_host_sample">Публикация от хоста</string>
+    <string name="xr_stats_host_sample_value">%1$d | получена преди %2$.1f s</string>
+    <string name="xr_stats_host_performance">Производителност на хоста</string>
+    <string name="xr_stats_host_enable_diagnostics">Включете диагностиката на хоста за данни за производителността</string>
+    <string name="xr_stats_host_decision_rates">Извод / повторно използване / невалидни FPS</string>
+    <string name="xr_stats_host_reuse_ratio">Повторно използване при почти идентичен вход</string>
+    <string name="xr_stats_host_reuse_ratio_value">%1$.1f%% от решенията за извод + повторно използване</string>
+    <string name="xr_stats_host_no_eligible_decisions">Няма измерени допустими решения</string>
+    <string name="xr_stats_host_decision_sample">Копие на GPU решенията</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | получено преди %2$.1f s</string>
+    <string name="xr_stats_host_output_rates">Деформация / повторен SBS кадър / плоски FPS</string>
+    <string name="xr_stats_host_stage_averages">Средни стойности по етапи</string>
+    <string name="xr_stats_host_stage_averages_value">От смяната на режима; CPU/GPU етапите се припокриват</string>
+    <string name="xr_stats_host_conversion_cpu">Време за преобразуване (CPU)</string>
+    <string name="xr_stats_host_encode_cpu">Време за кодиране / получаване (CPU)</string>
+    <string name="xr_stats_host_content_age">Възраст на съдържанието в новия изход</string>
+    <string name="xr_stats_host_warp_gpu">Деформация (GPU)</string>
+    <string name="xr_stats_host_preprocess_gpu">Предварителна обработка (GPU)</string>
+    <string name="xr_stats_host_conditional_gpu">Модел / повторно използване (GPU)</string>
+    <string name="xr_stats_host_postprocess_gpu">Последваща обработка (GPU)</string>
+    <string name="xr_stats_host_output_gpu">Изход (GPU)</string>
+    <string name="xr_stats_host_waiting_rates">Изчакване на две нови проби</string>
+    <string name="xr_stats_host_stage_value">%1$.2f ms | %2$d проби</string>
+    <string name="xr_stats_host_not_sampled">Няма проби</string>
+    <string name="xr_cinema_environment">Среда за кино</string>
+    <string name="xr_cinema_environment_summary">Фон при влизане в режим „Кино“</string>
+    <string name="xr_cinema_environment_black">Черно</string>
+    <string name="xr_cinema_environment_system">Системна среда</string>
+    <string name="xr_cinema_environment_passthrough">Изглед към реалната среда</string>
+    <string name="xr_cinema_environment_hint">Изберете системната среда в настройките на очилата.</string>
+    <string name="xr_cinema_exit">Излизане от кино</string>
 </resources>

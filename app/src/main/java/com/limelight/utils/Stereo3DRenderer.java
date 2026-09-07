@@ -18,6 +18,7 @@ import android.util.Log;
 import android.view.Surface;
 
 import com.limelight.LimeLog;
+import com.limelight.binding.video.DecodedSourceIdentityTracker;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.sbs.ClientSbsFrameSlots;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
@@ -104,6 +105,26 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private long lastDepthObservationFrameSequence;
     private long lastModelInferenceFrameSequence;
     private long lastModelInferenceCapturedAtNs;
+
+    // Encoder-input proof is attributed to a decoded buffer, never the inference/comparison owner.
+    // Lossy P-frames can refine a static image. Allow initial color updates before retaining it.
+    static final long HOST_SOURCE_SETTLING_NS = TimeUnit.MILLISECONDS.toNanos(500L);
+    private volatile DecodedSourceIdentityTracker decodedSourceIdentityTracker;
+    private final DecodedSourceIdentityTracker.Sample latchedSourceIdentity =
+            new DecodedSourceIdentityTracker.Sample();
+    private final DecodedSourceIdentityTracker.Sample presentedSourceIdentity =
+            new DecodedSourceIdentityTracker.Sample();
+    private final DecodedSourceIdentityTracker.Sample[] colorSourceIdentities = {
+            new DecodedSourceIdentityTracker.Sample(), new DecodedSourceIdentityTracker.Sample()
+    };
+    private final float[][] colorSourceTransforms = {new float[16], new float[16]};
+    private final float[] presentedSourceTransform = new float[16];
+    private long lastProvenSourceRepeatSequence;
+    private long sourceSettlingStartedNs;
+    private boolean sourceSettled;
+    // Only a successful GPU Near decision confirms valid, settled comparison history. Allocated
+    // output textures alone can also represent rejected raw depth or geometry-confirmation holds.
+    private boolean sourceRepeatOwnerConfirmed;
 
     private volatile boolean clientSbs;
     /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
@@ -350,6 +371,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final AtomicLong perfDepthAdopts = new AtomicLong();
     private final AtomicLong perfNearIdenticalCandidates = new AtomicLong();
     private final AtomicLong perfNearIdenticalReuses = new AtomicLong();
+    private final AtomicLong perfHostSourceRepeats = new AtomicLong();
     private final AtomicLong perfNearIdenticalContentRejects = new AtomicLong();
     private final AtomicLong perfNearIdenticalInvalidRejects = new AtomicLong();
     private final AtomicLong perfGlOutputSubmits = new AtomicLong();
@@ -365,7 +387,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final AtomicLong perfDepthResultAgeMaxNs = new AtomicLong();
     private final AtomicLong[] performanceCounters = {
             perfGlLatches, perfDepthAdopts,
-            perfNearIdenticalCandidates, perfNearIdenticalReuses,
+            perfNearIdenticalCandidates, perfNearIdenticalReuses, perfHostSourceRepeats,
             perfNearIdenticalContentRejects,
             perfNearIdenticalInvalidRejects,
             perfGlOutputSubmits,
@@ -819,6 +841,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         public final float depthAdoptFps;
         /** Current-color frames presented with the last actual-inference depth field. */
         public final float depthReuseFps;
+        /** Negotiated exact encoder-input repeats retained without another GPU transaction. */
+        public final float hostSourceRepeatFps;
         /** Reuses divided by all GPU near-identical candidate decisions in this window. */
         public final float depthReuseRatio;
         /** Candidate fallbacks classified by the already-mapped GPU decision record. */
@@ -923,6 +947,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             this.glLatchFps = rate(glLatches, elapsedNs);
             this.depthAdoptFps = rate(depthAdopts, elapsedNs);
             this.depthReuseFps = rate(depthReuses, elapsedNs);
+            this.hostSourceRepeatFps = rate(owner.perfHostSourceRepeats.getAndSet(0L), elapsedNs);
             this.depthReuseRatio = reuseCandidates == 0L
                     ? 0.0f : (float) depthReuses / reuseCandidates;
             this.glOutputSubmitFps = rate(glOutputSubmits, elapsedNs);
@@ -2269,7 +2294,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         ClientSbsFrameSlots.Lease presented = activeColorFrameLease;
         if (presented == null || !hasDepthProfile()
                 || presented.getGeneration() != activeClientSbsGeneration
-                || latchedFrameSequence <= presented.getFrameSequence()) {
+                || latchedFrameSequence <= Math.max(presented.getFrameSequence(),
+                        lastProvenSourceRepeatSequence)) {
             // A fresh adoption caught up before the deadline (or invalidated its owner). Remove
             // the old timer so it cannot force a redundant swap of an already-current pair.
             cancelStaleDepthWatchdog();
@@ -2373,6 +2399,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             return;
         }
 
+        if (consumeProvenSourceRepeat()) {
+            return;
+        }
+
         if (shouldPresentCurrentFlatForStaleDepth(System.nanoTime())) {
             // A real draw/swap is required to replace SceneCore's retained packed image with the
             // current decoded color duplicated flat. The in-flight inference remains untouched.
@@ -2406,6 +2436,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             return false;
         }
 
+        if (consumeProvenSourceRepeat()) {
+            return false;
+        }
+
         // Thermal state remains telemetry only. Depth inference is uncapped and starts whenever a
         // newer decoded frame exists and the single-flight claim below is free.
         if (performanceSamplingEnabled) {
@@ -2421,6 +2455,55 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             return false;
         }
         return true;
+    }
+
+    /** Installed once by the stream owner; absent metadata keeps ordinary local arbitration. */
+    public void setDecodedSourceIdentityTracker(DecodedSourceIdentityTracker tracker) {
+        decodedSourceIdentityTracker = tracker;
+    }
+
+    /**
+     * A negotiated exact encoder-input repeat needs no model draw, color copy, decision map or
+     * packed swap. The decoder and SurfaceTexture still drain. Neither the real inference owner
+     * nor depth/cut/history advances; only the transport proof extends to this newer delivery.
+     */
+    private boolean consumeProvenSourceRepeat() {
+        DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
+        if (tracker == null || !clientSbs || !matchedOutputPresented || !hasPresentableDepth()
+                || !sourceRepeatOwnerConfirmed
+                || gpuSceneCutDetector == null || gpuSceneCutResetPending
+                || !surfaceLifecycleReady || !outputSurfaceValidated
+                || activeClientSbsGeneration != clientSbsGeneration.get()
+                || hdrInputTransition.isBlockingFrames() || presentationCompletion.hasPending()
+                || gpuShutdownRequested.get() || shuttingDown.get() || inferenceClaim.get() != 0L
+                || latchedFrameSequence <= lastCapturedFrameSequence
+                || !java.util.Arrays.equals(presentedSourceTransform, videoTextureTransform)
+                || !canRetainHostSource(presentedSourceIdentity, latchedSourceIdentity,
+                        tracker.getEpoch())) {
+            return false;
+        }
+        if (!sourceSettled) {
+            sourceSettled = hasHostSourceSettled(sourceSettlingStartedNs, System.nanoTime());
+            if (!sourceSettled) return false;
+        }
+        presentedSourceIdentity.copyFrom(latchedSourceIdentity);
+        lastCapturedFrameSequence = latchedFrameSequence;
+        lastProvenSourceRepeatSequence = latchedFrameSequence;
+        cancelStaleDepthWatchdog();
+        recordCounter(perfHostSourceRepeats);
+        return true;
+    }
+
+    static boolean canRetainHostSource(DecodedSourceIdentityTracker.Sample presented,
+                                       DecodedSourceIdentityTracker.Sample current,
+                                       long decoderEpoch) {
+        return current.epoch == decoderEpoch
+                && DecodedSourceIdentityTracker.isSameSource(presented, current);
+    }
+
+    static boolean hasHostSourceSettled(long startedNs, long nowNs) {
+        return startedNs > 0L && nowNs >= startedNs
+                && nowNs - startedNs >= HOST_SOURCE_SETTLING_NS;
     }
 
     /**
@@ -2533,6 +2616,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     return false;
                 }
                 lastLatchedSurfaceTimestampNs = surfaceTimestampNs;
+                DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
+                if (tracker != null) {
+                    tracker.readSurfaceIdentity(surfaceTimestampNs, latchedSourceIdentity);
+                } else {
+                    latchedSourceIdentity.clear();
+                }
                 // Must be sampled after updateTexImage(): codec crop/orientation can change with
                 // the newly latched buffer. Both matched-color and model-input shaders use this
                 // matrix.
@@ -3257,8 +3346,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             matchedOutputPresented = false;
             return;
         }
+        long nowNs = System.nanoTime();
         if (!hasDepthProfile()
-                || shouldPresentCurrentFlatForStaleDepth(System.nanoTime())) {
+                || shouldPresentCurrentFlatForStaleDepth(nowNs)) {
             long performanceEpoch = capturePerformanceSamplingEpoch();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             drawFlatSbs();
@@ -3287,6 +3377,23 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             endGpuTimer(composeGpuTimerStarted);
         }
         matchedOutputPresented = stereoPresented;
+        if (stereoPresented && activeColorFrameLease != null) {
+            DecodedSourceIdentityTracker.Sample source =
+                    colorSourceIdentities[activeColorFrameLease.getSlot()];
+            if (source.sourceId == 0 || source.epoch != presentedSourceIdentity.epoch
+                    || source.sourceId != presentedSourceIdentity.sourceId
+                    || (source.frameNumber != presentedSourceIdentity.frameNumber
+                    && !DecodedSourceIdentityTracker.isSameSource(presentedSourceIdentity, source))) {
+                sourceSettlingStartedNs = nowNs;
+                sourceSettled = false;
+            }
+            presentedSourceIdentity.copyFrom(source);
+            System.arraycopy(colorSourceTransforms[activeColorFrameLease.getSlot()], 0,
+                    presentedSourceTransform, 0, 16);
+        } else {
+            presentedSourceIdentity.clear();
+            sourceSettled = false;
+        }
         recordGlOutputSubmit(!stereoPresented, performanceEpoch);
     }
 
@@ -3608,6 +3715,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             return false;
         }
 
+        colorSourceIdentities[bufferSlot].copyFrom(latchedSourceIdentity);
+        System.arraycopy(videoTextureTransform, 0, colorSourceTransforms[bufferSlot], 0, 16);
         ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
         boolean nearIdenticalCandidate = sceneCutDetector != null
                 && sceneCutDetector.hasCommittedInferenceHistory()
@@ -4043,6 +4152,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     }
 
     private void clearPublishedPresentationStateLocked(boolean glContextValid) {
+        latchedSourceIdentity.clear();
+        presentedSourceIdentity.clear();
+        lastProvenSourceRepeatSequence = 0L;
+        sourceSettlingStartedNs = 0L;
+        sourceSettled = false;
+        sourceRepeatOwnerConfirmed = false;
         GpuInferenceResult unpublishedGpu = latestGpuInferenceResult.getAndSet(null);
         if (unpublishedGpu != null) {
             if (glContextValid) {
@@ -4218,6 +4333,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             return false;
         }
 
+        sourceRepeatOwnerConfirmed = false;
         if (result.reusedDepth) {
             return adoptNearIdenticalReuseLocked(result);
         }
@@ -4274,6 +4390,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             ClientSbsFrameSlots.Lease oldColorLease = activeColorFrameLease;
             activeColorFrameLease = result.colorFrameLease;
             colorFrameSlots.release(oldColorLease, ClientSbsFrameSlots.State.ACTIVE);
+            lastProvenSourceRepeatSequence = 0L;
             gpuDepthTextureId = 0;
             gpuProfileTextureId = 0;
             gpuParallaxTextureId = 0;
@@ -4405,6 +4522,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             ClientSbsFrameSlots.Lease oldColorLease = activeColorFrameLease;
             activeColorFrameLease = result.colorFrameLease;
             colorFrameSlots.release(oldColorLease, ClientSbsFrameSlots.State.ACTIVE);
+            lastProvenSourceRepeatSequence = 0L;
             colorAdopted = true;
 
             // Freeze normalization, cut, profile, conditioned disparity, and the cached warp. Only this
@@ -4416,6 +4534,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 perfNearIdenticalReuses.incrementAndGet();
             }
 
+            sourceRepeatOwnerConfirmed = result.sceneCutDetector != null
+                    && result.sceneCutDetector == gpuSceneCutDetector;
             releaseInferenceClaim(result.inferenceClaimToken);
             return true;
         } catch (Throwable error) {

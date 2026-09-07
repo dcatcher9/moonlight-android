@@ -356,46 +356,7 @@ public class XrStreamPresenterLayoutTest {
     }
 
     @Test
-    public void expandedSessionToolsBlockSoftCollapse() {
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
-                true, true, XrControlUiState.Surface.NONE,
-                false, false, false, false, false, false, false,
-                true));
-    }
-
-    @Test
-    public void inlineSessionToolsExpandBarWithoutSqueezingPrimaryTiles() {
-        assertEquals(8.5f, XrStreamPresenter.controlBarTileUnits(false), EPSILON);
-        assertEquals(10.5f, XrStreamPresenter.controlBarTileUnits(true), EPSILON);
-
-        com.limelight.ui.xrcontrols.XrControlPanelLayout compact =
-                com.limelight.ui.xrcontrols.XrControlPanelLayout.calculate(
-                        XrStreamPresenter.controlBarTileUnits(false),
-                        1, 0.21f, 0.05f, 2.0f, 0.24f);
-        com.limelight.ui.xrcontrols.XrControlPanelLayout expanded =
-                com.limelight.ui.xrcontrols.XrControlPanelLayout.calculate(
-                        XrStreamPresenter.controlBarTileUnits(true),
-                        1, 0.21f, 0.05f, 2.0f, 0.24f);
-
-        assertEquals(1.835f, compact.widthMeters, EPSILON);
-        assertEquals(2.255f, expanded.widthMeters, EPSILON);
-        assertEquals(compact.heightMeters, expanded.heightMeters, EPSILON);
-
-        float compactCenter = XrStreamPresenter.controlBarCenterX(
-                false, compact.widthMeters, expanded.widthMeters);
-        float expandedCenter = XrStreamPresenter.controlBarCenterX(
-                true, compact.widthMeters, expanded.widthMeters);
-        float compactRightEdge = compactCenter + compact.widthMeters / 2.0f;
-        float expandedRightEdge = expandedCenter + expanded.widthMeters / 2.0f;
-        float compactToggleCenter = compactRightEdge - 0.25f * 0.21f;
-        float expandedToggleCenter = expandedRightEdge - 0.25f * 0.21f;
-
-        assertEquals(compactRightEdge, expandedRightEdge, EPSILON);
-        assertEquals(compactToggleCenter, expandedToggleCenter, EPSILON);
-    }
-
-    @Test
-    public void dockExpansionIgnoresDuplicateClickFromOnePhysicalTap() {
+    public void controlToggleIgnoresDuplicateClickFromOnePhysicalTap() {
         assertTrue(XrStreamPresenter.shouldAcceptControlToggle(1000L, 0L));
         assertFalse(XrStreamPresenter.shouldAcceptControlToggle(1200L, 1000L));
         assertTrue(XrStreamPresenter.shouldAcceptControlToggle(1400L, 1000L));

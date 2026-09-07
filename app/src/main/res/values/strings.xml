@@ -140,6 +140,8 @@
     <string name="xr_stats_display_refresh">Display refresh</string>
     <string name="xr_stats_fps_value">%1$.2f FPS</string>
     <string name="xr_stats_hz_value">%1$.2f Hz</string>
+    <string name="xr_stats_host_source_repeats">Host-proven repeats</string>
+    <string name="xr_stats_host_source_repeats_value">%1$.1f fps | retained output</string>
     <string name="video_range_full">Full</string>
     <string name="video_range_limited">Limited</string>
 
@@ -887,8 +889,6 @@
     <string name="xr_glance_reconnecting">Reconnecting</string>
     <string name="xr_dock_show_controls">Show controls</string>
     <string name="xr_dock_reveal_status">&#x25B4; %1$s &#x00B7; %2$s</string>
-    <string name="xr_dock_expand_session_tools">Show session tools</string>
-    <string name="xr_dock_collapse_session_tools">Hide session tools</string>
     <string name="xr_client_model">Model</string>
     <string name="xr_client_aspect_bucket">Aspect bucket</string>
     <string name="xr_client_gpu_status">GPU status</string>
@@ -907,4 +907,36 @@
     <!-- Client load on the glance strip: CPU core-equivalent, then GPU busy percent. -->
     <string name="xr_glance_load">CPU %1$s · GPU %2$s</string>
     <string name="xr_glance_load_unavailable" translatable="false">n/a</string>
+    <string name="xr_stats_host_sample">Host publication</string>
+    <string name="xr_stats_host_sample_value">%1$d | received %2$.1f s ago</string>
+    <string name="xr_stats_host_performance">Host performance</string>
+    <string name="xr_stats_host_enable_diagnostics">Enable host diagnostics for performance</string>
+    <string name="xr_stats_host_decision_rates">Infer / reuse / invalid FPS</string>
+    <string name="xr_stats_host_reuse_ratio">Near-identical reuse</string>
+    <string name="xr_stats_host_reuse_ratio_value">%1$.1f%% of infer + reuse decisions</string>
+    <string name="xr_stats_host_no_eligible_decisions">No measured eligible decisions</string>
+    <string name="xr_stats_host_decision_sample">GPU decision copy</string>
+    <string name="xr_stats_host_decision_sample_value">%1$d | received %2$.1f s ago</string>
+    <string name="xr_stats_host_output_rates">Warp / packed repeat / flat FPS</string>
+    <string name="xr_stats_host_stage_averages">Stage averages</string>
+    <string name="xr_stats_host_stage_averages_value">Since mode change; CPU/GPU stages overlap</string>
+    <string name="xr_stats_host_conversion_cpu">Conversion CPU wall</string>
+    <string name="xr_stats_host_encode_cpu">Encode / retrieve CPU wall</string>
+    <string name="xr_stats_host_content_age">New-output content age</string>
+    <string name="xr_stats_host_warp_gpu">Warp GPU</string>
+    <string name="xr_stats_host_preprocess_gpu">Preprocess GPU</string>
+    <string name="xr_stats_host_conditional_gpu">Model / reuse branch GPU</string>
+    <string name="xr_stats_host_postprocess_gpu">Postprocess GPU</string>
+    <string name="xr_stats_host_output_gpu">Output GPU</string>
+    <string name="xr_stats_host_rates_value" translatable="false">%1$.1f / %2$.1f / %3$.1f | %4$.2f s</string>
+    <string name="xr_stats_host_waiting_rates">Waiting for two fresh samples</string>
+    <string name="xr_stats_host_stage_value">%1$.2f ms | %2$d samples</string>
+    <string name="xr_stats_host_not_sampled">Not sampled</string>
+    <string name="xr_cinema_environment">Cinema environment</string>
+    <string name="xr_cinema_environment_summary">Background to use when entering Cinema</string>
+    <string name="xr_cinema_environment_black">Black</string>
+    <string name="xr_cinema_environment_system">System environment</string>
+    <string name="xr_cinema_environment_passthrough">Passthrough</string>
+    <string name="xr_cinema_environment_hint">Choose the system environment in headset settings.</string>
+    <string name="xr_cinema_exit">Exit Cinema</string>
 </resources>

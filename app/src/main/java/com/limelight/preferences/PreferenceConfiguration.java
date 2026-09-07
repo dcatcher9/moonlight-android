@@ -55,6 +55,27 @@ public class PreferenceConfiguration {
         }
     }
 
+    public enum CinemaEnvironment {
+        BLACK("black"),
+        SYSTEM("system"),
+        PASSTHROUGH("passthrough");
+
+        public final String preferenceValue;
+
+        CinemaEnvironment(String preferenceValue) {
+            this.preferenceValue = preferenceValue;
+        }
+
+        public static CinemaEnvironment fromPreferenceValue(String value) {
+            for (CinemaEnvironment environment : values()) {
+                if (environment.preferenceValue.equals(value)) {
+                    return environment;
+                }
+            }
+            return BLACK;
+        }
+    }
+
     public static final String CUSTOM_BITRATE_PREF_STRING = "edit_diy_bitrate";
     public static final String CUSTOM_REFRESH_RATE_PREF_STRING = "custom_refresh_rate";
     public static final String CUSTOM_RESOLUTION_PREF_STRING = "edit_diy_w_h";
@@ -91,6 +112,7 @@ public class PreferenceConfiguration {
             "list_client_sbs_depth_model";
     public static final String RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING =
             "list_raw_sbs_per_eye_resolution";
+    public static final String CINEMA_ENVIRONMENT_PREF_STRING = "list_cinema_environment";
     private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
     private static final String CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD = "checkbox_hide_osc_when_has_gamepad";
     private static final String ONLY_L3_R3_PREF_STRING = "checkbox_only_show_L3R3";
@@ -397,6 +419,7 @@ public class PreferenceConfiguration {
     /** Raw SBS packing choice, captured once when the stream starts. */
     public RawSbsPerEyeResolution rawSbsPerEyeResolution =
             RawSbsPerEyeResolution.FULL;
+    public CinemaEnvironment cinemaEnvironment = CinemaEnvironment.BLACK;
     public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
     public int oscOpacity;
@@ -666,6 +689,15 @@ public class PreferenceConfiguration {
         PreferenceManager.getDefaultSharedPreferences(context)
                 .edit()
                 .putBoolean(ENABLE_PERF_OVERLAY_STRING, enabled)
+                .apply();
+    }
+
+    /** Persists the Cinema background selected in either Global Settings or the XR dock. */
+    public static void setCinemaEnvironment(Context context, CinemaEnvironment environment) {
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putString(CINEMA_ENVIRONMENT_PREF_STRING,
+                        (environment != null ? environment : CinemaEnvironment.BLACK).preferenceValue)
                 .apply();
     }
 
@@ -957,6 +989,14 @@ public class PreferenceConfiguration {
         }
         config.rawSbsPerEyeResolution =
                 RawSbsPerEyeResolution.fromPreferenceValue(rawSbsPerEyeResolution);
+        String cinemaEnvironment = null;
+        try {
+            cinemaEnvironment = prefs.getString(CINEMA_ENVIRONMENT_PREF_STRING,
+                    CinemaEnvironment.BLACK.preferenceValue);
+        } catch (ClassCastException invalidStoredType) {
+            // A corrupt persisted type must not prevent the stream from starting.
+        }
+        config.cinemaEnvironment = CinemaEnvironment.fromPreferenceValue(cinemaEnvironment);
         config.framePacing = getFramePacingValue(prefs);
 
 

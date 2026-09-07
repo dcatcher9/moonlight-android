@@ -196,6 +196,16 @@
         android:key="category_xr_general"
         android:title="@string/category_xr_general">
 
+        <com.limelight.preferences.InlineListPreference
+            android:defaultValue="black"
+            android:entries="@array/xr_cinema_environment_names"
+            android:entryValues="@array/xr_cinema_environment_values"
+            android:icon="@drawable/ic_xr_cinema_view"
+            android:key="list_cinema_environment"
+            android:summary="@string/xr_cinema_environment_summary"
+            android:title="@string/xr_cinema_environment"
+            app:iconSpaceReserved="false" />
+
         <com.limelight.preferences.LanguagePreference
             android:defaultValue="default"
             android:entries="@array/language_names"

@@ -187,26 +187,6 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void compactDockExpandsInlineWithPlusAndMinusAffordance() {
-        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
-        Activity activity = controller.get();
-        activity.setTheme(R.style.AppTheme);
-        controller.setup();
-
-        assertEquals(View.GONE, XrStreamPresenter.secondaryActionVisibility(false));
-        assertEquals(View.VISIBLE, XrStreamPresenter.secondaryActionVisibility(true));
-        assertEquals(R.drawable.ic_add_base,
-                XrStreamPresenter.expansionIconResource(false));
-        assertEquals(R.drawable.ic_remove_base,
-                XrStreamPresenter.expansionIconResource(true));
-        assertEquals("Show session tools",
-                activity.getString(R.string.xr_dock_expand_session_tools));
-        assertEquals("Hide session tools",
-                activity.getString(R.string.xr_dock_collapse_session_tools));
-        controller.destroy();
-    }
-
-    @Test
     public void xrPanelsUseReadableTypeAndCinemaNaming() {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
