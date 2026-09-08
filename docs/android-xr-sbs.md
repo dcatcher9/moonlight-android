@@ -896,9 +896,36 @@ requires a restart. The Client SBS ZipDepth aspect graph is derived from the pen
 resolution and is not an independent setting. Raw's Full/Half choice is mode-specific, persists
 with the current session, and inherits its default from Global Settings.
 
-The resolution ladder keeps its six established landscape choices first and then exposes one
-explicit portrait counterpart for each by swapping `W` and `H`. Those portrait IDs are literal
-host/virtual-display requests; they do not toggle Android's resolution-inversion option or rotate
+The resolution ladder keeps its six established landscape choices first, then adds twelve common
+phone/tablet source sizes. One explicit portrait counterpart for each of the eighteen landscape
+choices follows by swapping `W` and `H`, for 36 choices in both Global Settings and every mode's
+in-session picker. `XrResolutionOptions` owns their ordering and IDs; the Android resource arrays
+mirror it. These are source/virtual-desktop dimensions displayed in XR, not additional Android
+device targets. The compact phone/tablet labels map to these exact landscape requests:
+
+| Label | Source dimensions |
+| --- | --- |
+| Phone 18:9 | `2160 x 1080` |
+| Phone 19.5:9 | `2340 x 1080` |
+| Phone 20:9 | `2400 x 1080` |
+| Phone wide | `2424 x 1080` |
+| Tablet 1200p | `1920 x 1200` |
+| Tablet 1600p | `2560 x 1600` |
+| Tablet 4:3 | `2048 x 1536` |
+| Tablet 4:3+ | `2732 x 2048` |
+| Tablet 3:2 | `2160 x 1440` |
+| Tablet 1640p | `2360 x 1640` |
+| Tablet 1668p | `2388 x 1668` |
+| Tablet 1668p+ | `2420 x 1668` |
+
+The phone/tablet entries retain the existing Client SBS aspect handling: landscape input selects
+the nearest packaged landscape graph and directly resizes to it, while portrait input uses the
+reflected aspect-fit path described below. They do not add Client SBS tensor shapes. Host SBS
+source-to-tensor routing is defined separately in the companion host's
+[Host SBS contract](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/host-sbs.md).
+
+All portrait IDs are literal host/virtual-display requests; they do not toggle Android's
+resolution-inversion option or rotate
 the XR activity. Landscape/portrait crossings reconnect so the decoder can use a real
 orientation-specific adaptive envelope rather than a synthetic `5120 x 5120` maximum. Resizes
 within the current orientation remain live when that envelope and the active presentation

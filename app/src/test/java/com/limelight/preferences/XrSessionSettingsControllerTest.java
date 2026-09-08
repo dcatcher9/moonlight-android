@@ -1839,6 +1839,29 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void phoneAndTabletPortraitSourcesPersistInEveryModeWithoutRotation() {
+        String[] sources = {"1080x2400", "1536x2048"};
+        for (SessionSettingsStore.PresenterMode mode
+                : SessionSettingsStore.PresenterMode.values()) {
+            for (String source : sources) {
+                XrSessionSettingsController controller = controller();
+                controller.selectModeQualitySetting(mode,
+                        SessionSettingsModel.Key.RESOLUTION, source);
+                assertTrue(controller.commitPending());
+
+                SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
+                assertEquals(source, snapshot.preferencesForMode(mode)
+                        .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
+                XrSessionSettingsController restored =
+                        new XrSessionSettingsController(store, pc, app, globals, snapshot);
+                assertEquals(source, restored.getModeStreamQualityModel(mode)
+                        .pendingQuality.resolution);
+            }
+        }
+        assertFalse(globals.contains("checkbox_auto_invert_video_resolution"));
+    }
+
+    @Test
     public void clientSbsPortraitContractReconnectsOnOrientationButNotSameAspectResize() {
         assertFalse(XrSessionSettingsController.sameClientSbsPipelineContract(
                 new int[] {1920, 1080}, new int[] {1080, 1920}));

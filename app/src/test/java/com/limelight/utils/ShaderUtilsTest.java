@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import com.limelight.preferences.XrResolutionOptions;
+
 import org.junit.Test;
 
 public class ShaderUtilsTest {
@@ -143,13 +145,8 @@ public class ShaderUtilsTest {
 
     @Test
     public void exactAreaLoopCoversEverySupportedXrResolutionIncludingPortrait() {
-        int[][] supportedStreams = {
-                {1920, 1080}, {2560, 1440}, {3840, 2160},
-                {2560, 1080}, {3440, 1440}, {5120, 2160},
-                {1080, 1920}, {1440, 2560}, {2160, 3840},
-                {1080, 2560}, {1440, 3440}, {2160, 5120},
-        };
-        for (int[] stream : supportedStreams) {
+        for (XrResolutionOptions.Option option : XrResolutionOptions.standardOptions()) {
+            int[] stream = {option.width, option.height};
             float sourceAspect = stream[0] / (float) stream[1];
             ClientSbsPipelineContract contract = ClientSbsPipelineContract.forStream(
                     ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, sourceAspect);

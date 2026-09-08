@@ -11,10 +11,9 @@ import java.util.Objects;
 /**
  * Authoritative XR resolution ladder shared by the global and in-session quality pickers.
  *
- * <p>The established landscape entries retain their original order. Their explicit portrait
- * counterparts follow in the same order, so adding portrait support does not move an existing
- * card or change cycle behavior for persisted landscape values. IDs are real requested stream
- * dimensions; selecting one never relies on Android's display-rotation inversion preference.</p>
+ * <p>The six established landscape entries retain their original order, followed by phone/tablet
+ * source dimensions. Explicit portrait counterparts follow in the same order. IDs are real requested
+ * stream dimensions; selecting one never relies on Android's display-rotation inversion preference.</p>
  */
 public final class XrResolutionOptions {
     public static final String RESOLUTION_1080P = "1920x1080";
@@ -23,6 +22,19 @@ public final class XrResolutionOptions {
     public static final String RESOLUTION_UW_1080P = "2560x1080";
     public static final String RESOLUTION_UW_1440P = "3440x1440";
     public static final String RESOLUTION_5K2K = "5120x2160";
+
+    public static final String RESOLUTION_PHONE_18_9 = "2160x1080";
+    public static final String RESOLUTION_PHONE_19_5_9 = "2340x1080";
+    public static final String RESOLUTION_PHONE_20_9 = "2400x1080";
+    public static final String RESOLUTION_PHONE_WIDE = "2424x1080";
+    public static final String RESOLUTION_TABLET_1200P = "1920x1200";
+    public static final String RESOLUTION_TABLET_1600P = "2560x1600";
+    public static final String RESOLUTION_TABLET_4_3 = "2048x1536";
+    public static final String RESOLUTION_TABLET_4_3_HIGH = "2732x2048";
+    public static final String RESOLUTION_TABLET_3_2 = "2160x1440";
+    public static final String RESOLUTION_TABLET_1640P = "2360x1640";
+    public static final String RESOLUTION_TABLET_1668P = "2388x1668";
+    public static final String RESOLUTION_TABLET_1668P_HIGH = "2420x1668";
 
     public static final String RESOLUTION_1080P_PORTRAIT = "1080x1920";
     public static final String RESOLUTION_1440P_PORTRAIT = "1440x2560";
@@ -38,7 +50,19 @@ public final class XrResolutionOptions {
                     new Option(RESOLUTION_4K, "4K", 3840, 2160, false),
                     new Option(RESOLUTION_UW_1080P, "UW 1080p", 2560, 1080, false),
                     new Option(RESOLUTION_UW_1440P, "UW 1440p", 3440, 1440, false),
-                    new Option(RESOLUTION_5K2K, "5K2K", 5120, 2160, false)));
+                    new Option(RESOLUTION_5K2K, "5K2K", 5120, 2160, false),
+                    new Option(RESOLUTION_PHONE_18_9, "Phone 18:9", 2160, 1080, false),
+                    new Option(RESOLUTION_PHONE_19_5_9, "Phone 19.5:9", 2340, 1080, false),
+                    new Option(RESOLUTION_PHONE_20_9, "Phone 20:9", 2400, 1080, false),
+                    new Option(RESOLUTION_PHONE_WIDE, "Phone wide", 2424, 1080, false),
+                    new Option(RESOLUTION_TABLET_1200P, "Tablet 1200p", 1920, 1200, false),
+                    new Option(RESOLUTION_TABLET_1600P, "Tablet 1600p", 2560, 1600, false),
+                    new Option(RESOLUTION_TABLET_4_3, "Tablet 4:3", 2048, 1536, false),
+                    new Option(RESOLUTION_TABLET_4_3_HIGH, "Tablet 4:3+", 2732, 2048, false),
+                    new Option(RESOLUTION_TABLET_3_2, "Tablet 3:2", 2160, 1440, false),
+                    new Option(RESOLUTION_TABLET_1640P, "Tablet 1640p", 2360, 1640, false),
+                    new Option(RESOLUTION_TABLET_1668P, "Tablet 1668p", 2388, 1668, false),
+                    new Option(RESOLUTION_TABLET_1668P_HIGH, "Tablet 1668p+", 2420, 1668, false)));
 
     private static final List<Option> STANDARD_OPTIONS =
             buildWithPortraitCounterparts(LANDSCAPE_OPTIONS);

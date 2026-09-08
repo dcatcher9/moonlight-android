@@ -62,7 +62,7 @@ public final class XrResolutionSelector extends ViewGroup {
     /**
      * Existing landscape families first, followed by their portrait counterparts in the same
      * deterministic order. Keeping the original six cards first preserves their established
-     * placement and cycle order.
+     * placement. Phone/tablet source dimensions extend that landscape group.
      *
      * <p>The shared source is also consumed by every presenter's settings model, so a card cannot
      * silently exist in only the global picker or only one presentation mode.</p>

@@ -14,16 +14,39 @@ public final class XrResolutionOptionsTest {
     public void everyLandscapeOptionHasOneOrderedSwappedPortraitCounterpart() {
         List<XrResolutionOptions.Option> options = XrResolutionOptions.standardOptions();
 
-        assertEquals(12, options.size());
-        for (int i = 0; i < 6; i++) {
+        assertEquals(36, options.size());
+        int landscapeCount = options.size() / 2;
+        for (int i = 0; i < landscapeCount; i++) {
             XrResolutionOptions.Option landscape = options.get(i);
-            XrResolutionOptions.Option portrait = options.get(i + 6);
+            XrResolutionOptions.Option portrait = options.get(i + landscapeCount);
             assertFalse(landscape.portrait);
             assertTrue(portrait.portrait);
             assertEquals(landscape.height, portrait.width);
             assertEquals(landscape.width, portrait.height);
             assertEquals(portrait.width + "x" + portrait.height, portrait.id);
             assertEquals(landscape.label + " Portrait", portrait.label);
+        }
+    }
+
+    @Test
+    public void phoneAndTabletSourcesExtendExistingLandscapesWithEvenCodecDimensions() {
+        String[] expectedLandscapeIds = {
+                "1920x1080", "2560x1440", "3840x2160",
+                "2560x1080", "3440x1440", "5120x2160",
+                "2160x1080", "2340x1080", "2400x1080", "2424x1080",
+                "1920x1200", "2560x1600", "2048x1536", "2732x2048",
+                "2160x1440", "2360x1640", "2388x1668", "2420x1668",
+        };
+        List<XrResolutionOptions.Option> options = XrResolutionOptions.standardOptions();
+        assertEquals(expectedLandscapeIds.length * 2, options.size());
+        for (int i = 0; i < expectedLandscapeIds.length; i++) {
+            assertEquals(expectedLandscapeIds[i], options.get(i).id);
+        }
+        for (XrResolutionOptions.Option option : options) {
+            assertEquals(option.id, 0, option.width % 2);
+            assertEquals(option.id, 0, option.height % 2);
+            assertTrue(option.id, Math.max(option.width, option.height) <= 5120);
+            assertTrue(option.id, Math.min(option.width, option.height) <= 2160);
         }
     }
 

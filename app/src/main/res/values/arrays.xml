@@ -146,12 +146,36 @@
         <item>@string/resolution_uw_1080p</item>
         <item>@string/resolution_uw_1440p</item>
         <item>@string/resolution_5k2k</item>
+        <item>@string/xr_resolution_phone_18_9</item>
+        <item>@string/xr_resolution_phone_19_5_9</item>
+        <item>@string/xr_resolution_phone_20_9</item>
+        <item>@string/xr_resolution_phone_wide</item>
+        <item>@string/xr_resolution_tablet_1200p</item>
+        <item>@string/xr_resolution_tablet_1600p</item>
+        <item>@string/xr_resolution_tablet_4_3</item>
+        <item>@string/xr_resolution_tablet_4_3_high</item>
+        <item>@string/xr_resolution_tablet_3_2</item>
+        <item>@string/xr_resolution_tablet_1640p</item>
+        <item>@string/xr_resolution_tablet_1668p</item>
+        <item>@string/xr_resolution_tablet_1668p_high</item>
         <item>@string/xr_resolution_1080p_portrait</item>
         <item>@string/xr_resolution_1440p_portrait</item>
         <item>@string/xr_resolution_4k_portrait</item>
         <item>@string/xr_resolution_uw_1080p_portrait</item>
         <item>@string/xr_resolution_uw_1440p_portrait</item>
         <item>@string/xr_resolution_5k2k_portrait</item>
+        <item>@string/xr_resolution_phone_18_9_portrait</item>
+        <item>@string/xr_resolution_phone_19_5_9_portrait</item>
+        <item>@string/xr_resolution_phone_20_9_portrait</item>
+        <item>@string/xr_resolution_phone_wide_portrait</item>
+        <item>@string/xr_resolution_tablet_1200p_portrait</item>
+        <item>@string/xr_resolution_tablet_1600p_portrait</item>
+        <item>@string/xr_resolution_tablet_4_3_portrait</item>
+        <item>@string/xr_resolution_tablet_4_3_high_portrait</item>
+        <item>@string/xr_resolution_tablet_3_2_portrait</item>
+        <item>@string/xr_resolution_tablet_1640p_portrait</item>
+        <item>@string/xr_resolution_tablet_1668p_portrait</item>
+        <item>@string/xr_resolution_tablet_1668p_high_portrait</item>
     </string-array>
     <string-array name="xr_resolution_values" translatable="false">
         <item>1920x1080</item>
@@ -160,12 +184,36 @@
         <item>2560x1080</item>
         <item>3440x1440</item>
         <item>5120x2160</item>
+        <item>2160x1080</item>
+        <item>2340x1080</item>
+        <item>2400x1080</item>
+        <item>2424x1080</item>
+        <item>1920x1200</item>
+        <item>2560x1600</item>
+        <item>2048x1536</item>
+        <item>2732x2048</item>
+        <item>2160x1440</item>
+        <item>2360x1640</item>
+        <item>2388x1668</item>
+        <item>2420x1668</item>
         <item>1080x1920</item>
         <item>1440x2560</item>
         <item>2160x3840</item>
         <item>1080x2560</item>
         <item>1440x3440</item>
         <item>2160x5120</item>
+        <item>1080x2160</item>
+        <item>1080x2340</item>
+        <item>1080x2400</item>
+        <item>1080x2424</item>
+        <item>1200x1920</item>
+        <item>1600x2560</item>
+        <item>1536x2048</item>
+        <item>2048x2732</item>
+        <item>1440x2160</item>
+        <item>1640x2360</item>
+        <item>1668x2388</item>
+        <item>1668x2420</item>
     </string-array>
 
     <string-array name="xr_fps_names">

@@ -22,6 +22,7 @@ import androidx.appcompat.widget.AppCompatButton;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.limelight.R;
+import com.limelight.preferences.XrResolutionOptions;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -30,6 +31,7 @@ import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -47,31 +49,15 @@ public final class XrResolutionSelectorTest {
     @Test
     public void standardCardsExposeShortLabelsAndExplicitResolutionIds() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        // Existing landscapes retain their order, followed by exact swapped portrait IDs.
-        String[] ids = {
-                XrResolutionSelector.RESOLUTION_1080P,
-                XrResolutionSelector.RESOLUTION_1440P,
-                XrResolutionSelector.RESOLUTION_4K,
-                XrResolutionSelector.RESOLUTION_UW_1080P,
-                XrResolutionSelector.RESOLUTION_UW_1440P,
-                XrResolutionSelector.RESOLUTION_5K2K,
-                XrResolutionSelector.RESOLUTION_1080P_PORTRAIT,
-                XrResolutionSelector.RESOLUTION_1440P_PORTRAIT,
-                XrResolutionSelector.RESOLUTION_4K_PORTRAIT,
-                XrResolutionSelector.RESOLUTION_UW_1080P_PORTRAIT,
-                XrResolutionSelector.RESOLUTION_UW_1440P_PORTRAIT,
-                XrResolutionSelector.RESOLUTION_5K2K_PORTRAIT,
-        };
-        String[] labels = {
-                "1080p", "1440p", "4K", "UW 1080p", "UW 1440p", "5K2K",
-                "1080p Portrait", "1440p Portrait", "4K Portrait",
-                "UW 1080p Portrait", "UW 1440p Portrait", "5K2K Portrait"
-        };
-
-        assertEquals(12, selector.getCardCount());
-        assertArrayEquals(ids, context.getResources().getStringArray(
-                R.array.xr_resolution_values));
+        List<XrResolutionOptions.Option> options = XrResolutionOptions.standardOptions();
+        String[] ids = context.getResources().getStringArray(R.array.xr_resolution_values);
+        String[] labels = context.getResources().getStringArray(R.array.xr_resolution_names);
+        assertEquals(options.size(), selector.getCardCount());
+        assertEquals(options.size(), ids.length);
+        assertEquals(options.size(), labels.length);
         for (int i = 0; i < ids.length; i++) {
+            assertEquals(options.get(i).id, ids[i]);
+            assertEquals(options.get(i).label, labels[i]);
             AppCompatButton card = selector.getCardAt(i);
             assertEquals(ids[i], selector.getResolutionIdAt(i));
             assertEquals(ids[i], card.getTag());
@@ -144,26 +130,25 @@ public final class XrResolutionSelectorTest {
     @Test
     public void glyphScreenBoundsPreserveTheResolutionAspectCue() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        // Six established landscapes followed by their swapped portrait counterparts.
-        float[] expectedAspects = {16f / 9f, 16f / 9f, 16f / 9f,
-                2560f / 1080f, 3440f / 1440f, 5120f / 2160f,
-                9f / 16f, 9f / 16f, 9f / 16f,
-                1080f / 2560f, 1440f / 3440f, 2160f / 5120f};
+        List<XrResolutionOptions.Option> options = XrResolutionOptions.standardOptions();
+        int landscapeCount = options.size() / 2;
         for (int i = 0; i < selector.getCardCount(); i++) {
+            XrResolutionOptions.Option option = options.get(i);
             XrResolutionSelector.ResolutionCard card =
                     (XrResolutionSelector.ResolutionCard) selector.getCardAt(i);
             XrResolutionSelector.ResolutionGlyphDrawable glyph = card.glyph;
             glyph.setBounds(0, 0, glyph.getIntrinsicWidth(), glyph.getIntrinsicHeight());
             RectF screen = glyph.getScreenBounds();
 
-            assertEquals(expectedAspects[i], selector.getAspectRatioAt(i), 0.0001f);
+            assertEquals(option.width / (float) option.height,
+                    selector.getAspectRatioAt(i), 0.0001f);
             assertEquals(selector.getAspectRatioAt(i),
                     screen.width() / screen.height(), 0.0001f);
-            assertEquals(i < 6, screen.width() > screen.height());
+            assertEquals(!option.portrait, screen.width() > screen.height());
             assertTrue(screen.bottom < glyph.getBounds().bottom);
-            if (i >= 6) {
+            if (option.portrait) {
                 assertEquals(((XrResolutionSelector.ResolutionCard)
-                                selector.getCardAt(i - 6)).glyph.getDensityLevel(),
+                                selector.getCardAt(i - landscapeCount)).glyph.getDensityLevel(),
                         glyph.getDensityLevel());
             }
         }
@@ -248,19 +233,20 @@ public final class XrResolutionSelectorTest {
     @Test
     public void wideWidthStillKeepsLandscapeAndPortraitCardsOnSeparateRows() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        int width = dp(2000);
+        int width = dp(6000);
         selector.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         selector.layout(0, 0, selector.getMeasuredWidth(), selector.getMeasuredHeight());
 
         int landscapeTop = selector.getCardAt(0).getTop();
-        for (int i = 1; i < 6; i++) {
+        int landscapeCount = selector.getCardCount() / 2;
+        for (int i = 1; i < landscapeCount; i++) {
             assertEquals(landscapeTop, selector.getCardAt(i).getTop());
         }
 
-        int portraitTop = selector.getCardAt(6).getTop();
+        int portraitTop = selector.getCardAt(landscapeCount).getTop();
         assertTrue(portraitTop > landscapeTop);
-        for (int i = 7; i < 12; i++) {
+        for (int i = landscapeCount + 1; i < selector.getCardCount(); i++) {
             assertEquals(portraitTop, selector.getCardAt(i).getTop());
         }
     }
@@ -277,8 +263,7 @@ public final class XrResolutionSelectorTest {
         assertTrue(width > 0);
         assertTrue(height > 0);
         for (int i = 1; i < selector.getCardCount(); i++) {
-            // "UW 1440p Portrait" is the longest label on the ladder; before uniform measurement
-            // it produced a visibly wider card than the landscape entry beside it.
+            // Longer phone/tablet labels must not produce wider cards than retained entries.
             assertEquals(width, selector.getCardAt(i).getWidth());
             assertEquals(height, selector.getCardAt(i).getHeight());
         }
@@ -287,12 +272,13 @@ public final class XrResolutionSelectorTest {
     @Test
     public void portraitGlyphsSpreadDensityDotsAlongTheirLongAxisInsteadOfCollapsing() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        // Cards 6..8 are 1080p/1440p/4K portrait: identical 9:16 aspect, so the density matrix is
+        // The first three portraits are 1080p/1440p/4K: identical 9:16 aspect, so the density matrix is
         // the only thing separating them. Along the narrow axis the dots merged into one smudge,
         // which is what made every portrait icon look the same.
         float previousSpread = -1f;
         for (int i = 0; i < 3; i++) {
-            XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, 6 + i);
+            XrResolutionSelector.ResolutionGlyphDrawable glyph =
+                    glyphAt(selector, selector.getCardCount() / 2 + i);
             float[] centers = glyph.densityDotCenters();
             assertEquals(glyph.getDensityLevel() * 4, centers.length);
 
@@ -318,7 +304,7 @@ public final class XrResolutionSelectorTest {
     @Test
     public void landscapeGlyphsKeepTheirHorizontalDensityRow() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < selector.getCardCount() / 2; i++) {
             XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, i);
             float[] centers = glyph.densityDotCenters();
             // Unchanged from before the portrait fix: step along X, pair across Y.
@@ -331,7 +317,8 @@ public final class XrResolutionSelectorTest {
     @Test
     public void glyphGeometryCacheTracksBoundsTranslationAndResize() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, 6);
+        XrResolutionSelector.ResolutionGlyphDrawable glyph =
+                glyphAt(selector, selector.getCardCount() / 2);
         RectF originalScreen = glyph.getScreenBounds();
         float[] originalCenters = glyph.densityDotCenters();
         int width = glyph.getIntrinsicWidth();
@@ -365,7 +352,8 @@ public final class XrResolutionSelectorTest {
     @Test
     public void glyphGeometryAccessorsReturnDefensiveCopies() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
-        XrResolutionSelector.ResolutionGlyphDrawable glyph = glyphAt(selector, 7);
+        XrResolutionSelector.ResolutionGlyphDrawable glyph =
+                glyphAt(selector, selector.getCardCount() / 2 + 1);
         RectF expectedScreen = glyph.getScreenBounds();
         float[] expectedCenters = glyph.densityDotCenters();
 
@@ -399,7 +387,7 @@ public final class XrResolutionSelectorTest {
         selector.setSelectedResolutionId(customId);
 
         assertEquals(customId, selector.getSelectedResolutionId());
-        assertEquals(13, selector.getCardCount());
+        assertEquals(XrResolutionOptions.standardOptions().size() + 1, selector.getCardCount());
         AppCompatButton custom = selector.findCardByResolutionId(customId);
         assertTrue(custom.isActivated());
         assertFalse(custom.isClickable());
@@ -420,7 +408,7 @@ public final class XrResolutionSelectorTest {
 
         assertEquals(XrResolutionSelector.RESOLUTION_1440P,
                 selector.getSelectedResolutionId());
-        assertEquals(12, selector.getCardCount());
+        assertEquals(XrResolutionOptions.standardOptions().size(), selector.getCardCount());
         assertNull(selector.findCardByResolutionId(customId));
         assertTrue(selector.findCardByResolutionId(
                 XrResolutionSelector.RESOLUTION_1440P).isActivated());
