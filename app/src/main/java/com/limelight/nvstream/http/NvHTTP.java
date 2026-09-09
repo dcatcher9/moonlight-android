@@ -48,6 +48,7 @@ import org.xmlpull.v1.XmlPullParserFactory;
 import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.nvstream.ConnectionContext;
+import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.http.PairingManager.PairState;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.utils.DeviceUtils;
@@ -382,7 +383,23 @@ public class NvHTTP {
         }
     }
     
+    public static final class ServerInfoResponse {
+        public final String xml;
+        public final boolean authenticated;
+
+        private ServerInfoResponse(String xml, boolean authenticated) {
+            this.xml = xml;
+            this.authenticated = authenticated;
+        }
+    }
+
     public String getServerInfo(boolean likelyOnline) throws IOException, XmlPullParserException {
+        return getServerInfoWithProvenance(likelyOnline).xml;
+    }
+
+    /** Keep discovery fallback available without treating its HTTP contents as host authority. */
+    public ServerInfoResponse getServerInfoWithProvenance(boolean likelyOnline)
+            throws IOException, XmlPullParserException {
         String resp;
 
         // If we believe the PC is online, give it a little extra time to respond
@@ -398,7 +415,11 @@ public class NvHTTP {
         if (serverCert != null) {
             try {
                 try {
-                    resp = openHttpConnectionToString(client, getHttpsUrl(likelyOnline), "serverinfo");
+                    // A redirected response must not inherit authentication from the initial URL.
+                    OkHttpClient authenticatedClient = client.newBuilder()
+                            .followRedirects(false).followSslRedirects(false).build();
+                    resp = openHttpConnectionToString(authenticatedClient,
+                            getHttpsUrl(likelyOnline), "serverinfo");
                 } catch (SSLHandshakeException e) {
                     // Detect if we failed due to a server cert mismatch
                     if (e.getCause() instanceof CertificateException) {
@@ -418,18 +439,20 @@ public class NvHTTP {
             catch (HostHttpResponseException e) {
                 if (e.getErrorCode() == 401) {
                     // Cert validation error - fall back to HTTP
-                    return openHttpConnectionToString(client, baseUrlHttp, "serverinfo");
+                    return new ServerInfoResponse(
+                            openHttpConnectionToString(client, baseUrlHttp, "serverinfo"), false);
                 }
 
                 // If it's not a cert validation error, throw it
                 throw e;
             }
 
-            return resp;
+            return new ServerInfoResponse(resp, true);
         }
         else {
             // No pinned cert, so use HTTP
-            return openHttpConnectionToString(client, baseUrlHttp, "serverinfo");
+            return new ServerInfoResponse(
+                    openHttpConnectionToString(client, baseUrlHttp, "serverinfo"), false);
         }
     }
 
@@ -936,6 +959,16 @@ public class NvHTTP {
         return new String(hexChars);
     }
     
+    public static boolean isCursorConfinementSupported(String serverInfo, boolean authenticated)
+            throws XmlPullParserException, IOException {
+        return authenticated
+                && "1".equals(getXmlString(serverInfo, "CursorConfinementSupported", false));
+    }
+
+    static String cursorConfinementQuery(StreamConfiguration configuration, boolean supported) {
+        return supported ? "&confineCursor=" + (configuration.getConfineCursor() ? 1 : 0) : "";
+    }
+
     public boolean launchApp(ConnectionContext context, String verb, String appUUID, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
         // Using an FPS value over 60 causes SOPS to default to 720p60,
         // so force it to 0 to ensure the correct resolution is set. We
@@ -998,6 +1031,7 @@ public class NvHTTP {
                     "&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1" +
                     "&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
+            cursorConfinementQuery(context.streamConfig, context.cursorConfinementSupported) +
             (context.hostSessionIdSupported
                     ? "&sbsMode=" + context.streamConfig.getInitialSbsMode() : "") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +

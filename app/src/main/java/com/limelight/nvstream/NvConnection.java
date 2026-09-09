@@ -83,6 +83,10 @@ public class NvConnection {
         this.isMonkey = ActivityManager.isUserAMonkey();
     }
     
+    public boolean isCursorConfinementSupported() {
+        return context.cursorConfinementSupported;
+    }
+
     private static SecretKey generateRiAesKey() {
         try {
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
@@ -325,7 +329,8 @@ public class NvConnection {
         NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId,
                 context.serverCert, cryptoProvider, startupHttpCalls);
 
-        String serverInfo = h.getServerInfo(true);
+        NvHTTP.ServerInfoResponse serverInfoResponse = h.getServerInfoWithProvenance(true);
+        String serverInfo = serverInfoResponse.xml;
         
         context.serverAppVersion = h.getServerVersion(serverInfo);
         if (context.serverAppVersion == null) {
@@ -336,6 +341,8 @@ public class NvConnection {
         ComputerDetails details = h.getComputerDetails(serverInfo);
         context.isNvidiaServerSoftware = details.nvidiaServer;
         context.hostSessionIdSupported = details.hostSessionIdSupported;
+        context.cursorConfinementSupported = NvHTTP.isCursorConfinementSupported(
+                serverInfo, serverInfoResponse.authenticated);
         context.expectedHostSessionId = null;
         context.hostSessionId = null;
 

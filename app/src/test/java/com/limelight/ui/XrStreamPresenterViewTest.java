@@ -29,6 +29,7 @@ import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsMetricHistory;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
+import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrSparklineView;
 
@@ -42,6 +43,8 @@ import org.robolectric.annotation.Config;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Locale;
+import java.util.Arrays;
+import java.util.Map;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, shadows = {
@@ -49,6 +52,55 @@ import java.util.Locale;
         com.limelight.shadows.ShadowGameManager.class,
 })
 public final class XrStreamPresenterViewTest {
+    @Test
+    public void cursorSettingRequiresCapabilityAndEmitsNativeOffChoice() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+        XrStreamPresenter presenter = new XrStreamPresenter(activity,
+                PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
+        SessionSettingsModel model = SessionSettingsModel.builder()
+                .putApplied(SessionSettingsModel.Key.CONFINE_CURSOR, "On",
+                        SessionSettingsModel.Source.GLOBAL, Arrays.asList(
+                                new SessionSettingsModel.Choice("false", "Off"),
+                                new SessionSettingsModel.Choice("true", "On")), "true")
+                .build();
+        presenter.setSessionSettingsModel(model);
+        String[] selection = new String[1];
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override
+            public boolean onSharedSettingSelected(SessionSettingsModel.Key key, String value,
+                                                   SessionSettingsModel current) {
+                assertEquals(SessionSettingsModel.Key.CONFINE_CURSOR, key);
+                selection[0] = value;
+                return true;
+            }
+        });
+        Method build = XrStreamPresenter.class.getDeclaredMethod("buildSessionSettingsView");
+        build.setAccessible(true);
+        build.invoke(presenter);
+        Map<?, ?> groups = (Map<?, ?>) getField(presenter, "sessionChoiceGroups");
+        XrChoiceGroup cursor = (XrChoiceGroup) groups.get(SessionSettingsModel.Key.CONFINE_CURSOR);
+        assertFalse(cursor.getButtonAt(0).isEnabled());
+        assertFalse(cursor.getButtonAt(1).isEnabled());
+
+        presenter.setCursorConfinementSupported(true);
+        build.invoke(presenter);
+        cursor = (XrChoiceGroup) groups.get(SessionSettingsModel.Key.CONFINE_CURSOR);
+        assertTrue(cursor.getButtonAt(0).isEnabled());
+        assertEquals("true", cursor.getSelectedValue());
+        cursor.getButtonAt(0).performClick();
+        assertEquals("false", selection[0]);
+
+        presenter.setCursorConfinementSupported(false);
+        Method update = XrStreamPresenter.class.getDeclaredMethod("updateSessionSettingsView");
+        update.setAccessible(true);
+        update.invoke(presenter);
+        assertFalse(cursor.getButtonAt(0).isEnabled());
+        controller.destroy();
+    }
+
     @Test
     public void rawModePaneUsesConnectedFullHalfButtonsAndEmitsHalfChoice()
             throws Exception {

@@ -98,6 +98,8 @@ public final class XrSessionSettingsController {
                 PreferenceConfiguration.AUDIO_CONFIG_PREF_STRING);
         PREF_KEYS.put(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC,
                 PreferenceConfiguration.HOST_AUDIO_PREF_STRING);
+        PREF_KEYS.put(SessionSettingsModel.Key.CONFINE_CURSOR,
+                PreferenceConfiguration.CONFINE_CURSOR_PREF_STRING);
     }
 
     private final SessionSettingsStore store;
@@ -459,6 +461,7 @@ public final class XrSessionSettingsController {
             case HDR:
             case VIDEO_RANGE:
             case PLAY_AUDIO_ON_PC:
+            case CONFINE_CURSOR:
                 selectSharedSetting(key, String.valueOf(
                         !((Boolean) pendingSharedValues.get(key))));
                 break;
@@ -1079,6 +1082,9 @@ public final class XrSessionSettingsController {
         output.put(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC, preferences.getBoolean(
                 PreferenceConfiguration.HOST_AUDIO_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_HOST_AUDIO));
+        output.put(SessionSettingsModel.Key.CONFINE_CURSOR, preferences.getBoolean(
+                PreferenceConfiguration.CONFINE_CURSOR_PREF_STRING,
+                PreferenceConfiguration.DEFAULT_CONFINE_CURSOR));
     }
 
     private static PreferenceConfiguration.RawSbsPerEyeResolution
@@ -1134,6 +1140,7 @@ public final class XrSessionSettingsController {
                 return BITRATE_CHOICES;
             case HDR:
             case PLAY_AUDIO_ON_PC:
+            case CONFINE_CURSOR:
                 return ON_OFF_CHOICES;
             case VIDEO_RANGE:
                 return VIDEO_RANGE_CHOICES;
@@ -1188,6 +1195,7 @@ public final class XrSessionSettingsController {
             case HDR:
             case VIDEO_RANGE:
             case PLAY_AUDIO_ON_PC:
+            case CONFINE_CURSOR:
                 if (!"true".equals(choiceId) && !"false".equals(choiceId)) {
                     throw new IllegalArgumentException("Invalid boolean choice: " + choiceId);
                 }

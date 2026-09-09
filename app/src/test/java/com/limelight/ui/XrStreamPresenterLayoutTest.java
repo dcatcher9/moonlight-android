@@ -376,5 +376,7 @@ public class XrStreamPresenterLayoutTest {
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.AUDIO_LAYOUT));
         assertEquals(1, XrStreamPresenter.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.PLAY_AUDIO_ON_PC));
+        assertEquals(1, XrStreamPresenter.sharedSettingColumn(
+                com.limelight.ui.xrcontrols.SessionSettingsModel.Key.CONFINE_CURSOR));
     }
 }

@@ -494,6 +494,7 @@ public class XrStreamPresenter {
     private boolean presenterDestroyed;
     /** Apollo-3D control messages are opt-in; regular Sunshine/Apollo must never receive them. */
     private boolean hostControlExtensionsSupported = true;
+    private boolean cursorConfinementSupported;
     private final Runnable hostSbsTelemetryRetryRunnable =
             this::retryHostSbsTelemetrySubscription;
 
@@ -1333,6 +1334,18 @@ public class XrStreamPresenter {
         return mode != PresenterMode.HOST_SBS_AI || hostControlExtensionsSupported;
     }
 
+    /** Cursor confinement is separately advertised by the authenticated host serverinfo. */
+    public void setCursorConfinementSupported(boolean supported) {
+        if (cursorConfinementSupported == supported) {
+            return;
+        }
+        cursorConfinementSupported = supported;
+        if (controlUiState.getVisibleSurface()
+                == XrControlUiState.Surface.SESSION_SETTINGS && auxiliaryContentHost != null) {
+            renderAuxiliaryContent();
+        }
+    }
+
     /** Replace the immutable applied/pending snapshot and refresh an open Settings panel. */
     public void setSessionSettingsModel(SessionSettingsModel model) {
         sessionSettingsModel = java.util.Objects.requireNonNull(model, "model");
@@ -1509,6 +1522,8 @@ public class XrStreamPresenter {
                 .putApplied(SessionSettingsModel.Key.AUDIO_LAYOUT, audio, global)
                 .putApplied(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC,
                         prefConfig.playHostAudio ? "On" : "Off", global)
+                .putApplied(SessionSettingsModel.Key.CONFINE_CURSOR,
+                        prefConfig.confineCursor ? "On" : "Off", global)
                 .build();
     }
 
@@ -3413,7 +3428,7 @@ public class XrStreamPresenter {
         return column;
     }
 
-    /** Stable semantic grouping keeps the six shared controls scannable in two short columns. */
+    /** Stable semantic grouping keeps shared controls scannable in two columns. */
     static int sharedSettingColumn(SessionSettingsModel.Key key) {
         switch (key) {
             case HDR:
@@ -3423,6 +3438,7 @@ public class XrStreamPresenter {
             case FRAME_PACING:
             case AUDIO_LAYOUT:
             case PLAY_AUDIO_ON_PC:
+            case CONFINE_CURSOR:
             case BITRATE:
                 return 1;
             default:
@@ -3464,13 +3480,22 @@ public class XrStreamPresenter {
         XrChoiceGroup choices = buildChoiceGroup(value.choices, value.selectedChoiceId,
                 value.pendingValue, choiceId -> controlActionListener.onSharedSettingSelected(
                         key, choiceId, sessionSettingsModel));
-        choices.setEnabled(sessionControlsEnabled);
+        choices.setEnabled(sessionControlsEnabled && isSharedSettingSupported(key));
         sessionChoiceGroups.put(key, choices);
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         choiceParams.topMargin = dimen(R.dimen.xr_space_sm);
         row.addView(choices, choiceParams);
+
+        if (key == SessionSettingsModel.Key.CONFINE_CURSOR) {
+            TextView explanation = controlText(activity.getString(cursorConfinementSupported
+                            ? R.string.xr_confine_cursor_session_summary
+                            : R.string.xr_confine_cursor_unsupported),
+                    SESSION_META_TEXT_DIMEN, paletteColor(R.color.xr_text_secondary));
+            explanation.setPadding(0, dimen(R.dimen.xr_space_xs), 0, 0);
+            row.addView(explanation);
+        }
 
         TextView pending = controlText("", SESSION_META_TEXT_DIMEN,
                 paletteColor(R.color.xr_text_secondary));
@@ -3613,7 +3638,7 @@ public class XrStreamPresenter {
                                     controlActionListener.onSharedSettingSelected(
                                             key, choiceId, sessionSettingsModel));
                 }
-                group.setEnabled(sessionControlsEnabled);
+                group.setEnabled(sessionControlsEnabled && isSharedSettingSupported(key));
             }
             TextView sourceView = sessionSourceViews.get(key);
             if (sourceView != null) {
@@ -3811,6 +3836,10 @@ public class XrStreamPresenter {
         title.setCompoundDrawablePadding(dimen(R.dimen.xr_space_sm));
     }
 
+    private boolean isSharedSettingSupported(SessionSettingsModel.Key key) {
+        return key != SessionSettingsModel.Key.CONFINE_CURSOR || cursorConfinementSupported;
+    }
+
     /** Icon shown beside a settings row title, or 0 where the row has no icon of its own. */
     private int sessionSettingIconRes(SessionSettingsModel.Key key) {
         switch (key) {
@@ -3832,6 +3861,8 @@ public class XrStreamPresenter {
                 return R.drawable.ic_xr_audio;
             case PLAY_AUDIO_ON_PC:
                 return R.drawable.ic_xr_audio_host;
+            case CONFINE_CURSOR:
+                return R.drawable.ic_xr_mouse;
             default:
                 return 0;
         }
@@ -3857,6 +3888,8 @@ public class XrStreamPresenter {
                 return activity.getString(R.string.title_audio_config_list);
             case PLAY_AUDIO_ON_PC:
                 return activity.getString(R.string.title_checkbox_host_audio);
+            case CONFINE_CURSOR:
+                return activity.getString(R.string.title_checkbox_confine_cursor);
             default:
                 return key.name();
         }

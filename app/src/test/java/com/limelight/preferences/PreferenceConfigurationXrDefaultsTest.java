@@ -53,9 +53,21 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertSame(MoonBridge.AUDIO_CONFIGURATION_STEREO,
                 configuration.audioConfiguration);
         assertFalse(configuration.playHostAudio);
+        assertTrue(configuration.confineCursor);
         assertEquals(3, configuration.audioBoostDb);
         assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
                 configuration.rawSbsPerEyeResolution);
+    }
+
+    @Test
+    public void cursorConfinementCanBeDisabledAndReturnsToDefaultWhenUnset() {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        assertTrue(preferences.edit()
+                .putBoolean(PreferenceConfiguration.CONFINE_CURSOR_PREF_STRING, false).commit());
+        assertFalse(PreferenceConfiguration.readPreferences(context).confineCursor);
+        assertTrue(preferences.edit()
+                .remove(PreferenceConfiguration.CONFINE_CURSOR_PREF_STRING).commit());
+        assertTrue(PreferenceConfiguration.readPreferences(context).confineCursor);
     }
 
     @Test

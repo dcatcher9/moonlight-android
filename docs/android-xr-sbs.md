@@ -938,7 +938,7 @@ is reflected before the decoder transform; mirroring only the center is incorrec
 footprint crosses a padding fold.
 
 The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
-range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
+range, audio layout, play audio on the host PC, and virtual-display cursor confinement**. The Session Settings pane edits only this
 shared set. Global Settings provide the cross-session defaults for both the shared set and the
 quality baseline inherited independently by each mode.
 
@@ -1146,11 +1146,23 @@ mode row's **Use session settings** restores only that mode's durable quality tu
 Full/Half choice for the Raw SBS row).
 
 The Settings tile opens the left side panel for values shared by every mode in the current PC
-session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
-(pacing, audio layout, host audio), with large XR-readable labels, choice targets, and status text.
+session. Its controls use two semantic columns: Video (HDR, range, codec) and Delivery
+(pacing, audio layout, host audio, cursor confinement), with large XR-readable labels, choice targets, and status text.
 Each setting is a distinct raised card under a strong semantic heading; mode options likewise group
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
 surfaces rather than one undifferentiated row.
+
+**Keep cursor on virtual display** defaults to on in Global Settings → Audio & input and can be
+overridden for the current PC session in the native Settings panel. A session change uses
+**Apply & reconnect**; it is never sent as a live control packet. The client reads the explicit
+`CursorConfinementSupported=1` capability from authenticated `/serverinfo`, independently of the
+Host SBS/session-token capability. Only supporting hosts receive `confineCursor=1|0` on `/launch`
+and `/resume`; older hosts receive neither flag and the session row is disabled with an update
+explanation. The setting applies only to a virtual-display-backed stream. It bounds remote input
+without locking the host's physical mouse. Turn it off for raw-relative input or Windows mouse
+acceleration compatibility. The owning host behavior and protocol are in
+[Virtual desktop interaction](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/virtual-desktop.md).
+This client/host feature still requires live Galaxy XR verification.
 
 Keep the four modes, Settings, Cinema, Library, Stats, and **End session** visible in the dock.
 Debug builds append **Dump 3D** immediately after **End session**. All tiles have the same width;
