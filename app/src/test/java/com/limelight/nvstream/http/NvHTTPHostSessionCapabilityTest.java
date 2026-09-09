@@ -40,6 +40,7 @@ public class NvHTTPHostSessionCapabilityTest {
 
     private static final String CURSOR_SERVER_INFO = response(
             "<appversion>7.1.0.0</appversion>"
+                    + "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>"
                     + "<CursorConfinementSupported>1</CursorConfinementSupported>");
 
     private static NvHTTP.ServerInfoResponse fetchServerInfo(boolean hasPinnedCertificate,
@@ -73,6 +74,12 @@ public class NvHTTPHostSessionCapabilityTest {
         assertFalse(supported);
         assertEquals("", NvHTTP.cursorConfinementQuery(
                 new StreamConfiguration.Builder().setConfineCursor(false).build(), supported));
+        boolean virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(
+                response.xml, response.authenticated);
+        assertFalse(virtualDisplayOnlySupported);
+        assertEquals("", NvHTTP.virtualDisplayOnlyQuery(
+                new StreamConfiguration.Builder().setVirtualDisplayOnly(false).build(),
+                virtualDisplayOnlySupported));
     }
 
     @Test
@@ -83,6 +90,7 @@ public class NvHTTPHostSessionCapabilityTest {
         assertEquals(Arrays.asList("https"), schemes);
         assertTrue(info.authenticated);
         assertTrue(NvHTTP.isCursorConfinementSupported(info.xml, info.authenticated));
+        assertTrue(NvHTTP.isVirtualDisplayOnlySupported(info.xml, info.authenticated));
     }
 
     @Test
@@ -137,6 +145,37 @@ public class NvHTTPHostSessionCapabilityTest {
         assertEquals("&confineCursor=0", NvHTTP.cursorConfinementQuery(disabled, true));
         assertEquals("", NvHTTP.cursorConfinementQuery(enabled, false));
         assertEquals("", NvHTTP.cursorConfinementQuery(disabled, false));
+    }
+
+    @Test
+    public void virtualDisplayOnlyRequiresItsOwnExplicitCapability() throws Exception {
+        assertFalse(NvHTTP.isVirtualDisplayOnlySupported(
+                response("<CursorConfinementSupported>1</CursorConfinementSupported>"), true));
+        for (String value : new String[] {"", "0", "true", "2"}) {
+            assertFalse(NvHTTP.isVirtualDisplayOnlySupported(response(
+                    "<VirtualDisplayOnlySupported>" + value
+                            + "</VirtualDisplayOnlySupported>"), true));
+        }
+        assertTrue(NvHTTP.isVirtualDisplayOnlySupported(response(
+                "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>"), true));
+        assertFalse(NvHTTP.isVirtualDisplayOnlySupported(response(
+                "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>"), false));
+    }
+
+    @Test
+    public void launchAndResumeVirtualDisplayOnlyOptionDefaultsOnAndOmitsUnsupportedHosts() {
+        // The generated Virtual Display tile does not set StreamConfiguration.virtualDisplay;
+        // host-side session classification decides whether this option applies.
+        StreamConfiguration enabled = new StreamConfiguration.Builder().build();
+        StreamConfiguration disabled = new StreamConfiguration.Builder()
+                .setVirtualDisplayOnly(false).build();
+        assertFalse(enabled.getVirtualDisplay());
+        assertEquals("&virtualDisplayOnly=1",
+                NvHTTP.virtualDisplayOnlyQuery(enabled, true));
+        assertEquals("&virtualDisplayOnly=0",
+                NvHTTP.virtualDisplayOnlyQuery(disabled, true));
+        assertEquals("", NvHTTP.virtualDisplayOnlyQuery(enabled, false));
+        assertEquals("", NvHTTP.virtualDisplayOnlyQuery(disabled, false));
     }
 
     @Test

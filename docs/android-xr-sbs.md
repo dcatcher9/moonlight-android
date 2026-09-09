@@ -1152,6 +1152,15 @@ Each setting is a distinct raised card under a strong semantic heading; mode opt
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
 surfaces rather than one undifferentiated row.
 
+**Use virtual display only while streaming** defaults to on in Global Settings → Streaming
+defaults. It is a global reconnect-time preference rather than an in-session setting. The client
+trusts `VirtualDisplayOnlySupported=1` only from authenticated `/serverinfo` and sends
+`virtualDisplayOnly=1|0` on `/launch` and `/resume` only to a supporting host. The client sends the
+choice independently of the legacy `virtualDisplay` launch flag because Apollo's generated
+Virtual Display tile is classified by the host. The host applies the choice only to a
+virtual-display-backed session; physical-display streams are unaffected. Older hosts receive no
+new parameter and retain their existing behavior.
+
 **Keep cursor on virtual display** defaults to on in Global Settings → Audio & input and can be
 overridden for the current PC session in the native Settings panel. A session change uses
 **Apply & reconnect**; it is never sent as a live control packet. The client reads the explicit

@@ -27,6 +27,7 @@ public class ConnectionContext {
     // Apollo-3D session capability. Token-capable hosts require the locally persisted token on
     // resume/cancel. Standard Sunshine and Apollo hosts use the legacy tokenless contract.
     public boolean hostSessionIdSupported;
+    public boolean virtualDisplayOnlySupported;
     public boolean cursorConfinementSupported;
     public String expectedHostSessionId;
     public String hostSessionId;

@@ -341,6 +341,8 @@ public class NvConnection {
         ComputerDetails details = h.getComputerDetails(serverInfo);
         context.isNvidiaServerSoftware = details.nvidiaServer;
         context.hostSessionIdSupported = details.hostSessionIdSupported;
+        context.virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(
+                serverInfo, serverInfoResponse.authenticated);
         context.cursorConfinementSupported = NvHTTP.isCursorConfinementSupported(
                 serverInfo, serverInfoResponse.authenticated);
         context.expectedHostSessionId = null;

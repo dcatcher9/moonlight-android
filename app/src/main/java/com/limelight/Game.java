@@ -1417,6 +1417,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
                 .setVirtualDisplay(vDisplay)
+                .setVirtualDisplayOnly(prefConfig.virtualDisplayOnly)
                 .setConfineCursor(prefConfig.confineCursor)
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)

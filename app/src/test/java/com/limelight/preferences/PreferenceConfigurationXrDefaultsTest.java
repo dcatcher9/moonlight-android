@@ -53,6 +53,7 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertSame(MoonBridge.AUDIO_CONFIGURATION_STEREO,
                 configuration.audioConfiguration);
         assertFalse(configuration.playHostAudio);
+        assertTrue(configuration.virtualDisplayOnly);
         assertTrue(configuration.confineCursor);
         assertEquals(3, configuration.audioBoostDb);
         assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
@@ -68,6 +69,18 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertTrue(preferences.edit()
                 .remove(PreferenceConfiguration.CONFINE_CURSOR_PREF_STRING).commit());
         assertTrue(PreferenceConfiguration.readPreferences(context).confineCursor);
+    }
+
+    @Test
+    public void virtualDisplayOnlyCanBeDisabledAndReturnsToDefaultWhenUnset() {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        assertTrue(preferences.edit()
+                .putBoolean(PreferenceConfiguration.VIRTUAL_DISPLAY_ONLY_PREF_STRING, false)
+                .commit());
+        assertFalse(PreferenceConfiguration.readPreferences(context).virtualDisplayOnly);
+        assertTrue(preferences.edit()
+                .remove(PreferenceConfiguration.VIRTUAL_DISPLAY_ONLY_PREF_STRING).commit());
+        assertTrue(PreferenceConfiguration.readPreferences(context).virtualDisplayOnly);
     }
 
     @Test

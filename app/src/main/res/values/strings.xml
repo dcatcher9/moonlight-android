@@ -272,6 +272,8 @@
     <string name="title_checkbox_touchscreen_trackpad">Use the touchscreen as a trackpad</string>
     <string name="summary_checkbox_touchscreen_trackpad">If enabled, the touchscreen acts like a trackpad. If disabled, the touchscreen directly controls the mouse cursor.</string>
     <string name="title_checkbox_absolute_mouse_mode">Remote desktop mouse mode</string>
+    <string name="title_checkbox_virtual_display_only">Use virtual display only while streaming</string>
+    <string name="summary_checkbox_virtual_display_only">While streaming a virtual display, turn off the PC’s physical displays so Windows opens apps on the streamed desktop. Requires a supported Sunshine 3D host. Applies on the next connection.</string>
     <string name="title_checkbox_confine_cursor">Keep cursor on virtual display</string>
     <string name="summary_checkbox_confine_cursor">Keep remote mouse movement inside the streamed virtual display. Requires a supported Sunshine 3D host. Turn off for games that need unmodified relative input or Windows mouse acceleration. Applies on the next connection.</string>
     <string name="xr_confine_cursor_session_summary">Virtual displays only. Apply &amp; reconnect to change. The PC\'s physical mouse remains free; turn off for raw-relative input compatibility.</string>

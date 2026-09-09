@@ -81,6 +81,14 @@
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
 
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="checkbox_virtual_display_only"
+            android:icon="@drawable/ic_xr_resolution"
+            android:summary="@string/summary_checkbox_virtual_display_only"
+            android:title="@string/title_checkbox_virtual_display_only"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

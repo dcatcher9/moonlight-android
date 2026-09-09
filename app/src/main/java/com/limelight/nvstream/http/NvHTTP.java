@@ -965,6 +965,18 @@ public class NvHTTP {
                 && "1".equals(getXmlString(serverInfo, "CursorConfinementSupported", false));
     }
 
+    public static boolean isVirtualDisplayOnlySupported(String serverInfo, boolean authenticated)
+            throws XmlPullParserException, IOException {
+        return authenticated
+                && "1".equals(getXmlString(serverInfo, "VirtualDisplayOnlySupported", false));
+    }
+
+    static String virtualDisplayOnlyQuery(StreamConfiguration configuration, boolean supported) {
+        return supported
+                ? "&virtualDisplayOnly=" + (configuration.getVirtualDisplayOnly() ? 1 : 0)
+                : "";
+    }
+
     static String cursorConfinementQuery(StreamConfiguration configuration, boolean supported) {
         return supported ? "&confineCursor=" + (configuration.getConfineCursor() ? 1 : 0) : "";
     }
@@ -1031,6 +1043,7 @@ public class NvHTTP {
                     "&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1" +
                     "&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
+            virtualDisplayOnlyQuery(context.streamConfig, context.virtualDisplayOnlySupported) +
             cursorConfinementQuery(context.streamConfig, context.cursorConfinementSupported) +
             (context.hostSessionIdSupported
                     ? "&sbsMode=" + context.streamConfig.getInitialSbsMode() : "") +

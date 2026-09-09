@@ -15,6 +15,7 @@ public class StreamConfiguration {
     private float refreshRate;
     private float launchRefreshRate;
     private boolean virtualDisplay;
+    private boolean virtualDisplayOnly = true;
     private boolean confineCursor = true;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
@@ -64,6 +65,11 @@ public class StreamConfiguration {
 
         public StreamConfiguration.Builder setVirtualDisplay(boolean enable) {
             config.virtualDisplay = enable;
+            return this;
+        }
+
+        public StreamConfiguration.Builder setVirtualDisplayOnly(boolean enable) {
+            config.virtualDisplayOnly = enable;
             return this;
         }
 
@@ -206,6 +212,8 @@ public class StreamConfiguration {
     }
 
     public boolean getVirtualDisplay() { return virtualDisplay; }
+
+    public boolean getVirtualDisplayOnly() { return virtualDisplayOnly; }
 
     public boolean getConfineCursor() { return confineCursor; }
 
