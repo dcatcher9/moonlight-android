@@ -135,12 +135,14 @@ public class MoonBridge {
     public static final byte LI_BATTERY_PERCENTAGE_UNKNOWN = (byte)0xFF;
 
     private static final class BridgeSession {
+        final long sessionId;
         final AudioRenderer audioRenderer;
         final VideoDecoderRenderer videoRenderer;
         final NvConnectionListener connectionListener;
 
-        BridgeSession(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer,
+        BridgeSession(long sessionId, VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer,
                       NvConnectionListener connectionListener) {
+            this.sessionId = sessionId;
             this.audioRenderer = audioRenderer;
             this.videoRenderer = videoRenderer;
             this.connectionListener = connectionListener;
@@ -150,6 +152,7 @@ public class MoonBridge {
     // Native callback threads snapshot one immutable session. This prevents cleanup/setup races
     // from mixing a renderer from one session with a listener from another.
     private static volatile BridgeSession bridgeSession;
+    private static long nextBridgeSessionId;
 
     static {
         System.loadLibrary("moonlight-core");
@@ -332,9 +335,11 @@ public class MoonBridge {
         }
     }
 
-    public static void bridgeClConnectionTerminated(int errorCode) {
+    public static void bridgeClConnectionTerminated(int errorCode, long sessionId) {
         BridgeSession session = bridgeSession;
-        if (session != null) {
+        // Native termination delivery can outlive stopConnection() and a replacement setupBridge().
+        // The ID was captured when native code queued this callback, not when it reached Java.
+        if (session != null && session.sessionId == sessionId) {
             session.connectionListener.connectionTerminated(errorCode);
         }
     }
@@ -412,8 +417,10 @@ public class MoonBridge {
         }
     }
 
-    public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
-        bridgeSession = new BridgeSession(videoRenderer, audioRenderer, connectionListener);
+    public static synchronized long setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
+        long sessionId = ++nextBridgeSessionId;
+        bridgeSession = new BridgeSession(sessionId, videoRenderer, audioRenderer, connectionListener);
+        return sessionId;
     }
 
     public static void cleanupBridge() {
@@ -428,7 +435,7 @@ public class MoonBridge {
                                               int clientRefreshRateX100,
                                               byte[] riAesKey, byte[] riAesIv,
                                               int videoCapabilities,
-                                              int colorSpace, int colorRange);
+                                              int colorSpace, int colorRange, long sessionId);
 
     public static native void stopConnection();
 

@@ -96,7 +96,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClStageCompleteMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClStageComplete", "(I)V");
     BridgeClStageFailedMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClStageFailed", "(II)V");
     BridgeClConnectionStartedMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClConnectionStarted", "()V");
-    BridgeClConnectionTerminatedMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClConnectionTerminated", "(I)V");
+    BridgeClConnectionTerminatedMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClConnectionTerminated", "(IJ)V");
     BridgeClRumbleMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClRumble", "(SSS)V");
     BridgeClConnectionStatusUpdateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClConnectionStatusUpdate", "(I)V");
     BridgeClSetHdrModeMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetHdrMode", "(Z[B)V");
@@ -388,10 +388,10 @@ void BridgeClConnectionStarted(void) {
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClConnectionStartedMethod);
 }
 
-void BridgeClConnectionTerminated(int errorCode) {
+void BridgeClConnectionTerminated(int errorCode, uint64_t sessionId) {
     JNIEnv* env = GetThreadEnv();
 
-    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClConnectionTerminatedMethod, errorCode);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClConnectionTerminatedMethod, errorCode, (jlong)sessionId);
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
         (*JVM)->DetachCurrentThread(JVM);
@@ -563,7 +563,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .stageComplete = BridgeClStageComplete,
         .stageFailed = BridgeClStageFailed,
         .connectionStarted = BridgeClConnectionStarted,
-        .connectionTerminated = BridgeClConnectionTerminated,
+        .connectionTerminatedWithSession = BridgeClConnectionTerminated,
         .logMessage = BridgeClLogMessage,
         .rumble = BridgeClRumble,
         .connectionStatusUpdate = BridgeClConnectionStatusUpdate,
@@ -586,7 +586,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
                                                            jint clientRefreshRateX100,
                                                            jbyteArray riAesKey, jbyteArray riAesIv,
                                                            jint videoCapabilities,
-                                                           jint colorSpace, jint colorRange) {
+                                                           jint colorSpace, jint colorRange, jlong sessionId) {
     SERVER_INFORMATION serverInfo = {
             .address = (*env)->GetStringUTFChars(env, address, 0),
             .serverInfoAppVersion = (*env)->GetStringUTFChars(env, appVersion, 0),
@@ -622,9 +622,14 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
 
     BridgeVideoRendererCallbacks.capabilities = videoCapabilities;
 
+    // Keep the client's token tied to this start. The native dispatcher snapshots it when
+    // termination is queued, so a detached callback cannot adopt a replacement session's ID.
+    CONNECTION_LISTENER_CALLBACKS connectionCallbacks = BridgeConnListenerCallbacks;
+    connectionCallbacks.connectionSessionId = (uint64_t)sessionId;
+
     int ret = LiStartConnection(&serverInfo,
                                 &streamConfig,
-                                &BridgeConnListenerCallbacks,
+                                &connectionCallbacks,
                                 &BridgeVideoRendererCallbacks,
                                 &BridgeAudioRendererCallbacks,
                                 NULL, 0,

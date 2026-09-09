@@ -44,6 +44,25 @@ jobs:
             -pthread -o "$RUNNER_TEMP/control-telemetry-test"
       - name: Verify telemetry capability, bounds, subscription and latest-state delivery
         run: '"$RUNNER_TEMP/control-telemetry-test"'
+      - name: Verify delayed termination isolation and legacy callbacks in the C dispatcher
+        shell: bash
+        run: |
+          core=app/src/main/jni/moonlight-core/moonlight-common-c
+          cmake -S "$core" -B "$RUNNER_TEMP/connection-termination-build" \
+            -DCMAKE_BUILD_TYPE=Debug -DLC_BUILD_CONNECTION_TERMINATION_TESTS=ON
+          cmake --build "$RUNNER_TEMP/connection-termination-build" --target connection-termination-test
+          ctest --test-dir "$RUNNER_TEMP/connection-termination-build" \
+            --output-on-failure -R '^connection-termination-test$'
+      - name: Verify session identity through the production JNI start and callback
+        shell: bash
+        run: |
+          bridge=app/src/main/jni/moonlight-core
+          cc -std=c11 -O2 -flto -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/linux" \
+            -I app/src/test/native/include -I "$bridge/moonlight-common-c/src" \
+            -I "$bridge/libopus/include" app/src/test/native/ConnectionJniSessionTest.c \
+            -pthread -o "$RUNNER_TEMP/connection-jni-session-test"
+          "$RUNNER_TEMP/connection-jni-session-test"
       - name: Verify JNI video buffer ownership on a persistent native thread
         shell: bash
         run: |

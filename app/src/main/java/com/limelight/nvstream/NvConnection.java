@@ -673,7 +673,7 @@ public class NvConnection {
                     }
                 }
 
-                MoonBridge.setupBridge(videoDecoderRenderer, audioRenderer, connectionListener);
+                long bridgeSessionId = MoonBridge.setupBridge(videoDecoderRenderer, audioRenderer, connectionListener);
                 synchronized (lifecycleLock) {
                     if (stopRequested) {
                         return;
@@ -691,7 +691,7 @@ public class NvConnection {
                         context.riKey.getEncoded(), ib.array(),
                         context.videoCapabilities,
                         context.streamConfig.getColorSpace(),
-                        context.streamConfig.getColorRange());
+                        context.streamConfig.getColorRange(), bridgeSessionId);
                 nativeConnectionStarted = ret == 0;
             }
         } finally {
