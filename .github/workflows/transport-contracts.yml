@@ -29,6 +29,7 @@ jobs:
             "$core/reedsolomon/rs.c" "$core/src/VideoDepacketizer.c" \
             "$core/src/PlatformCrypto.c" "$core/src/ByteBuffer.c" \
             "$core/src/LinkedBlockingQueue.c" "$core/src/Platform.c" "$core/src/SdpGenerator.c" \
+            "$core/src/Ds5HapticsStream.c" \
             -lcrypto -pthread -o "$RUNNER_TEMP/video-packet-size-test"
       - name: Verify legacy negotiation and encrypted HEVC/AV1 recovery at selected loss positions
         run: '"$RUNNER_TEMP/video-packet-size-test"'
