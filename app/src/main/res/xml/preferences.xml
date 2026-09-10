@@ -175,14 +175,6 @@
             app:iconSpaceReserved="false" />
 
         <SwitchPreferenceCompat
-            android:defaultValue="true"
-            android:key="checkbox_confine_cursor"
-            android:icon="@drawable/ic_xr_mouse"
-            android:summary="@string/summary_checkbox_confine_cursor"
-            android:title="@string/title_checkbox_confine_cursor"
-            app:iconSpaceReserved="false" />
-
-        <SwitchPreferenceCompat
             android:defaultValue="false"
             android:key="checkbox_mouse_local_cursor"
         android:icon="@drawable/ic_xr_mouse"

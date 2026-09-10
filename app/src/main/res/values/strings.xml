@@ -273,11 +273,7 @@
     <string name="summary_checkbox_touchscreen_trackpad">If enabled, the touchscreen acts like a trackpad. If disabled, the touchscreen directly controls the mouse cursor.</string>
     <string name="title_checkbox_absolute_mouse_mode">Remote desktop mouse mode</string>
     <string name="title_checkbox_virtual_display_only">Use virtual display only while streaming</string>
-    <string name="summary_checkbox_virtual_display_only">While streaming a virtual display, disable ordinary PC displays in Windows so apps open on the streamed desktop. Approved AR-glasses displays that require scanout remain active; the host keeps the shared Windows cursor on the virtual display. Requires a supported Sunshine 3D host. Applies on the next connection.</string>
-    <string name="title_checkbox_confine_cursor">Keep cursor on virtual display</string>
-    <string name="summary_checkbox_confine_cursor">Keep remote mouse movement inside the streamed virtual display. Turn off for games that need unmodified relative input or Windows mouse acceleration. Virtual-display-only mode still keeps the shared Windows cursor away from an active AR-glasses display. Requires a supported Sunshine 3D host. Applies on the next connection.</string>
-    <string name="xr_confine_cursor_session_summary">Controls remote input. Apply &amp; reconnect to change. Virtual-display-only mode separately keeps the PC mouse away from active AR glasses.</string>
-    <string name="xr_confine_cursor_unsupported">This host does not advertise cursor confinement. Update Sunshine 3D to use this setting.</string>
+    <string name="summary_checkbox_virtual_display_only">While streaming a virtual display, disable ordinary PC displays in Windows so apps open on the streamed desktop. Approved AR-glasses displays that require scanout remain active; the host automatically keeps the shared Windows cursor on the virtual display. Requires a supported Sunshine 3D host. Applies on the next connection.</string>
     <string name="summary_checkbox_absolute_mouse_mode">This can make mouse acceleration behave more naturally for remote desktop usage, but it is incompatible with many games.</string>
     <string name="title_checkbox_mouse_nav_buttons">Enable forward/back mouse buttons</string>
     <string name="summary_checkbox_mouse_nav_buttons">Enabling this option may break right clicking on some buggy devices</string>

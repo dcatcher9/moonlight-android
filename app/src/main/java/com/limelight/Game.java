@@ -1418,7 +1418,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setRefreshRate(chosenFrameRate)
                 .setVirtualDisplay(vDisplay)
                 .setVirtualDisplayOnly(prefConfig.virtualDisplayOnly)
-                .setConfineCursor(prefConfig.confineCursor)
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
@@ -4600,8 +4599,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (presenter != null) {
                     presenter.setAtomicPresentationV2Supported(
                             negotiatedAtomicPresentationV2);
-                    presenter.setCursorConfinementSupported(
-                            conn != null && conn.isCursorConfinementSupported());
                 }
                 if (xrSessionSettingsController != null) {
                     xrSessionSettingsController.setLiveVideoModeSupported(

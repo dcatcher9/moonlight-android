@@ -38,10 +38,9 @@ public class NvHTTPHostSessionCapabilityTest {
         return "<root status_code=\"200\">" + body + "</root>";
     }
 
-    private static final String CURSOR_SERVER_INFO = response(
+    private static final String VIRTUAL_DISPLAY_SERVER_INFO = response(
             "<appversion>7.1.0.0</appversion>"
-                    + "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>"
-                    + "<CursorConfinementSupported>1</CursorConfinementSupported>");
+                    + "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>");
 
     private static NvHTTP.ServerInfoResponse fetchServerInfo(boolean hasPinnedCertificate,
             String httpsResponse, IOException httpsFailure, List<String> requestedSchemes)
@@ -54,7 +53,7 @@ public class NvHTTPHostSessionCapabilityTest {
             if ("https".equals(scheme) && httpsFailure != null) {
                 throw httpsFailure;
             }
-            String xml = "https".equals(scheme) ? httpsResponse : CURSOR_SERVER_INFO;
+            String xml = "https".equals(scheme) ? httpsResponse : VIRTUAL_DISPLAY_SERVER_INFO;
             return new Response.Builder().request(call.request()).protocol(Protocol.HTTP_1_1)
                     .code(200).message("OK")
                     .body(ResponseBody.create(xml, MediaType.get("application/xml"))).build();
@@ -65,15 +64,10 @@ public class NvHTTPHostSessionCapabilityTest {
         return http.getServerInfoWithProvenance(true);
     }
 
-    private static void assertCursorOptionOmitted(NvHTTP.ServerInfoResponse response)
+    private static void assertVirtualDisplayOnlyOptionOmitted(NvHTTP.ServerInfoResponse response)
             throws Exception {
-        assertEquals(CURSOR_SERVER_INFO, response.xml);
+        assertEquals(VIRTUAL_DISPLAY_SERVER_INFO, response.xml);
         assertFalse(response.authenticated);
-        boolean supported = NvHTTP.isCursorConfinementSupported(
-                response.xml, response.authenticated);
-        assertFalse(supported);
-        assertEquals("", NvHTTP.cursorConfinementQuery(
-                new StreamConfiguration.Builder().setConfineCursor(false).build(), supported));
         boolean virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(
                 response.xml, response.authenticated);
         assertFalse(virtualDisplayOnlySupported);
@@ -83,74 +77,50 @@ public class NvHTTPHostSessionCapabilityTest {
     }
 
     @Test
-    public void successfulHttpsResponseCanAdvertiseCursorConfinement() throws Exception {
+    public void successfulHttpsResponseCanAdvertiseVirtualDisplayOnly() throws Exception {
         List<String> schemes = new ArrayList<>();
-        NvHTTP.ServerInfoResponse info = fetchServerInfo(true, CURSOR_SERVER_INFO, null, schemes);
+        NvHTTP.ServerInfoResponse info = fetchServerInfo(
+                true, VIRTUAL_DISPLAY_SERVER_INFO, null, schemes);
 
         assertEquals(Arrays.asList("https"), schemes);
         assertTrue(info.authenticated);
-        assertTrue(NvHTTP.isCursorConfinementSupported(info.xml, info.authenticated));
         assertTrue(NvHTTP.isVirtualDisplayOnlySupported(info.xml, info.authenticated));
     }
 
     @Test
-    public void missingPinnedCertificateCannotAdvertiseCursorConfinement() throws Exception {
+    public void missingPinnedCertificateCannotAdvertiseVirtualDisplayOnly() throws Exception {
         List<String> schemes = new ArrayList<>();
         NvHTTP.ServerInfoResponse info = fetchServerInfo(false, null, null, schemes);
 
         assertEquals(Arrays.asList("http"), schemes);
-        assertCursorOptionOmitted(info);
+        assertVirtualDisplayOnlyOptionOmitted(info);
     }
 
     @Test
-    public void unauthorizedHttpsFallbackCannotAdvertiseCursorConfinement() throws Exception {
+    public void unauthorizedHttpsFallbackCannotAdvertiseVirtualDisplayOnly() throws Exception {
         List<String> schemes = new ArrayList<>();
         NvHTTP.ServerInfoResponse info = fetchServerInfo(true,
                 "<root status_code=\"401\" status_message=\"Unauthorized\"/>", null, schemes);
 
         assertEquals(Arrays.asList("https", "http"), schemes);
-        assertCursorOptionOmitted(info);
+        assertVirtualDisplayOnlyOptionOmitted(info);
     }
 
     @Test
-    public void certificateMismatchFallbackCannotAdvertiseCursorConfinement() throws Exception {
+    public void certificateMismatchFallbackCannotAdvertiseVirtualDisplayOnly() throws Exception {
         List<String> schemes = new ArrayList<>();
         SSLHandshakeException mismatch = new SSLHandshakeException("Certificate mismatch");
         mismatch.initCause(new CertificateException("Certificate mismatch"));
         NvHTTP.ServerInfoResponse info = fetchServerInfo(true, null, mismatch, schemes);
 
         assertEquals(Arrays.asList("https", "http"), schemes);
-        assertCursorOptionOmitted(info);
-    }
-
-    @Test
-    public void cursorConfinementRequiresItsOwnExplicitCapability() throws Exception {
-        assertFalse(NvHTTP.isCursorConfinementSupported(response("<hostsessionid>1</hostsessionid>"), true));
-        for (String value : new String[] {"", "0", "true", "2"}) {
-            assertFalse(NvHTTP.isCursorConfinementSupported(response(
-                    "<CursorConfinementSupported>" + value + "</CursorConfinementSupported>"), true));
-        }
-        assertTrue(NvHTTP.isCursorConfinementSupported(response(
-                "<CursorConfinementSupported>1</CursorConfinementSupported>"), true));
-        assertFalse(NvHTTP.isCursorConfinementSupported(response(
-                "<CursorConfinementSupported>1</CursorConfinementSupported>"), false));
-    }
-
-    @Test
-    public void launchAndResumeCursorOptionDefaultsOnAndOmitsUnsupportedHosts() {
-        StreamConfiguration enabled = new StreamConfiguration.Builder().build();
-        StreamConfiguration disabled = new StreamConfiguration.Builder()
-                .setConfineCursor(false).build();
-        assertEquals("&confineCursor=1", NvHTTP.cursorConfinementQuery(enabled, true));
-        assertEquals("&confineCursor=0", NvHTTP.cursorConfinementQuery(disabled, true));
-        assertEquals("", NvHTTP.cursorConfinementQuery(enabled, false));
-        assertEquals("", NvHTTP.cursorConfinementQuery(disabled, false));
+        assertVirtualDisplayOnlyOptionOmitted(info);
     }
 
     @Test
     public void virtualDisplayOnlyRequiresItsOwnExplicitCapability() throws Exception {
         assertFalse(NvHTTP.isVirtualDisplayOnlySupported(
-                response("<CursorConfinementSupported>1</CursorConfinementSupported>"), true));
+                response("<hostsessionid>1</hostsessionid>"), true));
         for (String value : new String[] {"", "0", "true", "2"}) {
             assertFalse(NvHTTP.isVirtualDisplayOnlySupported(response(
                     "<VirtualDisplayOnlySupported>" + value

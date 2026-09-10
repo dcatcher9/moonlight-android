@@ -959,12 +959,6 @@ public class NvHTTP {
         return new String(hexChars);
     }
     
-    public static boolean isCursorConfinementSupported(String serverInfo, boolean authenticated)
-            throws XmlPullParserException, IOException {
-        return authenticated
-                && "1".equals(getXmlString(serverInfo, "CursorConfinementSupported", false));
-    }
-
     public static boolean isVirtualDisplayOnlySupported(String serverInfo, boolean authenticated)
             throws XmlPullParserException, IOException {
         return authenticated
@@ -975,10 +969,6 @@ public class NvHTTP {
         return supported
                 ? "&virtualDisplayOnly=" + (configuration.getVirtualDisplayOnly() ? 1 : 0)
                 : "";
-    }
-
-    static String cursorConfinementQuery(StreamConfiguration configuration, boolean supported) {
-        return supported ? "&confineCursor=" + (configuration.getConfineCursor() ? 1 : 0) : "";
     }
 
     public boolean launchApp(ConnectionContext context, String verb, String appUUID, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
@@ -1044,7 +1034,6 @@ public class NvHTTP {
                     "&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
             virtualDisplayOnlyQuery(context.streamConfig, context.virtualDisplayOnlySupported) +
-            cursorConfinementQuery(context.streamConfig, context.cursorConfinementSupported) +
             (context.hostSessionIdSupported
                     ? "&sbsMode=" + context.streamConfig.getInitialSbsMode() : "") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +

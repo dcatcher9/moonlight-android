@@ -106,28 +106,6 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
-    public void cursorConfinementStagesForReconnectAndPersistsAcrossEveryMode() {
-        XrSessionSettingsController controller = controller();
-        controller.selectSharedSetting(SessionSettingsModel.Key.CONFINE_CURSOR, "false");
-        SessionSettingsModel.Value cursor = controller.getSessionModel()
-                .get(SessionSettingsModel.Key.CONFINE_CURSOR);
-        assertEquals("On", cursor.appliedValue);
-        assertEquals("Off", cursor.pendingValue);
-        assertTrue(controller.pendingChangesRequireReconnect());
-        assertTrue(controller.commitPending());
-
-        SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
-        assertTrue(snapshot.isSharedOverridden(PreferenceConfiguration.CONFINE_CURSOR_PREF_STRING));
-        for (SessionSettingsStore.PresenterMode mode : SessionSettingsStore.PresenterMode.values()) {
-            assertFalse(PreferenceConfiguration.readPreferences(
-                    context, snapshot.preferencesForMode(mode)).confineCursor);
-        }
-        assertTrue(PreferenceConfiguration.readPreferences(context, globals).confineCursor);
-        assertEquals("Off", controller().getSessionModel()
-                .get(SessionSettingsModel.Key.CONFINE_CURSOR).appliedValue);
-    }
-
-    @Test
     public void playAudioOnPcRemainsAvailableAsASessionSetting() {
         XrSessionSettingsController controller = controller();
         controller.cycle(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC);

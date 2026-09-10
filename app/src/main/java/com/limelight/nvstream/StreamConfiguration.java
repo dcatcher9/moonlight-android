@@ -16,7 +16,6 @@ public class StreamConfiguration {
     private float launchRefreshRate;
     private boolean virtualDisplay;
     private boolean virtualDisplayOnly = true;
-    private boolean confineCursor = true;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
     private int bitrate;
@@ -133,11 +132,6 @@ public class StreamConfiguration {
             return this;
         }
 
-        public StreamConfiguration.Builder setConfineCursor(boolean enable) {
-            config.confineCursor = enable;
-            return this;
-        }
-
         public StreamConfiguration.Builder setInitialSbsMode(int mode) {
             if (mode != MoonBridge.SBS_MODE_OFF && mode != MoonBridge.SBS_MODE_AI) {
                 throw new IllegalArgumentException("Unknown initial SBS mode: " + mode);
@@ -214,8 +208,6 @@ public class StreamConfiguration {
     public boolean getVirtualDisplay() { return virtualDisplay; }
 
     public boolean getVirtualDisplayOnly() { return virtualDisplayOnly; }
-
-    public boolean getConfineCursor() { return confineCursor; }
 
     public int getResolutionScaleFactor() { return resolutionScaleFactor; }
     

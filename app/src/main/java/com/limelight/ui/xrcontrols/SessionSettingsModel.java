@@ -29,8 +29,7 @@ public final class SessionSettingsModel {
         CODEC(Scope.SHARED_SESSION),
         FRAME_PACING(Scope.SHARED_SESSION),
         AUDIO_LAYOUT(Scope.SHARED_SESSION),
-        PLAY_AUDIO_ON_PC(Scope.SHARED_SESSION),
-        CONFINE_CURSOR(Scope.SHARED_SESSION);
+        PLAY_AUDIO_ON_PC(Scope.SHARED_SESSION);
 
         public final Scope scope;
 
