@@ -59,19 +59,6 @@ public final class XrResolutionSelector extends ViewGroup {
     public static final String RESOLUTION_5K2K_PORTRAIT =
             XrResolutionOptions.RESOLUTION_5K2K_PORTRAIT;
 
-    /**
-     * Existing landscape families first, followed by their portrait counterparts in the same
-     * deterministic order. Keeping the original six cards first preserves their established
-     * placement. Phone/tablet source dimensions extend that landscape group.
-     *
-     * <p>The shared source is also consumed by every presenter's settings model, so a card cannot
-     * silently exist in only the global picker or only one presentation mode.</p>
-     */
-    private static final List<XrResolutionOptions.Option> STANDARD_OPTIONS =
-            XrResolutionOptions.standardOptions();
-    private static final int PORTRAIT_GROUP_START_INDEX =
-            firstPortraitOptionIndex(STANDARD_OPTIONS);
-
     public interface OnResolutionSelectedListener {
         /** Returns true when the explicit resolution ID is accepted. */
         boolean onResolutionSelected(@NonNull String resolutionId);
@@ -81,6 +68,8 @@ public final class XrResolutionSelector extends ViewGroup {
     private final List<ResolutionCard> cards = new ArrayList<>();
     private final int horizontalSpacing;
     private final int verticalSpacing;
+    private final List<XrResolutionOptions.Option> standardOptions;
+    private final int portraitGroupStartIndex;
     @Nullable
     private String selectedResolutionId;
     @Nullable
@@ -96,7 +85,15 @@ public final class XrResolutionSelector extends ViewGroup {
 
     public XrResolutionSelector(@NonNull Context context, @Nullable AttributeSet attrs,
                                 int defStyleAttr) {
+        this(context, attrs, defStyleAttr, XrResolutionOptions.standardOptions());
+    }
+
+    private XrResolutionSelector(@NonNull Context context, @Nullable AttributeSet attrs,
+                                 int defStyleAttr,
+                                 List<XrResolutionOptions.Option> options) {
         super(context, attrs, defStyleAttr);
+        standardOptions = options;
+        portraitGroupStartIndex = firstPortraitOptionIndex(options);
         horizontalSpacing = getResources().getDimensionPixelSize(R.dimen.xr_space_sm);
         verticalSpacing = getResources().getDimensionPixelSize(R.dimen.xr_space_sm);
         setClipChildren(false);
@@ -108,6 +105,12 @@ public final class XrResolutionSelector extends ViewGroup {
     public void setOnResolutionSelectedListener(
             @Nullable OnResolutionSelectedListener listener) {
         this.listener = listener;
+    }
+
+    /** Builds only the compact desktop-oriented ladder for a mode's contextual subpane. */
+    public static XrResolutionSelector forModeSubpane(@NonNull Context context) {
+        return new XrResolutionSelector(context, null, 0,
+                XrResolutionOptions.modeSubpaneOptions());
     }
 
     /**
@@ -186,7 +189,7 @@ public final class XrResolutionSelector extends ViewGroup {
         visibleOptions.clear();
         cards.clear();
 
-        for (XrResolutionOptions.Option option : STANDARD_OPTIONS) {
+        for (XrResolutionOptions.Option option : standardOptions) {
             addOption(new ResolutionOption(
                     option.id, option.label, option.width, option.height, false));
         }
@@ -245,11 +248,16 @@ public final class XrResolutionSelector extends ViewGroup {
     }
 
     private boolean isCustomId(@Nullable String id) {
-        return id != null && !isStandardId(id);
+        return id != null && !isVisibleStandardId(id);
     }
 
-    private static boolean isStandardId(String id) {
-        return XrResolutionOptions.isStandardId(id);
+    private boolean isVisibleStandardId(String id) {
+        for (XrResolutionOptions.Option option : standardOptions) {
+            if (option.id.equals(id)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Nullable
@@ -333,7 +341,7 @@ public final class XrResolutionSelector extends ViewGroup {
                     ? lineWidth + horizontalSpacing + childWidth : childWidth;
 
             if (lineHasChild
-                    && (i == PORTRAIT_GROUP_START_INDEX || nextWidth > availableWidth)) {
+                    && (i == portraitGroupStartIndex || nextWidth > availableWidth)) {
                 widestLine = Math.max(widestLine, lineWidth);
                 contentHeight += lineHeight + verticalSpacing;
                 lineWidth = childWidth;
@@ -379,7 +387,7 @@ public final class XrResolutionSelector extends ViewGroup {
             int childHeight = child.getMeasuredHeight();
             int occupiedWidth = childWidth + params.leftMargin + params.rightMargin;
             boolean needsWrap = lineHasChild
-                    && (i == PORTRAIT_GROUP_START_INDEX
+                    && (i == portraitGroupStartIndex
                     || (rtl
                     ? x - horizontalSpacing - occupiedWidth < contentLeft
                     : x + horizontalSpacing + occupiedWidth > contentRight));

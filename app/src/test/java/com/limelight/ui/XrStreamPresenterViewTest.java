@@ -25,12 +25,14 @@ import androidx.appcompat.widget.AppCompatButton;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrChoiceGroup;
+import com.limelight.preferences.XrResolutionOptions;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsMetricHistory;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
+import com.limelight.ui.xrcontrols.XrResolutionSelector;
 import com.limelight.ui.xrcontrols.XrSparklineView;
 
 import org.junit.Test;
@@ -159,6 +161,39 @@ public final class XrStreamPresenterViewTest {
         state.toggleModeOptions(XrStreamPresenter.PresenterMode.NORMAL.name());
         render.invoke(presenter);
         assertNull(getField(presenter, "rawSbsPerEyeResolutionChoiceGroup"));
+        controller.destroy();
+    }
+
+    @Test
+    public void modeQualitySubpaneOmitsPhoneAndTabletResolutionPresets()
+            throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, PreferenceConfiguration.readPreferences(activity),
+                surface -> { }, visible -> { });
+        FrameLayout host = new FrameLayout(activity);
+        setField(presenter, "modeOptionsHost", host);
+        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
+        state.toggleModeOptions(XrStreamPresenter.PresenterMode.NORMAL.name());
+
+        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+        render.invoke(presenter);
+
+        XrResolutionSelector selector = (XrResolutionSelector) getField(
+                presenter, "modeResolutionSelector");
+        assertEquals(XrResolutionOptions.modeSubpaneOptions().size(),
+                selector.getCardCount());
+        assertNull(selector.findCardByResolutionId(
+                XrResolutionOptions.RESOLUTION_PHONE_18_9));
+        assertNull(selector.findCardByResolutionId(
+                XrResolutionOptions.RESOLUTION_TABLET_1200P));
+        assertTrue(selector.findCardByResolutionId(
+                XrResolutionOptions.RESOLUTION_1080P) != null);
         controller.destroy();
     }
 

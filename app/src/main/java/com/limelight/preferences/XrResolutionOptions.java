@@ -16,6 +16,8 @@ import java.util.Objects;
  * stream dimensions; selecting one never relies on Android's display-rotation inversion preference.</p>
  */
 public final class XrResolutionOptions {
+    private static final int MODE_SUBPANE_LANDSCAPE_OPTION_COUNT = 6;
+
     public static final String RESOLUTION_1080P = "1920x1080";
     public static final String RESOLUTION_1440P = "2560x1440";
     public static final String RESOLUTION_4K = "3840x2160";
@@ -66,12 +68,25 @@ public final class XrResolutionOptions {
 
     private static final List<Option> STANDARD_OPTIONS =
             buildWithPortraitCounterparts(LANDSCAPE_OPTIONS);
+    private static final List<Option> MODE_SUBPANE_OPTIONS =
+            buildWithPortraitCounterparts(LANDSCAPE_OPTIONS.subList(
+                    0, MODE_SUBPANE_LANDSCAPE_OPTION_COUNT));
 
     private XrResolutionOptions() {
     }
 
     public static List<Option> standardOptions() {
         return STANDARD_OPTIONS;
+    }
+
+    /**
+     * Compact choices for a mode's in-session subpane.
+     *
+     * <p>Global Settings retains the phone/tablet source presets. The smaller contextual pane
+     * offers the six established desktop families and their portrait counterparts.</p>
+     */
+    public static List<Option> modeSubpaneOptions() {
+        return MODE_SUBPANE_OPTIONS;
     }
 
     public static boolean isStandardId(String id) {

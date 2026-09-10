@@ -315,6 +315,37 @@ public final class XrResolutionSelectorTest {
     }
 
     @Test
+    public void modeSubpaneOmitsPhoneAndTabletPresetsButPreservesAnInheritedValue() {
+        XrResolutionSelector selector = XrResolutionSelector.forModeSubpane(context);
+        assertEquals(XrResolutionOptions.modeSubpaneOptions().size(), selector.getCardCount());
+        selector.setSelectedResolutionId(XrResolutionOptions.RESOLUTION_PHONE_20_9);
+
+        assertEquals(XrResolutionOptions.modeSubpaneOptions().size() + 1,
+                selector.getCardCount());
+        for (int i = 0; i < XrResolutionOptions.modeSubpaneOptions().size(); i++) {
+            assertEquals(XrResolutionOptions.modeSubpaneOptions().get(i).id,
+                    selector.getResolutionIdAt(i));
+        }
+        assertNull(selector.findCardByResolutionId(
+                XrResolutionOptions.RESOLUTION_PHONE_18_9));
+        assertNull(selector.findCardByResolutionId(
+                XrResolutionOptions.RESOLUTION_TABLET_1200P));
+
+        AppCompatButton inherited = selector.findCardByResolutionId(
+                XrResolutionOptions.RESOLUTION_PHONE_20_9);
+        assertTrue(inherited.isActivated());
+        assertFalse(inherited.isClickable());
+        assertTrue(inherited.getText().toString().startsWith("Custom"));
+        assertTrue(inherited.getText().toString().contains("2400 \u00d7 1080"));
+
+        selector.findCardByResolutionId(XrResolutionSelector.RESOLUTION_4K).performClick();
+
+        assertEquals(XrResolutionOptions.modeSubpaneOptions().size(), selector.getCardCount());
+        assertNull(selector.findCardByResolutionId(XrResolutionOptions.RESOLUTION_PHONE_20_9));
+        assertEquals(XrResolutionSelector.RESOLUTION_4K, selector.getSelectedResolutionId());
+    }
+
+    @Test
     public void glyphGeometryCacheTracksBoundsTranslationAndResize() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
         XrResolutionSelector.ResolutionGlyphDrawable glyph =

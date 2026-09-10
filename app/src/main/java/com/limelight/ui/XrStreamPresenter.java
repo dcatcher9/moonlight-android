@@ -2821,7 +2821,7 @@ public class XrStreamPresenter {
                 android.graphics.Typeface.BOLD);
         applyTitleIcon(resolutionTitle, R.drawable.ic_xr_resolution);
         resolutionColumn.addView(resolutionTitle);
-        modeResolutionSelector = new XrResolutionSelector(activity);
+        modeResolutionSelector = XrResolutionSelector.forModeSubpane(activity);
         modeResolutionSelector.setSelectedResolutionId(model.pendingQuality.resolution);
         modeResolutionSelector.setEnabled(sessionControlsEnabled);
         modeResolutionSelector.setOnResolutionSelectedListener(choiceId ->

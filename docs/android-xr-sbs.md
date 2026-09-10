@@ -898,10 +898,14 @@ with the current session, and inherits its default from Global Settings.
 
 The resolution ladder keeps its six established landscape choices first, then adds twelve common
 phone/tablet source sizes. One explicit portrait counterpart for each of the eighteen landscape
-choices follows by swapping `W` and `H`, for 36 choices in both Global Settings and every mode's
-in-session picker. `XrResolutionOptions` owns their ordering and IDs; the Android resource arrays
-mirror it. These are source/virtual-desktop dimensions displayed in XR, not additional Android
-device targets. The compact phone/tablet labels map to these exact landscape requests:
+choices follows by swapping `W` and `H`, for 36 choices in Global Settings. Each mode's compact
+in-session subpane presents the original six landscape choices and their six portrait counterparts;
+phone/tablet presets remain global choices rather than filling the contextual pane. If a mode
+inherits one of those presets or another non-subpane size, the pane preserves it as the selected
+Custom card until the user chooses a compact preset. `XrResolutionOptions` owns both orderings and
+their IDs; the Android resource arrays mirror the Global Settings ladder. These are source/virtual-
+desktop dimensions displayed in XR, not additional Android device targets. The compact
+phone/tablet labels map to these exact landscape requests:
 
 | Label | Source dimensions |
 | --- | --- |

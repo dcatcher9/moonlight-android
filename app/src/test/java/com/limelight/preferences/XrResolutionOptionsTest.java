@@ -51,6 +51,23 @@ public final class XrResolutionOptionsTest {
     }
 
     @Test
+    public void modeSubpaneKeepsOnlyEstablishedDesktopFamiliesAndPortraits() {
+        String[] expectedIds = {
+                "1920x1080", "2560x1440", "3840x2160",
+                "2560x1080", "3440x1440", "5120x2160",
+                "1080x1920", "1440x2560", "2160x3840",
+                "1080x2560", "1440x3440", "2160x5120",
+        };
+
+        List<XrResolutionOptions.Option> options = XrResolutionOptions.modeSubpaneOptions();
+        assertEquals(expectedIds.length, options.size());
+        for (int i = 0; i < expectedIds.length; i++) {
+            assertEquals(expectedIds[i], options.get(i).id);
+            assertTrue(XrResolutionOptions.isStandardId(options.get(i).id));
+        }
+    }
+
+    @Test
     public void portraitGenerationIsDeterministicAndDeduplicatesSquaresAndExistingSwaps() {
         XrResolutionOptions.Option landscape =
                 new XrResolutionOptions.Option("1600x900", "Test", 1600, 900, false);
