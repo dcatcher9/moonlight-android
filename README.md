@@ -14,15 +14,12 @@
 > Sunshine 3D does not support AMD or Intel GPUs, software encoding, Linux, or macOS hosts.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-reduced-motion: reduce)" srcset="./docs/assets/readme/sunshine3d-moonlight3d-workflow.png">
-    <img src="./docs/assets/readme/sunshine3d-moonlight3d-workflow.gif" width="760"
-         alt="Sunshine 3D converts a flat PC scene, then either streams it to Moonlight 3D on Android XR or presents it directly to PC-connected AR glasses without Moonlight 3D.">
-  </picture>
+  <img src="./docs/assets/readme/sunshine3d-moonlight3d-workflow.svg" width="900"
+       alt="Choose where to create 3D: Host 3D converts on the PC, Client 3D converts on the headset, Raw SBS preserves existing stereo, and 2D stays flat. Sunshine 3D also supports direct AR glasses and offline video conversion on the PC.">
 </p>
 
 <p align="center">
-  Stream to Moonlight 3D on Android XR, or let Sunshine 3D drive connected AR glasses directly.
+  Choose where to create 3D, then watch on your headset or connected glasses—or save a 3D video.
 </p>
 
 <p align="center">
@@ -65,13 +62,11 @@ support.
 The product boundary is intentionally simple: Sunshine 3D owns the PC; Moonlight 3D owns the
 Android XR experience; directly attached AR glasses stay on the PC path.
 
-```mermaid
-flowchart TD
-    SOURCE["Capturable Windows content"]
-    SOURCE --> PC["PC · Sunshine 3D<br/>capture · optional Host 3D"]
-    PC -->|"Encrypted mono or packed SBS"| XR["Android XR · Moonlight 3D<br/>decode · optional Client 3D"]
-    PC -->|"Direct D3D11<br/>no Moonlight 3D or network"| GLASSES["PC-connected AR glasses<br/>2D · Host 3D full SBS"]
-```
+| Where you want to watch | What you need | What Sunshine 3D does |
+|---|---|---|
+| **Galaxy XR headset** | Sunshine 3D on the PC + Moonlight 3D on the headset | Streams 2D or stereo, with audio and input |
+| **PC-connected AR glasses** | Sunshine 3D + a supported glasses display | Presents 2D or Host 3D directly on the glasses |
+| **A saved 3D video** | Sunshine 3D + the approved FFmpeg tools | Converts a local file to SBS for later playback |
 
 Direct AR output is a Sunshine 3D feature, not a Moonlight 3D client path. It is currently
 video-only and supports 1920×1080 2D or 3840×1080 host-generated full SBS on an approved,
@@ -96,17 +91,18 @@ and gives each eye half of its horizontal pixels.
 Host 3D and Client 3D are the real-time 2D-to-3D paths. Raw SBS preserves stereo supplied by the
 source, while 2D bypasses conversion entirely.
 
-Original ZipDepth Base is the single Client 3D model family. Its three fixed short-384 aspect
-graphs use FP16-stored weights while retaining Float32 GL tensors, so 16:9, 21:9, and ultrawide
-streams share one model family without forcing every source through one distorted rectangle. See
-[Client SBS evaluation](./docs/client-sbs-evaluation.md) for the exact contract.
+Client 3D uses original ZipDepth Base and automatically adapts to the selected stream's aspect
+ratio, including portrait. There is no model selector. See the
+[XR architecture](./docs/android-xr-sbs.md) for the current contracts and
+[Client SBS evaluation](./docs/client-sbs-evaluation.md) for device measurements.
 
 ## Quick start
 
 1. Install and configure [Sunshine 3D](https://github.com/dcatcher9/Apollo-3D) with its bundled
    SudoVDA driver on the Windows PC, then run the host with administrator privileges.
-2. Open `https://localhost:47990` on the PC. No account or Web UI login is required; keep the
-   page ready for the **Enter PIN** pairing card.
+2. Open `https://localhost:47990` on the PC. No sign-in is required on this PC or an allowed
+   trusted local network; credentials apply only if WAN Web UI access is explicitly enabled.
+   Keep the page ready for the **Enter PIN** pairing card.
 3. [Build and install](#build-from-source) the current arm64 Moonlight 3D APK, or install a
    packaged build when one is available, on Galaxy XR.
 4. Put the PC and headset on the same network for initial discovery.
@@ -123,35 +119,42 @@ including standard pairing, launch, resume, and end-session behavior. Raw SBS is
 selected launch is backed by a compatible virtual display. Sunshine 3D is required for Host 3D,
 live host quality controls, and host depth telemetry/debugging.
 
-## Scene-aware adaptive pop and zero plane
+**Use virtual display only while streaming** is enabled by default in **Global Settings →
+Streaming defaults** and applies on the next connection to a supporting Sunshine 3D host. For a
+virtual-display session, it disables ordinary PC displays in Windows so applications open on the
+streamed desktop. Approved AR-glasses displays that need scanout remain active, and the host
+automatically keeps the shared Windows cursor on the virtual display. Turn the setting off and
+reconnect to keep ordinary PC displays active. The previous display setup is restored on disconnect.
+This is the same signed-in Windows desktop, with shared applications, focus, and cursor;
+physical-display streams are unaffected. See the
+[virtual-desktop guide](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/virtual-desktop.md)
+for application placement and recovery behavior.
 
-The PC and headset AI modes use the same scene-level strategy, with implementation details
-calibrated for their respective GPU pipelines:
+## Stable 3D within each scene
 
-- **Scene-aware adaptive pop** waits for a new scene’s depth to settle, measures
-  gradient-magnitude-weighted depth-edge risk, then chooses a parallax multiplier between `1.20×`
-  and `2.00×`. Lower-risk depth fields can use more relief; edge-dense fields move toward the
-  gentler end. The choice stays fixed for the shot instead of pumping every frame.
-- **Shot-stable zero plane** places the display surface—the depth rendered at zero disparity—at
-  the scene’s median inferred depth. It is resolved immediately on an accepted scene cut,
-  corrected once after depth settles, and then latched. Between accepted cuts it does not
-  continuously follow per-frame motion or depth noise; the committed synthetic exposure-flash
-  tests also verify that supported brightness flashes do not relatch it.
+Host 3D and Client 3D use the current Depth Coordinate V2 mapping, with different depth models
+and GPU pipelines. Client 3D calibrates each ZipDepth aspect graph to that shared coordinate and
+uses a fixed stereo strength. Its zero-disparity screen plane comes from the arithmetic mean of
+the raw depth field, latched when usable depth first establishes a shot and on accepted scene cuts.
+It stays fixed as objects move within the scene.
 
 ```mermaid
 flowchart TD
-    CUT["Accepted scene cut<br/>set the median zero plane immediately"]
-    CUT --> SETTLE["After depth settles<br/>correct the plane once · measure depth-edge risk"]
-    SETTLE -->|"Lower risk"| MORE["Stronger relief<br/>pop multiplier toward 2.00×"]
-    SETTLE -->|"Higher risk"| LESS["Gentler relief<br/>pop multiplier toward 1.20×"]
-    MORE --> HOLD["Hold pop and zero plane<br/>until the next accepted cut"]
-    LESS --> HOLD
+    START["First usable depth in a new shot"]
+    START --> PLANE["Set the screen plane<br/>from the shot's average depth"]
+    PLANE --> HOLD["Keep that plane steady<br/>as objects move"]
+    HOLD -->|"Scene cut accepted"| START
 ```
 
-The controller favors stronger stereo relief in lower-risk depth fields and backs off in edge-dense
-fields. The shot-latched screen plane reduces convergence breathing from per-frame tracking. These
-controls reduce pumping and warp risk; they do not guarantee perfect depth, artifact-free
-reprojection, or flawless cut detection.
+Client 3D reuses valid geometry for sufficiently similar content and presents the current color
+with it. Invalid or collapsed depth produces flat output. This reduces unnecessary inference while
+keeping depth failures from applying invalid geometry to the current image.
+
+The models can still produce different detail and artifacts. Host 3D also owns foreground-window
+and subtitle plane conditioning; these are not part of Client 3D. The
+[XR architecture](./docs/android-xr-sbs.md#fixed-client-sbs-depth-coordinate-v2) owns the live client
+geometry, and the [client–host parity guide](./docs/client-host-sbs-parity.md) distinguishes current
+behavior from historical experiments.
 
 ## Why this pair stands out
 
@@ -175,19 +178,29 @@ views are available.
 
 | Feature | What it provides |
 |---|---|
-| **In-headset stream dock** | Switches among 2D, Client 3D, Raw SBS, and Host 3D, reconnecting automatically when transport geometry changes; also provides Cinema, Library, Stats, Dump 3D, and Disconnect actions |
+| **In-headset stream dock** | Switches among 2D, Client 3D, Raw SBS, and Host 3D; keeps Settings, Cinema, Library, Stats, and End session within reach. Debug builds also offer Dump 3D |
+| **Cinema backgrounds** | A screen size/position preset with Black, System environment, or Passthrough choices; change the background while staying in Cinema |
 | **Per-mode quality** | Independent resolution, frame-rate ceiling, and bitrate choices for every viewing mode, with shared codec, HDR, range, pacing, and audio settings |
-| **Explicit landscape and portrait modes** | 1080p, 1440p, 4K, ultrawide 1080p/1440p, and 5K2K rows, each with a real swapped-dimension portrait counterpart |
+| **Landscape and portrait source sizes** | Global Settings offers 36 presets, including desktop, ultrawide, phone, and tablet dimensions. In-session mode panes keep the six desktop/ultrawide sizes and their portrait counterparts, preserving other inherited sizes as Custom |
 | **Adaptive refresh behavior** | Selectable 30, 60, 72, 90, and 120 FPS ceilings; the live stream can follow a lower headset display rate and recover without changing the selected ceiling |
 | **Client GPU depth** | Original ZipDepth Base short-384 aspect graphs using a native LiteRT/OpenCL/GLES path—no NPU or CPU fallback |
-| **Scene-aware 3D stability** | Selects one depth-edge-aware pop multiplier after a shot settles and holds a median-depth screen plane to reduce pumping and convergence drift |
+| **Stable scene geometry** | Calibrated raw-depth coordinates, fixed Client 3D strength, a screen plane held for each shot, and validity-checked reuse of geometry for similar content |
 | **Sunshine 3D integration** | Session-scoped Virtual Display launches, negotiated resolution/FPS/HDR, Host 3D, Raw SBS transport, application library, session resume/end controls, and clipboard sync |
-| **Moonlight input and audio** | Gamepad, mouse, keyboard, touchpad, rumble, stereo/5.1/7.1 audio, and host-audio controls |
-| **Live diagnostics** | Stream, decoder, network, CPU/GPU load, and Client 3D depth-health telemetry with trend charts |
+| **Virtual desktop focus** | The default virtual-display-only preference directs Windows apps to the streamed desktop and automatically keeps the shared cursor there when an approved AR display remains active |
+| **Moonlight input and audio** | Gamepad, mouse, keyboard, touchpad, rumble, stereo/5.1/7.1 audio, host-audio controls, and client loudness boost with a soft limiter |
+| **Live diagnostics** | Stream, decoder, network, CPU/GPU load, Client 3D depth health, and supported Sunshine 3D host telemetry with trend charts; client detail sampling and the host subscription stop when Stats closes |
 | **Connection tools** | Automatic host discovery, manual IP/hostname entry, secure PIN pairing, Wake-on-LAN, and network testing |
 
 Codec choices include Auto, AV1, HEVC, and H.264. Available geometry, frame rate, HDR, and codec
-combinations still depend on the host encoder, network, and Galaxy XR decoder limits.
+combinations still depend on the host encoder, network, and Galaxy XR decoder limits. Phone and
+tablet presets describe the Windows source dimensions; Moonlight 3D remains an XR-only app.
+
+Quality changes use live updates when the host and decoder support them, or **Apply & reconnect**
+when a restart is required. Entering or leaving Raw SBS Full packing and changing Full/Half during
+Raw SBS require a reconnect. Current Sunshine 3D hosts negotiate these transitions with the client.
+
+Host Stats performance measurements require diagnostics to be enabled on Sunshine 3D. Opening
+Stats in the headset does not turn host diagnostics on.
 
 ## Requirements
 
@@ -209,8 +222,12 @@ the revision you need, use the source-build steps below.
 
 ## Build from source
 
-Moonlight 3D uses the Gradle wrapper, Android Gradle Plugin 9.3.2, Android SDK 37.0,
+Moonlight 3D uses the Gradle 9.7.1 wrapper, Android Gradle Plugin 9.3.2, Android SDK 37.0,
 JDK 17–25 (JDK 25 is the development standard), and Android NDK `27.3.13750724`.
+Set `JAVA_HOME` to a supported JDK before running Gradle. The app targets Android API 34, requires
+API 24 or later plus the XR spatial feature, and compiles Java sources at Java 11 compatibility.
+Declared versions live in [app/build.gradle](./app/build.gradle), [build.gradle](./build.gradle),
+and the [Gradle wrapper configuration](./gradle/wrapper/gradle-wrapper.properties).
 
 Before installing to Galaxy XR, enable Developer options and Wireless debugging on the headset,
 connect it through Android SDK Platform Tools, and confirm that it appears in `adb devices`.
@@ -235,13 +252,20 @@ workflow uninstalls the target package and erases preferences, certificates, pai
 profiles. Use a disposable emulator, or follow the data-preserving procedure in
 [Client SBS evaluation](./docs/client-sbs-evaluation.md).
 
+For an existing checkout, run `git submodule update --init --recursive` before building. Run
+`.\gradlew.bat :app:testNonRoot_gameDebugUnitTest` for the main flavor's JVM tests, which do not
+require a headset. See [Android test setup](./android_test_setup.md) for focused test commands.
+
 ## Documentation
 
 | Topic | Guide |
 |---|---|
 | XR presentation and mode contracts | [Android XR SBS architecture](./docs/android-xr-sbs.md) |
+| Virtual desktop and display restoration | [Sunshine 3D virtual desktop](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/virtual-desktop.md) |
 | Host/client 3D behavior | [Client–host SBS parity](./docs/client-host-sbs-parity.md) |
 | Client 3D measurement workflow | [Client SBS evaluation](./docs/client-sbs-evaluation.md) |
+| JVM test setup | [Android tests](./android_test_setup.md) |
+| Host/client boundary tests | [Workflow tests](./tools/workflow-tests/README.md) |
 | Depth-model provenance | [Model sources](./tools/model-sources/README.md) |
 
 ## Project lineage and credits
