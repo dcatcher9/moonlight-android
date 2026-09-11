@@ -1991,14 +1991,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    /** Abandons a failed transaction so no late attachment can apply or publish its geometry. */
-    public void abandonLiveStreamResize() {
-        // Failed live geometry always requires reconnect. Fail closed immediately; neither a
-        // driver-bound resize nor SurfaceTexture acquisition may hold its timeout on main.
+    /** Terminally gates a failed presentation; resource cleanup remains ordered after stop. */
+    public void abandonPresentation() {
+        // Neither a driver-bound resize nor SurfaceTexture acquisition may hold a failed
+        // presentation's timeout on main. The background cleanup coordinator owns those waits.
         terminalSurfaceDestroyRequested = true;
         shuttingDown.set(true);
         outputSurfaceValidated = false;
-        presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
+        presentationCompletion.cancel();
     }
 
     /**

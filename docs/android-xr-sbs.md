@@ -145,8 +145,10 @@ acknowledges detach; exact renderer attachment validation and the existing two-d
 acknowledge entry/resize. A late callback cannot revive a timed-out or destroyed generation.
 Resize and HDR entry publish a draw/transfer gate without taking the GL callback lock. An already
 running draw may finish with the renderer's old, privately owned dimensions; geometry replacement
-and frame retirement still happen after acknowledged EGL detach. Failed resize closes the
-renderer for mandatory reconnect immediately, without waiting for an in-flight GPU allocation.
+and frame retirement still happen after acknowledged EGL detach. Failed resize or Client SBS
+surface handoff closes presentation and invalidates its EGL attachment immediately, without
+waiting for an in-flight frame drain or GPU allocation. Only successful handoffs use the ordinary
+renderer enable/disable setter; failed owners retain the existing stop/reconnect cleanup order.
 The EGL context survives normal pause/resume. Context loss rebuilds it on that same owner and uses
 the renderer's existing decoder-parking recovery. Events queued from a draw run after its swap;
 render requests remain coalesced. Terminal teardown first finishes native renderer cleanup, then

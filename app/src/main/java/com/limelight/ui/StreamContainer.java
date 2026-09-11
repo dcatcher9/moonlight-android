@@ -610,6 +610,19 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
     }
 
+    /** Fail closed without waiting for an in-flight renderer or EGL driver call. */
+    public void abandonClientSbsPresentation() {
+        // A late factory/renderer callback cannot become an ordinary context recovery after
+        // this presentation owner has failed. Native and surface release still follow stop.
+        mRequestedEglAttachGeneration = 0;
+        mCreatedEglAttachGeneration = 0;
+        mRequestedEglDetachGeneration = 0;
+        mExpectedEglOutputSurface = null;
+        if (mStereoRenderer != null) {
+            mStereoRenderer.abandonPresentation();
+        }
+    }
+
     /**
      * Acknowledge Client-SBS entry only after its first fresh packed buffer has been swapped.
      */
@@ -1209,15 +1222,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 ? mQueuedClientSbsResize : mPendingClientSbsResize;
         mClientSbsResizeTimeoutToken++;
         if (!success) {
-            // A late factory/renderer callback must not be reclassified as ordinary context
-            // recovery after the presenter has already handed this failure to reconnect.
-            mRequestedEglAttachGeneration = 0;
-            mCreatedEglAttachGeneration = 0;
-            mRequestedEglDetachGeneration = 0;
-            mExpectedEglOutputSurface = null;
-            if (mStereoRenderer != null) {
-                mStereoRenderer.abandonLiveStreamResize();
-            }
+            abandonClientSbsPresentation();
         }
         mPendingClientSbsResize = null;
         mPendingClientSbsResizeGeneration = 0;

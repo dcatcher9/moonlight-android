@@ -85,7 +85,7 @@ public final class StreamContainerAsyncEglLifecycleTest {
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(3));
             assertEquals(1, uiEvents.get());
             assertEquals(1, completions.get());
-            verify(renderer).abandonLiveStreamResize();
+            verify(renderer).abandonPresentation();
             release.countDown();
             assertTrue(ackPosted.await(3, TimeUnit.SECONDS));
             Shadows.shadowOf(Looper.getMainLooper()).idle();

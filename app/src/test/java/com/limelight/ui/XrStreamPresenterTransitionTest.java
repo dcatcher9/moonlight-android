@@ -260,10 +260,6 @@ public class XrStreamPresenterTransitionTest {
         assertTrue(XrStreamPresenter.clientSbsActiveDuringSurfaceSwitch(false, true));
         assertTrue(XrStreamPresenter.clientSbsActiveDuringSurfaceSwitch(true, false));
 
-        assertTrue(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(false, true, true));
-        assertFalse(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(false, true, false));
-        assertFalse(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(true, false, true));
-        assertTrue(XrStreamPresenter.clientSbsActiveAfterSurfaceSwitch(true, false, false));
     }
 
     @Test

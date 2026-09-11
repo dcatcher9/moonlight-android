@@ -692,12 +692,6 @@ public class XrStreamPresenter {
         return wasClientSbs || isClientSbs;
     }
 
-    /** Commit the requested renderer state only after the surface switch result is known. */
-    static boolean clientSbsActiveAfterSurfaceSwitch(
-            boolean wasClientSbs, boolean isClientSbs, boolean surfaceSwitchSucceeded) {
-        return surfaceSwitchSucceeded ? isClientSbs : wasClientSbs;
-    }
-
     /** An inactive Client mode with a live-applicable saved tuple is one fused ACK-first switch. */
     static boolean shouldFuseClientModeEntryQuality(
             PresentationMode previousMode, PresentationMode nextMode,
@@ -7095,11 +7089,12 @@ public class XrStreamPresenter {
         }
 
         boolean surfaceUsable = surfaceEntity != null && !surfaceEntity.isDisposed();
-        if (streamContainer != null && wasClientSbs != isClientSbs) {
-            streamContainer.setClientSbsActive(clientSbsActiveAfterSurfaceSwitch(
-                    wasClientSbs, isClientSbs, surfaceSwitchSucceeded && surfaceUsable));
-        }
         if (!surfaceSwitchSucceeded || !surfaceUsable) {
+            if (streamContainer != null && wasClientSbs != isClientSbs) {
+                // A timed-out entry may still hold renderer locks inside a driver call. Close
+                // presentation without those locks; connection teardown owns eventual cleanup.
+                streamContainer.abandonClientSbsPresentation();
+            }
             if (isAckFirstModeTransitionPending()) {
                 pendingDecoderTransitionMode = null;
                 LimeLog.severe("XR: ACKed Client SBS entry could not complete its sole surface "
@@ -7126,6 +7121,9 @@ public class XrStreamPresenter {
             return;
         }
 
+        if (streamContainer != null && wasClientSbs != isClientSbs) {
+            streamContainer.setClientSbsActive(isClientSbs);
+        }
         boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode);
         boolean retainOldPictureUntilTargetFrame =
                 retainsOldPictureUntilFreshTargetFrame(previousMode, nextMode);

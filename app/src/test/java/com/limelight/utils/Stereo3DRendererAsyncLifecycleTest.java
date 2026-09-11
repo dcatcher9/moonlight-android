@@ -100,7 +100,7 @@ public final class Stereo3DRendererAsyncLifecycleTest {
             int hdr = renderer.beginHdrInputTransition(true);
             assertTrue(hdr > 0);
             renderer.cancelHdrInputTransition(hdr);
-            renderer.abandonLiveStreamResize();
+            renderer.abandonPresentation();
             renderer.onSurfaceDestroyedAsync(Runnable::run, cleaned::countDown);
             // No resource can be released while the simulated renderer/native owner is blocked.
             assertEquals(1, cleaned.getCount());
