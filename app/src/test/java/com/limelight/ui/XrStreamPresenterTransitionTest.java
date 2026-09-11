@@ -290,7 +290,7 @@ public class XrStreamPresenterTransitionTest {
                 XrStreamPresenter.PresenterMode.NORMAL,
                 XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
                 true, false, liveTarget));
-        assertFalse(XrStreamPresenter.shouldReconnectBeforeClientModeEntry(
+        assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
                 XrStreamPresenter.PresenterMode.NORMAL,
                 XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
                 false, liveTarget));
@@ -314,7 +314,7 @@ public class XrStreamPresenterTransitionTest {
     public void incompatibleOrLegacyClientSavedQualityReconnectsBeforeHandoff() {
         ModeStreamQualityModel reconnectTarget = targetQuality(true);
 
-        assertTrue(XrStreamPresenter.shouldReconnectBeforeClientModeEntry(
+        assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
                 XrStreamPresenter.PresenterMode.NORMAL,
                 XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
                 false, reconnectTarget));
@@ -322,6 +322,32 @@ public class XrStreamPresenterTransitionTest {
                 XrStreamPresenter.PresenterMode.NORMAL,
                 XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
                 true, false, reconnectTarget));
+    }
+
+    @Test
+    public void everyModeReconnectsBeforeIncompatibleSavedQualityCanBeOverwritten() {
+        ModeStreamQualityModel reconnectTarget = targetQuality(true);
+        for (XrStreamPresenter.PresenterMode previous : XrStreamPresenter.PresenterMode.values()) {
+            for (XrStreamPresenter.PresenterMode next : XrStreamPresenter.PresenterMode.values()) {
+                assertEquals(previous + " -> " + next, previous != next,
+                        XrStreamPresenter.shouldReconnectBeforeModeEntry(
+                                previous, next, false, reconnectTarget));
+            }
+        }
+    }
+
+    @Test
+    public void liveTargetWithOtherStagedReconnectWorkDoesNotStartInterimAck() {
+        ModeStreamQualityModel liveTarget = targetQuality(false);
+        assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, true, liveTarget));
+        assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                XrStreamPresenter.PresenterMode.NORMAL, true, liveTarget));
+        assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+                XrStreamPresenter.PresenterMode.NORMAL,
+                XrStreamPresenter.PresenterMode.HOST_SBS_AI, false, liveTarget));
     }
 
     @Test

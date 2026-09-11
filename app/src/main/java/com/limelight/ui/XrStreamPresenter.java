@@ -722,17 +722,14 @@ public class XrStreamPresenter {
                 && targetQuality.appliesLiveIfSelected();
     }
 
-    /** Reconnect before touching Client presentation when its target tuple cannot change live. */
-    static boolean shouldReconnectBeforeClientModeEntry(
+    /** Commit reconnect-only settings and target quality before any interim mode ACK. */
+    static boolean shouldReconnectBeforeModeEntry(
             PresenterMode previousMode, PresenterMode nextMode,
             boolean otherStagedChangesRequireReconnect,
             ModeStreamQualityModel targetQuality) {
         return previousMode != nextMode
-                && nextMode == PresenterMode.CLIENT_SBS_AI
-                && targetQuality != null
-                && targetQuality.requiresApplyIfSelected()
                 && (otherStagedChangesRequireReconnect
-                || targetQuality.requiresReconnectIfSelected());
+                || (targetQuality != null && targetQuality.requiresReconnectIfSelected()));
     }
 
     static boolean canSynchronizeClientSbsHdrTransition(
@@ -2340,39 +2337,6 @@ public class XrStreamPresenter {
             applyControlUiState(true, "mode tile");
         }
         if (action == XrControlUiState.ModeTileAction.SELECT_MODE) {
-            if (liveQualityTransactionBusy()) {
-                return;
-            }
-            ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(
-                    item.selectsMode);
-            if (requiresAtomicPresentationReconnect(
-                    currentPresenterMode, item.selectsMode,
-                    atomicPresentationV2Supported)) {
-                LimeLog.info("XR: reconnecting before unacknowledged host wire-mode boundary "
-                        + currentPresenterMode + " -> " + item.selectsMode);
-                controlActionListener.onPresentationModeNeedsReconnect(item.selectsMode);
-                return;
-            }
-            if (shouldReconnectBeforeClientModeEntry(
-                    currentPresenterMode, item.selectsMode,
-                    applyRequiresReconnect, targetQuality)) {
-                // The target Client tuple cannot be adopted by the running decoder. Select and
-                // reconnect while the old producer/picture is still completely untouched.
-                LimeLog.info("XR: reconnecting directly into Client SBS saved quality");
-                controlActionListener.onPresentationModeCommitted(item.selectsMode);
-                return;
-            }
-            if (requiresReconnectBeforeModeSwitch(
-                    currentPresenterMode, item.selectsMode,
-                    prefConfig.rawSbsPerEyeResolution)) {
-                // Raw Full negotiates a 2W x H base frame that no other mode uses, so the
-                // replacement connection has to renegotiate it. Raw Half is W x H — the same
-                // stream as Normal — and switches live through selectMode() below.
-                LimeLog.info("XR: reconnecting before Raw SBS transport boundary "
-                        + currentPresenterMode + " -> " + item.selectsMode);
-                controlActionListener.onPresentationModeCommitted(item.selectsMode);
-                return;
-            }
             selectMode(item);
         }
     }
@@ -5708,6 +5672,20 @@ public class XrStreamPresenter {
             controlActionListener.onPresentationModeNeedsReconnect(item.selectsMode);
             return;
         }
+        ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(item.selectsMode);
+        if (shouldReconnectBeforeModeEntry(
+                currentPresenterMode, item.selectsMode,
+                applyRequiresReconnect, targetQuality)
+                || requiresReconnectBeforeModeSwitch(
+                currentPresenterMode, item.selectsMode, prefConfig.rawSbsPerEyeResolution)) {
+            // Reconnect before any host request or surface handoff. An ACK for an interim tuple
+            // would otherwise replace the target mode's saved quality before Game could apply it.
+            // Raw Full additionally crosses its distinct 2W x H transport even at equal quality.
+            LimeLog.info("XR: reconnecting before presentation quality/transport boundary "
+                    + currentPresenterMode + " -> " + item.selectsMode);
+            controlActionListener.onPresentationModeNeedsReconnect(item.selectsMode);
+            return;
+        }
         // A switch kicks off an async surface handoff (GL pause/resume + resize); ignore a second
         // mode tap landing right after one so overlapping handoffs can't interleave and glitch.
         long now = android.os.SystemClock.uptimeMillis();
@@ -5721,7 +5699,6 @@ public class XrStreamPresenter {
         PresenterMode previousMode = currentPresenterMode;
         PresenterMode nextMode = item.selectsMode;
 
-        ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(nextMode);
         boolean fuseClientQuality = shouldFuseClientModeEntryQuality(
                 previousMode, nextMode, atomicPresentationV2Supported,
                 applyRequiresReconnect, targetQuality);

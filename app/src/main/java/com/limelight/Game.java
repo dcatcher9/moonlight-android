@@ -688,22 +688,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void onPresentationModeCommitted(XrStreamPresenter.PresenterMode mode) {
                 SessionSettingsStore.PresenterMode selected = toSessionPresenterMode(mode);
-                if (selected == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
-                    if (!rawSbsHasVirtualDisplayBacking(vDisplay, appName, appUUID)) {
-                        showCenteredStreamMessage(
-                                getString(R.string.xr_raw_requires_virtual_display),
-                                Toast.LENGTH_LONG);
-                        return;
-                    }
-                    if (xrSessionSettingsController
-                            .constrainRawSbsTransportToSupportedPreset()) {
-                        showCenteredStreamMessage(
-                                getString(R.string.xr_raw_resolution_adjusted),
-                                Toast.LENGTH_LONG);
-                    }
+                if (!selectXrPresentationMode(selected)) {
+                    return;
                 }
-                xrSessionSettingsController.selectPresentationMode(selected);
-                refreshXrSessionSettingsModels();
                 if (xrSessionSettingsController.selectedModeRequiresReconnect()) {
                     LimeLog.info("XR: reconnecting to the saved stream quality for " + selected);
                     // A reconnect is already required to honor the selected mode's quality.
@@ -740,15 +727,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     return;
                 }
                 SessionSettingsStore.PresenterMode selected = toSessionPresenterMode(mode);
-                xrSessionSettingsController.selectPresentationMode(selected);
-                refreshXrSessionSettingsModels();
+                if (!selectXrPresentationMode(selected)) {
+                    return;
+                }
                 if (!xrSessionSettingsController.commitPending()) {
                     showCenteredStreamMessage(
                             getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
                     return;
                 }
-                LimeLog.info("XR: reconnecting for atomic presentation compatibility: "
-                        + selected);
+                LimeLog.info("XR: reconnecting into the selected presentation: " + selected);
                 scheduleXrSessionReconnect();
             }
 
@@ -767,6 +754,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 return true;
             }
         });
+    }
+
+    private boolean selectXrPresentationMode(SessionSettingsStore.PresenterMode selected) {
+        if (selected == SessionSettingsStore.PresenterMode.HOST_SBS_RAW) {
+            if (!rawSbsHasVirtualDisplayBacking(vDisplay, appName, appUUID)) {
+                showCenteredStreamMessage(
+                        getString(R.string.xr_raw_requires_virtual_display), Toast.LENGTH_LONG);
+                return false;
+            }
+            if (xrSessionSettingsController.constrainRawSbsTransportToSupportedPreset()) {
+                showCenteredStreamMessage(
+                        getString(R.string.xr_raw_resolution_adjusted), Toast.LENGTH_LONG);
+            }
+        }
+        xrSessionSettingsController.selectPresentationMode(selected);
+        refreshXrSessionSettingsModels();
+        return true;
     }
 
     static Intent createLibraryIntent(Context context, Intent streamIntent) {
@@ -857,10 +861,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         reconnectScheduled = true;
         XrStreamPresenter presenter = streamContainer != null
                 ? streamContainer.getXrPresenter() : null;
-        Intent reconnectIntent = new Intent(getIntent());
-        reconnectIntent.setClass(this, Game.class);
-        reconnectIntent.putExtra(EXTRA_RESUME_EXISTING_SESSION, true);
-        reconnectIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        Intent reconnectIntent = createXrReconnectIntent(this, getIntent());
         if (presenter != null) {
             presenter.captureReconnectViewState(reconnectIntent);
             presenter.setSessionControlsEnabled(false);
@@ -889,6 +890,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 restart.run();
             }
         });
+    }
+
+    /** Preserve this session's identity while consuming guards that apply only to its launch. */
+    static Intent createXrReconnectIntent(Context context, Intent currentIntent) {
+        Intent reconnectIntent = new Intent(currentIntent);
+        reconnectIntent.setClass(context, Game.class);
+        reconnectIntent.removeExtra(EXTRA_REQUIRE_HOST_IDLE);
+        reconnectIntent.removeExtra(EXTRA_XR_STARTUP_MODE_OVERRIDE);
+        reconnectIntent.putExtra(EXTRA_RESUME_EXISTING_SESSION, true);
+        reconnectIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        return reconnectIntent;
     }
 
     /**

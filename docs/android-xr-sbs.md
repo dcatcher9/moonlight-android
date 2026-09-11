@@ -789,7 +789,9 @@ the entry: retain the old picture and interpretation, await the authoritative `0
 perform exactly one decoder/surface handoff at the ACKed geometry and the same packed-swap proof.
 Publish the ACKed quality before the mode so the settings callback cannot start a second request.
 A Client tuple that cannot apply live reconnects before any presentation handoff, including on
-regular Sunshine/Apollo hosts.
+regular Sunshine/Apollo hosts. The same pre-transition decision applies to every target mode: a
+Normal/Host AI switch must not ACK an interim current-mode tuple and overwrite the target mode's
+saved resolution before reconnecting into it.
 The Client-entry GL thread holds its mandatory initial draw until that fresh decoder callback, so
 GLSurfaceView cannot submit an empty first buffer over the retained SceneCore picture.
 The packed-swap watchdog starts only at that decoder-output edge; time spent waiting inside the
@@ -836,6 +838,9 @@ resume and the standard tokenless cancel request. Absence is not equivalent to a
 
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
+An intentional reconnect copies that identity and generation token but consumes launch-only guards.
+In particular, the idle-host guard used when replacing another app applies to the replacement's
+initial launch, never to a subsequent resume of the session it created.
 
 Live-quality state remains logical `W x H` in the client. On an extension-capable Apollo-3D host,
 at the `0x3007`/`0x3008` boundary only,
@@ -884,11 +889,15 @@ writes. Global Settings remain the inheritance source across PCs and sessions; a
 override is stored only while it differs from its global value.
 
 Each of the four presentation modes owns an independent stream-quality tuple: **resolution, frame
-rate, and bitrate**. Changing one mode's tuple never changes another mode. After a presentation
-handoff succeeds, selecting a mode whose saved or newly staged tuple differs from the tuple backing
-the live decoder automatically commits the complete staged session record and reconnects into the
-selected tuple. Committing the whole record ensures that shared or other-mode edits cannot be lost
-when the Activity is recreated. A same-tuple switch remains live unless it enters or leaves Raw
+rate, and bitrate**. Changing one mode's tuple never changes another mode. Selecting a mode whose
+saved or newly staged tuple cannot apply live commits the complete staged session record and
+reconnects into that tuple before any host presentation request or surface handoff. This also applies
+when any staged setting requires a reconnect, even if the target quality tuple already matches the
+live stream. An interim mode ACK must not persist a new HDR/codec choice before the stream adopts it.
+Committing the
+whole record ensures that shared or other-mode edits cannot be lost when the Activity is recreated.
+Live-compatible quality changes retain the guarded ACK and first-frame completion paths. Without
+staged reconnect-only work, a same-tuple switch remains live unless it enters or leaves Raw
 Full's distinct `2W x H` transport. Raw Half uses the ordinary `W x H` mono transport, so entering
 or leaving it remains live; changing Raw's Full/Half choice while Raw is live still reconnects.
 **Apply & reconnect** remains the explicit action when no mode-quality or transport change already
@@ -1366,6 +1375,10 @@ For every mode/surface change, test:
   changes; verify Apollo-3D retains exact generation-token checks and live controls.
 - A new session starts Normal with inherited global defaults; host-confirmed resume and the
   Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
+  Replace a running app, then Apply/reconnect and cross the Raw Full boundary; the initial idle-host
+  launch guard must not reject either intentional resume. With landscape Normal and portrait Host
+  AI saved separately, switching in either direction must reconnect into the target tuple and
+  preserve both resolutions.
 - Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
   A successfully selected mode whose tuple differs from the live decoder must reconnect into that
   tuple automatically. Same-tuple switches stay live when they retain the ordinary `W x H`
