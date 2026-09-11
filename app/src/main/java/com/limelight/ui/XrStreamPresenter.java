@@ -5575,7 +5575,7 @@ public class XrStreamPresenter {
 
     /** Enable presentation switching after MediaCodec has rendered the stream's first frame. */
     public void onFirstVideoFrameRendered() {
-        if (streamPresentationReady) {
+        if (!controlTransportOpen() || streamPresentationReady) {
             return;
         }
 
@@ -6722,6 +6722,9 @@ public class XrStreamPresenter {
      * surface whose geometry disagrees with the host.
      */
     private void finishConfirmedLiveQualityChange(com.limelight.Game game) {
+        if (!controlTransportOpen()) {
+            return;
+        }
         if (!liveQualityConfirmations.canSettle()) {
             if (decoderMismatchRequiresMandatoryResync(
                     liveQualityChangeInProgress, liveQualityConfirmations)) {
@@ -6886,6 +6889,9 @@ public class XrStreamPresenter {
 
     private void requireMandatoryLiveQualityResync(
             boolean commitStagedSettings, boolean allowConfirmedSurfaceReveal) {
+        if (!controlTransportOpen()) {
+            return;
+        }
         if (commitStagedSettings && isAckFirstModeTransitionPending()) {
             stagePendingAckFirstModeForReconnect();
         }
@@ -7192,6 +7198,9 @@ public class XrStreamPresenter {
 
     /** Decoder callback: the fresh transition IDR is now being released to the target Surface. */
     public void onDecoderPresentationModeTransitionOpened(int transitionGeneration) {
+        if (!controlTransportOpen()) {
+            return;
+        }
         PresentationMode pendingMode = pendingDecoderTransitionMode;
         if (pendingMode != null) {
             if (!decoderTransitionGenerations.dispatchModeIfCurrent(
@@ -7339,7 +7348,9 @@ public class XrStreamPresenter {
     }
 
     private void finishPendingModeTransition(PresentationMode pendingMode) {
-        if (surfaceEntity == null || surfaceEntity.isDisposed()
+        // Both decoder output and a later packed EGL swap can reach this completion boundary.
+        // Disconnect closes presentation commits before onStop invalidates their generations.
+        if (!controlTransportOpen() || surfaceEntity == null || surfaceEntity.isDisposed()
                 || pendingDecoderTransitionMode != pendingMode) {
             LimeLog.warning("XR: ignoring stale decoder transition completion for " + pendingMode);
             return;
@@ -7395,6 +7406,9 @@ public class XrStreamPresenter {
 
     /** Decoder callback: preserve the last successful saved mode while the stream terminates. */
     public boolean onDecoderPresentationModeTransitionTimedOut(int transitionGeneration) {
+        if (!controlTransportOpen()) {
+            return false;
+        }
         boolean liveQualityTimeout = liveQualityChangeInProgress;
         boolean current = decoderTransitionGenerations.dispatchAnyIfCurrent(
                 transitionGeneration, () -> {

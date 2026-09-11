@@ -1222,6 +1222,10 @@ End session remains available in the application library. Stats is a direct one-
 Ordinary host controls require an active connection and a Game activity that is neither finishing
 nor destroyed. This closes the interval between Disconnect's `finish()` and `onStop()`: late panel
 refresh observations and queued quality changes cannot reconfigure the retained host session.
+Queued first-frame, decoder-transition and packed-swap completions follow the same guard, so they
+cannot commit a mode or quality, or initiate recovery, after Disconnect. Teardown still owns their
+generation invalidation; rejected late callbacks do not roll back host state. A valid first frame
+may arrive while Game is connecting, before `connectionStarted()`, and remains eligible to commit.
 Initial panel observations are still retained until the stream becomes ready.
 Stats visibility is independent,
 so it stays open while left-side Settings or the lower mode row opens. The Stats choice is

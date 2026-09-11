@@ -92,7 +92,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     /**
      * Monotonic decoder-callback identity. Unlike successful GL latches, this advances for every
      * callback so latest-only SurfaceTexture coalescing cannot hide source-frame steps from the
-     * near-identical reuse bound. Access is guarded by {@link #frameLock}.
+     * source-order and scene-cut observations. Access is guarded by {@link #frameLock}.
      */
     private long decoderFrameCallbackSequence;
     /** Sequence attached to the newest coalesced callback; guarded by {@link #frameLock}. */
@@ -2591,7 +2591,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 // Keep callback publication under the same short lock through updateTexImage().
                 // A callback that arrives while this call is selecting the latest buffer waits
                 // and is therefore unambiguously assigned to the next latch, rather than being
-                // silently omitted from (or double-counted in) the cumulative four-step bound.
+                // silently omitted from (or double-counted in) source-frame progression.
                 texture.updateTexImage();
                 long surfaceTimestampNs = texture.getTimestamp();
                 if (surfaceTimestampNs != 0L

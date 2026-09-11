@@ -77,6 +77,200 @@ public final class XrStreamPresenterControlTransportTeardownTest {
     }
 
     @Test
+    public void disconnectRejectsQueuedFirstFrameWithoutOverwritingTheSavedMode() throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        Game game = (Game) getField(presenter, "activity");
+        setField(presenter, "streamPresentationReady", false);
+        setField(presenter, "currentPresenterMode", PresentationMode.NORMAL);
+        setField(presenter, "deferredPresenterMode", PresentationMode.NORMAL);
+        new Handler(Looper.getMainLooper()).post(presenter::onFirstVideoFrameRendered);
+
+        game.disconnectFromXrControls();
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+
+        assertFalse((boolean) getField(presenter, "streamPresentationReady"));
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
+    public void firstFrameWhileConnectingStillCommitsBeforeConnectionStarted() throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        Game game = (Game) getField(presenter, "activity");
+        setField(game, "connected", false);
+        setField(game, "connecting", true);
+        setField(presenter, "streamPresentationReady", false);
+        setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
+        setField(presenter, "deferredPresenterMode", PresentationMode.NORMAL);
+        int[] commits = {0};
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public void onPresentationModeCommitted(PresentationMode mode) {
+                assertEquals(PresentationMode.HOST_SBS_AI, mode);
+                commits[0]++;
+            }
+        });
+
+        presenter.onFirstVideoFrameRendered();
+
+        assertTrue((boolean) getField(presenter, "streamPresentationReady"));
+        assertEquals(1, commits[0]);
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
+    public void disconnectRejectsQueuedDecoderModeCommitBeforeOnStop() throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        Game game = (Game) getField(presenter, "activity");
+        setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
+        setField(presenter, "pendingDecoderTransitionMode", PresentationMode.NORMAL);
+        setField(presenter, "modeSwitchInProgress", true);
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+                        presenter, "decoderTransitionGenerations");
+        assertTrue(gate.beginMode(77));
+        new Handler(Looper.getMainLooper()).post(
+                () -> presenter.onDecoderPresentationModeTransitionOpened(77));
+
+        game.disconnectFromXrControls();
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+
+        assertEquals(PresentationMode.HOST_SBS_AI, getField(presenter, "currentPresenterMode"));
+        assertEquals(77, gate.currentModeGeneration());
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
+    public void disconnectRejectsPackedSwapCommitBeforeOnStop() throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        Game game = (Game) getField(presenter, "activity");
+        setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
+        setField(presenter, "pendingDecoderTransitionMode", PresentationMode.CLIENT_SBS_AI);
+        setField(presenter, "modeSwitchInProgress", true);
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+                        presenter, "decoderTransitionGenerations");
+        assertTrue(gate.beginMode(77));
+        Runnable[] packedSwap = {null};
+        int[] commits = {0};
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public void onPresentationModeCommitted(PresentationMode mode) {
+                commits[0]++;
+            }
+        });
+        when(game.getStreamContainer().completeClientSbsModeSwitchAfterSwap(
+                org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+                    packedSwap[0] = invocation.getArgument(0);
+                    return true;
+                });
+        assertTrue(ReflectionHelpers.callInstanceMethod(presenter, "armClientSbsModeSwap",
+                ReflectionHelpers.ClassParameter.from(int.class, 77),
+                ReflectionHelpers.ClassParameter.from(
+                        PresentationMode.class, PresentationMode.CLIENT_SBS_AI)));
+        new Handler(Looper.getMainLooper()).post(packedSwap[0]);
+
+        game.disconnectFromXrControls();
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+
+        assertEquals(PresentationMode.HOST_SBS_AI, getField(presenter, "currentPresenterMode"));
+        assertEquals(0, commits[0]);
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
+    public void activeDecoderCompletionStillCommitsItsCurrentGeneration() throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
+        setField(presenter, "pendingDecoderTransitionMode", PresentationMode.HOST_SBS_AI);
+        setField(presenter, "modeSwitchInProgress", true);
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+                        presenter, "decoderTransitionGenerations");
+        assertTrue(gate.beginMode(77));
+        int[] commits = {0};
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public void onPresentationModeCommitted(PresentationMode mode) {
+                assertEquals(PresentationMode.HOST_SBS_AI, mode);
+                commits[0]++;
+            }
+        });
+
+        presenter.onDecoderPresentationModeTransitionOpened(77);
+
+        assertEquals(1, commits[0]);
+        assertNull(getField(presenter, "pendingDecoderTransitionMode"));
+        assertFalse((boolean) getField(presenter, "modeSwitchInProgress"));
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
+    public void disconnectRejectsLateQualityConfirmationAndAckTimeout() throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        Game game = (Game) getField(presenter, "activity");
+        setField(presenter, "liveQualityChangeInProgress", true);
+        StreamQualityTuple target = new StreamQualityTuple("3840x2160", "72", 200_000);
+        setField(presenter, "pendingLiveQuality", target);
+        XrStreamPresenter.LiveQualityConfirmationGate confirmations =
+                (XrStreamPresenter.LiveQualityConfirmationGate) getField(
+                        presenter, "liveQualityConfirmations");
+        confirmations.begin(true);
+        confirmations.onAppliedAck();
+        confirmations.beginPostAckDecoderConfirmation();
+        confirmations.onDecoderOutput(3840, 2160, 3840, 2160);
+        confirmations.onPresentationReady();
+        assertTrue(confirmations.canSettle());
+        int[] callbacks = {0};
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public void onLiveStreamQualityApplied(PresentationMode mode,
+                                                            StreamQualityTuple applied) {
+                callbacks[0]++;
+            }
+            @Override public void onLiveStreamQualityResyncRequired(boolean commitStagedSettings) {
+                callbacks[0]++;
+            }
+        });
+
+        game.disconnectFromXrControls();
+        ReflectionHelpers.callInstanceMethod(presenter, "finishConfirmedLiveQualityChange",
+                ReflectionHelpers.ClassParameter.from(Game.class, game));
+        invoke(presenter, "onLiveQualityAckTimeout");
+
+        assertEquals(0, callbacks[0]);
+        assertEquals(target, getField(presenter, "pendingLiveQuality"));
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
+    public void disconnectRejectsCurrentDecoderTimeoutWithoutReconnectOrStagedCommit()
+            throws Exception {
+        XrStreamPresenter presenter = createReadyGamePresenter();
+        Game game = (Game) getField(presenter, "activity");
+        XrStreamPresenter.DecoderTransitionGenerationGate gate =
+                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+                        presenter, "decoderTransitionGenerations");
+        assertTrue(gate.beginMode(77));
+        setField(presenter, "liveQualityChangeInProgress", true);
+        int[] reconnects = {0};
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public void onLiveStreamQualityResyncRequired(boolean commitStagedSettings) {
+                reconnects[0]++;
+            }
+        });
+
+        game.disconnectFromXrControls();
+        assertFalse(presenter.onDecoderPresentationModeTransitionTimedOut(77));
+
+        assertEquals(0, reconnects[0]);
+        assertEquals(77, gate.currentModeGeneration());
+        assertSavedHostQuality(presenter);
+        presenter.onDestroy();
+    }
+
+    @Test
     public void activeGameStillFollowsPanelToSeventyTwoWithoutChangingSavedModeOrCeiling()
             throws Exception {
         XrStreamPresenter presenter = createReadyGamePresenter();
