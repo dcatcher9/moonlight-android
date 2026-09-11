@@ -229,6 +229,10 @@ API 24 or later plus the XR spatial feature, and compiles Java sources at Java 1
 Declared versions live in [app/build.gradle](./app/build.gradle), [build.gradle](./build.gradle),
 and the [Gradle wrapper configuration](./gradle/wrapper/gradle-wrapper.properties).
 
+`nonRoot_game` is the sole distribution, with arm64-v8a for Galaxy XR and x86_64 for the XR emulator.
+The unsupported Android 7 root APK and its privileged input helper have been removed. The existing
+application IDs and `nonRoot_game` task names are unchanged, so update-installs preserve user data.
+
 Before installing to Galaxy XR, enable Developer options and Wireless debugging on the headset,
 connect it through Android SDK Platform Tools, and confirm that it appears in `adb devices`.
 

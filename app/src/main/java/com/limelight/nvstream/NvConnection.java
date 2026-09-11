@@ -21,7 +21,6 @@ import java.nio.ByteBuffer;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.util.Objects;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
@@ -63,6 +62,7 @@ public class NvConnection {
     private boolean connectionPermitHeld;
     private boolean ownsNativeBridge;
     private HttpCallScope startupHttpCalls = new HttpCallScope();
+    private HostSessionLaunchRequest launchRequest;
 
     public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert)
     {
@@ -74,6 +74,7 @@ public class NvConnection {
         this.context.serverAddress = host;
         this.context.httpsPort = httpsPort;
         this.context.streamConfig = config;
+        this.launchRequest = config.getLaunchRequest();
         this.context.serverCert = serverCert;
 
         // This is unique per connection
@@ -419,69 +420,66 @@ public class NvConnection {
             }
         }
         
-        // Token-capable hosts require the exact session ID previously persisted by this client.
-        // Standard Sunshine/Apollo hosts retain the legacy resume-by-application contract.
-        if (details.runningGameId != 0 || hasIdentity(details.runningGameUUID)) {
-            if (context.streamConfig.getRequireHostIdleForLaunch()) {
-                context.connListener.displayMessage("Another session started before the " +
-                        "replacement launch. Refresh the host and confirm again.");
-                return false;
-            }
-            try {
-                if (isSameApplication(details.runningGameId, details.runningGameUUID, app)) {
-                    String expectedHostSessionId = context.streamConfig.getExpectedHostSessionId();
-                    if (!isHostSessionResumeAllowed(details.hostSessionIdSupported,
-                            expectedHostSessionId, details.hostSessionId)) {
-                        context.connListener.displayMessage("The running session has changed and " +
-                                "cannot be resumed safely. Refresh the host and try again.");
-                        return false;
-                    }
-                    context.expectedHostSessionId = details.hostSessionIdSupported
-                            ? expectedHostSessionId : null;
-                    // UUID is authoritative when both sides have one. Use the ID from the same
-                    // serverinfo snapshot so a refreshed app-list ID cannot contradict the UUID
-                    // in Apollo's resume identity check.
-                    if (!h.launchApp(context, "resume", app.getAppUUID(),
-                            details.runningGameId, context.negotiatedHdr)) {
-                        context.connListener.displayMessage("Failed to resume existing session");
-                        return false;
-                    }
-                    context.resumedHostSession = true;
-                } else if (Objects.equals(NvApp.REMOTE_INPUT_UUID, app.getAppUUID())) {
-                    // When launching InputOnly, we shouldn't try terminating the current running app
-                    return launchNotRunningApp(h, context);
-                } else {
-                    return quitAndLaunch(h, context, details.hostSessionId,
-                            details.hostSessionIdSupported);
-                }
-            } catch (HostHttpResponseException e) {
-                if (e.getErrorCode() == 470) {
-                    // This is the error you get when you try to resume a session that's not yours.
-                    // Because this is fairly common, we'll display a more detailed message.
-                    context.connListener.displayMessage("This session wasn't started by this device," +
-                            " so it cannot be resumed. End streaming on the original " +
-                            "device or the PC itself and try again. (Error code: "+e.getErrorCode()+")");
-                    return false;
-                }
-                else if (e.getErrorCode() == 525) {
-                    context.connListener.displayMessage("The application is minimized. Resume it on the PC manually or " +
-                            "quit the session and start streaming again.");
-                    return false;
-                } else {
-                    throw e;
-                }
-            }
-            
-            LimeLog.info("Resumed existing game session");
-            return true;
-        }
-        else {
-            return launchNotRunningApp(h, context);
-        }
+        return startApp(h, details, app);
     }
 
-    private static boolean hasIdentity(String identity) {
-        return identity != null && !identity.trim().isEmpty();
+    /** Applies only the mutation authorized by the original, immutable user decision. */
+    boolean startApp(NvHTTP h, ComputerDetails details, NvApp app)
+            throws IOException, XmlPullParserException {
+        HostSessionLaunchRequest.Action action = launchRequest.plan(details, app);
+        if (action == HostSessionLaunchRequest.Action.SESSION_CHANGED
+                || action == HostSessionLaunchRequest.Action.SESSION_ENDED) {
+            context.connListener.displayMessage(action == HostSessionLaunchRequest.Action.SESSION_ENDED
+                    ? "The session has ended. Return to the library to start a new session."
+                    : "The running session has changed. Refresh the host and confirm again.");
+            return false;
+        }
+        try {
+            if (action == HostSessionLaunchRequest.Action.RESUME) {
+                context.expectedHostSessionId = launchRequest.tokenSupported
+                        ? launchRequest.expectedToken : null;
+                // The UUID is stable, while Apollo may renumber the app between list refreshes.
+                if (!h.launchApp(context, "resume", app.getAppUUID(),
+                        details.runningGameId, context.negotiatedHdr)) {
+                    context.connListener.displayMessage("Failed to resume existing session");
+                    return false;
+                }
+                context.resumedHostSession = true;
+                LimeLog.info("Resumed existing game session");
+                return true;
+            }
+            if (action == HostSessionLaunchRequest.Action.REPLACE) {
+                if (!h.quitApp(launchRequest.expectedToken, launchRequest.tokenSupported)) {
+                    context.connListener.displayMessage("Failed to quit previous session! You must quit it manually");
+                    return false;
+                }
+            }
+            // A successful cancel consumes replacement authority. A failed launch retry is Start
+            // and must never reuse the captured cancellation authority against a newer session.
+            launchRequest = HostSessionLaunchRequest.start();
+            context.expectedHostSessionId = null;
+            if (!h.launchApp(context, "launch", app.getAppUUID(),
+                    app.getAppId(), context.negotiatedHdr)) {
+                context.connListener.displayMessage("Failed to launch application");
+                return false;
+            }
+            context.resumedHostSession = false;
+            LimeLog.info("Launched new game session");
+            return true;
+        } catch (HostHttpResponseException e) {
+            if (e.getErrorCode() == 470 || e.getErrorCode() == 599) {
+                context.connListener.displayMessage("This session wasn't started by this device," +
+                        " so it cannot be resumed or quit. End streaming on the original " +
+                        "device or the PC itself. (Error code: " + e.getErrorCode() + ")");
+                return false;
+            }
+            if (e.getErrorCode() == 525) {
+                context.connListener.displayMessage("The application is minimized. Resume it on the PC manually or " +
+                        "quit the session and start streaming again.");
+                return false;
+            }
+            throw e;
+        }
     }
 
     /**
@@ -505,68 +503,6 @@ public class NvConnection {
                 && (clientVideoFormats & MoonBridge.VIDEO_FORMAT_H265_MAIN10) != 0
                 && (serverCodecModeSupport
                 & MoonBridge.SERVER_CODEC_MODE_HEVC_MAIN10) != 0;
-    }
-
-    static boolean isSameApplication(int runningAppId, String runningAppUuid, NvApp requestedApp) {
-        if (hasIdentity(runningAppUuid) && hasIdentity(requestedApp.getAppUUID())) {
-            return runningAppUuid.equalsIgnoreCase(requestedApp.getAppUUID());
-        }
-        return runningAppId > 0 && requestedApp.getAppId() > 0
-                && runningAppId == requestedApp.getAppId();
-    }
-
-    static boolean isHostSessionResumeAllowed(boolean hostSessionIdSupported,
-                                              String expectedHostSessionId,
-                                              String publishedHostSessionId) {
-        if (!hostSessionIdSupported) {
-            return true;
-        }
-        return hasIdentity(expectedHostSessionId)
-                && expectedHostSessionId.equals(publishedHostSessionId);
-    }
-
-    protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context,
-                                    String expectedHostSessionId) throws IOException,
-            XmlPullParserException {
-        return quitAndLaunch(h, context, expectedHostSessionId, true);
-    }
-
-    protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context,
-                                    String expectedHostSessionId,
-                                    boolean hostSessionIdSupported) throws IOException,
-            XmlPullParserException {
-        try {
-            if (!h.quitApp(expectedHostSessionId, hostSessionIdSupported)) {
-                context.connListener.displayMessage("Failed to quit previous session! You must quit it manually");
-                return false;
-            } 
-        } catch (HostHttpResponseException e) {
-            if (e.getErrorCode() == 599) {
-                context.connListener.displayMessage("This session wasn't started by this device," +
-                        " so it cannot be quit. End streaming on the original " +
-                        "device or the PC itself. (Error code: "+e.getErrorCode()+")");
-                return false;
-            }
-            else {
-                throw e;
-            }
-        }
-
-        return launchNotRunningApp(h, context);
-    }
-    
-    private boolean launchNotRunningApp(NvHTTP h, ConnectionContext context)
-            throws IOException, XmlPullParserException {
-        // Launch the app since it's not running
-        if (!h.launchApp(context, "launch", context.streamConfig.getApp().getAppUUID(), context.streamConfig.getApp().getAppId(), context.negotiatedHdr)) {
-            context.connListener.displayMessage("Failed to launch application");
-            return false;
-        }
-        
-        LimeLog.info("Launched new game session");
-        context.resumedHostSession = false;
-        
-        return true;
     }
 
     public void start(final AudioRenderer audioRenderer, final VideoDecoderRenderer videoDecoderRenderer, final NvConnectionListener connectionListener)

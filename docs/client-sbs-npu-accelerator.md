@@ -8,17 +8,16 @@ production LiteRT OpenCL/OpenGL accelerator.
 The Galaxy XR vendor image does not grant third-party application UIDs the FastRPC access required
 to execute on the Hexagon NPU. The experimental CPU/GPU/NPU benchmark, its JNI entry point, the
 Qualcomm LiteRT plugins, and the QAIRT/QNN runtime payloads were therefore removed. They must not be
-added to `app/src/main/jniLibs`: that shared source set would affect every product flavor and the
+added to `app/src/main/jniLibs`: that shared source set would affect every build and the
 payload cannot provide NPU execution on the target device.
 
-The only LiteRT binaries intentionally packaged by Artemis are flavor-scoped under
+The only LiteRT binaries intentionally packaged by Artemis are distribution-scoped under
 `app/src/nonRoot_game/jniLibs`:
 
 - `libLiteRt.so`
 - `libLiteRtClGlAccelerator.so`
 
 Those libraries implement the supported zero-copy GPU path and are not Qualcomm NPU components.
-The root flavor packages neither library.
 
 ## Historical benchmark result
 

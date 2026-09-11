@@ -9,6 +9,7 @@ import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.opengl.GLES31;
 import android.opengl.GLSurfaceView;
+import com.limelight.ui.ClientSbsRenderSurface;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -63,7 +64,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     /** Mirrors Apollo's maximum changed-source packed-presentation hold. */
     static final long MAX_STALE_DEPTH_PRESENTATION_AGE_NS = TimeUnit.MILLISECONDS.toNanos(250L);
     private static final long RENDERER_FINISH_ACK_TIMEOUT_MS = 1_500L;
-    /** Prevents GLSurfaceView's mandatory first draw from replacing the retained frame with black. */
+    /** Prevents The EGL owner's initial draw from replacing the retained frame with black. */
     // Cover MediaCodec's 2.5 s fresh-IDR watchdog plus the 2 s post-IDR packed-swap proof. Those
     // state-machine watchdogs own failure; this final bound only prevents an orphaned GL wait.
     private static final long MODE_ENTRY_FIRST_FRAME_WAIT_MS = 5_000L;
@@ -141,7 +142,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     // Final Member Variables
     private final Context context;
     private final PowerManager powerManager;
-    private final GLSurfaceView glSurfaceView;
+    private final ClientSbsRenderSurface glSurfaceView;
     /** Routes decoder availability off the main Looper without ever performing GL work there. */
     private final HandlerThread frameCallbackThread;
     private final Handler frameCallbackHandler;
@@ -152,8 +153,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final OnSurfaceReadyListener onSurfaceReadyListener;
     /** Serializes the GL-thread context constructor against UI-thread terminal teardown. */
     private final Object surfaceLifecycleLock = new Object();
-    /** Guarded by surfaceLifecycleLock; this renderer is never reusable after terminal teardown. */
-    private boolean terminalSurfaceDestroyRequested;
+    /** Terminal request never waits for context initialization or a driver call on the UI thread. */
+    private volatile boolean terminalSurfaceDestroyRequested;
+    /** Exact context whose renderer writes the inference owner may need to drain on failure. */
+    private volatile android.opengl.EGLContext rendererOwnerContext = EGL14.EGL_NO_CONTEXT;
     /** Serializes bounded terminal-teardown attempts after the lifecycle terminal bit is set. */
     private final Object terminalTeardownLock = new Object();
     /** Exactly one background coordinator owns terminal worker joining and native-close retries. */
@@ -221,7 +224,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     private final AtomicBoolean rendererFinishConfirmed = new AtomicBoolean(false);
     private final AtomicBoolean gpuFailureNeedsRendererFinish = new AtomicBoolean(false);
     private final AtomicInteger clientSbsGeneration = new AtomicInteger(0);
-    /** Surface handoff generation requested by StreamContainer before GLSurfaceView resumes. */
+    /** Surface handoff generation requested by StreamContainer before the EGL owner resumes. */
     private volatile int requestedDecoderSurfaceGeneration;
     /** Generation of videoSurface/videoSurfaceTexture, written only with the GL context current. */
     private volatile int decoderSurfaceGeneration;
@@ -415,7 +418,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     /** Current-context packed viewport limit used to preflight the optional one-draw path. */
     private int maximumViewportWidth;
     // When >0, the explicit pixel size of the GL output (EGL) surface to render into, overriding the
-    // on-screen GLSurfaceView/SurfaceHolder size. Needed for the XR client-SBS path: the GL output is
+    // on-screen input/layout holder size. Needed for the XR client-SBS path: the GL output is
     // an off-screen packed XR compositor surface whose size is unrelated to this view's on-screen
     // SurfaceHolder size.
     private volatile int outputWidthOverride;
@@ -600,7 +603,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    public Stereo3DRenderer(GLSurfaceView view, OnSurfaceReadyListener listener, Context context,
+    public Stereo3DRenderer(ClientSbsRenderSurface view, OnSurfaceReadyListener listener, Context context,
                             PreferenceConfiguration prefConfig,
                             boolean performanceSamplingEnabled) {
         this.glSurfaceView = view;
@@ -824,7 +827,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
      *
      * <p>Every {@code *Fps} value is a completed-stage throughput, calculated over the same
      * {@link #windowSeconds}. In particular, {@link #glOutputSubmitFps} means that the renderer
-     * submitted a valid frame to the GLSurfaceView default framebuffer. GLSurfaceView performs its
+     * submitted a valid frame to the EGL window default framebuffer. The owner performs its
      * EGL swap after {@code onDrawFrame()} returns and SceneCore exposes no per-frame compositor
      * callback, so this snapshot deliberately does not claim to measure headset presentation.</p>
      */
@@ -1362,18 +1365,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
      *
      * <p>LiteRT creation, invocation, and destruction remain on AiTask (or its dedicated retained-
      * engine cleanup worker). The coordinator only waits for that owner and retries retained close
-     * attempts. Context-independent Java/Surface release and {@code onCleanupComplete} are posted
-     * through {@code completionExecutor} after native ownership has ended.</p>
+     * attempts. Context-independent Java/Surface release stays with that background coordinator;
+     * only {@code onCleanupComplete} is posted through {@code completionExecutor} after native
+     * ownership and the renderer callback barrier have ended.</p>
      */
     public void onSurfaceDestroyedAsync(Executor completionExecutor,
                                         Runnable onCleanupComplete) {
-        synchronized (surfaceLifecycleLock) {
-            terminalSurfaceDestroyRequested = true;
-            shuttingDown.set(true);
-        }
-        shutdownFrameCallbackThread();
-        invalidateQueuedFrameDrain();
-        cancelStaleDepthWatchdog();
+        terminalSurfaceDestroyRequested = true;
+        shuttingDown.set(true);
 
         if (!terminalTeardownStarted.compareAndSet(false, true)) {
             return;
@@ -1386,23 +1385,20 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         AsyncCleanupCoordinator.start(backgroundExecutor, completionExecutor,
                 this::awaitTerminalWorkerCleanup,
                 Stereo3DRenderer::awaitTerminalCleanupRetry,
-                () -> {
-                    boolean released;
-                    synchronized (terminalTeardownLock) {
-                        synchronized (glCallbackLifecycleLock) {
-                            released = releaseTerminalSurfaceResources();
-                        }
-                    }
-                    if (released) {
-                        onCleanupComplete.run();
-                    }
-                });
+                onCleanupComplete);
     }
 
     /** Blocking portion of terminal teardown. Runs only on ClientSbsTerminalTeardown. */
     private boolean awaitTerminalWorkerCleanup() {
         LimeLog.info("Quit called. Shutting down 3dRenderer.");
+        // Context creation may still own native initialization. Only this background coordinator
+        // waits for it. The GL callback reapplies the terminal bit before leaving that boundary.
+        synchronized (surfaceLifecycleLock) {
+            shuttingDown.set(true);
+        }
+        shutdownFrameCallbackThread();
         invalidateQueuedFrameDrain();
+        cancelStaleDepthWatchdog();
         cancelFirstModeEntryFrameWait();
 
         // A callback which passed its shutdown check before the terminal bit was published may
@@ -1417,7 +1413,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             LimeLog.severe("Client SBS renderer teardown deferred until its AI worker terminates");
             return false;
         }
-        return true;
+        synchronized (terminalTeardownLock) {
+            synchronized (glCallbackLifecycleLock) {
+                return releaseTerminalSurfaceResources();
+            }
+        }
     }
 
     private static boolean awaitTerminalCleanupRetry() {
@@ -1494,9 +1494,9 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             videoSurfaceTexture = null;
         }
 
-        // This final callback runs after GLSurfaceView has lost its window surface. queueEvent()
-        // may still execute, but no EGL context is current by then, so explicit glDelete* calls
-        // are invalid. EGL releases all of these context-owned objects when its GL thread exits.
+        // This cleanup coordinator runs after native cleanup, without a current EGL context.
+        // Explicit glDelete* calls are invalid here. StreamContainer next closes the EGL owner
+        // asynchronously; context destruction releases these objects before XR disposal.
         // Context-loss reinitialization is handled separately in onSurfaceCreated().
         ordinalPointSampler = 0;
 
@@ -1718,31 +1718,23 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
      * renderer transition generation that must later be committed at the fresh-IDR output edge.
      */
     public int beginHdrInputTransition(boolean enabled) {
-        synchronized (glCallbackLifecycleLock) {
-            if (!clientSbs || shuttingDown.get()) {
-                return 0;
-            }
-            int transitionGeneration = hdrInputTransition.begin(enabled);
-            clientSbsGeneration.incrementAndGet();
-
-            presentationCompletion.cancel();
-            invalidateQueuedFrameDrain();
-            synchronized (frameLock) {
-                frameAvailable.set(false);
-                pendingFrameGeneration = -1;
-                pendingFrameCallbackSequence = 0L;
-            }
-            requestPriorityRender();
-            return transitionGeneration;
+        if (!clientSbs || shuttingDown.get()) {
+            return 0;
         }
+        // MediaCodec is gated. Publish the blocking state without waiting for an in-flight GL
+        // draw. The presenter hides the old output before the GL-owned commit drains that image
+        // and retokens callbacks for any new-transfer presentation.
+        int transitionGeneration = hdrInputTransition.begin(enabled);
+        clientSbsGeneration.incrementAndGet();
+        presentationCompletion.cancel();
+        requestPriorityRender();
+        return transitionGeneration;
     }
 
     /** A timed-out owner cannot leave a completion that a late draw could acknowledge. */
     public void cancelHdrInputTransition(int transitionGeneration) {
-        synchronized (glCallbackLifecycleLock) {
-            if (hdrInputTransition.cancel(transitionGeneration)) {
-                presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.HDR);
-            }
+        if (hdrInputTransition.cancel(transitionGeneration)) {
+            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.HDR);
         }
     }
 
@@ -1770,26 +1762,17 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     /**
      * Establishes a draw barrier before the UI publishes new shared stream dimensions.
      *
-     * <p>Taking the GL callback lock waits for an already-running draw to finish; clearing
-     * validation before releasing it guarantees every later draw returns before reading the
-     * mutable PreferenceConfiguration. The actual targets and override move only after EGL has
-     * detached.</p>
+     * <p>The renderer owns its source dimensions, so an in-flight draw may finish at the old
+     * geometry. New draws stop at this volatile gate. Actual targets, callback generations and
+     * output dimensions move only after the EGL owner acknowledges detach.</p>
      */
     public boolean suspendPresentationForLiveStreamResize(int width, int height) {
-        synchronized (glCallbackLifecycleLock) {
-            if (!canResizeStreamLive(width, height)) {
-                return false;
-            }
-            outputSurfaceValidated = false;
-            rejectedOutputSurfaceGeneration = 0;
-            invalidateQueuedFrameDrain();
-            synchronized (frameLock) {
-                frameAvailable.set(false);
-                pendingFrameGeneration = -1;
-                pendingFrameCallbackSequence = 0L;
-            }
-            return true;
+        if (!canResizeStreamLive(width, height)) {
+            return false;
         }
+        outputSurfaceValidated = false;
+        rejectedOutputSurfaceGeneration = 0;
+        return true;
     }
 
     /**
@@ -1798,7 +1781,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
      * <p>The packed override is part of the resize contract, not a renderer initialization
      * constant. It must move from {@code 2*oldW x oldH} to {@code 2*newW x newH} atomically with
      * the full-resolution color targets. StreamContainer destroys the old EGL window surface
-     * before calling this method and resumes GLSurfaceView afterwards; onSurfaceChanged consumes
+     * before calling this method and requests EGL resume afterwards; onSurfaceChanged consumes
      * the request before it validates or publishes the replacement surface.</p>
      *
      * @return false when the immutable depth pipeline changes or the packed geometry is invalid
@@ -2010,12 +1993,12 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
 
     /** Abandons a failed transaction so no late attachment can apply or publish its geometry. */
     public void abandonLiveStreamResize() {
-        synchronized (liveStreamResizeLock) {
-            pendingLiveStreamResize = null;
-            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
-            outputSurfaceValidated = false;
-        }
-        invalidateQueuedFrameDrain();
+        // Failed live geometry always requires reconnect. Fail closed immediately; neither a
+        // driver-bound resize nor SurfaceTexture acquisition may hold its timeout on main.
+        terminalSurfaceDestroyRequested = true;
+        shuttingDown.set(true);
+        outputSurfaceValidated = false;
+        presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
     }
 
     /**
@@ -2106,8 +2089,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             this.outputHeightOverride = height;
         }
         invalidateQueuedFrameDrain();
-        // StreamContainer sets the initial override before GLSurfaceView.setRenderer(), when
-        // requestRender() would dereference GLSurfaceView's not-yet-created GLThread. Initial
+        // StreamContainer sets the initial override before ClientSbsRenderSurface.initialize(), when
+        // requestRender() would dereference the not-yet-created EGL owner. Initial
         // surface creation and later decoder/onResume events already schedule a draw.
     }
 
@@ -2330,7 +2313,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 if (queuedFrameDrainToken == token) {
                     clearQueuedFrameDrainTicketLocked();
                 }
-                // A lifecycle transition may temporarily leave GLSurfaceView without a GLThread.
+                // A terminal lifecycle transition may retire the EGL owner before a queued frame drain.
                 // Keep the notification pending so the next lifecycle-driven draw can latch it.
                 LimeLog.warning("Client SBS decoder latch event deferred: " + error.getMessage());
                 if (!shuttingDown.get() && clientSbs) {
@@ -2368,7 +2351,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         if (frameDrainToken.get() != token) {
             return;
         }
-        // GLSurfaceView runs all queued events before a dirty draw. Once a result, deadline,
+        // The EGL owner runs queued events before a dirty draw. Once a result, deadline,
         // or lifecycle boundary needs that draw, this existing event must also yield and must not
         // re-arm callbacks. The draw itself will latch the newest metadata left in frameAvailable.
         if (!frameDrainScheduler.beginDrain()) {
@@ -2381,7 +2364,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
         if (EGL14.eglGetCurrentContext() == EGL14.EGL_NO_CONTEXT
                 || EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW) == EGL14.EGL_NO_SURFACE) {
-            // GLSurfaceView may execute queued events while paused, before an EGL window is
+            // The EGL owner may execute queued events while paused, before an EGL window is
             // current. Leave frameAvailable set and let the next real draw perform the latch.
             requestPriorityRender();
             return;
@@ -2507,7 +2490,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     }
 
     /**
-     * Queues N+1 only after the draw that adopted N has returned through GLSurfaceView's swap.
+     * Queues N+1 only after the draw that adopted N has returned through the EGL owner's swap.
      * The generation, output attachment, and lifecycle are revalidated by the continuation.
      */
     private void scheduleCaptureAfterSwap(int expectedGeneration,
@@ -2526,7 +2509,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             return;
         }
         try {
-            // An event enqueued from onDrawFrame() runs after GLSurfaceView returns through the
+            // An event enqueued from onDrawFrame() runs after the EGL owner returns through the
             // current draw's EGL swap, keeping capture/copy/inference for N+1 off N's critical
             // presentation path.
             glSurfaceView.queueEvent(postSwapCaptureRunnable);
@@ -2699,6 +2682,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 return;
             }
             onSurfaceCreatedLocked(gl, config);
+            if (terminalSurfaceDestroyRequested) {
+                shuttingDown.set(true);
+                surfaceLifecycleReady = false;
+            }
         }
     }
 
@@ -2730,6 +2717,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             }
             return;
         }
+        rendererOwnerContext = EGL14.eglGetCurrentContext();
         if (gpuDepthProcessor != null) {
             // onSurfaceCreated() denotes a replacement context. Old names must never be deleted
             // through the new context because GLES may already have reused their integer values.
@@ -3873,7 +3861,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    /** Requests presentation priority before touching GLSurfaceView's event-first queue. */
+    /** Requests presentation priority before touching the EGL owner's event-first queue. */
     private void requestPriorityRender() {
         frameDrainScheduler.requestDraw();
         glSurfaceView.requestRender();
@@ -3886,11 +3874,20 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    /** Runs only from onDrawFrame() while the renderer EGL context is current. */
+    /** Runs on the EGL owner, from a draw or a terminal cleanup event after presentation failed. */
     private boolean serviceRendererFinishRequest() {
         RendererFinishRequest request = rendererFinishRequest.get();
         if (request == null) {
             return false;
+        }
+        android.opengl.EGLContext currentContext = EGL14.eglGetCurrentContext();
+        if (currentContext == null || currentContext.equals(EGL14.EGL_NO_CONTEXT)
+                || !currentContext.equals(rendererOwnerContext)) {
+            // Events can run after pause/context loss. A different or absent context cannot prove
+            // that this renderer's shared-buffer writes finished.
+            rendererFinishRequest.compareAndSet(request, null);
+            request.complete(false);
+            return true;
         }
 
         // Ignore stale GL errors from the failure which requested teardown. The acknowledgement
@@ -3927,10 +3924,10 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         }
         RendererFinishRequest acknowledged = pending != null ? pending : requested;
         try {
-            // requestReadyRender() intentionally suppresses lifecycle-shutdown renders. This
-            // handshake must still be offered while the EGL surface exists, even after shutdown
-            // has begun, so request the GL thread directly.
-            requestPriorityRender();
+            // A failed swap stops ordinary rendering but can leave this context current. Queue
+            // only the cleanup operation; it proves its exact context before issuing glFinish.
+            // No failed presentation or new inference is restarted just to service teardown.
+            glSurfaceView.queueEvent(this::serviceRendererFinishRequest);
         } catch (Throwable error) {
             LimeLog.severe("Unable to request Client SBS renderer finish: "
                     + error.getMessage());

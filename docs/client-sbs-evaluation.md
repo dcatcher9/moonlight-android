@@ -818,8 +818,7 @@ dequantizations); MiDaS contains 234 (138 plus 96). MiDaS CPU correlations were 
 and 0.999609 for 16:9, 21:9, and 32:9 respectively. Historical complete-acceleration validation
 applied to the full formerly packaged graphs, not only to their pre-storage cores.
 
-The non-root flavor stores only the ZipDepth family in a standard solid TAR/XZ asset; root APKs
-contain neither the archive nor the LiteRT runtime:
+The supported XR distribution stores only the ZipDepth family in a standard solid TAR/XZ asset:
 
 - `app/src/nonRoot_game/assets/client-sbs-zipdepth-models.tar.xz` contains the three complete
   original-Base ZipDepth graphs.

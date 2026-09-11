@@ -15,7 +15,7 @@ import android.view.MotionEvent;
 
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.MouseButtonPacket;
-import com.limelight.binding.input.evdev.EvdevListener;
+import com.limelight.binding.input.MouseInputListener;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.StreamContainer;
 
@@ -60,7 +60,7 @@ public final class GamePhysicalMouseInputTest {
     }
 
     @Test
-    public void rootCaptureHonorsAbsoluteMouseMode() {
+    public void onScreenMouseHonorsAbsoluteMouseMode() {
         Game game = Robolectric.buildActivity(Game.class).get();
         NvConnection connection = mock(NvConnection.class);
         StreamContainer container = mock(StreamContainer.class);
@@ -80,7 +80,7 @@ public final class GamePhysicalMouseInputTest {
     }
 
     @Test
-    public void largeRootRelativeMoveIsSplitWithoutShortOverflow() {
+    public void largeOnScreenRelativeMoveIsSplitWithoutShortOverflow() {
         Game game = Robolectric.buildActivity(Game.class).get();
         NvConnection connection = mock(NvConnection.class);
         PreferenceConfiguration config = new PreferenceConfiguration();
@@ -95,7 +95,7 @@ public final class GamePhysicalMouseInputTest {
     }
 
     @Test
-    public void focusLossReleasesHeldLegacyEvdevButton() {
+    public void focusLossReleasesHeldOnScreenButton() {
         Game game = Robolectric.buildActivity(Game.class).get();
         NvConnection connection = mock(NvConnection.class);
         PreferenceConfiguration config = new PreferenceConfiguration();
@@ -103,7 +103,7 @@ public final class GamePhysicalMouseInputTest {
         game.connected = true;
         ReflectionHelpers.setField(game, "prefConfig", config);
 
-        game.mouseButtonEvent(EvdevListener.BUTTON_LEFT, true);
+        game.mouseButtonEvent(MouseInputListener.BUTTON_LEFT, true);
         clearInvocations(connection);
 
         game.onWindowFocusChanged(false);
@@ -134,7 +134,7 @@ public final class GamePhysicalMouseInputTest {
         }).when(connection).sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
 
         Thread buttonThread = new Thread(() ->
-                game.mouseButtonEvent(EvdevListener.BUTTON_LEFT, true));
+                game.mouseButtonEvent(MouseInputListener.BUTTON_LEFT, true));
         buttonThread.start();
         assertTrue(downSendEntered.await(2, TimeUnit.SECONDS));
 
@@ -161,7 +161,7 @@ public final class GamePhysicalMouseInputTest {
     }
 
     @Test
-    public void lateEvdevButtonDownIsRejectedAfterFocusReleaseWins() {
+    public void lateOnScreenButtonDownIsRejectedAfterFocusReleaseWins() {
         Game game = Robolectric.buildActivity(Game.class).get();
         NvConnection connection = mock(NvConnection.class);
         PreferenceConfiguration config = new PreferenceConfiguration();
@@ -172,7 +172,7 @@ public final class GamePhysicalMouseInputTest {
         // Models an evdev callback which was queued before UNGRAB but reaches
         // Game only after the focus-loss cleanup acquired and released its lock.
         game.releaseHeldPhysicalMouseButtons();
-        game.mouseButtonEvent(EvdevListener.BUTTON_LEFT, true);
+        game.mouseButtonEvent(MouseInputListener.BUTTON_LEFT, true);
 
         verify(connection, never()).sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
         PhysicalMouseButtonState state =

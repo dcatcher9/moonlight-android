@@ -4,9 +4,6 @@
 # remains fully operational.
 LOCAL_PATH := $(call my-dir)
 
-# Client SBS is an Android XR/non-root feature. The root flavor deliberately omits both this
-# bridge and the flavor-scoped LiteRT runtime that it depends on.
-ifeq ($(PRODUCT_FLAVOR),nonRoot)
 include $(CLEAR_VARS)
 LOCAL_MODULE := client-sbs-gpu
 LOCAL_SRC_FILES := client_sbs_gpu.c
@@ -16,4 +13,3 @@ LOCAL_LDLIBS := -llog -lEGL -lGLESv3
 LOCAL_LDFLAGS := -L$(LOCAL_PATH)/../../../nonRoot_game/jniLibs/$(TARGET_ARCH_ABI) -lLiteRt
 LOCAL_BRANCH_PROTECTION := standard
 include $(BUILD_SHARED_LIBRARY)
-endif

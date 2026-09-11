@@ -1001,7 +1001,7 @@ public class NvHTTP {
         }
 
         boolean resume = verb.equals("resume");
-        String expectedHostSessionId = context.streamConfig.getExpectedHostSessionId();
+        String expectedHostSessionId = context.expectedHostSessionId;
         if (resume && context.hostSessionIdSupported
                 && (expectedHostSessionId == null || expectedHostSessionId.isEmpty()
                 || "0".equals(expectedHostSessionId))) {
@@ -1054,14 +1054,6 @@ public class NvHTTP {
         }
     }
     
-    public boolean quitApp(String expectedHostSessionId) throws IOException, XmlPullParserException {
-        return quitApp(expectedHostSessionId, true);
-    }
-
-    public boolean quitApp() throws IOException, XmlPullParserException {
-        return quitApp(null, false);
-    }
-
     public boolean quitApp(String expectedHostSessionId, boolean hostSessionIdSupported)
             throws IOException, XmlPullParserException {
         String cancelQuery = null;

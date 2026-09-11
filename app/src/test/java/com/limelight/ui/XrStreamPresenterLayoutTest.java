@@ -45,17 +45,17 @@ public class XrStreamPresenterLayoutTest {
     public void statsTitleNamesIndependentStreamAndClientSbsWindows() {
         assertEquals("Stats | Client SBS AI | stream 1.0 s | SBS 1.8 s",
                 XrStreamPresenter.formatStatsTitle(
-                        XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, 1.0f, 1.8f));
+                        PresentationMode.CLIENT_SBS_AI, 1.0f, 1.8f));
     }
 
     @Test
     public void statsTitleDoesNotClaimAnUnavailableSamplingWindow() {
         assertEquals("Stats | Normal | stream 1.0 s",
                 XrStreamPresenter.formatStatsTitle(
-                        XrStreamPresenter.PresenterMode.NORMAL, 1.0f, Float.NaN));
+                        PresentationMode.NORMAL, 1.0f, Float.NaN));
         assertEquals("Stats | Host SBS AI",
                 XrStreamPresenter.formatStatsTitle(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_AI, 0.0f, 0.0f));
+                        PresentationMode.HOST_SBS_AI, 0.0f, 0.0f));
     }
 
     @Test

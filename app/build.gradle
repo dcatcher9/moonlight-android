@@ -21,7 +21,7 @@ android {
         ndk.debugSymbolLevel = 'FULL'
     }
 
-    flavorDimensions.add("root")
+    flavorDimensions.add("distribution")
 
     buildFeatures {
         buildConfig = true
@@ -38,38 +38,16 @@ android {
 
     sourceSets {
         main {
-            // Prebuilt accelerator libraries must be flavor-scoped. In particular, keeping this
-            // shared source set empty prevents experimental QNN/QAIRT payloads from entering both
-            // the root and non-root APKs when they are dropped into src/main/jniLibs locally.
+            // Only package qualified accelerator libraries from the distribution source set.
+            // Experimental payloads dropped into src/main/jniLibs must not enter the APK.
             jniLibs.srcDirs = []
         }
     }
 
     productFlavors {
-        root {
-            // Android O has native mouse capture, so don't show the rooted
-            // version to devices running O on the Play Store.
-            maxSdk 25
-
-            externalNativeBuild {
-                ndkBuild {
-                    arguments "PRODUCT_FLAVOR=root"
-                }
-            }
-
-            resValue "string",
-                    "obtainium_app_url",
-                    "data:text/html;base64,PGgxPlJvb3QgYnVpbGQgaXMgbm90IGF2YWlsYWJsZTwvaDE+"
-
-            applicationId "com.limelight.root"
-            dimension "root"
-            buildConfigField "boolean", "ROOT_BUILD", "true"
-        }
-
         nonRoot_game {
             externalNativeBuild {
                 ndkBuild {
-                    arguments "PRODUCT_FLAVOR=nonRoot"
                     // The GPU bridge is intentionally a separate, lazily loaded module so
                     // libLiteRt is not a hard dependency of the always-loaded streaming core.
                     targets "moonlight-core", "client-sbs-gpu"
@@ -81,8 +59,7 @@ android {
                     "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.moonlight3d%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fdcatcher9%2Fmoonlight-android%22%2C%22author%22%3A%22Yang%20Qu%22%2C%22name%22%3A%22Moonlight%203D%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v%28.%2B%29%5C%22%7D%22%7D"
 
             applicationId "com.limelight"
-            dimension "root"
-            buildConfigField "boolean", "ROOT_BUILD", "false"
+            dimension "distribution"
         }
     }
 
@@ -139,7 +116,6 @@ android {
         debug {
             applicationIdSuffix ".moonlight3ddebug"
             resValue "string", "app_label", "Moonlight 3D"
-            resValue "string", "app_label_root", "Moonlight 3D (Root)"
             resValue "string", "app_label_game", "Moonlight 3D (Game)"
             // Diagnostics must be explicitly enabled so debug APKs remain suitable for latency
             // and frame-pacing measurements on the headset.
@@ -186,7 +162,6 @@ android {
             // listings belong to whoever shipped the build.
             applicationIdSuffix ".moonlight3d"
             resValue "string", "app_label", "Moonlight 3D"
-            resValue "string", "app_label_root", "Moonlight 3D (Root)"
             resValue "string", "app_label_game", "Moonlight 3D (Game)"
 
             minifyEnabled true
@@ -252,6 +227,9 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'androidx.test:core:1.7.0'
     testImplementation 'org.robolectric:robolectric:4.16.1'
+    // Robolectric delegates javax.* to the parent loader. Supply the standard EGL/GL API types
+    // there for external-EGL lifecycle tests; this dependency is absent from the installed APK.
+    testImplementation 'org.khronos:opengl-api:gl1.1-android-2.1_r1'
     testImplementation 'org.mockito:mockito-core:5.23.0'
 
     // On-device native LiteRT GL smoke test (no Espresso/UI dependency required).

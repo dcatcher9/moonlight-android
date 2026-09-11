@@ -154,7 +154,7 @@ public class XrStreamPresenterCinemaEnvironmentTest {
         verify(surface, times(2)).setShape(shapes.capture());
         assertEquals(2f, ((SurfaceEntity.Shape.Quad) shapes.getAllValues().get(0)).getExtents().getHeight(), 0f);
         assertEquals(1.1f, ((SurfaceEntity.Shape.Quad) shapes.getAllValues().get(1)).getExtents().getHeight(), 0f);
-        assertSame(XrStreamPresenter.PresenterMode.NORMAL,
+        assertSame(PresentationMode.NORMAL,
                 ReflectionHelpers.getField(presenter, "currentPresenterMode"));
         verify(surface, never()).setEnabled(false);
     }

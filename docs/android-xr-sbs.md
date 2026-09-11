@@ -114,8 +114,8 @@ for the media-content classification contract.
 Mode entry, HDR changes, and live Client SBS resize share one renderer presentation-completion
 transaction. It binds the owning operation to the renderer generation and validated EGL
 attachment, and commits once only after a second draw on that same attachment proves the first
-swap succeeded. A queued GLSurfaceView event only requests the confirmation draw: Android runs
-such events even after a failed swap. Generation/attachment replacement and owner cancellation
+swap succeeded. A queued EGL-owner event only requests the confirmation draw; it is not itself
+proof of a successful swap. Generation/attachment replacement and owner cancellation
 invalidate the proof. The enclosing decoder/resize owner retains its existing fresh-IDR and
 cold-backend deadlines; the common proof adds no new timer or inference cadence.
 
@@ -136,7 +136,28 @@ The working Galaxy XR sequence is:
 5. Give `surfaceEntity.getSurface()` to
    `MediaCodecDecoderRenderer.setRenderTarget(Surface)`.
 
-Normal, Host AI, and Raw modes keep the Android GLSurfaceView holder INVISIBLE; it has no
+`ClientSbsRenderSurface` uses a plain Android `SurfaceView` for input/layout and a separate,
+single EGL owner for the external SceneCore window. Pause, resume, draw requests, and terminal
+close are asynchronous requests. No request lock is held during EGL or renderer calls. Android
+holder creation, resizing, destruction, and View detachment never join the EGL owner, so even a
+blocked driver call cannot stop the main-thread transition deadline. Exact factory destruction
+acknowledges detach; exact renderer attachment validation and the existing two-draw proof
+acknowledge entry/resize. A late callback cannot revive a timed-out or destroyed generation.
+Resize and HDR entry publish a draw/transfer gate without taking the GL callback lock. An already
+running draw may finish with the renderer's old, privately owned dimensions; geometry replacement
+and frame retirement still happen after acknowledged EGL detach. Failed resize closes the
+renderer for mandatory reconnect immediately, without waiting for an in-flight GPU allocation.
+The EGL context survives normal pause/resume. Context loss rebuilds it on that same owner and uses
+the renderer's existing decoder-parking recovery. Events queued from a draw run after its swap;
+render requests remain coalesced. Terminal teardown first finishes native renderer cleanup, then
+waits asynchronously for EGL release before disposing SceneCore or allowing reconnect completion.
+The existing background cleanup coordinator waits for initialization/draw barriers and releases
+context-independent decoder objects; the UI never waits for those locks.
+If presentation fails while its EGL context remains current, a specific queued finish operation
+can still drain renderer writes for native cleanup. It checks that exact context before issuing
+`glFinish`; an absent or replacement context cannot acknowledge the old renderer's completion.
+
+Normal, Host AI, and Raw modes keep the Android input/layout holder INVISIBLE; it has no
 producer on these direct paths and must not leave an empty BLAST layer for the system compositor.
 Client SBS shows the holder only after decoder parking, before resuming EGL, and hides it only
 after acknowledged EGL detach and direct decoder rebind. Intentional holder removal does not own
@@ -208,7 +229,7 @@ is aspect routing within one model family, not a user-selectable model choice.
 | 21:9-nearest | `896 x 384` | `zipdepth-base-static-896x384-fp16weights.tflite.model` | `31467ab0cd187b74c65b3b20f4850973309d120519b587610e3dd3e27b72df4a` |
 | ultrawide-nearest | `928 x 384` | `zipdepth-base-static-928x384-fp16weights.tflite.model` | `169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc` |
 
-The non-root flavor packages the three fixed-shape graphs in one standard solid family archive:
+The XR distribution packages the three fixed-shape graphs in one standard solid family archive:
 
 - `app/src/nonRoot_game/assets/client-sbs-zipdepth-models.tar.xz`
 
@@ -228,8 +249,8 @@ As soon as the stream's renderer chooses its immutable aspect contract, a low-pr
 thread begins a CPU-only pre-stage: it scans the ZipDepth TAR/XZ stream, writes only that complete
 TAR entry under `code_cache/client-sbs-model-assets`, and verifies its SHA-256. This helper is
 separate from the native engine and loads no JNI/LiteRT library, creates no EGL context, and submits
-no GPU work. Failure is nonfatal so the root flavor, which contains neither the ZipDepth archive nor
-the LiteRT runtime, keeps its normal direct modes unchanged. Speculative staging does not prune a
+no GPU work. Failure is nonfatal so Normal and Host SBS keep their direct paths available even when
+Client SBS initialization fails. Speculative staging does not prune a
 different aspect bucket. UI-side admission and request deduplication use a separate short lock;
 they never acquire the cache-integrity lock held through extraction, hashing, and publication.
 Authoritative first-use initialization takes that worker-side cache lock,
@@ -377,7 +398,7 @@ Scheduling is readiness-driven rather than timer-driven:
   only their newest metadata, and admission reopens at draw entry. Invalid surfaces still reject
   drains. This bounds progress
   to the running drain plus at most one queued drain even when callbacks keep arriving; a bounded
-  queue alone would not provide fairness in GLSurfaceView's event-first loop. Surface invalidation
+  queue alone would not provide fairness in the EGL owner's event-first loop. Surface invalidation
   closes admission, so drains cannot starve pause/resize work before the next draw.
 - A single-flight inference claim prevents the worker queue from growing.
 - There are exactly two native input/output tensor slots and exactly two matching full-resolution
@@ -793,7 +814,7 @@ regular Sunshine/Apollo hosts. The same pre-transition decision applies to every
 Normal/Host AI switch must not ACK an interim current-mode tuple and overwrite the target mode's
 saved resolution before reconnecting into it.
 The Client-entry GL thread holds its mandatory initial draw until that fresh decoder callback, so
-GLSurfaceView cannot submit an empty first buffer over the retained SceneCore picture.
+the EGL owner cannot submit an empty first buffer over the retained SceneCore picture.
 The packed-swap watchdog starts only at that decoder-output edge; time spent waiting inside the
 decoder's own bounded fresh-IDR transaction does not consume the renderer's proof budget.
 
@@ -838,9 +859,22 @@ resume and the standard tokenless cancel request. Absence is not equivalent to a
 
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
-An intentional reconnect copies that identity and generation token but consumes launch-only guards.
-In particular, the idle-host guard used when replacing another app applies to the replacement's
-initial launch, never to a subsequent resume of the session it created.
+A typed `HostSessionLaunchRequest` carries Start, Resume, or explicitly confirmed Replace authority
+from the library to the connection worker. Resume and Replace validate the original app identity
+and, for Apollo-3D, the original token against fresh serverinfo before mutating the host. Start never
+sends `/cancel`: on the custom host advertising the token contract, `/launch` atomically rejects
+active streams and pending handshakes while permitting replacement of an idle retained session.
+Standard Sunshine/Apollo still require idle app state before Start. Resume rejects a changed or
+expired session instead of silently launching with old preferences. Replace cancels only the
+captured session; after successful cancel, its retry authority becomes Start. Standard hosts use
+app identity and tokenless cancel. Their protocol cannot detect a same-app generation
+replacement without a token. Successful establishment replaces the Activity's launch request with
+Resume so Apply and Activity recreation cannot replay replacement authority.
+
+`PresentationMode` is the sole mode identity shared by controls, persistence, and surface routing.
+The current-session record owns the proven mode; `XrViewStateStore` stores only per-PC panel height.
+Existing stored mode names and height keys are unchanged; this cleanup does not reset installed
+preferences or pairings.
 
 Live-quality state remains logical `W x H` in the client. On an extension-capable Apollo-3D host,
 at the `0x3007`/`0x3008` boundary only,
@@ -982,8 +1016,8 @@ the presenter; a temporarily capped ACK cannot keep a higher user ceiling pinned
 SBS the decoder writes to the renderer's offscreen `SurfaceTexture`; that input is not the
 display-rate authority. The actual `SurfaceEntity` output receives the mode-aware durable vote
 after every `getSurface()` replacement, committed presentation-mode change, and successful explicit
-ceiling change. The paused, hidden GLSurfaceView holder remains neutral on XR; ordinary non-XR
-presentation holders retain their legacy vote.
+ceiling change. The input/layout holder remains neutral; only the external SceneCore output
+receives the vote.
 
 An ACK may clamp a panel-follow request below both its temporary rung and the durable ceiling—for
 example ceiling 90, request 72, applied 60. That 60 is the effective on-wire rate only; dynamic
@@ -1178,11 +1212,18 @@ host behavior and protocol are in
 [Virtual desktop interaction](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/virtual-desktop.md).
 This client/host feature still requires live Galaxy XR verification.
 
-Keep the four modes, Settings, Cinema, Library, Stats, and **End session** visible in the dock.
-Debug builds append **Dump 3D** immediately after **End session**. All tiles have the same width;
+Keep the four modes, Settings, Cinema, Stats, and **Disconnect** visible in the dock.
+Debug builds append **Dump 3D** immediately after **Disconnect**. All tiles have the same width;
 the panel width follows the actual button count, with no secondary-action expander.
-Library returns directly to the current PC's application library without an intermediate
-machine-selection step, and Stats is a direct one-tap toggle. Stats visibility is independent,
+Disconnect stops streaming and returns directly to the current PC's application library without
+an intermediate machine-selection step or `/cancel`. The host retains the session for its resume
+grace window. There is no separate Library or End session tile in the immersive dock; explicit
+End session remains available in the application library. Stats is a direct one-tap toggle.
+Ordinary host controls require an active connection and a Game activity that is neither finishing
+nor destroyed. This closes the interval between Disconnect's `finish()` and `onStop()`: late panel
+refresh observations and queued quality changes cannot reconfigure the retained host session.
+Initial panel observations are still retained until the stream becomes ready.
+Stats visibility is independent,
 so it stays open while left-side Settings or the lower mode row opens. The Stats choice is
 persisted so an in-place
 reconnect or activity recreation cannot silently clear it. All controls remain ordinary clickable
@@ -1375,8 +1416,12 @@ For every mode/surface change, test:
   changes; verify Apollo-3D retains exact generation-token checks and live controls.
 - A new session starts Normal with inherited global defaults; host-confirmed resume and the
   Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
-  Replace a running app, then Apply/reconnect and cross the Raw Full boundary; the initial idle-host
-  launch guard must not reject either intentional resume. With landscape Normal and portrait Host
+  Replace a running app, then Apply/reconnect and cross the Raw Full boundary; neither intentional
+  resume may replay the initial replacement authority. Race an active session against Start:
+  the custom host must reject `/launch` without any client `/cancel`, while an idle retained session
+  can be replaced through `/launch`. Standard hosts retain the client's running-app rejection.
+  Race a different app against Resume and grace expiry against Resume; neither may cancel a
+  successor or launch with the expired session's preferences. With landscape Normal and portrait Host
   AI saved separately, switching in either direction must reconnect into the target tuple and
   preserve both resolutions.
 - Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
@@ -1445,8 +1490,10 @@ For every mode/surface change, test:
 - The four GL GPU averages receive non-disjoint samples without stalling and remain distinct from
   LiteRT call-wall latency.
 - The glance strip remains passive; the level dock does not move when the upward-pitched mode pane,
-  inward-yawed left Settings pane, or wrapped right Stats pane opens. End session remains visible
+  inward-yawed left Settings pane, or wrapped right Stats pane opens. Disconnect remains visible
   immediately before Dump 3D in debug builds.
+- Disconnect returns to the current PC's library without requesting host quit; Resume stays
+  available during the host's grace window. End session in the library explicitly cancels it.
 - After eight idle seconds the dock leaves its reveal/status pill, then expands on the first
   explicit press/pinch.
   It must remain expanded while a pane, pending Apply, depth preparation,

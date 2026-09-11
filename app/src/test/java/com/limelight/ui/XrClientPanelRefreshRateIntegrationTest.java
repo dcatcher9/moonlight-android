@@ -94,19 +94,19 @@ public final class XrClientPanelRefreshRateIntegrationTest {
     public void windowPreferenceAppliesAndRestoresWithoutAnAdoptedVideoSurface()
             throws Exception {
         assertNull(field("videoSurface"));
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.CLIENT_SBS_AI);
+        setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
 
         invoke("applyPresentationFrameRatePreference");
         assertWindowPreference(2, 72.00001f);
 
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.HOST_SBS_AI);
+        setField("currentPresenterMode", PresentationMode.HOST_SBS_AI);
         invoke("applyPresentationFrameRatePreference");
         assertWindowPreference(41, 90.0f);
     }
 
     @Test
     public void destroyingClientPresenterRestoresTheOriginalWindowPreference() throws Exception {
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.CLIENT_SBS_AI);
+        setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
         invoke("applyPresentationFrameRatePreference");
         assertWindowPreference(2, 72.00001f);
 
@@ -122,13 +122,13 @@ public final class XrClientPanelRefreshRateIntegrationTest {
         when(display.getSupportedModes()).thenReturn(new Display.Mode[] {
                 current, ClientPanelRefreshRatePreferenceTest.mode(
                         3, 7104, 3840, 72.00001f)});
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.CLIENT_SBS_AI);
+        setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
 
         invoke("applyPresentationFrameRatePreference");
 
         assertWindowPreference(3, 72.00001f);
         assertEquals(30.0f, preferences.fps, 0.0f);
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.NORMAL);
+        setField("currentPresenterMode", PresentationMode.NORMAL);
         invoke("applyPresentationFrameRatePreference");
         assertWindowPreference(41, 90.0f);
     }
@@ -136,7 +136,7 @@ public final class XrClientPanelRefreshRateIntegrationTest {
     @Test
     public void successfulHigherDurableCeilingReleasesSeventyTwoDespiteEffectiveSixtyAck()
             throws Exception {
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.CLIENT_SBS_AI);
+        setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
         invoke("applyPresentationFrameRatePreference");
         assertWindowPreference(2, 72.00001f);
 
@@ -145,16 +145,16 @@ public final class XrClientPanelRefreshRateIntegrationTest {
         setField("pendingLiveQualityOrigin", XrStreamPresenter.LiveQualityRequestOrigin.USER);
         setField("pendingDurableUserQuality", new StreamQualityTuple("1920x1080", "90", 200000));
         invoke("settleSuccessfulLiveQuality",
-                new Class<?>[] {XrStreamPresenter.PresenterMode.class, StreamQualityTuple.class},
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                new Class<?>[] {PresentationMode.class, StreamQualityTuple.class},
+                PresentationMode.CLIENT_SBS_AI,
                 new StreamQualityTuple("1920x1080", "60", 200000));
 
         assertEquals(90, panel.getUserCeilingHz());
         assertEquals(60.0f, preferences.fps, 0.0f);
         assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                panel, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                panel, PresentationMode.CLIENT_SBS_AI));
         assertFalse(XrStreamPresenter.shouldPreferClientPanelRate(
-                panel, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                panel, PresentationMode.CLIENT_SBS_AI));
         assertWindowPreference(41, 90.0f);
     }
 
@@ -164,24 +164,24 @@ public final class XrClientPanelRefreshRateIntegrationTest {
         // Deferred Client startup and a same-wire switch can commit without quality settlement.
         setField("surfaceEntity", mock(SurfaceEntity.class));
         invoke("applyPresenterModeInterpretation",
-                new Class<?>[] {XrStreamPresenter.PresenterMode.class,
-                        XrStreamPresenter.PresenterMode.class, String.class},
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, "Client3D");
+                new Class<?>[] {PresentationMode.class,
+                        PresentationMode.class, String.class},
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI, "Client3D");
         assertWindowPreference(2, 72.00001f);
 
         invoke("applyPresenterModeInterpretation",
-                new Class<?>[] {XrStreamPresenter.PresenterMode.class,
-                        XrStreamPresenter.PresenterMode.class, String.class},
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.PresenterMode.NORMAL, "Normal");
+                new Class<?>[] {PresentationMode.class,
+                        PresentationMode.class, String.class},
+                PresentationMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL, "Normal");
         assertWindowPreference(41, 90.0f);
     }
 
     @Test
     public void replacementSceneCoreSurfaceKeepsSeventyTwoWithoutRaisingStreamRate()
             throws Exception {
-        setField("currentPresenterMode", XrStreamPresenter.PresenterMode.CLIENT_SBS_AI);
+        setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
         for (int replacement = 0; replacement < 2; replacement++) {
             Surface surface = mock(Surface.class);
             when(surface.isValid()).thenReturn(true);

@@ -298,7 +298,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
                 surface -> { }, visible -> { });
         setField(presenter, "streamPresentationReady", true);
         setField(presenter, "currentPresenterMode",
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI);
+                PresentationMode.HOST_SBS_AI);
         setField(presenter, "statsVisible", true);
         ((XrControlUiState) getField(presenter, "controlUiState")).showStats();
         return presenter;

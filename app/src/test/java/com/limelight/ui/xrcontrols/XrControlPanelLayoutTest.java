@@ -10,7 +10,7 @@ public class XrControlPanelLayoutTest {
     @Test
     public void buttonPanelContainsOnlyTheLevelPrimaryRow() {
         XrControlPanelLayout layout = XrControlPanelLayout.calculate(
-                9, 1, 0.21f, 0.05f, 2.0f, 0.24f);
+                8, 1, 0.21f, 0.05f, 2.0f, 0.24f);
 
         assertEquals(layout.primaryRowCenterY, layout.panelCenterY, EPSILON);
         assertEquals(0.21f, layout.heightMeters, EPSILON);
@@ -19,17 +19,17 @@ public class XrControlPanelLayoutTest {
     @Test
     public void widthKeepsEveryPrimaryTileAtItsPhysicalSize() {
         XrControlPanelLayout layout = XrControlPanelLayout.calculate(
-                9, 1, 0.21f, 0.05f, 2.0f, 0.24f);
+                8, 1, 0.21f, 0.05f, 2.0f, 0.24f);
 
-        assertEquals(1.94f, layout.widthMeters, EPSILON);
+        assertEquals(1.73f, layout.widthMeters, EPSILON);
     }
 
     @Test
     public void debugDumpKeepsEveryTileAtItsPhysicalSize() {
         XrControlPanelLayout layout = XrControlPanelLayout.calculate(
-                10, 1, 0.21f, 0.05f, 2.0f, 0.24f);
+                9, 1, 0.21f, 0.05f, 2.0f, 0.24f);
 
-        assertEquals(2.15f, layout.widthMeters, EPSILON);
+        assertEquals(1.94f, layout.widthMeters, EPSILON);
         assertEquals(0.21f, layout.heightMeters, EPSILON);
     }
 }

@@ -54,7 +54,7 @@ public final class XrModeReconnectPolicyTest {
         assertTrue(store.startNewSession(pc, app, null, 1L));
         SessionSettingsStore.SessionRecord record = store.snapshot(pc, globals).getRecord();
         assertTrue(store.edit(pc, app, record.getLocalSessionId())
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                .setModeValue(PresentationMode.HOST_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "1080x1920", "1920x1080")
                 .commit());
@@ -62,14 +62,14 @@ public final class XrModeReconnectPolicyTest {
 
     @Test
     public void normalToPortraitHostAiPreservesSavedQualityForReconnect() {
-        assertOrientationSwitchReconnects(SessionSettingsStore.PresenterMode.NORMAL,
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI, 7680, 2160);
+        assertOrientationSwitchReconnects(PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, 7680, 2160);
     }
 
     @Test
     public void portraitHostAiToNormalPreservesSavedQualityForReconnect() {
-        assertOrientationSwitchReconnects(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
-                SessionSettingsStore.PresenterMode.NORMAL, 2160, 7680);
+        assertOrientationSwitchReconnects(PresentationMode.HOST_SBS_AI,
+                PresentationMode.NORMAL, 2160, 7680);
     }
 
     @Test
@@ -83,12 +83,12 @@ public final class XrModeReconnectPolicyTest {
     }
 
     private void assertEqualQualitySettingReconnects(SessionSettingsModel.Key key, String choice) {
-        for (SessionSettingsStore.PresenterMode from : new SessionSettingsStore.PresenterMode[] {
-                SessionSettingsStore.PresenterMode.NORMAL,
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI}) {
-            SessionSettingsStore.PresenterMode to = from == SessionSettingsStore.PresenterMode.NORMAL
-                    ? SessionSettingsStore.PresenterMode.HOST_SBS_AI
-                    : SessionSettingsStore.PresenterMode.NORMAL;
+        for (PresentationMode from : new PresentationMode[] {
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI}) {
+            PresentationMode to = from == PresentationMode.NORMAL
+                    ? PresentationMode.HOST_SBS_AI
+                    : PresentationMode.NORMAL;
             assertTrue(store.startNewSession(pc, app, null, 3L));
             SessionSettingsStore.SessionRecord record = store.snapshot(pc, globals).getRecord();
             assertTrue(store.edit(pc, app, record.getLocalSessionId())
@@ -101,15 +101,15 @@ public final class XrModeReconnectPolicyTest {
             assertEquals(target.liveQuality, target.pendingQuality);
             assertFalse(target.requiresApplyIfSelected());
             assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                    XrStreamPresenter.PresenterMode.valueOf(from.name()),
-                    XrStreamPresenter.PresenterMode.valueOf(to.name()),
+                    PresentationMode.valueOf(from.name()),
+                    PresentationMode.valueOf(to.name()),
                     controller.pendingChangesRequireReconnect(), target));
 
             controller.selectSharedSetting(key, choice);
             assertTrue(controller.pendingChangesRequireReconnect());
             assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                    XrStreamPresenter.PresenterMode.valueOf(from.name()),
-                    XrStreamPresenter.PresenterMode.valueOf(to.name()),
+                    PresentationMode.valueOf(from.name()),
+                    PresentationMode.valueOf(to.name()),
                     controller.pendingChangesRequireReconnect(), target));
 
             // Only the reconnect path may persist this shared setting; a live mode ACK would
@@ -137,18 +137,18 @@ public final class XrModeReconnectPolicyTest {
         stale.setLiveVideoModeSupported(true);
         stale.setLiveResolutionEnvelope(7680, 2160);
         assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, false,
-                stale.getModeStreamQualityModel(SessionSettingsStore.PresenterMode.HOST_SBS_AI)));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, false,
+                stale.getModeStreamQualityModel(PresentationMode.HOST_SBS_AI)));
 
         assertTrue(store.startNewSession(pc, app, null, 2L));
-        stale.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
+        stale.selectPresentationMode(PresentationMode.HOST_SBS_AI);
         assertFalse(stale.commitPending());
         SessionSettingsStore.Snapshot replacement = store.snapshot(pc, globals);
-        assertEquals(SessionSettingsStore.PresenterMode.NORMAL,
+        assertEquals(PresentationMode.NORMAL,
                 replacement.getRecord().getLastSuccessfulMode());
         assertEquals("1920x1080", replacement.preferencesForMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI)
+                PresentationMode.HOST_SBS_AI)
                 .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
     }
 
@@ -156,23 +156,23 @@ public final class XrModeReconnectPolicyTest {
     public void restoredClientModeUsesItsAlreadyNegotiatedTupleWithoutAnotherReconnect() {
         SessionSettingsStore.SessionRecord record = store.snapshot(pc, globals).getRecord();
         assertTrue(store.edit(pc, app, record.getLocalSessionId())
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).commit());
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI).commit());
         XrSessionSettingsController restored = new XrSessionSettingsController(
                 store, pc, app, globals, store.snapshot(pc, globals));
         // This remains true on a standard host: Client's own quality already backs the first
         // decoded Normal frame, and only the guarded renderer handoff remains after that frame.
         restored.setLiveVideoModeSupported(false);
         ModeStreamQualityModel target = restored.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+                PresentationMode.CLIENT_SBS_AI);
         assertEquals(target.liveQuality, target.pendingQuality);
         assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 restored.pendingChangesRequireReconnect(), target));
     }
 
-    private void assertOrientationSwitchReconnects(SessionSettingsStore.PresenterMode from,
-                                                   SessionSettingsStore.PresenterMode to,
+    private void assertOrientationSwitchReconnects(PresentationMode from,
+                                                   PresentationMode to,
                                                    int maxWidth, int maxHeight) {
         SessionSettingsStore.SessionRecord record = store.snapshot(pc, globals).getRecord();
         assertTrue(store.edit(pc, app, record.getLocalSessionId())
@@ -185,8 +185,8 @@ public final class XrModeReconnectPolicyTest {
 
         assertTrue(target.requiresReconnectIfSelected());
         assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.valueOf(from.name()),
-                XrStreamPresenter.PresenterMode.valueOf(to.name()),
+                PresentationMode.valueOf(from.name()),
+                PresentationMode.valueOf(to.name()),
                 controller.pendingChangesRequireReconnect(), target));
 
         // The reconnect callback selects and commits the untouched target; it receives no ACK
@@ -195,9 +195,9 @@ public final class XrModeReconnectPolicyTest {
         assertTrue(controller.commitPending());
         SessionSettingsStore.Snapshot saved = store.snapshot(pc, globals);
         assertEquals(to, saved.getRecord().getLastSuccessfulMode());
-        assertEquals("1920x1080", saved.preferencesForMode(SessionSettingsStore.PresenterMode.NORMAL)
+        assertEquals("1920x1080", saved.preferencesForMode(PresentationMode.NORMAL)
                 .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
-        assertEquals("1080x1920", saved.preferencesForMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI)
+        assertEquals("1080x1920", saved.preferencesForMode(PresentationMode.HOST_SBS_AI)
                 .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
         XrSessionSettingsController resumed = new XrSessionSettingsController(
                 store, pc, app, globals, saved);

@@ -9,7 +9,7 @@ import androidx.test.core.app.ApplicationProvider;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore.AppIdentity;
 import com.limelight.preferences.session.SessionSettingsStore.PcIdentity;
-import com.limelight.preferences.session.SessionSettingsStore.PresenterMode;
+import com.limelight.ui.PresentationMode;
 import com.limelight.preferences.session.SessionSettingsStore.SessionRecord;
 import com.limelight.preferences.session.SessionSettingsStore.Snapshot;
 
@@ -80,7 +80,7 @@ public final class SessionSettingsStoreTest {
         assertEquals(secondApp, current.getCurrentApp());
         assertTrue(current.getSharedOverrides().isEmpty());
         assertTrue(current.getAllModeOverrides().isEmpty());
-        assertEquals(PresenterMode.NORMAL, current.getLastSuccessfulMode());
+        assertEquals(PresentationMode.NORMAL, current.getLastSuccessfulMode());
     }
 
     @Test
@@ -154,10 +154,10 @@ public final class SessionSettingsStoreTest {
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC).commit());
         assertTrue(store.startNewSession(pc, firstApp, "initial", 100L));
         assertTrue(store.edit(pc, firstApp)
-                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
-                .setLastSuccessfulMode(PresenterMode.CLIENT_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
         SessionRecord resumed = store.confirmHostResume(pc,
@@ -165,17 +165,17 @@ public final class SessionSettingsStoreTest {
                 "initial", 500L);
 
         assertNotNull(resumed);
-        assertEquals(PresenterMode.CLIENT_SBS_AI, resumed.getLastSuccessfulMode());
+        assertEquals(PresentationMode.CLIENT_SBS_AI, resumed.getLastSuccessfulMode());
         assertTrue(resumed.getResumeMetadata().isHostConfirmedResume());
         assertEquals("initial", resumed.getResumeMetadata().getHostSessionId());
         assertEquals(500L, resumed.getResumeMetadata().getHostConfirmedAtEpochMillis());
         Snapshot snapshot = store.snapshot(pc, globals);
         assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                snapshot.preferencesForMode(PresenterMode.CLIENT_SBS_AI)
+                snapshot.preferencesForMode(PresentationMode.CLIENT_SBS_AI)
                         .getString(MODEL, null));
         assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                snapshot.preferencesForMode(PresenterMode.NORMAL).getString(MODEL, null));
-        assertTrue(snapshot.isModeOverridden(PresenterMode.CLIENT_SBS_AI, MODEL));
+                snapshot.preferencesForMode(PresentationMode.NORMAL).getString(MODEL, null));
+        assertTrue(snapshot.isModeOverridden(PresentationMode.CLIENT_SBS_AI, MODEL));
     }
 
     @Test
@@ -187,12 +187,12 @@ public final class SessionSettingsStoreTest {
         assertTrue(store.startNewSession(secondPc, secondApp, "second", 20L));
         assertTrue(store.edit(pc, firstApp)
                 .setSharedValue(MODEL, "legacy-shared", "global")
-                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL, "first-model", "global")
-                .setModeValue(PresenterMode.CLIENT_SBS_AI, FPS, "90", "60")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "first-model", "global")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60")
                 .commit());
         assertTrue(store.edit(secondPc, secondApp)
-                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL, "second-model", "global")
-                .setModeValue(PresenterMode.HOST_SBS_AI, MODEL, "host-value", "global")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "second-model", "global")
+                .setModeValue(PresentationMode.HOST_SBS_AI, MODEL, "host-value", "global")
                 .commit());
         String firstStorageKey = "session." + pc.getStorageId();
         String firstJson = storage.getString(firstStorageKey, null);
@@ -205,16 +205,16 @@ public final class SessionSettingsStoreTest {
                 .commit());
 
         assertTrue(store.clearModeValueOverridesForAllCurrentSessions(
-                PresenterMode.CLIENT_SBS_AI, MODEL));
+                PresentationMode.CLIENT_SBS_AI, MODEL));
 
         SessionRecord first = store.getCurrentSession(pc);
         SessionRecord second = store.getCurrentSession(secondPc);
         assertFalse(first.getSharedOverrides().containsKey(MODEL));
-        assertFalse(first.getModeOverrides(PresenterMode.CLIENT_SBS_AI).containsKey(MODEL));
-        assertEquals("90", first.getModeOverrides(PresenterMode.CLIENT_SBS_AI).get(FPS));
-        assertFalse(second.getModeOverrides(PresenterMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertFalse(first.getModeOverrides(PresentationMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertEquals("90", first.getModeOverrides(PresentationMode.CLIENT_SBS_AI).get(FPS));
+        assertFalse(second.getModeOverrides(PresentationMode.CLIENT_SBS_AI).containsKey(MODEL));
         assertEquals("host-value",
-                second.getModeOverrides(PresenterMode.HOST_SBS_AI).get(MODEL));
+                second.getModeOverrides(PresentationMode.HOST_SBS_AI).get(MODEL));
         assertEquals("first", first.getResumeMetadata().getHostSessionId());
         assertEquals("second", second.getResumeMetadata().getHostSessionId());
         assertTrue(storage.getString(firstStorageKey, "").contains(
@@ -227,17 +227,17 @@ public final class SessionSettingsStoreTest {
     public void legacyHostResumePreservesSettingsUsingApplicationIdentity() {
         assertTrue(store.startNewSession(pc, firstApp, null, 100L));
         assertTrue(store.edit(pc, firstApp)
-                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
-                .setLastSuccessfulMode(PresenterMode.CLIENT_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
         SessionRecord resumed = store.confirmLegacyHostResume(pc,
                 new AppIdentity("42", null, "Cyberpunk 2077 Updated"), 500L);
 
         assertNotNull(resumed);
-        assertEquals(PresenterMode.CLIENT_SBS_AI, resumed.getLastSuccessfulMode());
+        assertEquals(PresentationMode.CLIENT_SBS_AI, resumed.getLastSuccessfulMode());
         assertTrue(resumed.getResumeMetadata().isHostConfirmedResume());
         assertNull(resumed.getResumeMetadata().getHostSessionId());
         assertEquals(500L, resumed.getResumeMetadata().getHostConfirmedAtEpochMillis());
@@ -295,7 +295,7 @@ public final class SessionSettingsStoreTest {
         assertTrue(store.startNewSession(pc, firstApp, "host", 1L));
         assertTrue(store.edit(pc, firstApp)
                 .setSharedValue(FPS, "90", "60")
-                .setModeValue(PresenterMode.CLIENT_SBS_AI, MODEL, "midas", "da-v2")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "midas", "da-v2")
                 .commit());
 
         assertTrue(store.clearCurrentSession(pc));

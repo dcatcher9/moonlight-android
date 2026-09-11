@@ -1,5 +1,6 @@
 package com.limelight.preferences;
 
+import com.limelight.ui.PresentationMode;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -124,14 +125,14 @@ public final class LegacyProfileMigrationTest {
                 .setSharedValue(modelKey,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI, modelKey,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, modelKey,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.FPS_PREF_STRING, "30", "60")
                 .commit());
         assertTrue(store.edit(secondPc, secondApp)
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI, modelKey,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, modelKey,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
                 .commit());
@@ -144,10 +145,10 @@ public final class LegacyProfileMigrationTest {
             SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
             assertFalse(record.getSharedOverrides().containsKey(modelKey));
             assertFalse(record.getModeOverrides(
-                    SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).containsKey(modelKey));
+                    PresentationMode.CLIENT_SBS_AI).containsKey(modelKey));
         }
         assertEquals("30", store.getCurrentSession(firstPc).getModeOverrides(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).get(
+                PresentationMode.CLIENT_SBS_AI).get(
                 PreferenceConfiguration.FPS_PREF_STRING));
 
         // The cleanup is idempotent and must not erase unrelated session state on later starts.

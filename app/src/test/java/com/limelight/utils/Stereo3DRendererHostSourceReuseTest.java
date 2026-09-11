@@ -3,7 +3,7 @@ package com.limelight.utils;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
-import android.opengl.GLSurfaceView;
+import com.limelight.ui.ClientSbsRenderSurface;
 
 import com.limelight.binding.video.DecodedSourceIdentityTracker;
 import com.limelight.preferences.PreferenceConfiguration;
@@ -29,14 +29,14 @@ import java.util.concurrent.atomic.AtomicLong;
 @Config(sdk = 35)
 public class Stereo3DRendererHostSourceReuseTest {
     private Stereo3DRenderer renderer;
-    private GLSurfaceView view;
+    private ClientSbsRenderSurface view;
     private DecodedSourceIdentityTracker tracker;
     private DecodedSourceIdentityTracker.Sample candidate;
     private ClientSbsFrameSlots.Lease originalColor;
 
     @Before
     public void setUp() {
-        view = mock(GLSurfaceView.class);
+        view = mock(ClientSbsRenderSurface.class);
         PreferenceConfiguration prefs = new PreferenceConfiguration();
         prefs.width = 1920;
         prefs.height = 1080;

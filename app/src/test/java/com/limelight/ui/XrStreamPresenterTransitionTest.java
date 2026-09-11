@@ -30,20 +30,20 @@ public class XrStreamPresenterTransitionTest {
     public void rawFullBoundaryReconnectsBeforeAnyLiveSurfaceSwitch() {
         // Raw Full negotiates 2W x H, which no other mode uses.
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_RAW, FULL));
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.NORMAL, FULL));
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, FULL));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.CLIENT_SBS_AI, FULL));
         assertTrue(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_RAW, FULL));
         assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, FULL));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, FULL));
     }
 
     @Test
@@ -51,41 +51,41 @@ public class XrStreamPresenterTransitionTest {
         // Raw Half is W x H, byte-for-byte the stream Normal negotiates, sent with sbs_mode 0.
         // Entering or leaving it renegotiates nothing, so it switches live.
         assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_RAW, HALF));
         assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.NORMAL, HALF));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.NORMAL, HALF));
         assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_RAW, HALF));
         assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, HALF));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.CLIENT_SBS_AI, HALF));
     }
 
     @Test
     public void onlyRawFullOwnsItsOwnTransport() {
         assertTrue(XrStreamPresenter.usesRawPackedTransport(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+                PresentationMode.HOST_SBS_RAW, FULL));
         assertFalse(XrStreamPresenter.usesRawPackedTransport(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+                PresentationMode.HOST_SBS_RAW, HALF));
         assertFalse(XrStreamPresenter.usesRawPackedTransport(
-                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+                PresentationMode.NORMAL, FULL));
     }
 
     @Test
     public void bitrateCostTracksTheEncodedWidthRatherThanTheRawModeName() {
         assertTrue(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, HALF));
+                PresentationMode.HOST_SBS_AI, HALF));
         assertTrue(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+                PresentationMode.HOST_SBS_RAW, FULL));
         assertFalse(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+                PresentationMode.HOST_SBS_RAW, HALF));
         assertFalse(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, FULL));
+                PresentationMode.CLIENT_SBS_AI, FULL));
         assertFalse(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+                PresentationMode.NORMAL, FULL));
     }
 
     @Test
@@ -97,27 +97,27 @@ public class XrStreamPresenterTransitionTest {
 
         // The applied fallback deliberately disagrees with the staged value in both directions.
         assertFalse(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, stagedHalf, FULL));
+                PresentationMode.HOST_SBS_RAW, stagedHalf, FULL));
         assertTrue(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, stagedFull, HALF));
+                PresentationMode.HOST_SBS_RAW, stagedFull, HALF));
         assertTrue(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, stagedHalf, FULL));
+                PresentationMode.HOST_SBS_AI, stagedHalf, FULL));
         assertTrue(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, null, null));
+                PresentationMode.HOST_SBS_RAW, null, null));
         assertFalse(XrStreamPresenter.usesPackedBitrateCost(
-                XrStreamPresenter.PresenterMode.NORMAL, null, null));
+                PresentationMode.NORMAL, null, null));
     }
 
     @Test
     public void rawHalfResizesLiveWhileRawFullDoesNot() {
         assertTrue(XrStreamPresenter.supportsLiveResolutionChange(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, HALF));
+                PresentationMode.HOST_SBS_RAW, HALF));
         assertFalse(XrStreamPresenter.supportsLiveResolutionChange(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW, FULL));
+                PresentationMode.HOST_SBS_RAW, FULL));
         assertTrue(XrStreamPresenter.supportsLiveResolutionChange(
-                XrStreamPresenter.PresenterMode.NORMAL, FULL));
+                PresentationMode.NORMAL, FULL));
         assertTrue(XrStreamPresenter.supportsLiveResolutionChange(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, FULL));
+                PresentationMode.CLIENT_SBS_AI, FULL));
     }
 
     @Test
@@ -126,56 +126,56 @@ public class XrStreamPresenterTransitionTest {
         // no surface resize, and no atomic presentation transaction. Only the SceneCore mode and
         // quad aspect move, and finishModeSwitch already applies both live.
         assertFalse(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_RAW));
         assertFalse(XrStreamPresenter.requiresHostSurfaceResize(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_RAW));
     }
 
     @Test
     public void rawStartupUsesSelectedPackingAndLogicalPerEyeAspect() {
         assertEquals(16.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         16.0f / 9.0f),
                 0.0001f);
         assertEquals(8.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         16.0f / 9.0f,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF),
                 0.0001f);
         assertEquals(16.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        PresentationMode.HOST_SBS_AI,
                         16.0f / 9.0f,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF),
                 0.0001f);
         assertEquals(16.0f / 9.0f,
                 XrStreamPresenter.presentationAspect(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         16.0f / 9.0f,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL),
                 0.0001f);
         assertEquals(7680,
                 XrStreamPresenter.initialSurfacePixelDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL)[0]);
         assertEquals(2160,
                 XrStreamPresenter.initialSurfacePixelDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL)[1]);
         assertEquals(3840,
                 XrStreamPresenter.initialSurfacePixelDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF)[0]);
         assertEquals(2160,
                 XrStreamPresenter.initialSurfacePixelDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H264,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF)[1]);
     }
@@ -191,25 +191,25 @@ public class XrStreamPresenterTransitionTest {
     @Test
     public void crossingHostAiBoundaryRequiresHostSurfaceResize() {
         assertTrue(XrStreamPresenter.requiresHostSurfaceResize(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI));
         assertTrue(XrStreamPresenter.requiresHostSurfaceResize(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_AI));
         assertTrue(XrStreamPresenter.requiresHostSurfaceResize(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.NORMAL));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.NORMAL));
         assertTrue(XrStreamPresenter.requiresHostSurfaceResize(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_RAW));
     }
 
     @Test
     public void unchangedDirectModeDoesNotResizeHostSurface() {
-        for (XrStreamPresenter.PresenterMode mode : new XrStreamPresenter.PresenterMode[] {
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI}) {
+        for (PresentationMode mode : new PresentationMode[] {
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_AI}) {
             assertFalse(XrStreamPresenter.requiresHostSurfaceResize(mode, mode));
         }
     }
@@ -217,40 +217,40 @@ public class XrStreamPresenterTransitionTest {
     @Test
     public void onlySurfaceOrDimensionChangesRequireDecoderTransition() {
         assertFalse(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_RAW));
         assertFalse(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.NORMAL));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.NORMAL));
 
         assertTrue(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI));
         assertTrue(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_RAW));
         assertTrue(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI));
         assertTrue(XrStreamPresenter.requiresDecoderTransition(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW));
+                PresentationMode.CLIENT_SBS_AI,
+                PresentationMode.HOST_SBS_RAW));
     }
 
     @Test
     public void onlyClientRendererCrossingsRetainTheOldPictureUntilFreshTargetFrame() {
         assertTrue(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI));
         assertTrue(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                PresentationMode.CLIENT_SBS_AI,
+                PresentationMode.HOST_SBS_AI));
         assertFalse(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI));
         assertFalse(XrStreamPresenter.retainsOldPictureUntilFreshTargetFrame(
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
-                XrStreamPresenter.PresenterMode.NORMAL));
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.NORMAL));
     }
 
     @Test
@@ -269,17 +269,17 @@ public class XrStreamPresenterTransitionTest {
     @Test
     public void onlyClientEntryWaitsForAPackedEglSwap() {
         assertTrue(XrStreamPresenter.requiresClientPackedSwapProof(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI));
         assertTrue(XrStreamPresenter.requiresClientPackedSwapProof(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI));
         assertFalse(XrStreamPresenter.requiresClientPackedSwapProof(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.PresenterMode.NORMAL));
+                PresentationMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL));
         assertFalse(XrStreamPresenter.requiresClientPackedSwapProof(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI));
     }
 
     @Test
@@ -287,26 +287,26 @@ public class XrStreamPresenterTransitionTest {
         ModeStreamQualityModel liveTarget = targetQuality(false);
 
         assertTrue(XrStreamPresenter.shouldFuseClientModeEntryQuality(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 true, false, liveTarget));
         assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 false, liveTarget));
 
         // No fusion for a same-mode update, a standard host, or unrelated staged reconnect work.
         assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 true, false, liveTarget));
         assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 false, false, liveTarget));
         assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 true, true, liveTarget));
     }
 
@@ -315,20 +315,20 @@ public class XrStreamPresenterTransitionTest {
         ModeStreamQualityModel reconnectTarget = targetQuality(true);
 
         assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 false, reconnectTarget));
         assertFalse(XrStreamPresenter.shouldFuseClientModeEntryQuality(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI,
                 true, false, reconnectTarget));
     }
 
     @Test
     public void everyModeReconnectsBeforeIncompatibleSavedQualityCanBeOverwritten() {
         ModeStreamQualityModel reconnectTarget = targetQuality(true);
-        for (XrStreamPresenter.PresenterMode previous : XrStreamPresenter.PresenterMode.values()) {
-            for (XrStreamPresenter.PresenterMode next : XrStreamPresenter.PresenterMode.values()) {
+        for (PresentationMode previous : PresentationMode.values()) {
+            for (PresentationMode next : PresentationMode.values()) {
                 assertEquals(previous + " -> " + next, previous != next,
                         XrStreamPresenter.shouldReconnectBeforeModeEntry(
                                 previous, next, false, reconnectTarget));
@@ -340,25 +340,25 @@ public class XrStreamPresenterTransitionTest {
     public void liveTargetWithOtherStagedReconnectWorkDoesNotStartInterimAck() {
         ModeStreamQualityModel liveTarget = targetQuality(false);
         assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, true, liveTarget));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, true, liveTarget));
         assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.NORMAL, true, liveTarget));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.NORMAL, true, liveTarget));
         assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, false, liveTarget));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, false, liveTarget));
     }
 
     @Test
     public void restoredHostAiRefreshesSurfaceWhenActualCodecChangesPackedGeometry() {
         assertTrue(XrStreamPresenter.hostSbsFormatChangeRequiresResize(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_AI,
                 5120, 1440,
                 MoonBridge.VIDEO_FORMAT_H265,
                 MoonBridge.VIDEO_FORMAT_H264));
         assertFalse(XrStreamPresenter.hostSbsFormatChangeRequiresResize(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_AI,
                 1920, 1080,
                 MoonBridge.VIDEO_FORMAT_H265,
                 MoonBridge.VIDEO_FORMAT_H264));
@@ -367,12 +367,12 @@ public class XrStreamPresenterTransitionTest {
     @Test
     public void inactiveHostAiAndEquivalentCodecGeometryDoNotResizeAtStartup() {
         assertFalse(XrStreamPresenter.hostSbsFormatChangeRequiresResize(
-                XrStreamPresenter.PresenterMode.NORMAL,
+                PresentationMode.NORMAL,
                 5120, 1440,
                 MoonBridge.VIDEO_FORMAT_H265,
                 MoonBridge.VIDEO_FORMAT_H264));
         assertFalse(XrStreamPresenter.hostSbsFormatChangeRequiresResize(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_AI,
                 5120, 1440,
                 MoonBridge.VIDEO_FORMAT_H265,
                 MoonBridge.VIDEO_FORMAT_AV1_MAIN8));
@@ -381,23 +381,23 @@ public class XrStreamPresenterTransitionTest {
     @Test
     public void onlyAnActiveClientSbsStreamStartsAStandaloneHdrBoundary() {
         assertTrue(XrStreamPresenter.canSynchronizeClientSbsHdrTransition(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 true, false, false));
         assertFalse(XrStreamPresenter.canSynchronizeClientSbsHdrTransition(
-                XrStreamPresenter.PresenterMode.NORMAL,
+                PresentationMode.NORMAL,
                 true, false, false));
         assertFalse(XrStreamPresenter.canSynchronizeClientSbsHdrTransition(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 false, false, false));
     }
 
     @Test
     public void hdrBoundaryCanBeSupersededButCannotOverlapAModeSwitch() {
         assertTrue(XrStreamPresenter.canSynchronizeClientSbsHdrTransition(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 true, true, true));
         assertFalse(XrStreamPresenter.canSynchronizeClientSbsHdrTransition(
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 true, true, false));
     }
 

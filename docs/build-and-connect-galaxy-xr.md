@@ -1,20 +1,14 @@
 # Build & update-deploy to Galaxy XR (SM-I610)
 
 Quick reference for building this app and deploying it to the **Samsung Galaxy XR
-(SM-I610, Android 14 / API 34, arm64-v8a)** over wireless adb. Written to avoid the two
-recurring snags: picking the wrong **product flavor** (build/install fails) and the
-headset's **wireless-adb connection dropping** (needs a re-`connect` with the current port).
+(SM-I610, Android 14 / API 34, arm64-v8a)** over wireless adb. The headset's
+**wireless-adb connection dropping** needs a re-`connect` with the current port.
 
-## 1. Use the correct flavor task (most common build failure)
+## 1. Build the supported XR distribution
 
-The app has **two product flavors**: `root` (`maxSdk 25`) and `nonRoot_game`. Consequences:
-
-- There is **no plain `installDebug` / `assembleDebug`** task — Gradle requires a flavor-qualified
-  task name.
-- **`installRootDebug` installs but then fails on the headset**: the `root` flavor is capped at
-  `maxSdk 25`, while the Galaxy XR is **API 34**, so the package manager rejects it.
-
-➡️ **Always use the `nonRoot_game` flavor:**
+The sole supported distribution retains the `nonRoot_game` task names and application IDs.
+The obsolete Android 7 root flavor and its privileged input helper have been removed.
+Use the explicit distribution task:
 
 ```bash
 JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-25.0.3.9-hotspot" \

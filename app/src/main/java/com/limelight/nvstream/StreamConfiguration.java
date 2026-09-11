@@ -30,8 +30,7 @@ public class StreamConfiguration {
     private int colorSpace;
     private boolean enableUltraLowLatency;
     private int initialSbsMode;
-    private String expectedHostSessionId;
-    private boolean requireHostIdleForLaunch;
+    private HostSessionLaunchRequest launchRequest = HostSessionLaunchRequest.start();
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -140,19 +139,8 @@ public class StreamConfiguration {
             return this;
         }
 
-        public StreamConfiguration.Builder setExpectedHostSessionId(String hostSessionId) {
-            if (hostSessionId != null) {
-                hostSessionId = hostSessionId.trim();
-                if (hostSessionId.isEmpty() || "0".equals(hostSessionId)) {
-                    hostSessionId = null;
-                }
-            }
-            config.expectedHostSessionId = hostSessionId;
-            return this;
-        }
-
-        public StreamConfiguration.Builder requireHostIdleForLaunch(boolean requireHostIdle) {
-            config.requireHostIdleForLaunch = requireHostIdle;
+        public StreamConfiguration.Builder setLaunchRequest(HostSessionLaunchRequest request) {
+            config.launchRequest = java.util.Objects.requireNonNull(request);
             return this;
         }
 
@@ -267,11 +255,7 @@ public class StreamConfiguration {
         return initialSbsMode;
     }
 
-    public String getExpectedHostSessionId() {
-        return expectedHostSessionId;
-    }
-
-    public boolean getRequireHostIdleForLaunch() {
-        return requireHostIdleForLaunch;
+    public HostSessionLaunchRequest getLaunchRequest() {
+        return launchRequest;
     }
 }

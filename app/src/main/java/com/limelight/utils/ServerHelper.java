@@ -25,6 +25,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
 
 import org.xmlpull.v1.XmlPullParserException;
+import com.limelight.nvstream.HostSessionLaunchRequest;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -33,7 +34,6 @@ import java.security.cert.CertificateEncodingException;
 
 public class ServerHelper {
     public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
-    public static final String EXTRA_HOST_SESSION_ID_SUPPORTED = "HostSessionIdSupported";
 
     /**
      * Returns whether the host's latest serverinfo says this exact app is still running.
@@ -50,14 +50,8 @@ public class ServerHelper {
             return false;
         }
 
-        String runningUuid = computer.runningGameUUID;
-        String appUuid = app.getAppUUID();
-        if (runningUuid != null && !runningUuid.isEmpty()
-                && appUuid != null && !appUuid.isEmpty()) {
-            return runningUuid.equalsIgnoreCase(appUuid);
-        }
-        return computer.runningGameId > 0 && app.getAppId() > 0
-                && computer.runningGameId == app.getAppId();
+        return HostSessionLaunchRequest.sameApplication(computer.runningGameId,
+                computer.runningGameUUID, app.getAppId(), app.getAppUUID());
     }
 
     public static ComputerDetails.AddressTuple getCurrentAddressFromComputer(ComputerDetails computer) throws IOException {
@@ -118,6 +112,14 @@ public class ServerHelper {
     public static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
                                            ComputerManagerService.ComputerManagerBinder managerBinder,
                                            boolean withVDisplay) {
+        HostSessionLaunchRequest request = isResumeOfSameHostApp(computer, app)
+                ? HostSessionLaunchRequest.resume(computer) : HostSessionLaunchRequest.start();
+        return createStartIntent(parent, app, computer, managerBinder, withVDisplay, request);
+    }
+
+    private static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
+                                            ComputerManagerService.ComputerManagerBinder managerBinder,
+                                            boolean withVDisplay, HostSessionLaunchRequest request) {
         Intent gameIntent = null;
         PreferenceConfiguration prefConfig = PreferenceConfiguration.readPreferences(parent);
         // Try to add secondary DisplayContext if supported and connected
@@ -131,7 +133,7 @@ public class ServerHelper {
         gameIntent.putExtra(Game.EXTRA_PORT, computer.activeAddress.port);
         gameIntent.putExtra(Game.EXTRA_HTTPS_PORT, computer.httpsPort);
         gameIntent.putExtra(Game.EXTRA_APP_NAME, app.getAppName());
-        boolean resumeExistingSession = isResumeOfSameHostApp(computer, app);
+        boolean resumeExistingSession = request.kind == HostSessionLaunchRequest.Kind.RESUME;
         String appUuid = app.getAppUUID();
         if (resumeExistingSession && (appUuid == null || appUuid.isEmpty())
                 && computer.runningGameUUID != null && !computer.runningGameUUID.isEmpty()) {
@@ -142,14 +144,7 @@ public class ServerHelper {
         gameIntent.putExtra(Game.EXTRA_APP_UUID, appUuid);
         gameIntent.putExtra(Game.EXTRA_APP_ID, app.getAppId());
         gameIntent.putExtra(Game.EXTRA_APP_HDR, app.isHdrSupported());
-        // Gate XR presentation restoration on the host's authoritative running-app state. Any
-        // Game intent constructed elsewhere omits this extra and therefore defaults to fresh.
-        gameIntent.putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, resumeExistingSession);
-        gameIntent.putExtra(EXTRA_HOST_SESSION_ID_SUPPORTED,
-                computer.hostSessionIdSupported);
-        if (resumeExistingSession && computer.hostSessionId != null) {
-            gameIntent.putExtra(Game.EXTRA_HOST_SESSION_ID, computer.hostSessionId);
-        }
+        gameIntent.putExtra(Game.EXTRA_LAUNCH_REQUEST, request);
         gameIntent.putExtra(Game.EXTRA_UNIQUEID, managerBinder.getUniqueId());
         gameIntent.putExtra(Game.EXTRA_PC_UUID, computer.uuid);
         gameIntent.putExtra(Game.EXTRA_PC_NAME, computer.name);
@@ -184,7 +179,9 @@ public class ServerHelper {
             ComputerManagerService.ComputerManagerBinder managerBinder,
             boolean withVDisplay
     ) {
-        doStart(parent, app, computer, managerBinder, withVDisplay, false);
+        HostSessionLaunchRequest request = isResumeOfSameHostApp(computer, app)
+                ? HostSessionLaunchRequest.resume(computer) : HostSessionLaunchRequest.start();
+        doStart(parent, app, computer, managerBinder, withVDisplay, request);
     }
 
     public static void doStart(
@@ -193,15 +190,14 @@ public class ServerHelper {
             ComputerDetails computer,
             ComputerManagerService.ComputerManagerBinder managerBinder,
             boolean withVDisplay,
-            boolean requireHostIdle
+            HostSessionLaunchRequest request
     ) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(parent, parent.getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
 
-        Intent intent = createStartIntent(parent, app, computer, managerBinder, withVDisplay);
-        intent.putExtra(Game.EXTRA_REQUIRE_HOST_IDLE, requireHostIdle);
+        Intent intent = createStartIntent(parent, app, computer, managerBinder, withVDisplay, request);
         parent.startActivity(intent);
     }
 
@@ -297,18 +293,6 @@ public class ServerHelper {
             }
         }).start();
 
-    }
-
-    /** Retains the exact-token behavior for callers that do not provide host capabilities. */
-    public static void doQuit(final Activity parent,
-                              final NvHTTP httpConn,
-                              final String appName,
-                              final String expectedHostSessionId,
-                              final Runnable onComplete,
-                              final Runnable onFail
-    ) {
-        doQuit(parent, httpConn, appName, expectedHostSessionId, true,
-                onComplete, onFail);
     }
 
     public static void doQuit(final Activity parent,

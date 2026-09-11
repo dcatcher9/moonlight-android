@@ -167,12 +167,12 @@ public final class StreamContainerSurfaceHandoffContractTest {
         int clientShow = parked.indexOf("setClientSbsWindowSurfaceEnabled(true)");
         assertTrue(initialHide >= 0 && initialHide < init.indexOf("addView(mSurfaceView, childParams)"));
         assertTrue(publishTarget >= 0 && clientShow > publishTarget);
-        assertTrue(clientShow < parked.indexOf("glView.onResume()"));
+        assertTrue(clientShow < parked.indexOf("glView.requestResume()"));
         String directSuccess = blockBody(completed,
                 completed.indexOf('{', completed.indexOf("if (success && !completedEnable)")));
         assertTrue(directSuccess.contains("setClientSbsWindowSurfaceEnabled(false)"));
         assertFalse(resizeAttach.contains("setClientSbsWindowSurfaceEnabled("));
-        assertTrue(resizeAttach.contains("onResume()"));
+        assertTrue(resizeAttach.contains("requestResume()"));
     }
 
     @Test

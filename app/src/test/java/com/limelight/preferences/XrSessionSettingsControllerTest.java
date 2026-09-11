@@ -1,5 +1,6 @@
 package com.limelight.preferences;
 
+import com.limelight.ui.PresentationMode;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
@@ -96,8 +97,8 @@ public final class XrSessionSettingsControllerTest {
                 PreferenceConfiguration.FULL_RANGE_PREF_STRING, false));
         assertTrue(snapshot.isSharedOverridden(
                 PreferenceConfiguration.FULL_RANGE_PREF_STRING));
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             assertTrue(snapshot.preferencesForMode(mode).getBoolean(
                     PreferenceConfiguration.FULL_RANGE_PREF_STRING, false));
         }
@@ -130,19 +131,19 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = controller();
         controller.cycle(SessionSettingsModel.Key.RESOLUTION);
         controller.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.NORMAL,
+                PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE,
                 "10000");
         controller.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.BITRATE,
                 "10000");
         controller.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_AI,
                 SessionSettingsModel.Key.BITRATE,
                 "10000");
         controller.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.BITRATE,
                 "10000");
         assertTrue(controller.hasPendingChanges());
@@ -153,16 +154,16 @@ public final class XrSessionSettingsControllerTest {
         assertEquals("1080p", controller.getSessionModel()
                 .get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("200000", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL).get(
+                PresentationMode.NORMAL).get(
                 SessionSettingsModel.Key.BITRATE).selectedChoiceId);
         assertEquals("200000", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW).get(
+                PresentationMode.HOST_SBS_RAW).get(
                 SessionSettingsModel.Key.BITRATE).selectedChoiceId);
         assertEquals("200000", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI).get(
+                PresentationMode.HOST_SBS_AI).get(
                 SessionSettingsModel.Key.BITRATE).selectedChoiceId);
         assertEquals("200000", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).get(
+                PresentationMode.CLIENT_SBS_AI).get(
                 SessionSettingsModel.Key.BITRATE).selectedChoiceId);
     }
 
@@ -171,7 +172,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = controller();
 
         ModeStreamQualityModel client = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+                PresentationMode.CLIENT_SBS_AI);
         assertEquals("1080p", client.get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("30", client.get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
         assertEquals("200 Mbps",
@@ -181,7 +182,7 @@ public final class XrSessionSettingsControllerTest {
         assertEquals("672 x 384", clientModel.bucket);
 
         ModeStreamQualityModel normal = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL);
+                PresentationMode.NORMAL);
         assertEquals("1080p", normal.get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("60", normal.get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
     }
@@ -194,22 +195,22 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = controller();
 
         assertEquals("60", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
         assertEquals("60", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI)
+                PresentationMode.HOST_SBS_AI)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
         assertEquals("60", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL)
+                PresentationMode.NORMAL)
                 .get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
     }
 
     @Test
     public void hostSbsKeepsAnExplicitRateInsteadOfTheDefault() {
         XrSessionSettingsController controller = controller();
-        for (SessionSettingsStore.PresenterMode mode : new SessionSettingsStore.PresenterMode[] {
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI}) {
+        for (PresentationMode mode : new PresentationMode[] {
+                PresentationMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_AI}) {
             controller.selectModeQualitySetting(
                     mode, SessionSettingsModel.Key.FRAME_RATE, "90");
             assertEquals("90", controller.getModeStreamQualityModel(mode)
@@ -224,11 +225,11 @@ public final class XrSessionSettingsControllerTest {
         ClientSbsModeSettingsModel model = controller.getClientSbsModel();
         assertEquals("672 x 384", model.bucket);
 
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3440x1440");
         assertEquals("928 x 384", controller.getClientSbsModel().bucket);
 
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "2560x1080");
         assertEquals("896 x 384", controller.getClientSbsModel().bucket);
     }
@@ -236,7 +237,7 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void retiredStoredClientModelCannotChangeTheFixedZipDepthPipeline() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
                         "future-model-family",
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
@@ -245,8 +246,8 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = withFullEnvelope(controller());
         assertEquals("672 x 384", controller.getClientSbsModel().bucket);
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertFalse(controller.selectedModeRequiresReconnect());
@@ -304,31 +305,31 @@ public final class XrSessionSettingsControllerTest {
     public void rawHalfPersistsOnlyInRawModeAndRestoresOnResume() {
         XrSessionSettingsController controller = controller();
         controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
 
         assertTrue(controller.commitPending());
 
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
         assertTrue(snapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
         assertFalse(snapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.NORMAL,
+                PresentationMode.NORMAL,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
         assertFalse(snapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                PresentationMode.HOST_SBS_AI,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
         assertFalse(snapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
         assertEquals(RawSbsModeSettingsModel.HALF_ID,
                 snapshot.preferencesForMode(
-                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW).getString(
+                        PresentationMode.HOST_SBS_RAW).getString(
                         PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, null));
 
         XrSessionSettingsController resumed = controller();
         RawSbsModeSettingsModel resumedModel = resumed.getRawSbsModel();
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 resumed.getStartupMode());
         assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
                 resumedModel.appliedResolution);
@@ -345,7 +346,7 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void rawUseGlobalModeDefaultsClearsPerEyeResolutionOverride() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
                         RawSbsModeSettingsModel.HALF_ID, RawSbsModeSettingsModel.FULL_ID)
                 .commit());
@@ -353,7 +354,7 @@ public final class XrSessionSettingsControllerTest {
         assertEquals(SessionSettingsModel.Source.CURRENT_SESSION,
                 controller.getRawSbsModel().source);
 
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useGlobalModeDefaults(PresentationMode.HOST_SBS_RAW);
 
         RawSbsModeSettingsModel staged = controller.getRawSbsModel();
         assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
@@ -365,7 +366,7 @@ public final class XrSessionSettingsControllerTest {
 
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
         assertFalse(snapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
         RawSbsModeSettingsModel restored = controller().getRawSbsModel();
         assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
@@ -376,14 +377,14 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void rawExplicitSelectionUndoesPendingGlobalReset() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
                         RawSbsModeSettingsModel.HALF_ID, RawSbsModeSettingsModel.FULL_ID)
                 .commit());
         XrSessionSettingsController controller = controller();
         assertFalse(controller.hasPendingChanges());
 
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useGlobalModeDefaults(PresentationMode.HOST_SBS_RAW);
         assertTrue(controller.hasPendingChanges());
         controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
 
@@ -401,11 +402,11 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void rawPackingChangeAloneRequiresReconnectWhenRawIsLive() {
         assertTrue(store.edit(pc, app)
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_RAW)
                 .commit());
         XrSessionSettingsController controller = controller();
         ModeStreamQualityModel quality = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertFalse(quality.hasPendingChanges());
         assertFalse(quality.requiresReconnect());
         assertFalse(controller.selectedModeRequiresReconnect());
@@ -413,7 +414,7 @@ public final class XrSessionSettingsControllerTest {
         controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
 
         quality = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertFalse(quality.hasPendingChanges());
         assertTrue(quality.requiresReconnect());
         assertTrue(controller.selectedModeRequiresReconnect());
@@ -429,7 +430,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController fullController = controller();
 
         fullController.selectPresentationMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
 
         assertEquals("forceh265", fullController.getSharedSessionModel()
                 .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
@@ -442,7 +443,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController halfController = controller();
 
         halfController.selectPresentationMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
 
         assertEquals(RawSbsModeSettingsModel.HALF_ID,
                 halfController.getRawSbsModel().selectedChoiceId);
@@ -461,11 +462,11 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController wideController = controller();
 
         wideController.selectPresentationMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
 
         assertTrue(wideController.isRawSbsTransportSupported());
         assertEquals("5120x2160", wideController.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
         assertEquals("forceh265", wideController.getSharedSessionModel()
                 .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
@@ -477,11 +478,11 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController boundaryController = controller();
 
         boundaryController.selectPresentationMode(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
 
         assertTrue(boundaryController.isRawSbsTransportSupported());
         assertEquals("4096x2160", boundaryController.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
         assertEquals("neverh265", boundaryController.getSharedSessionModel()
                 .get(SessionSettingsModel.Key.CODEC).selectedChoiceId);
@@ -523,11 +524,11 @@ public final class XrSessionSettingsControllerTest {
 
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
         assertEquals(24000, snapshot.preferencesForMode(
-                SessionSettingsStore.PresenterMode.NORMAL).getInt(
+                PresentationMode.NORMAL).getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING, 0));
         PreferenceConfiguration effective = PreferenceConfiguration.readPreferences(
                 context, snapshot.preferencesForMode(
-                        SessionSettingsStore.PresenterMode.NORMAL));
+                        PresentationMode.NORMAL));
         assertEquals(24000, effective.bitrate);
         assertEquals(24000, effective.meteredBitrate);
     }
@@ -554,7 +555,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(controller.commitPending());
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
         SharedPreferences effective = snapshot.preferencesForMode(
-                SessionSettingsStore.PresenterMode.NORMAL);
+                PresentationMode.NORMAL);
         assertEquals("3840x2160", effective.getString(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
         assertEquals("forceh265", effective.getString(
@@ -588,8 +589,8 @@ public final class XrSessionSettingsControllerTest {
                 .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 130000)
                 .commit());
         XrSessionSettingsController controller = controller();
-        SessionSettingsStore.PresenterMode mode =
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI;
+        PresentationMode mode =
+                PresentationMode.CLIENT_SBS_AI;
 
         controller.selectModeQualitySetting(mode,
                 SessionSettingsModel.Key.RESOLUTION, "1920x1080");
@@ -630,7 +631,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController staleController = controller();
         staleController.cycle(SessionSettingsModel.Key.HDR);
         staleController.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertTrue(store.startNewSession(pc, app, null, 2L));
@@ -640,7 +641,7 @@ public final class XrSessionSettingsControllerTest {
         assertFalse(replacement.sharedPreferences().getBoolean(
                 PreferenceConfiguration.ENABLE_HDR_PREF_STRING, false));
         assertEquals("1920x1080", replacement.preferencesForMode(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI).getString(
+                PresentationMode.CLIENT_SBS_AI).getString(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
     }
 
@@ -666,26 +667,26 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void allFourModesPersistIndependentQualityWhileOtherSettingsStayShared() {
         XrSessionSettingsController controller = controller();
-        stageQuality(controller, SessionSettingsStore.PresenterMode.NORMAL,
+        stageQuality(controller, PresentationMode.NORMAL,
                 "2560x1080", "30", "10000");
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "2560x1440", "60", "40000");
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        stageQuality(controller, PresentationMode.HOST_SBS_AI,
                 "1920x1080", "90", "60000");
-        stageQuality(controller, SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        stageQuality(controller, PresentationMode.CLIENT_SBS_AI,
                 "3840x2160", "120", "100000");
         controller.selectSharedSetting(SessionSettingsModel.Key.CODEC, "forceh265");
 
         assertTrue(controller.commitPending());
 
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(snapshot, PresentationMode.NORMAL,
                 "2560x1080", "30", 10000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertQuality(snapshot, PresentationMode.HOST_SBS_RAW,
                 "2560x1440", "60", 40000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        assertQuality(snapshot, PresentationMode.HOST_SBS_AI,
                 "1920x1080", "90", 60000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        assertQuality(snapshot, PresentationMode.CLIENT_SBS_AI,
                 "3840x2160", "120", 100000);
         assertFalse(snapshot.isSharedOverridden(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
@@ -693,8 +694,8 @@ public final class XrSessionSettingsControllerTest {
         assertFalse(snapshot.isSharedOverridden(PreferenceConfiguration.BITRATE_PREF_STRING));
         assertTrue(snapshot.isSharedOverridden(
                 PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING));
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             assertEquals("forceh265", snapshot.preferencesForMode(mode).getString(
                     PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, null));
         }
@@ -703,42 +704,42 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void selectedSavedQualityRequestsAutomaticReconnectAndRestartUsesIt() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3840x2160", "1920x1080")
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.BITRATE_PREF_STRING, 80000, 20000)
                 .commit());
         XrSessionSettingsController controller = controller();
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_AI);
         assertFalse(controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI).requiresReconnect());
+                PresentationMode.HOST_SBS_AI).requiresReconnect());
         assertFalse(controller.selectedModeRequiresReconnect());
         assertFalse(controller.hasPendingChanges());
 
         ModeStreamQualityModel raw = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertFalse(raw.selected);
         assertFalse(raw.hasPendingChanges());
         assertFalse(raw.requiresReconnect());
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         raw = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertTrue(raw.selected);
         assertFalse(raw.hasPendingChanges());
         assertTrue(raw.requiresReconnect());
         assertTrue(controller.selectedModeRequiresReconnect());
         assertTrue(controller.hasPendingChanges());
-        assertEquals(SessionSettingsStore.PresenterMode.NORMAL,
+        assertEquals(PresentationMode.NORMAL,
                 store.getCurrentSession(pc).getLastSuccessfulMode());
 
         assertTrue(controller.commitPending());
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 store.getCurrentSession(pc).getLastSuccessfulMode());
         XrSessionSettingsController restarted = controller();
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 restarted.getStartupMode());
         // Resolution and bitrate were overridden for this mode; the frame rate was not, so it
         // retains the explicit global 60-FPS choice used by this fixture.
@@ -749,22 +750,22 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void rawTransportBoundaryReconnectsWithIdenticalLogicalQuality() {
         XrSessionSettingsController controller = controller();
-        assertEquals(SessionSettingsStore.PresenterMode.NORMAL, controller.getStartupMode());
+        assertEquals(PresentationMode.NORMAL, controller.getStartupMode());
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_AI);
         assertFalse(controller.selectedModeRequiresReconnect());
         assertFalse(controller.hasPendingChanges());
 
         // Client SBS only defaults to a lower frame rate here, and a frame-rate delta is
         // live-applicable, so entering it no longer forces a reconnect.
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+        controller.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
         assertFalse(controller.selectedModeRequiresReconnect());
         assertTrue(controller.selectedModeHasLiveApplicableChange());
         assertTrue(controller.hasPendingChanges());
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         ModeStreamQualityModel raw = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertTrue(raw.selected);
         assertFalse(raw.hasPendingChanges());
         assertTrue(raw.requiresReconnect());
@@ -773,33 +774,33 @@ public final class XrSessionSettingsControllerTest {
 
         assertTrue(controller.commitPending());
         XrSessionSettingsController rawController = controller();
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 rawController.getStartupMode());
         assertFalse(rawController.selectedModeRequiresReconnect());
         assertFalse(rawController.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW).requiresReconnect());
+                PresentationMode.HOST_SBS_RAW).requiresReconnect());
 
-        rawController.selectPresentationMode(SessionSettingsStore.PresenterMode.NORMAL);
+        rawController.selectPresentationMode(PresentationMode.NORMAL);
         assertTrue(rawController.selectedModeRequiresReconnect());
         assertTrue(rawController.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL).requiresReconnect());
+                PresentationMode.NORMAL).requiresReconnect());
 
-        rawController.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
+        rawController.selectPresentationMode(PresentationMode.HOST_SBS_AI);
         assertTrue(rawController.selectedModeRequiresReconnect());
         assertTrue(rawController.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI).requiresReconnect());
+                PresentationMode.HOST_SBS_AI).requiresReconnect());
     }
 
     @Test
     public void wideRawTransportPromotesForcedH264ToHevc() {
         XrSessionSettingsController controller = controller();
         controller.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.RESOLUTION,
                 "3840x2160");
         controller.selectSharedSetting(SessionSettingsModel.Key.CODEC, "neverh265");
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
 
         SessionSettingsModel.Value codec = controller.getSharedSessionModel()
                 .get(SessionSettingsModel.Key.CODEC);
@@ -819,7 +820,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(controller.constrainRawSbsTransportToSupportedPreset());
         assertTrue(controller.isRawSbsTransportSupported());
         assertEquals("3840x2160", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
     }
 
@@ -834,7 +835,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(controller.constrainRawSbsTransportToSupportedPreset());
 
         ModeStreamQualityModel raw = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertEquals("3840x2160",
                 raw.get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
         assertEquals("43000", raw.get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
@@ -846,36 +847,36 @@ public final class XrSessionSettingsControllerTest {
                 .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "5120x2160")
                 .commit());
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3840x2160", "5120x2160")
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_RAW)
                 .commit());
         XrSessionSettingsController controller = controller();
 
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useGlobalModeDefaults(PresentationMode.HOST_SBS_RAW);
 
         assertTrue(controller.isRawSbsTransportSupported());
         assertEquals("3840x2160", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.RESOLUTION).selectedChoiceId);
         assertTrue(controller.commitPending());
         assertEquals("3840x2160", store.snapshot(pc, globals)
-                .preferencesForMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .preferencesForMode(PresentationMode.HOST_SBS_RAW)
                 .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
     }
 
     @Test
     public void startupModeOverrideFailsClosedWithoutChangingDurableRecord() {
         assertTrue(store.edit(pc, app)
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_RAW)
                 .commit());
         XrSessionSettingsController controller = new XrSessionSettingsController(
                 store, pc, app, globals, store.snapshot(pc, globals),
-                SessionSettingsStore.PresenterMode.NORMAL);
+                PresentationMode.NORMAL);
 
-        assertEquals(SessionSettingsStore.PresenterMode.NORMAL, controller.getStartupMode());
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.NORMAL, controller.getStartupMode());
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 store.getCurrentSession(pc).getLastSuccessfulMode());
     }
 
@@ -885,10 +886,10 @@ public final class XrSessionSettingsControllerTest {
                 .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "neverh265")
                 .commit());
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3840x2160", "1920x1080")
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_RAW)
                 .commit());
 
         XrSessionSettingsController controller = controller();
@@ -903,24 +904,24 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void automaticModeReconnectCommitsEveryStagedSettingAtomically() {
         XrSessionSettingsController controller = controller();
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "3840x2160", "90", "100000");
-        stageQuality(controller, SessionSettingsStore.PresenterMode.NORMAL,
+        stageQuality(controller, PresentationMode.NORMAL,
                 "2560x1080", "30", "10000");
         controller.selectSharedSetting(SessionSettingsModel.Key.CODEC, "forceh265");
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
 
         assertTrue(controller.selectedModeRequiresReconnect());
         assertTrue(controller.commitPending());
 
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertQuality(snapshot, PresentationMode.HOST_SBS_RAW,
                 "3840x2160", "90", 100000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(snapshot, PresentationMode.NORMAL,
                 "2560x1080", "30", 10000);
         assertEquals("forceh265", snapshot.sharedPreferences().getString(
                 PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "auto"));
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 snapshot.getRecord().getLastSuccessfulMode());
     }
 
@@ -933,9 +934,9 @@ public final class XrSessionSettingsControllerTest {
                 .setSharedValue(PreferenceConfiguration.BITRATE_PREF_STRING, 60000, 20000)
                 .commit());
         XrSessionSettingsController controller = controller();
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "3840x2160", "120", "100000");
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
 
         assertTrue(controller.selectedModeRequiresReconnect());
         assertTrue(controller.commitPending());
@@ -945,33 +946,33 @@ public final class XrSessionSettingsControllerTest {
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
         assertFalse(snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING));
         assertFalse(snapshot.isSharedOverridden(PreferenceConfiguration.BITRATE_PREF_STRING));
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertQuality(snapshot, PresentationMode.HOST_SBS_RAW,
                 "3840x2160", "120", 100000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(snapshot, PresentationMode.NORMAL,
                 "2560x1440", "90", 60000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        assertQuality(snapshot, PresentationMode.HOST_SBS_AI,
                 "2560x1440", "90", 60000);
-        assertQuality(snapshot, SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        assertQuality(snapshot, PresentationMode.CLIENT_SBS_AI,
                 "2560x1440", "90", 60000);
     }
 
     @Test
     public void startupUsesLastModeQualityAndFixedZipDepthBucket() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                .setModeValue(PresentationMode.HOST_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "2560x1440", "1920x1080")
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                .setModeValue(PresentationMode.HOST_SBS_AI,
                         PreferenceConfiguration.BITRATE_PREF_STRING, 40000, 20000)
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3440x1440", "1920x1080")
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_AI)
                 .commit());
 
         XrSessionSettingsController controller = controller();
         SharedPreferences startup = controller.getStartupPreferences();
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        assertEquals(PresentationMode.HOST_SBS_AI,
                 controller.getStartupMode());
         assertEquals("2560x1440", startup.getString(
                 PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
@@ -989,7 +990,7 @@ public final class XrSessionSettingsControllerTest {
                 .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 200000)
                 .commit());
         assertTrue(store.edit(pc, app)
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
         XrSessionSettingsController controller = controller();
@@ -1012,10 +1013,10 @@ public final class XrSessionSettingsControllerTest {
 
         SessionSettingsStore.Snapshot unchanged = store.snapshot(pc, globals);
         assertFalse(unchanged.isModeOverridden(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
         assertFalse(unchanged.isModeOverridden(
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI,
                 PreferenceConfiguration.FPS_PREF_STRING));
     }
 
@@ -1023,9 +1024,9 @@ public final class XrSessionSettingsControllerTest {
     public void modeQualitySurvivesStoreRestartAndConfirmedResume() {
         assertTrue(store.startNewSession(pc, app, "host-session-1", 2L));
         XrSessionSettingsController controller = controller();
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "3840x2160", "90", "100000");
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         assertTrue(controller.commitPending());
 
         SessionSettingsStore restartedStore = new SessionSettingsStore(context);
@@ -1034,11 +1035,11 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController resumed = new XrSessionSettingsController(
                 restartedStore, pc, app, globals, resumedSnapshot);
 
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 resumed.getStartupMode());
         assertEquals(new StreamQualityTuple("3840x2160", "90", 100000),
                 resumed.getLiveStreamQuality());
-        assertQuality(resumedSnapshot, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertQuality(resumedSnapshot, PresentationMode.HOST_SBS_RAW,
                 "3840x2160", "90", 100000);
     }
 
@@ -1047,7 +1048,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(store.startNewSession(pc, app, "host-session-raw-half", 2L));
         XrSessionSettingsController controller = controller();
         controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         assertTrue(controller.commitPending());
 
         SessionSettingsStore restartedStore = new SessionSettingsStore(context);
@@ -1058,7 +1059,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController resumed = new XrSessionSettingsController(
                 restartedStore, pc, app, globals, resumedSnapshot);
 
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        assertEquals(PresentationMode.HOST_SBS_RAW,
                 resumed.getStartupMode());
         assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
                 resumed.getRawSbsModel().appliedResolution);
@@ -1068,7 +1069,7 @@ public final class XrSessionSettingsControllerTest {
                 resumed.getStartupPreferences().getString(
                         PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, null));
         assertTrue(resumedSnapshot.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
         assertFalse(resumed.selectedModeRequiresReconnect());
         assertFalse(resumed.hasPendingChanges());
@@ -1083,8 +1084,8 @@ public final class XrSessionSettingsControllerTest {
                 .setSharedValue(PreferenceConfiguration.BITRATE_PREF_STRING, 60000, 20000)
                 .commit());
         XrSessionSettingsController controller = controller();
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             ModeStreamQualityModel quality = controller.getModeStreamQualityModel(mode);
             assertEquals("1440p",
                     quality.get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
@@ -1100,8 +1101,8 @@ public final class XrSessionSettingsControllerTest {
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
         assertFalse(migrated.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING));
         assertFalse(migrated.isSharedOverridden(PreferenceConfiguration.BITRATE_PREF_STRING));
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             assertQuality(migrated, mode, "2560x1440", "90", 60000);
             assertTrue(migrated.isModeOverridden(mode,
                     PreferenceConfiguration.RESOLUTION_PREF_STRING));
@@ -1113,10 +1114,10 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void scopedDefaultsLeaveUnrelatedSharedAndModeOverridesIntact() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.NORMAL,
+                .setModeValue(PresentationMode.NORMAL,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "2560x1080", "1920x1080")
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "3840x2160", "1920x1080")
                 .setSharedValue(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING,
@@ -1124,12 +1125,12 @@ public final class XrSessionSettingsControllerTest {
                 .commit());
 
         XrSessionSettingsController controller = controller();
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.NORMAL);
+        controller.useGlobalModeDefaults(PresentationMode.NORMAL);
         assertEquals("1080p", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL)
+                PresentationMode.NORMAL)
                 .get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("4K", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("HEVC", controller.getSharedSessionModel()
                 .get(SessionSettingsModel.Key.CODEC).pendingValue);
@@ -1137,10 +1138,10 @@ public final class XrSessionSettingsControllerTest {
 
         SessionSettingsStore.Snapshot afterModeReset = store.snapshot(pc, globals);
         assertFalse(afterModeReset.isModeOverridden(
-                SessionSettingsStore.PresenterMode.NORMAL,
+                PresentationMode.NORMAL,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
         assertTrue(afterModeReset.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
         assertTrue(afterModeReset.isSharedOverridden(
                 PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING));
@@ -1152,10 +1153,10 @@ public final class XrSessionSettingsControllerTest {
         assertFalse(afterSharedReset.isSharedOverridden(
                 PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING));
         assertTrue(afterSharedReset.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
         assertTrue(afterSharedReset.isModeOverridden(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 PreferenceConfiguration.RESOLUTION_PREF_STRING));
     }
 
@@ -1166,24 +1167,24 @@ public final class XrSessionSettingsControllerTest {
                 .commit());
 
         XrSessionSettingsController controller = controller();
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "2560x1080", "30", "10000");
         controller.selectModeQualitySetting(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.BITRATE, "200000");
 
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useGlobalModeDefaults(PresentationMode.HOST_SBS_RAW);
 
         assertEquals("200000", controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW)
+                PresentationMode.HOST_SBS_RAW)
                 .get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
         assertTrue(controller.commitPending());
 
         // Host SBS uses the same durable ceiling as Normal. Only Client SBS has a lower
         // mode-specific frame-rate default.
         assertQuality(store.snapshot(pc, globals),
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 "1920x1080", "60", 200000);
     }
 
@@ -1199,14 +1200,14 @@ public final class XrSessionSettingsControllerTest {
                 .commit());
 
         XrSessionSettingsController controller = controller();
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "2560x1080", "30", "10000");
 
-        controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useSessionModeDefaults(PresentationMode.HOST_SBS_RAW);
 
         ModeStreamQualityModel rawMode = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertEquals("1440p", rawMode.get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("120", rawMode.get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
         assertEquals("130000", rawMode.get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
@@ -1215,7 +1216,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(controller.commitPending());
 
         assertQuality(store.snapshot(pc, globals),
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 "2560x1440", "120", 130000);
     }
 
@@ -1232,14 +1233,14 @@ public final class XrSessionSettingsControllerTest {
 
         XrSessionSettingsController controller = controller();
 
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
-        stageQuality(controller, SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW,
                 "2560x1080", "30", "100000");
 
-        controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useSessionModeDefaults(PresentationMode.HOST_SBS_RAW);
 
         ModeStreamQualityModel host = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertEquals("1440p", host.get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("120", host.get(SessionSettingsModel.Key.FRAME_RATE).pendingValue);
         assertEquals("130000", host.get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
@@ -1248,26 +1249,26 @@ public final class XrSessionSettingsControllerTest {
 
         assertTrue(controller.commitPending());
         assertQuality(store.snapshot(pc, globals),
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                PresentationMode.HOST_SBS_RAW,
                 "2560x1440", "120", 130000);
     }
 
     @Test
     public void useSessionModeDefaultsIgnoresRetiredClientModelAndRestoresRawPacking() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
-                .setModeValue(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
                         RawSbsModeSettingsModel.HALF_ID, RawSbsModeSettingsModel.FULL_ID)
                 .commit());
         XrSessionSettingsController controller = controller();
         controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.FULL_ID);
 
-        controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.useSessionModeDefaults(PresentationMode.CLIENT_SBS_AI);
+        controller.useSessionModeDefaults(PresentationMode.HOST_SBS_RAW);
 
         assertEquals("672 x 384", controller.getClientSbsModel().bucket);
         assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
@@ -1281,16 +1282,16 @@ public final class XrSessionSettingsControllerTest {
         // Another writer (e.g. a confirmed mode-switch commit) updates the session record
         // after this settings panel was constructed.
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.NORMAL,
+                .setModeValue(PresentationMode.NORMAL,
                         PreferenceConfiguration.BITRATE_PREF_STRING, 60000, 200000)
                 .commit());
-        stageQuality(controller, SessionSettingsStore.PresenterMode.NORMAL,
+        stageQuality(controller, PresentationMode.NORMAL,
                 "2560x1080", "30", "10000");
 
-        controller.useSessionModeDefaults(SessionSettingsStore.PresenterMode.NORMAL);
+        controller.useSessionModeDefaults(PresentationMode.NORMAL);
 
         ModeStreamQualityModel normal = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL);
+                PresentationMode.NORMAL);
         assertEquals("1080p", normal.get(SessionSettingsModel.Key.RESOLUTION).pendingValue);
         assertEquals("60", normal.get(SessionSettingsModel.Key.FRAME_RATE).selectedChoiceId);
         assertEquals("60000", normal.get(SessionSettingsModel.Key.BITRATE).selectedChoiceId);
@@ -1308,7 +1309,7 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void bitrateOnlyDeltaAppliesLive() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
 
         assertTrue(controller.hasPendingChanges());
@@ -1316,13 +1317,13 @@ public final class XrSessionSettingsControllerTest {
         assertFalse(controller.selectedModeRequiresReconnect());
         assertFalse(controller.pendingChangesRequireReconnect());
         assertTrue(controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL).appliesLive());
+                PresentationMode.NORMAL).appliesLive());
     }
 
     @Test
     public void frameRateOnlyDeltaAppliesLive() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.FRAME_RATE, "90");
 
         assertTrue(controller.selectedModeHasLiveApplicableChange());
@@ -1334,7 +1335,7 @@ public final class XrSessionSettingsControllerTest {
     public void standardHostReconnectsForEveryQualityDelta() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
         controller.setLiveVideoModeSupported(false);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
 
         assertFalse(controller.selectedModeHasLiveApplicableChange());
@@ -1345,7 +1346,7 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void resolutionDeltaInsideTheEnvelopeAppliesLive() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertTrue(controller.selectedModeHasLiveApplicableChange());
@@ -1357,7 +1358,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = controller();
         // A decoder configured only for the launch geometry cannot absorb 4K.
         controller.setLiveResolutionEnvelope(1920, 1080);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertFalse(controller.selectedModeHasLiveApplicableChange());
@@ -1369,14 +1370,14 @@ public final class XrSessionSettingsControllerTest {
     public void noAdaptiveEnvelopeMakesEveryResolutionDeltaReconnect() {
         XrSessionSettingsController controller = controller();
         controller.setLiveResolutionEnvelope(0, 0);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION, "2560x1080");
 
         assertTrue(controller.selectedModeRequiresReconnect());
         // Bitrate and frame rate stay live even without any envelope.
         XrSessionSettingsController other = controller();
         other.setLiveResolutionEnvelope(0, 0);
-        other.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        other.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
         assertTrue(other.selectedModeHasLiveApplicableChange());
     }
@@ -1386,13 +1387,13 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = controller();
         // 2 x 2560 = 5120 fits; 2 x 3840 = 7680 does not.
         controller.setLiveResolutionEnvelope(5120, 2160);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_AI);
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "2560x1440");
         assertTrue(controller.selectedModeHasLiveApplicableChange());
         assertFalse(controller.selectedModeRequiresReconnect());
 
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
         assertTrue(controller.selectedModeRequiresReconnect());
     }
@@ -1402,8 +1403,8 @@ public final class XrSessionSettingsControllerTest {
         // Every standard preset is 16:9, so a preset-to-preset change keeps the depth bucket and
         // needs no model change or shader regeneration — only the color targets are resized.
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "2560x1440");
 
         assertFalse(controller.selectedModeRequiresReconnect());
@@ -1416,8 +1417,8 @@ public final class XrSessionSettingsControllerTest {
         // SceneCore and is not decoder-constrained. 3840 fits a 3840-wide envelope.
         XrSessionSettingsController controller = controller();
         controller.setLiveResolutionEnvelope(3840, 2160);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertTrue(controller.selectedModeHasLiveApplicableChange());
@@ -1426,8 +1427,8 @@ public final class XrSessionSettingsControllerTest {
         // The same size in Host SBS AI packs to 7680 and does not fit that envelope.
         XrSessionSettingsController hostAi = controller();
         hostAi.setLiveResolutionEnvelope(3840, 2160);
-        hostAi.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
-        hostAi.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        hostAi.selectPresentationMode(PresentationMode.HOST_SBS_AI);
+        hostAi.selectModeQualitySetting(PresentationMode.HOST_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
         assertTrue(hostAi.selectedModeRequiresReconnect());
     }
@@ -1461,7 +1462,7 @@ public final class XrSessionSettingsControllerTest {
         // recomputed on the live path anyway. Only Client SBS is bucket-constrained.
         // Live 2560x1440 (16:9) -> staged 5120x2160 (21:9) is a genuine aspect change.
         XrSessionSettingsController seed = controller();
-        seed.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        seed.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION, "2560x1440");
         assertTrue(seed.commitPending());
 
@@ -1471,7 +1472,7 @@ public final class XrSessionSettingsControllerTest {
 
         XrSessionSettingsController controller = withFullEnvelope(controller());
         assertEquals("2560x1440", controller.getLiveStreamQuality().resolution);
-        controller.useGlobalModeDefaults(SessionSettingsStore.PresenterMode.NORMAL);
+        controller.useGlobalModeDefaults(PresentationMode.NORMAL);
 
         assertEquals("5120x2160",
                 controller.getSelectedModePendingQuality().resolution);
@@ -1483,12 +1484,12 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void clientSbsFrameRateAndBitrateStayLive() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+        controller.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
         // Client SBS already defaults to a different frame rate/bitrate than the live tuple.
         assertTrue(controller.selectedModeHasLiveApplicableChange());
         assertFalse(controller.selectedModeRequiresReconnect());
 
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.BITRATE, "60000");
         assertTrue(controller.selectedModeHasLiveApplicableChange());
         assertFalse(controller.selectedModeRequiresReconnect());
@@ -1498,10 +1499,10 @@ public final class XrSessionSettingsControllerTest {
     public void rawFullResolutionDeltaRequiresReconnect() {
         // Raw Full's 2W transport may exceed what the virtual display advertises.
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         controller.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.FULL.preferenceValue);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.RESOLUTION, "2560x1440");
 
         assertTrue(controller.selectedModeRequiresReconnect());
@@ -1511,13 +1512,13 @@ public final class XrSessionSettingsControllerTest {
     public void enteringRawFullReconnectsButEnteringRawHalfIsLive() {
         // Raw Full negotiates 2W x H; Raw Half negotiates W x H, the same stream as Normal.
         XrSessionSettingsController full = withFullEnvelope(controller());
-        full.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        full.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         full.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.FULL.preferenceValue);
         assertTrue(full.selectedModeRequiresReconnect());
 
         XrSessionSettingsController half = withFullEnvelope(controller());
-        half.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        half.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         half.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue);
         assertFalse(half.selectedModeRequiresReconnect());
@@ -1529,10 +1530,10 @@ public final class XrSessionSettingsControllerTest {
         // which would pack the same size to 7680.
         XrSessionSettingsController controller = controller();
         controller.setLiveResolutionEnvelope(3840, 2160);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         controller.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertTrue(controller.selectedModeHasLiveApplicableChange());
@@ -1543,10 +1544,10 @@ public final class XrSessionSettingsControllerTest {
     public void rawHalfResolutionDeltaStillReconnectsBeyondTheEnvelope() {
         XrSessionSettingsController controller = controller();
         controller.setLiveResolutionEnvelope(1920, 1080);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         controller.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
 
         assertTrue(controller.selectedModeRequiresReconnect());
@@ -1563,13 +1564,13 @@ public final class XrSessionSettingsControllerTest {
             assertTrue(store.startNewSession(pc, app, null, 1L));
 
             XrSessionSettingsController seed = controller();
-            seed.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+            seed.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
             seed.selectRawSbsPerEyeResolution(packing.preferenceValue);
             assertTrue(seed.commitPending());
 
             XrSessionSettingsController live = withFullEnvelope(controller());
-            assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW, live.getStartupMode());
-            live.selectPresentationMode(SessionSettingsStore.PresenterMode.NORMAL);
+            assertEquals(PresentationMode.HOST_SBS_RAW, live.getStartupMode());
+            live.selectPresentationMode(PresentationMode.NORMAL);
 
             if (packing == PreferenceConfiguration.RawSbsPerEyeResolution.FULL) {
                 assertTrue("leaving Raw Full must reconnect",
@@ -1584,13 +1585,13 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void changingFullHalfWhileRawIsLiveStillReconnects() {
         XrSessionSettingsController seed = controller();
-        seed.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+        seed.selectPresentationMode(PresentationMode.HOST_SBS_RAW);
         seed.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue);
         assertTrue(seed.commitPending());
 
         XrSessionSettingsController live = withFullEnvelope(controller());
-        assertEquals(SessionSettingsStore.PresenterMode.HOST_SBS_RAW, live.getStartupMode());
+        assertEquals(PresentationMode.HOST_SBS_RAW, live.getStartupMode());
         // Half -> Full genuinely changes the transport from W x H to 2W x H.
         live.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.FULL.preferenceValue);
@@ -1601,7 +1602,7 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void sharedSettingDeltaKeepsApplyAndReconnect() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
         controller.cycle(SessionSettingsModel.Key.HDR);
 
@@ -1612,9 +1613,9 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void anotherModesStagedTupleKeepsApplyAndReconnect() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_AI,
                 SessionSettingsModel.Key.BITRATE, "60000");
 
         assertTrue(controller.pendingChangesRequireReconnect());
@@ -1623,9 +1624,9 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void notifyLiveStreamQualityAppliedClearsPendingState() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.FRAME_RATE, "90");
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
         assertTrue(controller.hasPendingChanges());
 
@@ -1639,7 +1640,7 @@ public final class XrSessionSettingsControllerTest {
         assertFalse(controller.selectedModeHasLiveApplicableChange());
         assertFalse(controller.selectedModeRequiresReconnect());
         ModeStreamQualityModel model = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.NORMAL);
+                PresentationMode.NORMAL);
         assertFalse(model.hasPendingChanges());
         assertFalse(model.requiresApply());
     }
@@ -1647,20 +1648,20 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void clampedLiveAckReplacesThePendingTupleBeforeCommit() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION, "5120x2160");
         StreamQualityTuple requested = controller.getSelectedModePendingQuality();
         StreamQualityTuple clamped = new StreamQualityTuple(
                 "4096x1728", requested.frameRate, requested.bitrateKbps);
 
         controller.notifyLiveStreamQualityApplied(
-                SessionSettingsStore.PresenterMode.NORMAL, clamped);
+                PresentationMode.NORMAL, clamped);
 
         assertEquals(clamped, controller.getSelectedModePendingQuality());
         assertEquals(clamped, controller.getLiveStreamQuality());
         assertFalse(controller.hasPendingChanges());
         assertTrue(controller.commitPending());
-        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(store.snapshot(pc, globals), PresentationMode.NORMAL,
                 clamped.resolution, clamped.frameRate, clamped.bitrateKbps);
     }
 
@@ -1668,21 +1669,21 @@ public final class XrSessionSettingsControllerTest {
     public void refusalPublicationPersistsTheTupleStillInEffect() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
         StreamQualityTuple stillInEffect = controller.getLiveStreamQuality();
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.FRAME_RATE, "90");
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
         assertTrue(controller.hasPendingChanges());
 
         // A non-reconnect refusal is published through the same callback as a reconciled success,
         // but with the previous requested-wire tuple that the host reports is still active.
         controller.notifyLiveStreamQualityApplied(
-                SessionSettingsStore.PresenterMode.NORMAL, stillInEffect);
+                PresentationMode.NORMAL, stillInEffect);
 
         assertEquals(stillInEffect, controller.getSelectedModePendingQuality());
         assertFalse(controller.hasPendingChanges());
         assertTrue(controller.commitPending());
-        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(store.snapshot(pc, globals), PresentationMode.NORMAL,
                 stillInEffect.resolution, stillInEffect.frameRate,
                 stillInEffect.bitrateKbps);
     }
@@ -1690,13 +1691,13 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void notifyLiveStreamQualityAppliedMarksTheModeAsSessionScoped() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.BITRATE, "80000");
         controller.notifyLiveStreamQualityApplied(
                 controller.getSelectedModePendingQuality());
 
         assertEquals(SessionSettingsModel.Source.CURRENT_SESSION,
-                controller.getModeStreamQualityModel(SessionSettingsStore.PresenterMode.NORMAL)
+                controller.getModeStreamQualityModel(PresentationMode.NORMAL)
                         .get(SessionSettingsModel.Key.BITRATE).source);
     }
 
@@ -1706,7 +1707,7 @@ public final class XrSessionSettingsControllerTest {
                 .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 130000)
                 .commit());
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.FRAME_RATE, "90");
 
         StreamQualityTuple firstRequest = controller.getSelectedModePendingQuality();
@@ -1716,11 +1717,11 @@ public final class XrSessionSettingsControllerTest {
         controller.notifyLiveStreamQualityApplied(new StreamQualityTuple(
                 firstRequest.resolution, firstRequest.frameRate, firstRequest.bitrateKbps));
         assertTrue(controller.commitPending());
-        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(store.snapshot(pc, globals), PresentationMode.NORMAL,
                 "1920x1080", "90", 130000);
 
         controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION, "3840x2160");
         StreamQualityTuple secondRequest = controller.getSelectedModePendingQuality();
         assertEquals("a prior effective encoder ACK must not become the next wire budget",
@@ -1728,7 +1729,7 @@ public final class XrSessionSettingsControllerTest {
         controller.notifyLiveStreamQualityApplied(new StreamQualityTuple(
                 secondRequest.resolution, secondRequest.frameRate, secondRequest.bitrateKbps));
         assertTrue(controller.commitPending());
-        assertQuality(store.snapshot(pc, globals), SessionSettingsStore.PresenterMode.NORMAL,
+        assertQuality(store.snapshot(pc, globals), PresentationMode.NORMAL,
                 "3840x2160", "90", 130000);
     }
 
@@ -1744,8 +1745,8 @@ public final class XrSessionSettingsControllerTest {
 
         assertEquals(PreferenceConfiguration.RES_1080P,
                 controller.getLiveStreamQuality().resolution);
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             assertEquals("mode " + mode + " must not keep a retired resolution",
                     PreferenceConfiguration.RES_1080P,
                     controller.getModeStreamQualityModel(mode).pendingQuality.resolution);
@@ -1755,7 +1756,7 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void persistedSessionRecord720pMigratesToTheLadderFloor() {
         assertTrue(store.edit(pc, app)
-                .setModeValue(SessionSettingsStore.PresenterMode.NORMAL,
+                .setModeValue(PresentationMode.NORMAL,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "1280x720", "1920x1080")
                 .commit());
@@ -1763,7 +1764,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController controller = controller();
 
         assertEquals(PreferenceConfiguration.RES_1080P,
-                controller.getModeStreamQualityModel(SessionSettingsStore.PresenterMode.NORMAL)
+                controller.getModeStreamQualityModel(PresentationMode.NORMAL)
                         .pendingQuality.resolution);
     }
 
@@ -1781,8 +1782,8 @@ public final class XrSessionSettingsControllerTest {
 
     @Test
     public void everyLadderEntryIsSelectableInEveryMode() {
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             XrSessionSettingsController controller = withFullEnvelope(controller());
             assertEquals(XrResolutionOptions.standardOptions().size(),
                     controller.getModeStreamQualityModel(mode)
@@ -1799,21 +1800,21 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void portraitResolutionPersistsAsLiteralGeometryWithoutRotationPreference() {
         XrSessionSettingsController controller = controller();
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        controller.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION,
                 XrResolutionOptions.RESOLUTION_4K_PORTRAIT);
 
         assertTrue(controller.commitPending());
         SessionSettingsStore.Snapshot snapshot = store.snapshot(pc, globals);
         assertEquals(XrResolutionOptions.RESOLUTION_4K_PORTRAIT,
-                snapshot.preferencesForMode(SessionSettingsStore.PresenterMode.NORMAL)
+                snapshot.preferencesForMode(PresentationMode.NORMAL)
                         .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
         assertFalse(globals.contains("checkbox_auto_invert_video_resolution"));
 
         XrSessionSettingsController restored =
                 new XrSessionSettingsController(store, pc, app, globals, snapshot);
         assertEquals(XrResolutionOptions.RESOLUTION_4K_PORTRAIT,
-                restored.getModeStreamQualityModel(SessionSettingsStore.PresenterMode.NORMAL)
+                restored.getModeStreamQualityModel(PresentationMode.NORMAL)
                         .pendingQuality.resolution);
     }
 
@@ -1821,7 +1822,7 @@ public final class XrSessionSettingsControllerTest {
     public void landscapeToPortraitReconnectsButPortraitFamilyResizeCanStayLive() {
         XrSessionSettingsController landscape = controller();
         landscape.setLiveResolutionEnvelope(5120, 2160);
-        landscape.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        landscape.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION,
                 XrResolutionOptions.RESOLUTION_1080P_PORTRAIT);
         assertTrue(landscape.selectedModeRequiresReconnect());
@@ -1831,7 +1832,7 @@ public final class XrSessionSettingsControllerTest {
         XrSessionSettingsController portrait = new XrSessionSettingsController(
                 store, pc, app, globals, store.snapshot(pc, globals));
         portrait.setLiveResolutionEnvelope(2160, 5120);
-        portrait.selectModeQualitySetting(SessionSettingsStore.PresenterMode.NORMAL,
+        portrait.selectModeQualitySetting(PresentationMode.NORMAL,
                 SessionSettingsModel.Key.RESOLUTION,
                 XrResolutionOptions.RESOLUTION_1440P_PORTRAIT);
         assertFalse(portrait.selectedModeRequiresReconnect());
@@ -1841,8 +1842,8 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void phoneAndTabletPortraitSourcesPersistInEveryModeWithoutRotation() {
         String[] sources = {"1080x2400", "1536x2048"};
-        for (SessionSettingsStore.PresenterMode mode
-                : SessionSettingsStore.PresenterMode.values()) {
+        for (PresentationMode mode
+                : PresentationMode.values()) {
             for (String source : sources) {
                 XrSessionSettingsController controller = controller();
                 controller.selectModeQualitySetting(mode,
@@ -1894,14 +1895,14 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void clientSbsUltrawideResolutionChangeIsLiveButFamilyChangeReconnects() {
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
+        controller.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
         // Live tuple is 16:9, so entering the ultrawide family must reconnect.
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_5K2K);
         assertTrue(controller.selectedModeRequiresReconnect());
 
         // Staying inside 16:9 remains live.
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        controller.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_4K);
         assertFalse(controller.selectedModeRequiresReconnect());
         assertTrue(controller.selectedModeHasLiveApplicableChange());
@@ -1913,8 +1914,8 @@ public final class XrSessionSettingsControllerTest {
         // client classifies it as reconnect-required rather than sending a doomed live request.
         XrSessionSettingsController controller = controller();
         controller.setLiveResolutionEnvelope(8192, 2160);
-        controller.selectPresentationMode(SessionSettingsStore.PresenterMode.HOST_SBS_AI);
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+        controller.selectPresentationMode(PresentationMode.HOST_SBS_AI);
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_5K2K);
 
         assertTrue(controller.selectedModeRequiresReconnect());
@@ -1922,8 +1923,8 @@ public final class XrSessionSettingsControllerTest {
         // Client SBS decodes a plain 5120 wide, which fits the same envelope.
         XrSessionSettingsController client = controller();
         client.setLiveResolutionEnvelope(8192, 2160);
-        client.selectPresentationMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI);
-        client.selectModeQualitySetting(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+        client.selectPresentationMode(PresentationMode.CLIENT_SBS_AI);
+        client.selectModeQualitySetting(PresentationMode.CLIENT_SBS_AI,
                 SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_5K2K);
         // Still a bucket crossing from the 16:9 live tuple, so reconnect for that reason only.
         assertTrue(client.selectedModeRequiresReconnect());
@@ -1942,9 +1943,9 @@ public final class XrSessionSettingsControllerTest {
                 PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
 
         XrSessionSettingsController controller = withFullEnvelope(controller());
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.BITRATE, "80000");
-        controller.selectModeQualitySetting(SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+        controller.selectModeQualitySetting(PresentationMode.HOST_SBS_RAW,
                 SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_5K2K);
         controller.selectRawSbsPerEyeResolution(
                 PreferenceConfiguration.RawSbsPerEyeResolution.FULL.preferenceValue);
@@ -1952,7 +1953,7 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(controller.constrainRawSbsTransportToSupportedPreset());
 
         ModeStreamQualityModel raw = controller.getModeStreamQualityModel(
-                SessionSettingsStore.PresenterMode.HOST_SBS_RAW);
+                PresentationMode.HOST_SBS_RAW);
         assertEquals(PreferenceConfiguration.RES_4K, raw.pendingQuality.resolution);
         assertEquals("the repair must not reset the user's bitrate",
                 80000, raw.pendingQuality.bitrateKbps);
@@ -1964,7 +1965,7 @@ public final class XrSessionSettingsControllerTest {
     }
 
     private static void stageQuality(XrSessionSettingsController controller,
-                                     SessionSettingsStore.PresenterMode mode,
+                                     PresentationMode mode,
                                      String resolution, String fps, String bitrate) {
         controller.selectModeQualitySetting(mode, SessionSettingsModel.Key.RESOLUTION,
                 resolution);
@@ -1973,7 +1974,7 @@ public final class XrSessionSettingsControllerTest {
     }
 
     private static void assertQuality(SessionSettingsStore.Snapshot snapshot,
-                                      SessionSettingsStore.PresenterMode mode,
+                                      PresentationMode mode,
                                       String resolution, String fps, int bitrate) {
         SharedPreferences effective = snapshot.preferencesForMode(mode);
         assertEquals(resolution, effective.getString(

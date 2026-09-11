@@ -1,5 +1,7 @@
 package com.limelight;
 
+import com.limelight.nvstream.HostSessionLaunchRequest;
+
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.HashSet;
@@ -608,10 +610,10 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     }
 
     private void startApp(NvApp app) {
-        startApp(app, false);
+        startApp(app, null);
     }
 
-    private void startApp(NvApp app, boolean requireHostIdle) {
+    private void startApp(NvApp app, HostSessionLaunchRequest request) {
         if (managerBinder == null || computer == null) {
             Toast.makeText(this, R.string.error_manager_not_running, Toast.LENGTH_LONG).show();
             return;
@@ -622,8 +624,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             return;
         }
 
-        ServerHelper.doStart(this, app, computer, managerBinder, false,
-                requireHostIdle);
+        if (request == null) {
+            ServerHelper.doStart(this, app, computer, managerBinder, false);
+        } else {
+            ServerHelper.doStart(this, app, computer, managerBinder, false, request);
+        }
     }
 
     private boolean isCurrentSessionApp(AppObject app) {
@@ -752,17 +757,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                         expected.app.getAppUUID());
     }
 
-    private boolean quitCompletionStillApplies(HostSessionSnapshot expected) {
-        if (expected == null || !inForeground || computer == null) {
-            return false;
-        }
-        if (stillOwnsHostSession(expected)) {
-            return true;
-        }
-        return expected.hostSessionIdSupported == computer.hostSessionIdSupported
-                && isAuthoritativelyIdle(computer);
-    }
-
     private void resumeCurrentSession() {
         resumeCurrentSession(null);
     }
@@ -839,18 +833,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             Toast.makeText(this, R.string.xr_session_changed, Toast.LENGTH_SHORT).show();
             return;
         }
-        ServerHelper.doQuit(this, expectedSession.computer, expectedSession.app,
-                expectedSession.hostSessionId, managerBinder, () -> {
-            clearPersistedSession(expectedSession);
-            runOnUiThread(() -> {
-                if (quitCompletionStillApplies(expectedSession)) {
-                    if (stillOwnsHostSession(expectedSession)) {
-                        updateRunningSessionCleared(expectedSession);
-                    }
-                    startApp(nextApp, true);
-                }
-            });
-        });
+        // The captured snapshot is the user's replacement authority; fresh polling cannot replace it.
+        // NvConnection serializes cancel + launch with all other local stream transactions.
+        startApp(nextApp, HostSessionLaunchRequest.replace(expectedSession.computer));
     }
 
     private void clearPersistedSession(HostSessionSnapshot expected) {

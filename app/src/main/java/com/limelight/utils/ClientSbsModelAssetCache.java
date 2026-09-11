@@ -4,7 +4,6 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.Process;
 
-import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
@@ -61,11 +60,6 @@ final class ClientSbsModelAssetCache {
     static void prestageProductionModelAsync(Context context,
                                              ClientSbsModelManifest manifest) {
         if (context == null || manifest == null) {
-            return;
-        }
-        // Root APKs intentionally package neither this archive nor LiteRT. Avoid even a failed
-        // background asset lookup so their existing direct-render behavior is unchanged.
-        if (BuildConfig.ROOT_BUILD) {
             return;
         }
         Context applicationContext = context.getApplicationContext();

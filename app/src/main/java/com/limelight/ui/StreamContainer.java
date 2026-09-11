@@ -138,7 +138,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private volatile boolean mClientSbsStatsVisible;
 
     private SurfaceView mSurfaceView;
-    /** The holder is needed only to drive GLSurfaceView while Client SBS owns EGL output. */
+    /** The holder bridges input/layout while Client SBS owns the external SceneCore EGL output. */
     private boolean mClientSbsWindowSurfaceEnabled;
     private Surface mCurrentSurface;
     private volatile Surface mClientSbsSurface;
@@ -182,7 +182,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private SurfaceSwitchCallback mPendingClientSbsHdrSwitch;
     private int mClientSbsHdrSwitchGeneration;
     private int mRendererHdrTransitionGeneration;
-    /** UI-thread request read by GLSurfaceView's EGL thread. */
+    /** UI-thread request read by the external EGL owner. */
     private volatile int mRequestedEglAttachGeneration;
     /** Exact generation whose XR window surface was created successfully on the EGL thread. */
     private volatile int mCreatedEglAttachGeneration;
@@ -370,12 +370,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         {
             // Single XR route: the decoder renders into the XR compositor's SurfaceEntity, not an
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
-            GLSurfaceView glSurfaceView = new GLSurfaceView(context);
-            glSurfaceView.setEGLContextClientVersion(3);
+            ClientSbsRenderSurface glSurfaceView = new ClientSbsRenderSurface(context);
             // Prefer an HDR-capable window, but retain an RGBA8 config fallback for runtimes that
             // cannot expose one. Stereo3DRenderer verifies the selected default framebuffer and
             // keeps SceneCore metadata consistent with the end-to-end precision.
-            glSurfaceView.setEGLConfigChooser(new ClientSbsEglConfigChooser());
             mXrPresenter = new XrStreamPresenter(game, prefConfig,
                     this::onStereo3DSurfaceReady, this::setClientSbsStatsVisible);
             if (!mXrPresenter.init()) {
@@ -391,17 +389,19 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mDummySurfaceTexture.detachFromGLContext();
             mDummySurface = new Surface(mDummySurfaceTexture);
 
-            glSurfaceView.setEGLWindowSurfaceFactory(new GLSurfaceView.EGLWindowSurfaceFactory() {
+            GLSurfaceView.EGLWindowSurfaceFactory windowFactory = new GLSurfaceView.EGLWindowSurfaceFactory() {
                 @Override
                 public javax.microedition.khronos.egl.EGLSurface createWindowSurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLConfig config, Object nativeWindow) {
-                    // Render into the XR compositor surface. If XR init failed (no surface yet),
-                    // fall back to the view's own window so EGL still gets a valid target.
+                    // The EGL owner must acquire the exact requested SceneCore producer.
                     Surface xrTarget = mXrPresenter != null
                             ? mXrPresenter.getVideoSurface() : null;
-                    Object target = xrTarget != null ? xrTarget : nativeWindow;
                     int attachGeneration = mRequestedEglAttachGeneration;
+                    if (xrTarget == null || !xrTarget.isValid() || attachGeneration <= 0
+                            || xrTarget != mExpectedEglOutputSurface) {
+                        return EGL10.EGL_NO_SURFACE;
+                    }
                     javax.microedition.khronos.egl.EGLSurface created =
-                            egl.eglCreateWindowSurface(display, config, target, null);
+                            egl.eglCreateWindowSurface(display, config, xrTarget, null);
                     mCreatedEglAttachGeneration = created != EGL10.EGL_NO_SURFACE
                             && attachGeneration > 0 && xrTarget == mExpectedEglOutputSurface
                             ? attachGeneration : 0;
@@ -410,6 +410,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 @Override
                 public void destroySurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLSurface surface) {
                     boolean detached = egl.eglDestroySurface(display, surface);
+                    if (!detached) {
+                        throw new IllegalStateException("Client SBS EGL window release failed");
+                    }
                     int detachGeneration = mRequestedEglDetachGeneration;
                     if (detached && detachGeneration > 0) {
                         // eglDestroySurface() is the only authoritative point at which SceneCore's
@@ -417,7 +420,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                         post(() -> onClientSbsEglDetached(detachGeneration));
                     }
                 }
-            });
+            };
 
             mStereoRenderer = new Stereo3DRenderer(glSurfaceView, new Stereo3DRenderer.OnSurfaceReadyListener() {
                 @Override
@@ -469,12 +472,16 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // unrelated to this view's on-screen size. Tell the renderer both dimensions explicitly.
             mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
                     mXrPresenter.getClientSbsSurfaceHeight());
-            glSurfaceView.setRenderer(mStereoRenderer);
-            glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-            glSurfaceView.setPreserveEGLContextOnPause(true);
+            glSurfaceView.initialize(mStereoRenderer, new ClientSbsEglConfigChooser(),
+                    windowFactory, error -> {
+                        LimeLog.severe("Client SBS EGL lifecycle failed: " + error);
+                        if (!mDestroyed) {
+                            game.handleDecoderSurfaceSwitchFailure();
+                        }
+                    });
             
-            // Start paused so EGL doesn't grab the XR surface initially
-            glSurfaceView.onPause();
+            // The owner starts paused and does not acquire EGL until an explicit Client request.
+            glSurfaceView.requestPause();
             mSurfaceView = glSurfaceView;
             setClientSbsWindowSurfaceEnabled(false);
         }
@@ -512,7 +519,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             callback.onComplete(false);
             return;
         }
-        GLSurfaceView glView = (GLSurfaceView) mSurfaceView;
+        ClientSbsRenderSurface glView = (ClientSbsRenderSurface) mSurfaceView;
         final int switchGeneration = ++mClientSbsSwitchGeneration;
         final int eglOperationGeneration = nextClientSbsEglOperationGeneration();
         final long switchDeadlineMs = newDecoderSurfaceHandoffDeadlineMs();
@@ -559,7 +566,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private void continueClientSbsSwitchAfterDecoderPark(
             int switchGeneration, int eglOperationGeneration, boolean enable,
-            GLSurfaceView glView, boolean success) {
+            ClientSbsRenderSurface glView, boolean success) {
         if (mDestroyed || switchGeneration != mClientSbsSwitchGeneration
                 || eglOperationGeneration != mPendingClientSbsSwitchEglGeneration
                 || mPendingClientSbsSwitch == null || mPendingClientSbsEnable != enable) {
@@ -575,7 +582,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
 
         if (enable) {
-            // Size the XR surface before onResume() so EGL creates its window at the target size.
+            // Size the XR surface before requestResume() so EGL creates its window at the target size.
             boolean surfaceReady;
             try {
                 surfaceReady = mXrPresenter.setClientSbsSurfaceSize(true);
@@ -592,14 +599,14 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mCreatedEglAttachGeneration = 0;
             mRequestedEglAttachGeneration = eglOperationGeneration;
             mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
-            // A visible holder supplies GLSurfaceView's create/change lifecycle even though its
-            // EGL factory targets SceneCore. Direct modes leave that unused BLAST layer absent.
+            // Keep the input/layout holder visible while Client SBS is active. Its lifecycle is
+            // independent of EGL and never waits for the renderer or GPU.
             setClientSbsWindowSurfaceEnabled(true);
-            glView.onResume();
+            glView.requestResume();
         } else {
-            // onPause() only requests a pause. Wait for this exact eglDestroySurface() ack.
+            // This is an asynchronous owner request. Wait for this exact eglDestroySurface ack.
             mRequestedEglDetachGeneration = eglOperationGeneration;
-            glView.onPause();
+            glView.requestPause();
         }
     }
 
@@ -1111,7 +1118,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             clearClientSbsPostAckResizeBoundary();
         }
         if (ClientSbsResizePolicy.queueSupersedingRequest(mClientSbsResizeStage)) {
-            // onResume() does not prove that EGL has created a window surface yet. Pausing again
+            // requestResume() does not prove that EGL has created a window surface yet. Pausing again
             // in that gap can produce no destroySurface callback and strand the clamp. Retain only
             // the newest clamp, let the current exact attachment finish while hidden, then detach
             // that known surface and apply the queued geometry.
@@ -1134,8 +1141,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (mClientSbsResizeStage == ClientSbsResizePolicy.Stage.IDLE) {
             mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
             mRequestedEglDetachGeneration = resizeGeneration;
-            ((GLSurfaceView) mSurfaceView).onPause();
             armClientSbsResizeTimeoutForActiveStage();
+            ((ClientSbsRenderSurface) mSurfaceView).requestPause();
         } else if (mClientSbsResizeStage
                 == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
             // A newer request can safely replace the geometry while the same acknowledged detach
@@ -1180,8 +1187,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mCreatedEglAttachGeneration = 0;
         mRequestedEglAttachGeneration = resizeGeneration;
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH;
-        ((GLSurfaceView) mSurfaceView).onResume();
         armClientSbsResizeTimeoutForActiveStage();
+        ((ClientSbsRenderSurface) mSurfaceView).requestResume();
     }
 
     private void completeClientSbsResize(int generation, boolean success) {
@@ -1241,7 +1248,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mClientSbsResizeStage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
         mRequestedEglDetachGeneration = mPendingClientSbsResizeGeneration;
         armClientSbsResizeTimeoutForActiveStage();
-        ((GLSurfaceView) mSurfaceView).onPause();
+        ((ClientSbsRenderSurface) mSurfaceView).requestPause();
     }
 
     private void failClientSbsResizeChain() {
@@ -1706,10 +1713,14 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 () -> {
                     // Stereo3DRenderer dispatches this only after its AI/native cleanup succeeds.
                     // Keep SceneCore, dummy-surface, and reconnect callbacks serialized on main.
-                    mStereoRendererDestroyed = true;
-                    if (mContainerCleanupPending) {
-                        finishContainerCleanup();
-                    }
+                    // Native cleanup does not prove EGL released SceneCore. Close the external
+                    // owner asynchronously and retain all XR surfaces until its actual exit ack.
+                    ((ClientSbsRenderSurface) mSurfaceView).closeAsync(() -> {
+                        mStereoRendererDestroyed = true;
+                        if (mContainerCleanupPending) {
+                            finishContainerCleanup();
+                        }
+                    });
                 });
         return false;
     }
@@ -1769,8 +1780,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         mCreatedEglAttachGeneration = 0;
         mRequestedEglDetachGeneration = 0;
         mExpectedEglOutputSurface = null;
-        setClientSbsActive(false);
-        setHdrInput(false);
+        // Terminal renderer cleanup owns its final mode state. Ordinary mode-switch setters can
+        // wait for frame bookkeeping and must not precede the asynchronous teardown request.
         mContainerCleanupPending = true;
         if (destroyStereoRenderer()) {
             finishContainerCleanup();

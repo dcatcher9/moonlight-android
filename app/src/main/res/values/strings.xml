@@ -863,7 +863,6 @@
     <string name="xr_session_end_and_start">End current and start new</string>
     <string name="xr_session_resume_current">Resume current</string>
     <string name="xr_session_changed">The current session changed. Refreshing…</string>
-    <string name="xr_bar_library">Library</string>
     <string name="xr_mode_options">Options &#x25BE;</string>
     <string name="xr_mode_open_options">Open %1$s options</string>
     <string name="xr_mode_active">Active mode</string>

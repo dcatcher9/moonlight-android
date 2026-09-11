@@ -1,5 +1,7 @@
 package com.limelight.ui;
 
+import com.limelight.nvstream.HostSessionLaunchRequest;
+
 /**
  * Keeps the Home Space launch behavior aligned with the host's one-session contract.
  */
@@ -28,14 +30,11 @@ public final class HomeSessionLaunchPolicy {
     /**
      * Returns whether an app card represents the host's one authoritative current session.
      * Apollo app IDs may change across app-list refreshes, so a stable non-empty UUID match is
-     * accepted too. A stale UUID never creates a session when the host reports running ID 0.
+     * accepted too. Without UUIDs, both numeric IDs must be positive and equal.
      */
     public static boolean isCurrentSessionApp(int runningAppId, String runningAppUuid,
                                               int selectedAppId, String selectedAppUuid) {
-        if (runningAppUuid != null && !runningAppUuid.isEmpty()
-                && selectedAppUuid != null && !selectedAppUuid.isEmpty()) {
-            return runningAppUuid.equalsIgnoreCase(selectedAppUuid);
-        }
-        return runningAppId > 0 && selectedAppId > 0 && runningAppId == selectedAppId;
+        return HostSessionLaunchRequest.sameApplication(runningAppId, runningAppUuid,
+                selectedAppId, selectedAppUuid);
     }
 }

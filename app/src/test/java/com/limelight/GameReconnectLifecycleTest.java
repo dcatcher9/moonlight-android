@@ -1,5 +1,6 @@
 package com.limelight;
 
+import com.limelight.ui.PresentationMode;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -12,7 +13,7 @@ import androidx.test.core.app.ApplicationProvider;
 
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
-import com.limelight.utils.ServerHelper;
+import com.limelight.nvstream.HostSessionLaunchRequest;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -30,50 +31,40 @@ import java.nio.file.Files;
 })
 public final class GameReconnectLifecycleTest {
     @Test
-    public void reconnectAfterReplacingAppConsumesOnlyLaunchGuards() {
+    public void reconnectPreservesEstablishedExactResumeAndViewMetadata() {
         Context context = ApplicationProvider.getApplicationContext();
+        HostSessionLaunchRequest established = HostSessionLaunchRequest.resume(7, "app-7", true, "1234");
         Intent launched = new Intent(context, Game.class)
-                .putExtra(Game.EXTRA_REQUIRE_HOST_IDLE, true)
-                .putExtra(Game.EXTRA_XR_STARTUP_MODE_OVERRIDE, "NORMAL")
-                .putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, false)
+                .putExtra(Game.EXTRA_LAUNCH_REQUEST, established)
                 .putExtra(Game.EXTRA_PC_UUID, "pc-1")
                 .putExtra(Game.EXTRA_APP_UUID, "app-7")
                 .putExtra(Game.EXTRA_APP_ID, 7)
-                .putExtra(Game.EXTRA_HOST_SESSION_ID, "1234")
-                .putExtra(ServerHelper.EXTRA_HOST_SESSION_ID_SUPPORTED, true)
                 .putExtra(Game.EXTRA_VDISPLAY, true)
                 .putExtra(Game.EXTRA_SERVER_CERT, new byte[] {1, 2, 3});
-
         Intent reconnect = Game.createXrReconnectIntent(context, launched);
-
-        assertFalse(reconnect.hasExtra(Game.EXTRA_REQUIRE_HOST_IDLE));
-        assertFalse(reconnect.hasExtra(Game.EXTRA_XR_STARTUP_MODE_OVERRIDE));
-        assertTrue(reconnect.getBooleanExtra(Game.EXTRA_RESUME_EXISTING_SESSION, false));
+        HostSessionLaunchRequest request = Game.getHostSessionLaunchRequest(reconnect);
+        assertEquals(HostSessionLaunchRequest.Kind.RESUME, request.kind);
+        assertEquals("1234", request.expectedToken);
+        assertEquals("app-7", request.expectedAppUuid);
+        assertTrue(request.tokenSupported);
         assertEquals(Game.class.getName(), reconnect.getComponent().getClassName());
         assertEquals("pc-1", reconnect.getStringExtra(Game.EXTRA_PC_UUID));
-        assertEquals("app-7", reconnect.getStringExtra(Game.EXTRA_APP_UUID));
         assertEquals(7, reconnect.getIntExtra(Game.EXTRA_APP_ID, 0));
-        assertEquals("1234", reconnect.getStringExtra(Game.EXTRA_HOST_SESSION_ID));
-        assertTrue(reconnect.getBooleanExtra(ServerHelper.EXTRA_HOST_SESSION_ID_SUPPORTED, false));
         assertTrue(reconnect.getBooleanExtra(Game.EXTRA_VDISPLAY, false));
         assertArrayEquals(new byte[] {1, 2, 3}, reconnect.getByteArrayExtra(Game.EXTRA_SERVER_CERT));
-        // Building a resume must not weaken the guard on the original replacement launch.
-        assertTrue(launched.getBooleanExtra(Game.EXTRA_REQUIRE_HOST_IDLE, false));
-        assertFalse(launched.getBooleanExtra(Game.EXTRA_RESUME_EXISTING_SESSION, true));
     }
 
     @Test
     public void repeatedLegacyReconnectKeepsTokenlessResume() {
         Context context = ApplicationProvider.getApplicationContext();
-        Intent first = Game.createXrReconnectIntent(context,
-                new Intent(context, Game.class).putExtra(Game.EXTRA_APP_ID, 7));
-        Intent second = Game.createXrReconnectIntent(context, first);
-
-        assertTrue(second.getBooleanExtra(Game.EXTRA_RESUME_EXISTING_SESSION, false));
-        assertFalse(second.getBooleanExtra(Game.EXTRA_REQUIRE_HOST_IDLE, false));
-        assertFalse(second.hasExtra(Game.EXTRA_HOST_SESSION_ID));
-        assertFalse(second.getBooleanExtra(ServerHelper.EXTRA_HOST_SESSION_ID_SUPPORTED, false));
-        assertEquals(7, second.getIntExtra(Game.EXTRA_APP_ID, 0));
+        Intent first = new Intent(context, Game.class).putExtra(Game.EXTRA_LAUNCH_REQUEST,
+                HostSessionLaunchRequest.resume(7, null, false, null));
+        Intent second = Game.createXrReconnectIntent(context, Game.createXrReconnectIntent(context, first));
+        HostSessionLaunchRequest request = Game.getHostSessionLaunchRequest(second);
+        assertEquals(HostSessionLaunchRequest.Kind.RESUME, request.kind);
+        assertEquals(7, request.expectedAppId);
+        assertFalse(request.tokenSupported);
+        assertEquals(null, request.expectedToken);
     }
 
     @Test
@@ -104,23 +95,23 @@ public final class GameReconnectLifecycleTest {
     @Test
     public void authoritativeStandardHostDowngradeReconnectsHostAiAsNormal() {
         assertTrue(Game.hostCapabilityRequiresNormalReconnect(false,
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI));
+                PresentationMode.HOST_SBS_AI));
         assertFalse(Game.hostCapabilityRequiresNormalReconnect(false,
-                SessionSettingsStore.PresenterMode.NORMAL));
+                PresentationMode.NORMAL));
         assertFalse(Game.hostCapabilityRequiresNormalReconnect(false,
-                SessionSettingsStore.PresenterMode.CLIENT_SBS_AI));
+                PresentationMode.CLIENT_SBS_AI));
         assertFalse(Game.hostCapabilityRequiresNormalReconnect(true,
-                SessionSettingsStore.PresenterMode.HOST_SBS_AI));
+                PresentationMode.HOST_SBS_AI));
     }
 
     @Test
     public void rawSbsNegotiatesDoubleWidthFromLogicalPerEyeQuality() {
         assertArrayEquals(new int[] {7680, 2160},
                 Game.xrTransportDimensions(3840, 2160,
-                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW));
+                        PresentationMode.HOST_SBS_RAW));
         assertArrayEquals(new int[] {7680, 2160},
                 Game.xrTransportDimensions(3840, 2160,
-                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
     }
 
@@ -128,7 +119,7 @@ public final class GameReconnectLifecycleTest {
     public void rawSbsHalfKeepsLogicalTransportWidth() {
         assertArrayEquals(new int[] {3840, 2160},
                 Game.xrTransportDimensions(3840, 2160,
-                        SessionSettingsStore.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
     }
 
@@ -136,10 +127,10 @@ public final class GameReconnectLifecycleTest {
     public void nonRawModesKeepTheirLogicalTransportDimensions() {
         assertArrayEquals(new int[] {3840, 2160},
                 Game.xrTransportDimensions(3840, 2160,
-                        SessionSettingsStore.PresenterMode.NORMAL));
+                        PresentationMode.NORMAL));
         assertArrayEquals(new int[] {3840, 2160},
                 Game.xrTransportDimensions(3840, 2160,
-                        SessionSettingsStore.PresenterMode.HOST_SBS_AI,
+                        PresentationMode.HOST_SBS_AI,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
     }
 

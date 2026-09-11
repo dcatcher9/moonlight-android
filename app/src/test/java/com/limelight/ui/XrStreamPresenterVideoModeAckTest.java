@@ -25,17 +25,17 @@ public class XrStreamPresenterVideoModeAckTest {
     @Test
     public void nonV2HostsReconnectOnlyForWireModeCrossings() {
         assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, false));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, false));
         assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, false));
+                PresentationMode.HOST_SBS_AI,
+                PresentationMode.CLIENT_SBS_AI, false));
         assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI, true));
+                PresentationMode.NORMAL,
+                PresentationMode.HOST_SBS_AI, true));
         assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(
-                XrStreamPresenter.PresenterMode.NORMAL,
-                XrStreamPresenter.PresenterMode.CLIENT_SBS_AI, false));
+                PresentationMode.NORMAL,
+                PresentationMode.CLIENT_SBS_AI, false));
     }
 
     @Test
@@ -405,7 +405,7 @@ public class XrStreamPresenterVideoModeAckTest {
     public void rawFullPanelFollowUsesPackedWireGeometryAndRefusalRestoresLogicalGeometry() {
         assertArrayEquals(new int[] {7680, 2160},
                 XrStreamPresenter.liveVideoModeWireDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
 
@@ -414,7 +414,7 @@ public class XrStreamPresenterVideoModeAckTest {
         XrStreamPresenter.AcknowledgedVideoMode refusal =
                 XrStreamPresenter.acknowledgedVideoMode(
                         previousLogical,
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
                         7680, 2160, 9000, 180000);
 
@@ -427,22 +427,22 @@ public class XrStreamPresenterVideoModeAckTest {
     public void rawHalfAndHostAiKeepBaseGeometryOnTheVideoModeWire() {
         assertArrayEquals(new int[] {3840, 2160},
                 XrStreamPresenter.liveVideoModeWireDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
         assertArrayEquals(new int[] {3840, 2160},
                 XrStreamPresenter.liveVideoModeLogicalDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160,
                         PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
         assertArrayEquals(new int[] {3840, 2160},
                 XrStreamPresenter.liveVideoModeWireDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        PresentationMode.HOST_SBS_AI,
                         3840, 2160,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
         assertArrayEquals(new int[] {3840, 2160},
                 XrStreamPresenter.liveVideoModeLogicalDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        PresentationMode.HOST_SBS_AI,
                         3840, 2160,
                         PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
     }
@@ -455,13 +455,13 @@ public class XrStreamPresenterVideoModeAckTest {
                 PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
 
         assertNull(XrStreamPresenter.acknowledgedVideoMode(
-                request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
+                request, PresentationMode.HOST_SBS_RAW, full,
                 7679, 2160, 7200, 180000));
         assertNull(XrStreamPresenter.acknowledgedVideoMode(
-                request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
+                request, PresentationMode.HOST_SBS_RAW, full,
                 7680, 0, 7200, 180000));
         assertNull(XrStreamPresenter.acknowledgedVideoMode(
-                request, XrStreamPresenter.PresenterMode.HOST_SBS_RAW, full,
+                request, PresentationMode.HOST_SBS_RAW, full,
                 8194, 2160, 7200, 180000));
     }
 
@@ -485,19 +485,19 @@ public class XrStreamPresenterVideoModeAckTest {
 
         assertArrayEquals(new int[] {7680, 2160},
                 XrStreamPresenter.decoderStreamDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H265, full));
         assertArrayEquals(new int[] {3840, 2160},
                 XrStreamPresenter.decoderStreamDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_RAW,
+                        PresentationMode.HOST_SBS_RAW,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H265, half));
         assertArrayEquals(new int[] {7680, 2160},
                 XrStreamPresenter.decoderStreamDimensions(
-                        XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+                        PresentationMode.HOST_SBS_AI,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H265, full));
         assertArrayEquals(new int[] {3840, 2160},
                 XrStreamPresenter.decoderStreamDimensions(
-                        XrStreamPresenter.PresenterMode.NORMAL,
+                        PresentationMode.NORMAL,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H265, full));
     }
 
@@ -602,7 +602,7 @@ public class XrStreamPresenterVideoModeAckTest {
 
         // A recreated SceneCore surface still votes the durable ceiling, not effective 72.
         assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                state, XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                state, PresentationMode.HOST_SBS_AI));
     }
 
     @Test
@@ -613,7 +613,7 @@ public class XrStreamPresenterVideoModeAckTest {
         state.userRequestSucceeded(60);
 
         assertEquals(60, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                state, XrStreamPresenter.PresenterMode.HOST_SBS_AI));
+                state, PresentationMode.HOST_SBS_AI));
     }
 
     @Test
@@ -622,14 +622,14 @@ public class XrStreamPresenterVideoModeAckTest {
                 new XrStreamPresenter.PanelRefreshRateState(30);
 
         assertEquals(72, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                state, PresentationMode.CLIENT_SBS_AI));
         assertTrue(XrStreamPresenter.shouldPreferClientPanelRate(
-                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                state, PresentationMode.CLIENT_SBS_AI));
         state.observe(72.00001f);
         assertEquals(-1, state.nextTarget(30, false));
         assertEquals(30, state.getUserCeilingHz());
         assertEquals(30, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                state, XrStreamPresenter.PresenterMode.NORMAL));
+                state, PresentationMode.NORMAL));
     }
 
     @Test
@@ -639,16 +639,16 @@ public class XrStreamPresenterVideoModeAckTest {
         state.observe(60);
 
         assertEquals(72, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                state, PresentationMode.CLIENT_SBS_AI));
         assertTrue(XrStreamPresenter.shouldPreferClientPanelRate(
-                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                state, PresentationMode.CLIENT_SBS_AI));
 
         state.userRequestSucceeded(90);
 
         assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
-                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                state, PresentationMode.CLIENT_SBS_AI));
         assertFalse(XrStreamPresenter.shouldPreferClientPanelRate(
-                state, XrStreamPresenter.PresenterMode.CLIENT_SBS_AI));
+                state, PresentationMode.CLIENT_SBS_AI));
     }
 
     @Test

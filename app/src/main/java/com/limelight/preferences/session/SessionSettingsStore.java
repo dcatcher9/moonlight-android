@@ -1,5 +1,6 @@
 package com.limelight.preferences.session;
 
+import com.limelight.ui.PresentationMode;
 import android.content.Context;
 import android.content.SharedPreferences;
 
@@ -49,13 +50,6 @@ public final class SessionSettingsStore {
     private static final Gson GSON = new Gson();
 
     private final SharedPreferences preferences;
-
-    public enum PresenterMode {
-        NORMAL,
-        HOST_SBS_RAW,
-        HOST_SBS_AI,
-        CLIENT_SBS_AI
-    }
 
     /** Stable storage identity for a PC. The host is used only when no UUID is available. */
     public static final class PcIdentity {
@@ -225,15 +219,15 @@ public final class SessionSettingsStore {
         private final String localSessionId;
         private final AppIdentity currentApp;
         private final Map<String, Object> sharedOverrides;
-        private final Map<PresenterMode, Map<String, Object>> modeOverrides;
-        private final PresenterMode lastSuccessfulMode;
+        private final Map<PresentationMode, Map<String, Object>> modeOverrides;
+        private final PresentationMode lastSuccessfulMode;
         private final ResumeMetadata resumeMetadata;
 
         private SessionRecord(String localSessionId,
                               AppIdentity currentApp,
                               Map<String, Object> sharedOverrides,
-                              Map<PresenterMode, Map<String, Object>> modeOverrides,
-                              PresenterMode lastSuccessfulMode,
+                              Map<PresentationMode, Map<String, Object>> modeOverrides,
+                              PresentationMode lastSuccessfulMode,
                               ResumeMetadata resumeMetadata) {
             schemaVersion = SCHEMA_VERSION;
             this.localSessionId = Objects.requireNonNull(localSessionId, "localSessionId");
@@ -241,7 +235,7 @@ public final class SessionSettingsStore {
             this.sharedOverrides = immutablePreferenceMap(sharedOverrides);
             this.modeOverrides = immutableModeMap(modeOverrides);
             this.lastSuccessfulMode = lastSuccessfulMode != null
-                    ? lastSuccessfulMode : PresenterMode.NORMAL;
+                    ? lastSuccessfulMode : PresentationMode.NORMAL;
             this.resumeMetadata = resumeMetadata != null
                     ? resumeMetadata : new ResumeMetadata(false, null, 0L);
         }
@@ -263,16 +257,16 @@ public final class SessionSettingsStore {
             return sharedOverrides;
         }
 
-        public Map<String, Object> getModeOverrides(PresenterMode mode) {
+        public Map<String, Object> getModeOverrides(PresentationMode mode) {
             Map<String, Object> values = modeOverrides.get(mode);
             return values != null ? values : Collections.emptyMap();
         }
 
-        public Map<PresenterMode, Map<String, Object>> getAllModeOverrides() {
+        public Map<PresentationMode, Map<String, Object>> getAllModeOverrides() {
             return modeOverrides;
         }
 
-        public PresenterMode getLastSuccessfulMode() {
+        public PresentationMode getLastSuccessfulMode() {
             return lastSuccessfulMode;
         }
 
@@ -289,7 +283,7 @@ public final class SessionSettingsStore {
         private final SessionRecord record;
         private final ReadOnlyPreferences globalDefaults;
         private final ReadOnlyPreferences sharedPreferences;
-        private final Map<PresenterMode, ReadOnlyPreferences> modePreferences;
+        private final Map<PresentationMode, ReadOnlyPreferences> modePreferences;
 
         private Snapshot(SessionRecord record, Map<String, ?> globalValues) {
             this.record = record;
@@ -302,8 +296,8 @@ public final class SessionSettingsStore {
             }
             sharedPreferences = new ReadOnlyPreferences(shared);
 
-            Map<PresenterMode, ReadOnlyPreferences> resolved = new HashMap<>();
-            for (PresenterMode mode : PresenterMode.values()) {
+            Map<PresentationMode, ReadOnlyPreferences> resolved = new HashMap<>();
+            for (PresentationMode mode : PresentationMode.values()) {
                 Map<String, Object> values = new LinkedHashMap<>(shared);
                 if (record != null) {
                     values.putAll(record.getModeOverrides(mode));
@@ -331,7 +325,7 @@ public final class SessionSettingsStore {
         }
 
         /** Global, then shared-session, then presenter-mode overrides. */
-        public SharedPreferences preferencesForMode(PresenterMode mode) {
+        public SharedPreferences preferencesForMode(PresentationMode mode) {
             Objects.requireNonNull(mode, "mode");
             return modePreferences.get(mode);
         }
@@ -341,7 +335,7 @@ public final class SessionSettingsStore {
          * This is intended for stream-start values that are owned by another mode but must be
          * available while parsing the selected startup mode.
          */
-        public SharedPreferences preferencesForModeWithOverrides(PresenterMode mode,
+        public SharedPreferences preferencesForModeWithOverrides(PresentationMode mode,
                                                                   Map<String, ?> overrides) {
             Objects.requireNonNull(mode, "mode");
             Objects.requireNonNull(overrides, "overrides");
@@ -354,7 +348,7 @@ public final class SessionSettingsStore {
             return record != null && record.sharedOverrides.containsKey(key);
         }
 
-        public boolean isModeOverridden(PresenterMode mode, String key) {
+        public boolean isModeOverridden(PresentationMode mode, String key) {
             return record != null && record.getModeOverrides(mode).containsKey(key);
         }
     }
@@ -368,11 +362,11 @@ public final class SessionSettingsStore {
         private final AppIdentity expectedApp;
         private final String expectedLocalSessionId;
         private final Map<String, Object> sharedChanges = new LinkedHashMap<>();
-        private final Map<PresenterMode, Map<String, Object>> modeChanges = new HashMap<>();
+        private final Map<PresentationMode, Map<String, Object>> modeChanges = new HashMap<>();
         private boolean clearShared;
-        private final Set<PresenterMode> clearModes = new HashSet<>();
+        private final Set<PresentationMode> clearModes = new HashSet<>();
         private boolean updateLastMode;
-        private PresenterMode lastMode;
+        private PresentationMode lastMode;
         private boolean updateResumeMetadata;
         private ResumeMetadata resumeMetadata;
         private boolean committed;
@@ -428,7 +422,7 @@ public final class SessionSettingsStore {
         }
 
         /** Stores desiredValue only when it differs from the mode's global default. */
-        public Editor setModeValue(PresenterMode mode, String key, Object desiredValue,
+        public Editor setModeValue(PresentationMode mode, String key, Object desiredValue,
                                    Object globalValue) {
             Objects.requireNonNull(mode, "mode");
             validateSettingKey(key);
@@ -438,7 +432,7 @@ public final class SessionSettingsStore {
             return this;
         }
 
-        public Editor inheritModeValue(PresenterMode mode, String key) {
+        public Editor inheritModeValue(PresentationMode mode, String key) {
             Objects.requireNonNull(mode, "mode");
             validateSettingKey(key);
             modeChanges.computeIfAbsent(mode, ignored -> new LinkedHashMap<>())
@@ -446,7 +440,7 @@ public final class SessionSettingsStore {
             return this;
         }
 
-        public Editor replaceModeValues(PresenterMode mode, Map<String, ?> desiredValues,
+        public Editor replaceModeValues(PresentationMode mode, Map<String, ?> desiredValues,
                                         Map<String, ?> globalValues) {
             Objects.requireNonNull(mode, "mode");
             clearModes.add(mode);
@@ -460,7 +454,7 @@ public final class SessionSettingsStore {
             return this;
         }
 
-        public Editor clearModeOverrides(PresenterMode mode) {
+        public Editor clearModeOverrides(PresentationMode mode) {
             Objects.requireNonNull(mode, "mode");
             clearModes.add(mode);
             modeChanges.remove(mode);
@@ -468,7 +462,7 @@ public final class SessionSettingsStore {
         }
 
         /** Call only after the mode switch and its surface handoff have succeeded. */
-        public Editor setLastSuccessfulMode(PresenterMode mode) {
+        public Editor setLastSuccessfulMode(PresentationMode mode) {
             updateLastMode = true;
             lastMode = Objects.requireNonNull(mode, "mode");
             return this;
@@ -506,10 +500,10 @@ public final class SessionSettingsStore {
                 }
                 applyChanges(mutable.sharedOverrides, sharedChanges);
 
-                for (PresenterMode mode : clearModes) {
+                for (PresentationMode mode : clearModes) {
                     mutable.modeOverrides.remove(mode);
                 }
-                for (Map.Entry<PresenterMode, Map<String, Object>> entry
+                for (Map.Entry<PresentationMode, Map<String, Object>> entry
                         : modeChanges.entrySet()) {
                     Map<String, Object> values = mutable.modeOverrides.computeIfAbsent(
                             entry.getKey(), ignored -> new LinkedHashMap<>());
@@ -565,7 +559,7 @@ public final class SessionSettingsStore {
      * in the same effective mode preference overlay. Unrelated settings, resume metadata, unknown
      * JSON fields, malformed records, and other schema versions are preserved.</p>
      */
-    public boolean clearModeValueOverridesForAllCurrentSessions(PresenterMode mode, String key) {
+    public boolean clearModeValueOverridesForAllCurrentSessions(PresentationMode mode, String key) {
         Objects.requireNonNull(mode, "mode");
         validateSettingKey(key);
         synchronized (WRITE_LOCK) {
@@ -632,7 +626,7 @@ public final class SessionSettingsStore {
         Objects.requireNonNull(app, "app");
         SessionRecord record = new SessionRecord(UUID.randomUUID().toString(), app,
                 Collections.emptyMap(),
-                Collections.emptyMap(), PresenterMode.NORMAL,
+                Collections.emptyMap(), PresentationMode.NORMAL,
                 new ResumeMetadata(false, hostSessionId, hostConfirmedAtEpochMillis));
         synchronized (WRITE_LOCK) {
             return writeRecord(pc, record);
@@ -888,11 +882,11 @@ public final class SessionSettingsStore {
         return Collections.unmodifiableMap(copy);
     }
 
-    private static Map<PresenterMode, Map<String, Object>> immutableModeMap(
-            Map<PresenterMode, ? extends Map<String, ?>> source) {
-        Map<PresenterMode, Map<String, Object>> copy = new HashMap<>();
+    private static Map<PresentationMode, Map<String, Object>> immutableModeMap(
+            Map<PresentationMode, ? extends Map<String, ?>> source) {
+        Map<PresentationMode, Map<String, Object>> copy = new HashMap<>();
         if (source != null) {
-            for (Map.Entry<PresenterMode, ? extends Map<String, ?>> entry : source.entrySet()) {
+            for (Map.Entry<PresentationMode, ? extends Map<String, ?>> entry : source.entrySet()) {
                 if (entry.getKey() != null && entry.getValue() != null
                         && !entry.getValue().isEmpty()) {
                     copy.put(entry.getKey(), immutablePreferenceMap(entry.getValue()));
@@ -941,15 +935,15 @@ public final class SessionSettingsStore {
         final String localSessionId;
         AppIdentity currentApp;
         final Map<String, Object> sharedOverrides = new LinkedHashMap<>();
-        final Map<PresenterMode, Map<String, Object>> modeOverrides = new HashMap<>();
-        PresenterMode lastSuccessfulMode;
+        final Map<PresentationMode, Map<String, Object>> modeOverrides = new HashMap<>();
+        PresentationMode lastSuccessfulMode;
         ResumeMetadata resumeMetadata;
 
         MutableRecord(SessionRecord source) {
             localSessionId = source.localSessionId;
             currentApp = source.currentApp;
             sharedOverrides.putAll(source.sharedOverrides);
-            for (Map.Entry<PresenterMode, Map<String, Object>> entry
+            for (Map.Entry<PresentationMode, Map<String, Object>> entry
                     : source.modeOverrides.entrySet()) {
                 modeOverrides.put(entry.getKey(), new LinkedHashMap<>(entry.getValue()));
             }
@@ -1137,7 +1131,7 @@ public final class SessionSettingsStore {
         dto.currentApp.displayName = record.currentApp.displayName;
         dto.sharedOverrides = toValueMap(record.sharedOverrides);
         dto.modeOverrides = new LinkedHashMap<>();
-        for (Map.Entry<PresenterMode, Map<String, Object>> entry
+        for (Map.Entry<PresentationMode, Map<String, Object>> entry
                 : record.modeOverrides.entrySet()) {
             dto.modeOverrides.put(entry.getKey().name(), toValueMap(entry.getValue()));
         }
@@ -1158,12 +1152,12 @@ public final class SessionSettingsStore {
         AppIdentity app = new AppIdentity(dto.currentApp.appId, dto.currentApp.appUuid,
                 dto.currentApp.displayName);
         Map<String, Object> shared = fromValueMap(dto.sharedOverrides);
-        Map<PresenterMode, Map<String, Object>> modes = new HashMap<>();
+        Map<PresentationMode, Map<String, Object>> modes = new HashMap<>();
         if (dto.modeOverrides != null) {
             for (Map.Entry<String, Map<String, ValueDto>> entry
                     : dto.modeOverrides.entrySet()) {
                 try {
-                    PresenterMode mode = PresenterMode.valueOf(entry.getKey());
+                    PresentationMode mode = PresentationMode.valueOf(entry.getKey());
                     Map<String, Object> values = fromValueMap(entry.getValue());
                     if (!values.isEmpty()) {
                         modes.put(mode, values);
@@ -1174,12 +1168,12 @@ public final class SessionSettingsStore {
             }
         }
 
-        PresenterMode lastMode = PresenterMode.NORMAL;
+        PresentationMode lastMode = PresentationMode.NORMAL;
         if (dto.lastSuccessfulMode != null) {
             try {
-                lastMode = PresenterMode.valueOf(dto.lastSuccessfulMode);
+                lastMode = PresentationMode.valueOf(dto.lastSuccessfulMode);
             } catch (IllegalArgumentException ignored) {
-                lastMode = PresenterMode.NORMAL;
+                lastMode = PresentationMode.NORMAL;
             }
         }
         ResumeMetadata metadata = dto.resumeMetadata != null

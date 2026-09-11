@@ -3,7 +3,7 @@
 These binaries are the official LiteRT 2.2.0 Android runtime and OpenCL/OpenGL
 accelerator used by the client-SBS zero-copy path. They are redistributed under
 the upstream Apache-2.0 license. This directory is intentionally scoped to the
-`nonRoot_game` product flavor so root APKs do not package the runtime.
+`nonRoot_game` distribution source set alongside the qualified model assets.
 
 The recipient-facing attribution and verbatim Apache-2.0 text are packaged at
 `assets/third_party/client_sbs_models/NOTICE.txt` and

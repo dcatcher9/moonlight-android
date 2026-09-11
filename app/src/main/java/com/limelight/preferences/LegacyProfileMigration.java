@@ -1,5 +1,6 @@
 package com.limelight.preferences;
 
+import com.limelight.ui.PresentationMode;
 import android.content.Context;
 import android.content.SharedPreferences;
 
@@ -207,7 +208,7 @@ public final class LegacyProfileMigration {
                 .commit();
         boolean sessionsCommitted = new SessionSettingsStore(context)
                 .clearModeValueOverridesForAllCurrentSessions(
-                        SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                        PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING);
         if (globalCommitted && sessionsCommitted) {
             if (!preferences.edit()

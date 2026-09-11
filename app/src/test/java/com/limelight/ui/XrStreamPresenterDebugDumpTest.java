@@ -9,9 +9,9 @@ import org.junit.Test;
 public final class XrStreamPresenterDebugDumpTest {
     @Test
     public void onlyHostSbsAiOwnsAHostDepthDump() {
-        for (XrStreamPresenter.PresenterMode mode
-                : XrStreamPresenter.PresenterMode.values()) {
-            assertEquals(mode == XrStreamPresenter.PresenterMode.HOST_SBS_AI,
+        for (PresentationMode mode
+                : PresentationMode.values()) {
+            assertEquals(mode == PresentationMode.HOST_SBS_AI,
                     XrStreamPresenter.isHostDebugDumpAvailable(
                             mode, true, true, false, true));
         }
@@ -19,8 +19,8 @@ public final class XrStreamPresenterDebugDumpTest {
 
     @Test
     public void hostDumpWaitsForAStableReadyPipeline() {
-        XrStreamPresenter.PresenterMode host =
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI;
+        PresentationMode host =
+                PresentationMode.HOST_SBS_AI;
 
         assertTrue(XrStreamPresenter.isHostDebugDumpAvailable(
                 host, true, true, false, true));
@@ -36,12 +36,12 @@ public final class XrStreamPresenterDebugDumpTest {
 
     @Test
     public void hostDepthReadinessIsScopedToOneHostModeGeneration() {
-        XrStreamPresenter.PresenterMode host =
-                XrStreamPresenter.PresenterMode.HOST_SBS_AI;
-        XrStreamPresenter.PresenterMode normal =
-                XrStreamPresenter.PresenterMode.NORMAL;
-        XrStreamPresenter.PresenterMode raw =
-                XrStreamPresenter.PresenterMode.HOST_SBS_RAW;
+        PresentationMode host =
+                PresentationMode.HOST_SBS_AI;
+        PresentationMode normal =
+                PresentationMode.NORMAL;
+        PresentationMode raw =
+                PresentationMode.HOST_SBS_RAW;
 
         assertTrue(XrStreamPresenter.resetsHostDepthStatusAtTransitionStart(normal, host));
         assertTrue(XrStreamPresenter.resetsHostDepthStatusAtTransitionStart(raw, host));

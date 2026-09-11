@@ -1,5 +1,6 @@
 package com.limelight;
 
+import com.limelight.ui.PresentationMode;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -15,7 +16,7 @@ import androidx.test.core.app.ApplicationProvider;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.ui.XrStreamPresenter;
-import com.limelight.utils.ServerHelper;
+import com.limelight.nvstream.HostSessionLaunchRequest;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -62,30 +63,30 @@ public final class GameXrSessionStartupTest {
     public void freshSameAppLaunchReplacesStaleClientModeWithNormalAndGlobalQuality() {
         SessionSettingsStore.SessionRecord staleRecord = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, staleRecord.getLocalSessionId())
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "1920x1080", "3840x2160")
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.FPS_PREF_STRING, "30", "90")
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
         Game game = Robolectric.buildActivity(Game.class, launchIntent(false)).get();
-        SharedPreferences startup = prepareCurrentSessionPreferences(game, false);
+        SharedPreferences startup = prepareCurrentSessionPreferences(game);
         PreferenceConfiguration configuration =
                 PreferenceConfiguration.readPreferences(game, startup);
 
-        assertEquals(XrStreamPresenter.PresenterMode.NORMAL,
+        assertEquals(PresentationMode.NORMAL,
                 game.getXrStartupPresenterMode());
         assertEquals(3840, configuration.width);
         assertEquals(2160, configuration.height);
         assertEquals(90.0f, configuration.fps, 0.001f);
         SessionSettingsStore.SessionRecord replacement = store.getCurrentSession(pc);
         assertNotEquals(staleRecord.getLocalSessionId(), replacement.getLocalSessionId());
-        assertEquals(SessionSettingsStore.PresenterMode.NORMAL,
+        assertEquals(PresentationMode.NORMAL,
                 replacement.getLastSuccessfulMode());
         assertFalse(store.snapshot(pc, PreferenceManager.getDefaultSharedPreferences(context))
-                .isModeOverridden(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .isModeOverridden(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING));
     }
 
@@ -93,20 +94,20 @@ public final class GameXrSessionStartupTest {
     public void hostConfirmedResumeRetainsClientModeAndItsSavedQuality() {
         SessionSettingsStore.SessionRecord existingRecord = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, existingRecord.getLocalSessionId())
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "1920x1080", "3840x2160")
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.FPS_PREF_STRING, "30", "90")
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
         Game game = Robolectric.buildActivity(Game.class, launchIntent(true)).get();
-        SharedPreferences startup = prepareCurrentSessionPreferences(game, false);
+        SharedPreferences startup = prepareCurrentSessionPreferences(game);
         PreferenceConfiguration configuration =
                 PreferenceConfiguration.readPreferences(game, startup);
 
-        assertEquals(XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+        assertEquals(PresentationMode.CLIENT_SBS_AI,
                 game.getXrStartupPresenterMode());
         assertEquals(1920, configuration.width);
         assertEquals(1080, configuration.height);
@@ -119,20 +120,20 @@ public final class GameXrSessionStartupTest {
     public void activityRecreationRetainsClientModeAndItsSavedQuality() {
         SessionSettingsStore.SessionRecord existingRecord = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, existingRecord.getLocalSessionId())
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING,
                         "1920x1080", "3840x2160")
-                .setModeValue(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI,
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.FPS_PREF_STRING, "30", "90")
-                .setLastSuccessfulMode(SessionSettingsStore.PresenterMode.CLIENT_SBS_AI)
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
-        Game game = Robolectric.buildActivity(Game.class, launchIntent(false)).get();
-        SharedPreferences startup = prepareCurrentSessionPreferences(game, true);
+        Game game = Robolectric.buildActivity(Game.class, launchIntent(true)).get();
+        SharedPreferences startup = prepareCurrentSessionPreferences(game);
         PreferenceConfiguration configuration =
                 PreferenceConfiguration.readPreferences(game, startup);
 
-        assertEquals(XrStreamPresenter.PresenterMode.CLIENT_SBS_AI,
+        assertEquals(PresentationMode.CLIENT_SBS_AI,
                 game.getXrStartupPresenterMode());
         assertEquals(1920, configuration.width);
         assertEquals(1080, configuration.height);
@@ -141,12 +142,25 @@ public final class GameXrSessionStartupTest {
                 store.getCurrentSession(pc).getLocalSessionId());
     }
 
+    @Test
+    public void successfulLaunchReplacesStartAuthorityWithExactResume() {
+        Game game = Robolectric.buildActivity(Game.class, launchIntent(false)).get();
+        prepareCurrentSessionPreferences(game);
+
+        game.hostSessionEstablished("new-session", false, true);
+
+        HostSessionLaunchRequest request = Game.getHostSessionLaunchRequest(game.getIntent());
+        assertEquals(HostSessionLaunchRequest.Kind.RESUME, request.kind);
+        assertEquals("new-session", request.expectedToken);
+        assertEquals(APP_UUID, request.expectedAppUuid);
+        assertEquals(PresentationMode.NORMAL, store.getCurrentSession(pc).getLastSuccessfulMode());
+        assertEquals("new-session", store.getCurrentSession(pc).getResumeMetadata().getHostSessionId());
+    }
+
     private static SharedPreferences prepareCurrentSessionPreferences(
-            Game game, boolean activityRecreated) {
+            Game game) {
         return ReflectionHelpers.callInstanceMethod(game,
-                "prepareCurrentSessionPreferences",
-                ReflectionHelpers.ClassParameter.from(
-                        boolean.class, activityRecreated));
+                "prepareCurrentSessionPreferences");
     }
 
     private static Intent launchIntent(boolean resume) {
@@ -157,8 +171,8 @@ public final class GameXrSessionStartupTest {
                 .putExtra(Game.EXTRA_APP_ID, 7)
                 .putExtra(Game.EXTRA_APP_UUID, APP_UUID)
                 .putExtra(Game.EXTRA_APP_NAME, "Game")
-                .putExtra(Game.EXTRA_RESUME_EXISTING_SESSION, resume)
-                .putExtra(ServerHelper.EXTRA_HOST_SESSION_ID_SUPPORTED, true)
-                .putExtra(Game.EXTRA_HOST_SESSION_ID, HOST_SESSION_ID);
+                .putExtra(Game.EXTRA_LAUNCH_REQUEST, resume
+                        ? HostSessionLaunchRequest.resume(7, APP_UUID, true, HOST_SESSION_ID)
+                        : HostSessionLaunchRequest.start());
     }
 }

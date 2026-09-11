@@ -7,6 +7,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 
 import android.app.Activity;
 import android.content.Context;
@@ -21,7 +23,9 @@ import android.widget.TableRow;
 import android.widget.TextView;
 
 import androidx.appcompat.widget.AppCompatButton;
+import androidx.xr.scenecore.PanelEntity;
 
+import com.limelight.BuildConfig;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrChoiceGroup;
@@ -36,6 +40,7 @@ import com.limelight.ui.xrcontrols.XrSparklineView;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.MockedStatic;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.android.controller.ActivityController;
@@ -43,6 +48,8 @@ import org.robolectric.annotation.Config;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 @RunWith(RobolectricTestRunner.class)
@@ -51,6 +58,60 @@ import java.util.Locale;
         com.limelight.shadows.ShadowGameManager.class,
 })
 public final class XrStreamPresenterViewTest {
+
+    @Test
+    public void dockHasOneDisconnectActionAndItsTileDispatchesOnce() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+
+        PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(activity);
+        prefs.enablePerfOverlay = false;
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, prefs, surface -> { }, visible -> { });
+        int[] disconnects = { 0 };
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public boolean onDisconnectRequested() {
+                disconnects[0]++;
+                return true;
+            }
+        });
+        // Keep real hosted Android Views and their click handlers; only SceneCore entities are mocked.
+        try (MockedStatic<PanelEntity> panels = mockStatic(PanelEntity.class,
+                invocation -> mock(PanelEntity.class))) {
+            Method build = XrStreamPresenter.class.getDeclaredMethod("buildControlBar", float.class);
+            build.setAccessible(true);
+            build.invoke(presenter, 2.0f);
+
+            List<?> items = (List<?>) getField(presenter, "barItems");
+            assertEquals(BuildConfig.DEBUG ? 9 : 8, items.size());
+            List<String> labels = new ArrayList<>();
+            View disconnect = null;
+            for (Object item : items) {
+                FrameLayout tile = (FrameLayout) getField(item, "root");
+                View tapTarget = tile.getChildAt(0);
+                String label = tapTarget.getContentDescription().toString();
+                labels.add(label);
+                if (activity.getString(R.string.game_menu_disconnect).equals(label)) {
+                    assertNull(disconnect);
+                    disconnect = tapTarget;
+                }
+            }
+            assertFalse(labels.contains("Library"));
+            assertFalse(labels.contains(activity.getString(R.string.xr_home_end_session)));
+            assertEquals(activity.getString(R.string.game_menu_disconnect), labels.get(7));
+            if (BuildConfig.DEBUG) {
+                assertEquals(activity.getString(R.string.xr_bar_dump), labels.get(8));
+            }
+            assertTrue(disconnect != null && disconnect.performClick());
+            assertEquals(1, disconnects[0]);
+            assertFalse(activity.isFinishing());
+        } finally {
+            presenter.onDestroy();
+            controller.destroy();
+        }
+    }
 
     @Test
     public void rawModePaneUsesConnectedFullHalfButtonsAndEmitsHalfChoice()
@@ -77,7 +138,7 @@ public final class XrStreamPresenterViewTest {
         FrameLayout host = new FrameLayout(activity);
         setField(presenter, "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
-        state.toggleModeOptions(XrStreamPresenter.PresenterMode.HOST_SBS_RAW.name());
+        state.toggleModeOptions(PresentationMode.HOST_SBS_RAW.name());
 
         Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
@@ -107,7 +168,7 @@ public final class XrStreamPresenterViewTest {
         assertEquals(RawSbsModeSettingsModel.HALF_ID, selectedResolution[0]);
         assertEquals(RawSbsModeSettingsModel.HALF_ID, group.getSelectedValue());
 
-        state.toggleModeOptions(XrStreamPresenter.PresenterMode.NORMAL.name());
+        state.toggleModeOptions(PresentationMode.NORMAL.name());
         render.invoke(presenter);
         assertNull(getField(presenter, "rawSbsPerEyeResolutionChoiceGroup"));
         controller.destroy();
@@ -127,7 +188,7 @@ public final class XrStreamPresenterViewTest {
         FrameLayout host = new FrameLayout(activity);
         setField(presenter, "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
-        state.toggleModeOptions(XrStreamPresenter.PresenterMode.NORMAL.name());
+        state.toggleModeOptions(PresentationMode.NORMAL.name());
 
         Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
@@ -160,7 +221,7 @@ public final class XrStreamPresenterViewTest {
         FrameLayout host = new FrameLayout(activity);
         setField(presenter, "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
-        state.toggleModeOptions(XrStreamPresenter.PresenterMode.CLIENT_SBS_AI.name());
+        state.toggleModeOptions(PresentationMode.CLIENT_SBS_AI.name());
 
         Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);

@@ -130,7 +130,7 @@ public class Stereo3DRendererSchedulingTest {
     public void surfaceTextureCallbacksUseOneExplicitUrgentDisplayLooper() throws IOException {
         String source = rendererSource();
         String constructor = source.substring(
-                source.indexOf("public Stereo3DRenderer(GLSurfaceView view,"),
+                source.indexOf("public Stereo3DRenderer(ClientSbsRenderSurface view,"),
                 source.indexOf("/** Immutable copy of the processor's reused"));
         assertTrue(constructor.contains("new HandlerThread("));
         assertTrue(constructor.contains("Process.THREAD_PRIORITY_URGENT_DISPLAY"));
@@ -198,7 +198,12 @@ public class Stereo3DRendererSchedulingTest {
         String terminalEntry = source.substring(
                 source.indexOf("public void onSurfaceDestroyedAsync"),
                 source.indexOf("private boolean awaitTerminalWorkerCleanup"));
-        assertTrue(terminalEntry.contains("shutdownFrameCallbackThread()"));
+        assertTrue(terminalEntry.contains("terminalSurfaceDestroyRequested = true"));
+        assertFalse(terminalEntry.contains("synchronized (surfaceLifecycleLock)"));
+        String terminalWorker = source.substring(
+                source.indexOf("private boolean awaitTerminalWorkerCleanup"),
+                source.indexOf("private static boolean awaitTerminalCleanupRetry"));
+        assertTrue(terminalWorker.contains("shutdownFrameCallbackThread()"));
     }
 
     @Test

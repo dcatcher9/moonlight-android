@@ -101,7 +101,7 @@ public class Stereo3DRendererStrictFailureContractTest {
         String source = readRendererSource();
         String prepare = methodBody(source, "private boolean prepareMatchedDepth()");
         String constructor = methodBody(source,
-                "public Stereo3DRenderer(GLSurfaceView view,");
+                "public Stereo3DRenderer(ClientSbsRenderSurface view,");
         String initialization = methodBody(
                 source, "private void onSurfaceCreatedLocked(GL10 gl, EGLConfig config)");
         String inverseCache = methodBody(
