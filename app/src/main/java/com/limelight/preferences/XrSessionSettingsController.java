@@ -240,11 +240,11 @@ public final class XrSessionSettingsController {
                 PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING)
                 ? SessionSettingsModel.Source.CURRENT_SESSION
                 : SessionSettingsModel.Source.GLOBAL;
-        startupMode = startupModeOverride != null
+        startupMode = PresentationMode.safeStartupMode(startupModeOverride != null
                 ? startupModeOverride
                 : snapshot.getRecord() != null
                         ? snapshot.getRecord().getLastSuccessfulMode()
-                        : PresentationMode.NORMAL;
+                        : PresentationMode.NORMAL);
         selectedMode = startupMode;
         liveStreamQuality = qualityTuple(appliedModeQuality.get(startupMode));
         startupCodecCompatibilityAdjusted = ensureSelectedRawCodecCompatibility();

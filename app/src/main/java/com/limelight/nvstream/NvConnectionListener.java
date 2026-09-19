@@ -37,6 +37,11 @@ public interface NvConnectionListener {
     /** Exact 240-byte Apollo host-SBS telemetry v2 state body. */
     void hostSbsTelemetryState(byte[] payload);
 
+    /** Replaceable Game provider observation for one encoder-proven presentation generation. */
+    default void onGameSourceStatus(int state, int provider, int presentationGeneration,
+                                    int sourceRevision, int sourceWidth, int sourceHeight,
+                                    int packedWidth, int packedHeight) {}
+
     /**
      * Called after the host accepts launch/resume. Token-capable Apollo-3D hosts return the bound
      * session token; standard Sunshine/Apollo hosts report {@code hostSessionIdSupported=false}

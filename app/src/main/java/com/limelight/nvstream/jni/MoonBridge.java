@@ -417,6 +417,16 @@ public class MoonBridge {
         }
     }
 
+    public static void bridgeClGameSourceStatus(int state, int provider, int presentationGeneration,
+                                               int sourceRevision, int sourceWidth, int sourceHeight,
+                                               int packedWidth, int packedHeight) {
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.onGameSourceStatus(state, provider, presentationGeneration,
+                    sourceRevision, sourceWidth, sourceHeight, packedWidth, packedHeight);
+        }
+    }
+
     public static synchronized long setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         long sessionId = ++nextBridgeSessionId;
         bridgeSession = new BridgeSession(sessionId, videoRenderer, audioRenderer, connectionListener);
@@ -444,7 +454,15 @@ public class MoonBridge {
     // Host-side SBS modes carried by atomic presentation v2 and the launch-time SBS setting.
     // Must match the SBS_MODE_* values in moonlight-common-c's Limelight.h.
     public static final int SBS_MODE_OFF = 0; // No host depth; plain W x H frame.
-    public static final int SBS_MODE_AI = 1;  // Enable Apollo's selected SBS profile; 2W x H frame.
+    public static final int SBS_MODE_AI = 1;  // Host AI depth; 2W x H frame.
+    public static final int SBS_MODE_GAME_MONO = 2; // Armed provider; ordinary W x H frame.
+    public static final int SBS_MODE_GAME_SBS = 3; // Exact provider SBS or duplicate-eye fallback.
+    public static final int LI_FF_GAME_PROVIDER_V1 = 0x02000000;
+    public static final int GAME_SOURCE_WAITING = 0;
+    public static final int GAME_SOURCE_READY = 1;
+    public static final int GAME_SOURCE_UNSUPPORTED = 2;
+    public static final int GAME_PROVIDER_NONE = 0;
+    public static final int GAME_PROVIDER_RESHADE = 1;
 
     /** Host/client-negotiated exact encoder-input identity in frame headers. */
     public static final int LI_FF_SOURCE_FRAME_ID_V1 = 0x10000000;

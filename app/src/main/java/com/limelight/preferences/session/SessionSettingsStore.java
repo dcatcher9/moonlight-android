@@ -1,6 +1,7 @@
 package com.limelight.preferences.session;
 
 import com.limelight.ui.PresentationMode;
+import com.limelight.preferences.PreferenceConfiguration;
 import android.content.Context;
 import android.content.SharedPreferences;
 
@@ -234,8 +235,7 @@ public final class SessionSettingsStore {
             this.currentApp = currentApp;
             this.sharedOverrides = immutablePreferenceMap(sharedOverrides);
             this.modeOverrides = immutableModeMap(modeOverrides);
-            this.lastSuccessfulMode = lastSuccessfulMode != null
-                    ? lastSuccessfulMode : PresentationMode.NORMAL;
+            this.lastSuccessfulMode = PresentationMode.safeStartupMode(lastSuccessfulMode);
             this.resumeMetadata = resumeMetadata != null
                     ? resumeMetadata : new ResumeMetadata(false, null, 0L);
         }
@@ -1136,6 +1136,8 @@ public final class SessionSettingsStore {
             dto.modeOverrides.put(entry.getKey().name(), toValueMap(entry.getValue()));
         }
         dto.lastSuccessfulMode = record.lastSuccessfulMode.name();
+        // A later explicit Movie reset must not copy the preserved Raw tuple again.
+        dto.rawModeMigrated = true;
         dto.resumeMetadata = new ResumeDto();
         dto.resumeMetadata.hostConfirmedResume = record.resumeMetadata.hostConfirmedResume;
         dto.resumeMetadata.hostSessionId = record.resumeMetadata.hostSessionId;
@@ -1168,6 +1170,14 @@ public final class SessionSettingsStore {
             }
         }
 
+        if (!dto.rawModeMigrated && !modes.containsKey(PresentationMode.MOVIE_3D)) {
+            Map<String, Object> legacyRaw = modes.get(PresentationMode.HOST_SBS_RAW);
+            Map<String, Object> movieQuality = compatibleLegacyRawQuality(legacyRaw);
+            if (!movieQuality.isEmpty()) {
+                modes.put(PresentationMode.MOVIE_3D, movieQuality);
+            }
+        }
+
         PresentationMode lastMode = PresentationMode.NORMAL;
         if (dto.lastSuccessfulMode != null) {
             try {
@@ -1182,6 +1192,48 @@ public final class SessionSettingsStore {
                         dto.resumeMetadata.hostConfirmedAtEpochMillis)
                 : new ResumeMetadata(false, null, 0L);
         return new SessionRecord(dto.localSessionId, app, shared, modes, lastMode, metadata);
+    }
+
+    /**
+     * Preserve the selected quality numbers without inheriting Raw's width multiplier or
+     * presentation choice. The old record remains intact for compatibility and inspection.
+     */
+    private static Map<String, Object> compatibleLegacyRawQuality(Map<String, Object> legacy) {
+        Map<String, Object> quality = new LinkedHashMap<>();
+        if (legacy == null) {
+            return quality;
+        }
+        Object resolution = legacy.get(PreferenceConfiguration.RESOLUTION_PREF_STRING);
+        if (resolution instanceof String && ((String) resolution).matches("[0-9]+x[0-9]+")) {
+            String[] axes = ((String) resolution).split("x");
+            try {
+                int width = Integer.parseInt(axes[0]);
+                int height = Integer.parseInt(axes[1]);
+                if (width > 0 && height > 0 && (width & 1) == 0 && (height & 1) == 0
+                        && width <= PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1
+                        && height <= PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1) {
+                    quality.put(PreferenceConfiguration.RESOLUTION_PREF_STRING, resolution);
+                }
+            } catch (NumberFormatException ignored) {
+                // A corrupt legacy dimension must not become a new mode's connection setting.
+            }
+        }
+        Object fps = legacy.get(PreferenceConfiguration.FPS_PREF_STRING);
+        if (fps instanceof String) {
+            try {
+                float rate = Float.parseFloat((String) fps);
+                if (Float.isFinite(rate) && rate > 0) {
+                    quality.put(PreferenceConfiguration.FPS_PREF_STRING, fps);
+                }
+            } catch (NumberFormatException ignored) {
+                // Keep the original value in Raw while the new mode inherits a valid default.
+            }
+        }
+        Object bitrate = legacy.get(PreferenceConfiguration.BITRATE_PREF_STRING);
+        if (bitrate instanceof Integer && (Integer) bitrate > 0) {
+            quality.put(PreferenceConfiguration.BITRATE_PREF_STRING, bitrate);
+        }
+        return quality;
     }
 
     private static Map<String, ValueDto> toValueMap(Map<String, Object> values) {
@@ -1213,6 +1265,7 @@ public final class SessionSettingsStore {
         @SerializedName("shared") Map<String, ValueDto> sharedOverrides;
         @SerializedName("modes") Map<String, Map<String, ValueDto>> modeOverrides;
         @SerializedName("last_mode") String lastSuccessfulMode;
+        @SerializedName("raw_mode_migrated") boolean rawModeMigrated;
         @SerializedName("resume") ResumeDto resumeMetadata;
     }
 

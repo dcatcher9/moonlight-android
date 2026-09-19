@@ -1,0 +1,18 @@
+<!-- Film strip: incoming movie picture format, separate from the Cinema view preset. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:tint="@color/xr_accent"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M4,3h16v18H4zM4,7h3M4,12h3M4,17h3M17,7h3M17,12h3M17,17h3"
+        android:strokeColor="@color/xr_accent"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="@android:color/transparent" />
+    <path
+        android:pathData="M10,8l6,4 -6,4z"
+        android:fillColor="@color/xr_accent" />
+</vector>

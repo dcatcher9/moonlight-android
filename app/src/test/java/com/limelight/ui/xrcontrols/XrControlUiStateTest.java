@@ -139,4 +139,31 @@ public class XrControlUiStateTest {
         assertTrue(state.isStatsVisible());
     }
 
+    @Test
+    public void gameAndMovieReuseTheOptionsPaneWithoutChangingStats() {
+        XrControlUiState state = new XrControlUiState();
+        state.showStats();
+
+        assertEquals(XrControlUiState.ModeTileAction.SELECT_MODE,
+                state.onModeTileTapped("GAME_3D", "NORMAL"));
+        assertEquals(XrControlUiState.Surface.NONE, state.getVisibleSurface());
+        assertEquals(XrControlUiState.ModeTileAction.OPTIONS_TOGGLED,
+                state.onModeTileTapped("GAME_3D", "GAME_3D"));
+        assertEquals("GAME_3D", state.getModeOptionsId());
+
+        assertEquals(XrControlUiState.ModeTileAction.SELECT_MODE,
+                state.onModeTileTapped("MOVIE_3D", "GAME_3D"));
+        assertEquals(XrControlUiState.Surface.NONE, state.getVisibleSurface());
+        assertNull(state.getModeOptionsId());
+        assertTrue(state.isStatsVisible());
+
+        assertEquals(XrControlUiState.ModeTileAction.OPTIONS_TOGGLED,
+                state.onModeTileTapped("MOVIE_3D", "MOVIE_3D"));
+        assertEquals("MOVIE_3D", state.getModeOptionsId());
+        assertTrue(state.isStatsVisible());
+        state.onModeTileTapped("MOVIE_3D", "MOVIE_3D");
+        assertEquals(XrControlUiState.Surface.NONE, state.getVisibleSurface());
+        assertTrue(state.isStatsVisible());
+    }
+
 }

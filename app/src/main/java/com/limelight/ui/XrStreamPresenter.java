@@ -58,6 +58,9 @@ import com.limelight.preferences.XrChoiceGroup;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
+import com.limelight.ui.xrcontrols.AuthoredStereoModeState;
+import com.limelight.ui.xrcontrols.GameStereoSourceState;
+import com.limelight.ui.xrcontrols.AuthoredStereoModeState.MoviePictureFormat;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
@@ -382,6 +385,18 @@ public class XrStreamPresenter {
     /** Unsigned host presentation generation. Zero means no v2 generation observed yet. */
     private int lastPresentationStateGeneration;
     private boolean atomicPresentationV2Supported;
+    private boolean gameProviderV1Supported;
+    private final GameStereoSourceState gameSourceState = new GameStereoSourceState();
+    /** Game intent survives reconnect; its packing and source proof never do. */
+    private int gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+    private int confirmedGamePresentationGeneration;
+    private boolean gameSourceReconcilePosted;
+    private final Runnable gameSourceReconcileRunnable = () -> {
+        gameSourceReconcilePosted = false;
+        reconcileGameSource();
+    };
+    private static final String EXTRA_GAME_WIDEN_FAILURE = "xr_game_widen_failure";
+    private static final String EXTRA_GAME_WIDEN_QUALITY = "xr_game_widen_quality";
     private boolean pendingClientPackedSwapProofArmed;
     private static final long LIVE_QUALITY_ACK_TIMEOUT_MS = 4000L;
     private final android.os.Handler liveQualityHandler =
@@ -417,6 +432,10 @@ public class XrStreamPresenter {
     private TextView rawSbsPerEyeResolutionSourceView;
     private TextView rawSbsPerEyeResolutionPendingView;
     private TextView rawSbsGeometryView;
+    private final AuthoredStereoModeState authoredStereoModeState = new AuthoredStereoModeState();
+    private XrChoiceGroup moviePictureFormatChoiceGroup;
+    private TextView gameSourceStatusView;
+    private TextView gameSourceDetailView;
 
     /** Passive glance strip above the video; it never intercepts input. */
     private PanelEntity glancePanel;
@@ -986,6 +1005,7 @@ public class XrStreamPresenter {
     enum LiveQualityRequestOrigin {
         USER,
         PANEL_FOLLOW,
+        GAME_SOURCE,
     }
 
     static boolean shouldPersistLiveQualityRequest(LiveQualityRequestOrigin origin) {
@@ -1276,6 +1296,8 @@ public class XrStreamPresenter {
         hostControlExtensionsSupported = supported;
         if (!supported) {
             atomicPresentationV2Supported = false;
+            gameProviderV1Supported = false;
+            invalidateGameSourceProof();
             liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
             panelRateReconcilePosted = false;
             clearHostSbsTelemetrySubscriptionState();
@@ -1302,6 +1324,8 @@ public class XrStreamPresenter {
         }
         atomicPresentationV2Supported = enabled;
         if (!enabled) {
+            gameProviderV1Supported = false;
+            invalidateGameSourceProof();
             liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
             panelRateReconcilePosted = false;
         } else {
@@ -1309,9 +1333,153 @@ public class XrStreamPresenter {
         }
     }
 
+    /** Game transport is opt-in and requires the acknowledged presentation protocol. */
+    public void setGameProviderV1Supported(boolean supported) {
+        boolean enabled = hostControlExtensionsSupported && atomicPresentationV2Supported && supported;
+        if (gameProviderV1Supported == enabled) {
+            return;
+        }
+        gameProviderV1Supported = enabled;
+        invalidateGameSourceProof();
+        updateGameSourceViews();
+        scheduleGameSourceReconcile();
+    }
+
+    /** Reliable source observation; depth-engine progress is never game-stereo proof. */
+    public void onGameSourceStatus(int state, int provider, int presentationGeneration,
+                                   int sourceRevision, int sourceWidth, int sourceHeight,
+                                   int packedWidth, int packedHeight) {
+        if (!controlTransportOpen() || !gameProviderV1Supported
+                || currentPresenterMode != PresentationMode.GAME_3D
+                || confirmedGamePresentationGeneration == 0) {
+            return;
+        }
+        if (gameSourceState.requiresPresentationReconfirmation(
+                Integer.toUnsignedLong(presentationGeneration),
+                Integer.toUnsignedLong(sourceRevision), state, provider,
+                sourceWidth, sourceHeight, packedWidth, packedHeight)
+                && canReconcileGameSource()) {
+            LimeLog.info("XR: Game source observed newer presentation generation "
+                    + Integer.toUnsignedString(presentationGeneration) + " after "
+                    + Integer.toUnsignedString(confirmedGamePresentationGeneration)
+                    + "; reconfirming wire mode " + gameWireMode);
+            // Invalidate before posting so repeated observations coalesce into one request.
+            // The observation is not an ACK and must never authorize packed interpretation.
+            invalidateGameSourceProof();
+            updateGameSourceViews();
+            updateGlancePanel();
+            scheduleGameSourceReconcile();
+            return;
+        }
+        if (gameSourceState.acceptStatus(Integer.toUnsignedLong(presentationGeneration),
+                Integer.toUnsignedLong(sourceRevision), state, provider,
+                sourceWidth, sourceHeight, packedWidth, packedHeight)) {
+            LimeLog.info("XR: Game source accepted state " + state + ", provider " + provider
+                    + ", presentation " + Integer.toUnsignedString(presentationGeneration)
+                    + ", revision " + Integer.toUnsignedString(sourceRevision));
+            updateGameSourceViews();
+            updateGlancePanel();
+            scheduleGameSourceReconcile();
+        }
+    }
+
+    private void invalidateGameSourceProof() {
+        confirmedGamePresentationGeneration = 0;
+        gameSourceState.invalidateSourceProof();
+    }
+
+    private void scheduleGameSourceReconcile() {
+        if (!gameSourceReconcilePosted && controlTransportOpen()
+                && gameProviderV1Supported && currentPresenterMode == PresentationMode.GAME_3D) {
+            gameSourceReconcilePosted = true;
+            liveQualityHandler.post(gameSourceReconcileRunnable);
+        }
+    }
+
+    private boolean canReconcileGameSource() {
+        return controlTransportOpen() && gameProviderV1Supported && streamPresentationReady
+                && sessionControlsEnabled && currentPresenterMode == PresentationMode.GAME_3D
+                && !modeSwitchInProgress && !liveQualityTransactionBusy()
+                && pendingDecoderTransitionMode == null && !clientSbsHdrTransitionInProgress
+                && !gameSourceState.hasWidenFailure();
+    }
+
+    private void reconcileGameSource() {
+        if (!canReconcileGameSource()) {
+            return;
+        }
+        int desiredMode;
+        if (confirmedGamePresentationGeneration == 0) {
+            // Launch/resume carries no ACK, and an independent host rebuild may retire the last
+            // proof. Reconfirm the current wire mode without changing desktop or packed layout.
+            desiredMode = gameWireMode;
+        } else if (gameSourceState.shouldAutoWiden(true, gameWireMode)) {
+            desiredMode = MoonBridge.SBS_MODE_GAME_SBS;
+        } else {
+            return;
+        }
+        StreamQualityTuple quality = new StreamQualityTuple(
+                prefConfig.width + "x" + prefConfig.height,
+                formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        if (!applyLiveStreamQuality(quality, LiveQualityRequestOrigin.GAME_SOURCE, null,
+                desiredMode)) {
+            if (isGameSourceWidening(desiredMode)) {
+                gameSourceState.recordWidenFailure();
+            }
+            updateGameSourceViews();
+        }
+    }
+
+    private boolean isGameSourceWidening(int desiredMode) {
+        return gameWireMode == MoonBridge.SBS_MODE_GAME_MONO
+                && desiredMode == MoonBridge.SBS_MODE_GAME_SBS;
+    }
+
+    private int gameSourceStatusText() {
+        GameStereoSourceState.Status status = gameSourceState.status(
+                gameProviderV1Supported, gameWireMode);
+        if (status == GameStereoSourceState.Status.READY
+                && gameWireMode == MoonBridge.SBS_MODE_GAME_SBS) {
+            return R.string.xr_game_3d_active;
+        }
+        return status == GameStereoSourceState.Status.WAITING
+                || status == GameStereoSourceState.Status.READY
+                ? R.string.xr_game_waiting : R.string.xr_game_showing_2d;
+    }
+
+    private int gameSourceDetailText() {
+        if (!gameProviderV1Supported) {
+            return R.string.xr_game_source_unavailable;
+        }
+        if (gameSourceState.hasWidenFailure()) {
+            return R.string.xr_game_widen_failed;
+        }
+        GameStereoSourceState.Status status = gameSourceState.status(true, gameWireMode);
+        if (status == GameStereoSourceState.Status.READY
+                && gameWireMode == MoonBridge.SBS_MODE_GAME_SBS) {
+            return R.string.xr_game_source_active;
+        }
+        if (status == GameStereoSourceState.Status.UNSUPPORTED) {
+            return R.string.xr_game_source_unsupported;
+        }
+        return status == GameStereoSourceState.Status.FALLBACK
+                ? R.string.xr_game_source_flat : R.string.xr_game_source_waiting;
+    }
+
+    private void updateGameSourceViews() {
+        if (gameSourceStatusView != null) {
+            gameSourceStatusView.setText(gameSourceStatusText());
+        }
+        if (gameSourceDetailView != null) {
+            gameSourceDetailView.setText(gameSourceDetailText());
+            scheduleModeOptionsPanelFit();
+        }
+    }
+
     static boolean isPresentationModeSupported(PresentationMode mode,
                                                boolean hostControlExtensionsSupported) {
-        return mode != PresentationMode.HOST_SBS_AI || hostControlExtensionsSupported;
+        return mode != PresentationMode.HOST_SBS_RAW
+                && (mode != PresentationMode.HOST_SBS_AI || hostControlExtensionsSupported);
     }
 
     /** Replace the immutable applied/pending snapshot and refresh an open Settings panel. */
@@ -1388,6 +1556,10 @@ public class XrStreamPresenter {
         }
         if (rawSbsPerEyeResolutionChoiceGroup != null) {
             rawSbsPerEyeResolutionChoiceGroup.setEnabled(enabled);
+        }
+        if (moviePictureFormatChoiceGroup != null) {
+            moviePictureFormatChoiceGroup.setEnabled(enabled && streamPresentationReady
+                    && !modeSwitchInProgress && !liveQualityTransactionBusy());
         }
         if (modeResolutionSelector != null) {
             modeResolutionSelector.setEnabled(enabled);
@@ -1728,17 +1900,16 @@ public class XrStreamPresenter {
      */
     private void buildControlBar(float videoHeightMeters) {
         BarItem normal = new BarItem(
-                activity.getString(R.string.xr_bar_normal),
+                activity.getString(R.string.xr_bar_2d),
                 R.drawable.ic_xr_mode_normal, PresentationMode.NORMAL);
-        BarItem hostSbsAi = new BarItem(
-                activity.getString(R.string.xr_bar_host_sbs_ai),
+        BarItem hostSbsAi = new BarItem(activity.getString(R.string.xr_bar_host_ai_3d),
                 R.drawable.ic_xr_mode_host_sbs, PresentationMode.HOST_SBS_AI);
-        BarItem hostSbsRaw = new BarItem(
-                activity.getString(R.string.xr_bar_host_sbs_raw),
-                R.drawable.ic_xr_mode_host_sbs_raw, PresentationMode.HOST_SBS_RAW);
-        BarItem clientSbsAi = new BarItem(
-                activity.getString(R.string.xr_bar_client_sbs_ai),
+        BarItem clientSbsAi = new BarItem(activity.getString(R.string.xr_bar_client_ai_3d),
                 R.drawable.ic_xr_mode_client_sbs, PresentationMode.CLIENT_SBS_AI);
+        BarItem game = new BarItem(activity.getString(R.string.xr_bar_game_3d),
+                R.drawable.ic_xr_mode_game_3d, PresentationMode.GAME_3D);
+        BarItem movie = new BarItem(activity.getString(R.string.xr_bar_movie_3d),
+                R.drawable.ic_xr_mode_movie_3d, PresentationMode.MOVIE_3D);
         BarItem settings = new BarItem(
                 activity.getString(R.string.xr_home_settings),
                 R.drawable.ic_settings, /* selectsMode= */ null);
@@ -1759,9 +1930,10 @@ public class XrStreamPresenter {
                 activity.getString(R.string.game_menu_disconnect),
                 R.drawable.ic_xr_disconnect, /* selectsMode= */ null);
         normal.onTap = () -> onModeTileTapped(normal);
-        clientSbsAi.onTap = () -> onModeTileTapped(clientSbsAi);
-        hostSbsRaw.onTap = () -> onModeTileTapped(hostSbsRaw);
         hostSbsAi.onTap = () -> onModeTileTapped(hostSbsAi);
+        clientSbsAi.onTap = () -> onModeTileTapped(clientSbsAi);
+        game.onTap = () -> onModeTileTapped(game);
+        movie.onTap = () -> onModeTileTapped(movie);
         settings.onTap = this::toggleSessionSettings;
         cinemaView.onTap = this::onCinemaTileTapped;
         stats.onTap = this::onStatsTileTapped;
@@ -1777,8 +1949,9 @@ public class XrStreamPresenter {
         barItems.clear();
         barItems.add(normal);
         barItems.add(hostSbsAi);
-        barItems.add(hostSbsRaw);
         barItems.add(clientSbsAi);
+        barItems.add(game);
+        barItems.add(movie);
         barItems.add(settings);
         barItems.add(cinemaView);
         barItems.add(stats);
@@ -1802,7 +1975,7 @@ public class XrStreamPresenter {
         boolean first = true;
         for (BarItem item : barItems) {
             boolean isMode = item.selectsMode != null;
-            // Divider between the four presentation modes and the direct stream actions.
+            // Divider between the five presentation modes and the direct stream actions.
             if (!first && prevWasMode && !isMode) {
                 bar.addView(makeDivider());
             }
@@ -1829,11 +2002,13 @@ public class XrStreamPresenter {
 
         Button revealButton = new Button(activity);
         styleControlButton(revealButton);
+        revealButton.setBackgroundResource(R.drawable.xr_dock_reveal_background);
         revealButton.setText("\u25B4");
-        setTextSize(revealButton, R.dimen.xr_text_emphasis);
+        setTextSize(revealButton, R.dimen.xr_text_title);
         revealButton.setAllCaps(false);
-        revealButton.setMinWidth(0);
-        revealButton.setMinHeight(0);
+        // Keep a generous gaze target even when the active mode/status label is short.
+        revealButton.setMinWidth(dimen(R.dimen.xr_dock_reveal_min_width));
+        revealButton.setMinHeight(dimen(R.dimen.xr_control_choice));
         dockRevealPill = revealButton;
         dockRevealPill.setGravity(Gravity.CENTER);
         dockRevealPill.setClickable(true);
@@ -1844,9 +2019,9 @@ public class XrStreamPresenter {
         // SceneCore-hosted Views do not have a normal window token. Samsung's tooltip popup logs
         // an error when it tries to resolve this anchor, while contentDescription remains valid
         // for accessibility and gaze narration.
-        dockRevealPill.setPadding(dimen(R.dimen.xr_space_lg),
-                dimen(R.dimen.xr_space_sm), dimen(R.dimen.xr_space_lg),
-                dimen(R.dimen.xr_space_sm));
+        dockRevealPill.setPadding(dimen(R.dimen.xr_space_xl),
+                dimen(R.dimen.xr_space_lg), dimen(R.dimen.xr_space_xl),
+                dimen(R.dimen.xr_space_lg));
         dockRevealPill.setVisibility(View.GONE);
         // Some XR input paths focus a hosted TextView/Button on the first pinch and do not deliver
         // its click until the second. Reveal on the first press event as well; the click handler
@@ -2080,6 +2255,13 @@ public class XrStreamPresenter {
         }
         else if (reconnectPending) {
             statusText = R.string.xr_glance_pending;
+        }
+        else if (currentPresenterMode == PresentationMode.GAME_3D) {
+            statusText = gameSourceStatusText();
+        }
+        else if (currentPresenterMode == PresentationMode.MOVIE_3D
+                && !authoredStereoModeState.isSideBySide(currentPresenterMode)) {
+            statusText = R.string.xr_game_showing_2d;
         }
         else {
             statusText = R.string.xr_glance_live;
@@ -2575,16 +2757,35 @@ public class XrStreamPresenter {
                 addModeStatus(header, activity.getString(R.string.xr_mode_host_raw_source),
                         activity.getString(R.string.xr_mode_host_raw_detail));
                 break;
+            case GAME_3D:
+                addModeStatus(header, activity.getString(R.string.xr_mode_game_source),
+                        activity.getString(R.string.xr_mode_game_detail));
+                break;
+            case MOVIE_3D:
+                addModeStatus(header, activity.getString(R.string.xr_mode_movie_source),
+                        activity.getString(R.string.xr_mode_movie_detail));
+                break;
             case HOST_SBS_AI:
-                addModeStatus(header, activity.getString(R.string.xr_mode_host_ai_source),
+                addModeStatus(header, activity.getString(R.string.xr_mode_host_ai_description),
                         hostDepthStatusText());
                 break;
             case CLIENT_SBS_AI:
-                addModeStatus(header, activity.getString(R.string.xr_client_gpu_status),
+                addModeStatus(header, activity.getString(R.string.xr_mode_client_ai_description),
                         clientSbsRuntimeStatus(clientSbsModeSettingsModel));
                 break;
         }
         root.addView(header);
+
+        if (mode == PresentationMode.MOVIE_3D) {
+            addMovieModeOptions(root);
+        } else if (mode == PresentationMode.GAME_3D) {
+            LinearLayout sourceCard = createModeSourceCard(root,
+                    activity.getString(gameSourceStatusText()));
+            gameSourceStatusView = (TextView) sourceCard.getChildAt(0);
+            gameSourceDetailView = controlText(activity.getString(gameSourceDetailText()),
+                    R.dimen.xr_text_emphasis, paletteColor(R.color.xr_text_secondary));
+            sourceCard.addView(gameSourceDetailView);
+        }
 
         TextView qualityHeading = controlText(
                 activity.getString(R.string.xr_mode_quality_heading),
@@ -2984,6 +3185,74 @@ public class XrStreamPresenter {
                         LinearLayout.LayoutParams.WRAP_CONTENT, 1.5f));
     }
 
+    private LinearLayout createModeSourceCard(LinearLayout root, String title) {
+        LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int padding = dimen(R.dimen.xr_space_md);
+        card.setPadding(padding, padding, padding, padding);
+        card.setBackground(controlSurfaceBackground(
+                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        TextView heading = controlText(title,
+                R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
+        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+        heading.setPadding(0, 0, 0, dimen(R.dimen.xr_space_sm));
+        card.addView(heading);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dimen(R.dimen.xr_space_md);
+        root.addView(card, params);
+        return card;
+    }
+
+    private void addMovieModeOptions(LinearLayout root) {
+        LinearLayout card = createModeSourceCard(root, activity.getString(R.string.xr_movie_picture_format));
+        moviePictureFormatChoiceGroup = buildChoiceGroup(java.util.Arrays.asList(
+                new SessionSettingsModel.Choice("2d", activity.getString(R.string.xr_movie_format_2d)),
+                new SessionSettingsModel.Choice("half_sbs", activity.getString(R.string.xr_movie_format_half_sbs)),
+                new SessionSettingsModel.Choice("full_sbs", activity.getString(R.string.xr_movie_format_full_sbs))),
+                moviePictureFormatId(), "", this::onMoviePictureFormatSelected);
+        moviePictureFormatChoiceGroup.setEnabled(sessionControlsEnabled && streamPresentationReady);
+        card.addView(moviePictureFormatChoiceGroup);
+    }
+
+    private String moviePictureFormatId() {
+        switch (authoredStereoModeState.getMoviePictureFormat()) {
+            case HALF_SBS: return "half_sbs";
+            case FULL_SBS: return "full_sbs";
+            default: return "2d";
+        }
+    }
+
+    private boolean onMoviePictureFormatSelected(String choiceId) {
+        if (!controlTransportOpen() || !sessionControlsEnabled || !streamPresentationReady
+                || currentPresenterMode != PresentationMode.MOVIE_3D
+                || modeSwitchInProgress || liveQualityTransactionBusy()
+                || surfaceEntity == null || surfaceEntity.isDisposed()) {
+            return false;
+        }
+        MoviePictureFormat format;
+        switch (choiceId) {
+            case "2d": format = MoviePictureFormat.TWO_D; break;
+            case "half_sbs": format = MoviePictureFormat.HALF_SBS; break;
+            case "full_sbs": format = MoviePictureFormat.FULL_SBS; break;
+            default: return false;
+        }
+        authoredStereoModeState.setMoviePictureFormat(format);
+        // This is an explicit interpretation of the existing frame, never a request to resize
+        // the Windows desktop, decoder buffer or transport. Half-SBS restores squeezed eyes.
+        surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
+        float aspect = aspectFor(currentPresenterMode);
+        SurfaceEntity.Shape shape = surfaceEntity.getShape();
+        float height = shape instanceof SurfaceEntity.Shape.Quad
+                ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight() : panelHeightMeters;
+        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
+        applyResizeBounds(aspect);
+        repositionControlBar(height);
+        updateGlancePanel();
+        revealDockTemporarily();
+        return true;
+    }
+
     private void addRawSbsModeOptions(LinearLayout root) {
         RawSbsModeSettingsModel model = rawSbsModeSettingsModel;
         LinearLayout card = new LinearLayout(activity);
@@ -3086,6 +3355,9 @@ public class XrStreamPresenter {
     }
 
     private void clearModeOptionsReferences() {
+        moviePictureFormatChoiceGroup = null;
+        gameSourceStatusView = null;
+        gameSourceDetailView = null;
         cinemaEnvironmentChoiceGroup = null;
         cinemaActionButton = null;
         renderedModeOptionsMode = null;
@@ -3146,6 +3418,11 @@ public class XrStreamPresenter {
         modeDefaultsButton.setEnabled(sessionControlsEnabled);
         modeApplyButton.setText(applyButtonLabel());
         modeApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
+        if (moviePictureFormatChoiceGroup != null) {
+            moviePictureFormatChoiceGroup.setSelectedValue(moviePictureFormatId());
+            moviePictureFormatChoiceGroup.setEnabled(sessionControlsEnabled && streamPresentationReady
+                    && !modeSwitchInProgress && !liveQualityTransactionBusy());
+        }
         if (mode == PresentationMode.CLIENT_SBS_AI) {
             updateClientSbsOptionsView();
         }
@@ -3650,11 +3927,15 @@ public class XrStreamPresenter {
             case HOST_SBS_RAW:
                 return activity.getString(R.string.xr_bar_host_sbs_raw);
             case HOST_SBS_AI:
-                return activity.getString(R.string.xr_bar_host_sbs_ai);
+                return activity.getString(R.string.xr_bar_host_ai_3d);
             case CLIENT_SBS_AI:
-                return activity.getString(R.string.xr_bar_client_sbs_ai);
+                return activity.getString(R.string.xr_bar_client_ai_3d);
+            case GAME_3D:
+                return activity.getString(R.string.xr_bar_game_3d);
+            case MOVIE_3D:
+                return activity.getString(R.string.xr_bar_movie_3d);
             default:
-                return activity.getString(R.string.xr_bar_normal);
+                return activity.getString(R.string.xr_bar_2d);
         }
     }
 
@@ -4023,7 +4304,20 @@ public class XrStreamPresenter {
             PresentationMode requestMode,
             int logicalWidth, int logicalHeight, int framerateX100,
             int requestId, int bitrateKbps) {
+        return sendHostVideoModeControl(requestMode, logicalWidth, logicalHeight,
+                framerateX100, requestId, bitrateKbps, effectiveWireModeFor(requestMode));
+    }
+
+    private int sendHostVideoModeControl(
+            PresentationMode requestMode,
+            int logicalWidth, int logicalHeight, int framerateX100,
+            int requestId, int bitrateKbps, int desiredWireMode) {
         if (!controlTransportOpen() || !atomicPresentationV2Supported) {
+            return 0;
+        }
+        if ((desiredWireMode == MoonBridge.SBS_MODE_GAME_MONO
+                || desiredWireMode == MoonBridge.SBS_MODE_GAME_SBS)
+                && (!gameProviderV1Supported || requestMode != PresentationMode.GAME_3D)) {
             return 0;
         }
         int[] wireDimensions = liveVideoModeWireDimensions(
@@ -4034,7 +4328,7 @@ public class XrStreamPresenter {
                     + logicalWidth + "x" + logicalHeight + " for " + requestMode);
             return 0;
         }
-        pendingDesiredWireMode = wireModeFor(requestMode);
+        pendingDesiredWireMode = desiredWireMode;
         pendingRequestedSourceWidth = wireDimensions[0];
         pendingRequestedSourceHeight = wireDimensions[1];
         return MoonBridge.sendSetVideoModeV2(
@@ -4168,6 +4462,10 @@ public class XrStreamPresenter {
         liveQualityHandler.removeCallbacks(liveQualityAckTimeoutRunnable);
         liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
         panelRateReconcilePosted = false;
+        liveQualityHandler.removeCallbacks(gameSourceReconcileRunnable);
+        gameSourceReconcilePosted = false;
+        invalidateGameSourceProof();
+        gameSourceState.leaveGame();
         liveQualityChangeInProgress = false;
         liveQualityConfirmations.clear();
         pendingVideoModeRequestId = -1;
@@ -4731,12 +5029,16 @@ public class XrStreamPresenter {
             case HOST_SBS_RAW:
                 return "Host SBS Raw";
             case HOST_SBS_AI:
-                return "Host SBS AI";
+                return "Host AI 3D";
             case CLIENT_SBS_AI:
-                return "Client SBS AI";
+                return "Client AI 3D";
+            case GAME_3D:
+                return "Game 3D";
+            case MOVIE_3D:
+                return "Movie 3D";
             case NORMAL:
             default:
-                return "Normal";
+                return "2D";
         }
     }
 
@@ -5236,6 +5538,7 @@ public class XrStreamPresenter {
         if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.MODE_OPTIONS) {
             renderModeOptions();
         }
+        updateModeOptionsIndicators();
         updateGlancePanel();
         revealDockTemporarily();
     }
@@ -5592,6 +5895,7 @@ public class XrStreamPresenter {
             persistPresentationState();
             controlActionListener.onPresentationModeCommitted(currentPresenterMode);
         }
+        scheduleGameSourceReconcile();
 
         PresentationMode modeToRestore = deferredPresenterMode;
         deferredPresenterMode = PresentationMode.NORMAL;
@@ -5673,6 +5977,13 @@ public class XrStreamPresenter {
         }
         lastModeSwitchMs = now;
         modeSwitchInProgress = true;
+        if (item.selectsMode == PresentationMode.GAME_3D) {
+            gameSourceState.enterGame();
+            gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+            confirmedGamePresentationGeneration = 0;
+            activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_FAILURE);
+            activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_QUALITY);
+        }
         updateGlancePanel();
         revealDockTemporarily();
         PresentationMode previousMode = currentPresenterMode;
@@ -5681,7 +5992,7 @@ public class XrStreamPresenter {
         boolean fuseClientQuality = shouldFuseClientModeEntryQuality(
                 previousMode, nextMode, atomicPresentationV2Supported,
                 applyRequiresReconnect, targetQuality);
-        if (wireModeFor(previousMode) != wireModeFor(nextMode) || fuseClientQuality) {
+        if (effectiveWireModeFor(previousMode) != effectiveWireModeFor(nextMode) || fuseClientQuality) {
             beginAckFirstModeTransition(
                     item, previousMode, targetQuality,
                     targetQuality != null && targetQuality.appliesLiveIfSelected());
@@ -5700,6 +6011,10 @@ public class XrStreamPresenter {
             BarItem item, PresentationMode previousMode,
             ModeStreamQualityModel targetQuality,
             boolean applyTargetQuality) {
+        // Own the mode start before validation or decoder gating can fail. The shared abort
+        // path must release selectMode's guard even when no host request has been queued yet.
+        pendingAckFirstModeItem = item;
+        pendingAckFirstPreviousMode = previousMode;
         PresentationMode nextMode = item.selectsMode;
         StreamQualityTuple durableTarget = applyTargetQuality && targetQuality != null
                 ? targetQuality.pendingQuality : null;
@@ -5740,8 +6055,6 @@ public class XrStreamPresenter {
         }
 
         int requestId = nextVideoModeRequestId();
-        pendingAckFirstModeItem = item;
-        pendingAckFirstPreviousMode = previousMode;
         pendingVideoModeRequestId = requestId;
         pendingExactEncodedWidth = 0;
         pendingExactEncodedHeight = 0;
@@ -5759,8 +6072,7 @@ public class XrStreamPresenter {
         liveQualityConfirmations.begin(
                 true, nextMode == PresentationMode.CLIENT_SBS_AI);
 
-        // Invalidate readiness before the request leaves the client. The host may publish the new
-        // generation immediately, including before the correlated ACK reaches this thread.
+        // Reset Host AI telemetry before its transition starts.
         if (resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
             resetHostDepthStatus();
         }
@@ -5773,6 +6085,12 @@ public class XrStreamPresenter {
                     LiveQualityRequestOrigin.USER,
                     "host request could not be queued");
             return;
+        }
+
+        // A rejected local send leaves the old Game stream intact. ACK/status delivery is
+        // serialized on this same main thread, so retire proof now, before either can run.
+        if (previousMode == PresentationMode.GAME_3D || nextMode == PresentationMode.GAME_3D) {
+            invalidateGameSourceProof();
         }
 
         armLiveQualityAckTimeout();
@@ -5808,7 +6126,8 @@ public class XrStreamPresenter {
 
         com.limelight.Game game = activity instanceof com.limelight.Game
                 ? (com.limelight.Game) activity : null;
-        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode);
+        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode)
+                || isAckFirstModeTransitionPending();
         if (decoderTransitionRequired) {
             boolean reuseAckFirstTransition = isAckFirstModeTransitionPending();
             int transitionGeneration = reuseOrBeginModeDecoderTransition(
@@ -5859,7 +6178,7 @@ public class XrStreamPresenter {
             } else {
                 streamContainer.switchToClientSbs(isClientSbs,
                         prefConfig.isHostDoubledWidthMode()
-                                && isHostDepthPresenterMode(nextMode),
+                                && isPackedWireMode(effectiveTargetWireMode(nextMode)),
                         success -> finishModeSwitch(item, previousMode, nextMode,
                                 wasClientSbs,
                                 isClientSbs, streamContainer, success));
@@ -5994,6 +6313,14 @@ public class XrStreamPresenter {
     private boolean applyLiveStreamQuality(StreamQualityTuple target,
                                            LiveQualityRequestOrigin origin,
                                            StreamQualityTuple durableUserTarget) {
+        return applyLiveStreamQuality(target, origin, durableUserTarget,
+                effectiveWireModeFor(currentPresenterMode));
+    }
+
+    private boolean applyLiveStreamQuality(StreamQualityTuple target,
+                                           LiveQualityRequestOrigin origin,
+                                           StreamQualityTuple durableUserTarget,
+                                           int desiredWireMode) {
         if (!controlTransportOpen() || !atomicPresentationV2Supported
                 || target == null || !streamPresentationReady
                 || surfaceEntity == null
@@ -6051,7 +6378,9 @@ public class XrStreamPresenter {
 
         // Close the decoder output gate before a geometry-changing request can reach the host.
         // FPS/bitrate-only v2 requests start their post-ACK proof after the correlated ACK.
-        boolean preSendDecoderGate = resolutionChanged;
+        boolean preSendDecoderGate = resolutionChanged
+                || desiredWireMode != effectiveWireModeFor(currentPresenterMode)
+                || origin == LiveQualityRequestOrigin.GAME_SOURCE;
         if (preSendDecoderGate) {
             int transitionGeneration = game.beginDecoderPresentationModeTransition();
             if (!decoderTransitionGenerations.beginMode(transitionGeneration)) {
@@ -6064,8 +6393,8 @@ public class XrStreamPresenter {
 
         // The reliable ACK is the authority for the geometry to allocate. Until it arrives, do
         // not resize either producer or publish replacement geometry.
-        int sendResult = sendHostVideoModeControl(
-                size[0], size[1], fpsX100, requestId, target.bitrateKbps);
+        int sendResult = sendHostVideoModeControl(currentPresenterMode,
+                size[0], size[1], fpsX100, requestId, target.bitrateKbps, desiredWireMode);
         if (sendResult <= 0) {
             if (preSendDecoderGate) {
                 game.cancelDecoderPresentationModeTransition();
@@ -6074,6 +6403,17 @@ public class XrStreamPresenter {
             reportLiveQualityStartFailure(
                     origin, "host request could not be queued");
             return false;
+        }
+        // Until the request queues, the confirmed stream and its source proof still apply.
+        // Main-thread ACK/status delivery cannot race this post-send invalidation.
+        if (currentPresenterMode == PresentationMode.GAME_3D && gameProviderV1Supported) {
+            if (origin == LiveQualityRequestOrigin.USER && !target.equals(previous)) {
+                gameSourceState.onRelevantQualityChanged();
+                activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_FAILURE);
+                activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_QUALITY);
+            }
+            invalidateGameSourceProof();
+            updateGameSourceViews();
         }
         armLiveQualityAckTimeout();
         LimeLog.info("XR: retaining current presentation while awaiting authoritative ack for "
@@ -6104,13 +6444,20 @@ public class XrStreamPresenter {
             int appliedFramerateX100, int effectiveEncoderBitrateKbps) {
         if (flags != 0 || stateGeneration == 0
                 || (appliedMode != MoonBridge.SBS_MODE_OFF
-                && appliedMode != MoonBridge.SBS_MODE_AI)
+                && appliedMode != MoonBridge.SBS_MODE_AI
+                && appliedMode != MoonBridge.SBS_MODE_GAME_MONO
+                && appliedMode != MoonBridge.SBS_MODE_GAME_SBS)
                 || !isUsableLiveVideoModeWireDimensions(
                         appliedSourceWidth, appliedSourceHeight)
                 || !isUsableLiveVideoModeWireDimensions(
                         exactEncodedWidth, exactEncodedHeight)
                 || appliedFramerateX100 <= 0 || effectiveEncoderBitrateKbps <= 0) {
             return false;
+        }
+        if (appliedMode == MoonBridge.SBS_MODE_GAME_SBS) {
+            // Authored eyes are copied exactly. AI's codec-fit rounding is not a Game contract.
+            return (long) exactEncodedWidth == (long) appliedSourceWidth * 2
+                    && exactEncodedHeight == appliedSourceHeight;
         }
         int encodedViewWidth = appliedMode == MoonBridge.SBS_MODE_AI
                 ? exactEncodedWidth / 2 : exactEncodedWidth;
@@ -6199,7 +6546,23 @@ public class XrStreamPresenter {
             return;
         }
 
-        if (status != MoonBridge.VIDEO_MODE_ACK_APPLIED) {
+        boolean recoveredGameWidenRefusal = status != MoonBridge.VIDEO_MODE_ACK_APPLIED
+                && status != MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
+                && pendingLiveQualityOrigin == LiveQualityRequestOrigin.GAME_SOURCE
+                && pendingDesiredWireMode == MoonBridge.SBS_MODE_GAME_SBS
+                && gameWireMode == MoonBridge.SBS_MODE_GAME_MONO
+                && appliedMode == MoonBridge.SBS_MODE_GAME_MONO
+                && appliedSourceWidth == pendingRequestedSourceWidth
+                && appliedSourceHeight == pendingRequestedSourceHeight
+                && (stateGeneration == lastPresentationStateGeneration
+                || isStrictlyNewerUnsignedGeneration(lastPresentationStateGeneration, stateGeneration));
+        if (recoveredGameWidenRefusal) {
+            // The ACK explicitly proves the retained mono layout. Re-open only after its fresh
+            // decoder boundary and latch this attempt across provider/encoder rebuilds.
+            gameSourceState.recordWidenFailure();
+            pendingDesiredWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+            LimeLog.warning("XR: Game 3D widening refused; retaining proven mono until a deliberate retry");
+        } else if (status != MoonBridge.VIDEO_MODE_ACK_APPLIED) {
             boolean commitRequestedTarget =
                     status == MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
                     && shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin);
@@ -6212,8 +6575,8 @@ public class XrStreamPresenter {
         boolean matchesRequest = appliedMode == pendingDesiredWireMode
                 && appliedSourceWidth == pendingRequestedSourceWidth
                 && appliedSourceHeight == pendingRequestedSourceHeight
-                && isStrictlyNewerUnsignedGeneration(
-                        lastPresentationStateGeneration, stateGeneration);
+                && (recoveredGameWidenRefusal || isStrictlyNewerUnsignedGeneration(
+                        lastPresentationStateGeneration, stateGeneration));
         if (!matchesRequest) {
             LimeLog.severe("XR: atomic presentation ack does not match the requested mode/source "
                     + "or advance generation; forcing reconnect");
@@ -6240,7 +6603,8 @@ public class XrStreamPresenter {
         pendingExactEncodedHeight = exactEncodedHeight;
         effectiveEncoderBitrateKbps = acknowledged.effectiveEncoderBitrateKbps;
         int[] decoderOutput = game.getDecoderOutputDimensions();
-        if (canSettleAtomicQualityWithoutDecoderTransition(
+        if (pendingLiveQualityOrigin != LiveQualityRequestOrigin.GAME_SOURCE
+                && canSettleAtomicQualityWithoutDecoderTransition(
                 isAckFirstModeTransitionPending(), previousLiveQuality,
                 pendingLiveQuality, exactEncodedWidth, exactEncodedHeight,
                 decoderOutput != null ? decoderOutput[0] : 0,
@@ -6434,11 +6798,19 @@ public class XrStreamPresenter {
                 || !transactionCurrent.getAsBoolean()) {
             return false;
         }
-        boolean geometryChanged =
-                size[0] != prefConfig.width || size[1] != prefConfig.height;
+        int[] previousRaster = currentExactEncodedWidth > 0 && currentExactEncodedHeight > 0
+                ? new int[] {currentExactEncodedWidth, currentExactEncodedHeight}
+                : initialSurfacePixelDimensions(currentPresenterMode,
+                        prefConfig.width, prefConfig.height, hostSbsVideoFormat,
+                        prefConfig.rawSbsPerEyeResolution);
+        boolean encodedRasterChanged = pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0
+                && (pendingExactEncodedWidth != previousRaster[0]
+                || pendingExactEncodedHeight != previousRaster[1]);
+        boolean geometryChanged = size[0] != prefConfig.width || size[1] != prefConfig.height
+                || encodedRasterChanged;
         if (geometryChanged) {
-            LimeLog.info("XR: host clamped the request to " + applied
-                    + "; adopting it as authoritative");
+            LimeLog.info("XR: adopting authoritative source " + applied.resolution
+                    + " and encoded raster " + pendingExactEncodedWidth + "x" + pendingExactEncodedHeight);
             return acknowledgedGeometryAdoptionSucceeded(true,
                     applyLiveStreamGeometry(
                             game, size[0], size[1], fps, applied.bitrateKbps,
@@ -6562,7 +6934,7 @@ public class XrStreamPresenter {
 
         return streamContainer.resizeHostSbsSurface(
                 prefConfig.isHostDoubledWidthMode()
-                        && isHostDepthPresenterMode(geometryMode),
+                        && isPackedWireMode(effectiveTargetWireMode(geometryMode)),
                 width, height, success -> {
                     if (!transactionCurrent.getAsBoolean()
                             || currentPresenterMode != geometryMode) {
@@ -6764,6 +7136,7 @@ public class XrStreamPresenter {
                 ? acknowledgedLiveQuality : pendingLiveQuality;
         PresentationMode requestMode = liveQualityRequestMode();
         boolean wasResolutionTransaction = liveQualityChangeInProgress;
+        commitGameTransport(requestMode);
         if (wasResolutionTransaction && surfaceEntity != null && !surfaceEntity.isDisposed()) {
             surfaceEntity.setAlpha(1.0f);
         }
@@ -6779,6 +7152,7 @@ public class XrStreamPresenter {
         LiveQualityRequestOrigin origin = pendingLiveQualityOrigin;
         StreamQualityTuple durableRequested = pendingDurableUserQuality;
         StreamQualityTuple durableApplied = durableUserQuality(applied, durableRequested);
+        commitGameTransport(requestMode);
 
         if (pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0) {
             currentExactEncodedWidth = pendingExactEncodedWidth;
@@ -6789,6 +7163,8 @@ public class XrStreamPresenter {
             panelRefreshRateState.automaticRequestSucceeded(
                     Math.round(parseFrameRate(
                             applied != null ? applied.frameRate : "0", prefConfig.fps)));
+        } else if (origin == LiveQualityRequestOrigin.GAME_SOURCE) {
+            panelRefreshRateState.otherTransactionSettled();
         } else if (durableApplied != null) {
             panelRefreshRateState.userRequestSucceeded(
                     parseFrameRate(durableApplied.frameRate, prefConfig.fps));
@@ -6811,6 +7187,31 @@ public class XrStreamPresenter {
             controlActionListener.onLiveStreamQualityApplied(requestMode, durableApplied);
         }
         schedulePanelRateReconcile();
+        scheduleGameSourceReconcile();
+    }
+
+    /** Called only once the existing ACK/fresh-frame gate can commit this presentation. */
+    private void commitGameTransport(PresentationMode requestMode) {
+        if (requestMode != PresentationMode.GAME_3D || !gameProviderV1Supported
+                || (pendingDesiredWireMode != MoonBridge.SBS_MODE_GAME_MONO
+                && pendingDesiredWireMode != MoonBridge.SBS_MODE_GAME_SBS)) {
+            return;
+        }
+        gameWireMode = pendingDesiredWireMode;
+        boolean changedGeneration = confirmedGamePresentationGeneration != lastPresentationStateGeneration;
+        confirmedGamePresentationGeneration = lastPresentationStateGeneration;
+        gameSourceState.confirmPresentation(Integer.toUnsignedLong(lastPresentationStateGeneration),
+                prefConfig.width, prefConfig.height);
+        if (changedGeneration) {
+            LimeLog.info("XR: Game presentation confirmed generation "
+                    + Integer.toUnsignedString(confirmedGamePresentationGeneration)
+                    + ", wire mode " + gameWireMode + ", source "
+                    + prefConfig.width + "x" + prefConfig.height);
+        }
+        if (surfaceEntity != null && !surfaceEntity.isDisposed()) {
+            surfaceEntity.setStereoMode(stereoModeFor(PresentationMode.GAME_3D));
+        }
+        updateGameSourceViews();
     }
 
     /**
@@ -6885,6 +7286,13 @@ public class XrStreamPresenter {
             boolean commitStagedSettings, boolean allowConfirmedSurfaceReveal) {
         if (!controlTransportOpen()) {
             return;
+        }
+        if (pendingLiveQualityOrigin == LiveQualityRequestOrigin.GAME_SOURCE
+                && isGameSourceWidening(pendingDesiredWireMode)) {
+            // A failed same-mode reconfirmation can be caused by a transient host display
+            // rebuild. Reconnect still clears all source proof, but must not prevent a fresh
+            // mono-to-stereo attempt after the replacement connection becomes ready.
+            gameSourceState.recordWidenFailure();
         }
         if (commitStagedSettings && isAckFirstModeTransitionPending()) {
             stagePendingAckFirstModeForReconnect();
@@ -6973,6 +7381,12 @@ public class XrStreamPresenter {
 
     private void reportLiveQualityStartFailure(
             LiveQualityRequestOrigin origin, String reason) {
+        if (origin == LiveQualityRequestOrigin.GAME_SOURCE) {
+            // The caller still owns the requested wire mode after failed-start cleanup and
+            // records a widening failure only for an actual mono-to-stereo attempt.
+            LimeLog.warning("XR automatic Game source request could not start: " + reason);
+            return;
+        }
         if (origin == LiveQualityRequestOrigin.PANEL_FOLLOW) {
             LimeLog.warning("XR automatic panel-rate request could not start: " + reason);
             return;
@@ -7063,9 +7477,11 @@ public class XrStreamPresenter {
         }
         if (surfaceSwitchSucceeded && !isClientSbs && !wasClientSbs
                 && prefConfig.isHostDoubledWidthMode()
-                && requiresHostSurfaceResize(previousMode, nextMode)) {
+                && (requiresHostSurfaceResize(previousMode, nextMode)
+                || isAckFirstModeTransitionPending())) {
             if (streamContainer != null && streamContainer.resizeHostSbsSurface(
-                    isHostDepthPresenterMode(nextMode), prefConfig.width, prefConfig.height,
+                    isPackedWireMode(effectiveTargetWireMode(nextMode)),
+                    prefConfig.width, prefConfig.height,
                     success -> finishModeSwitchAfterSurfaceHandoff(
                             item, previousMode, nextMode, wasClientSbs, isClientSbs,
                             streamContainer, success))) {
@@ -7124,7 +7540,8 @@ public class XrStreamPresenter {
         if (streamContainer != null && wasClientSbs != isClientSbs) {
             streamContainer.setClientSbsActive(isClientSbs);
         }
-        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode);
+        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode)
+                || isAckFirstModeTransitionPending();
         boolean retainOldPictureUntilTargetFrame =
                 retainsOldPictureUntilFreshTargetFrame(previousMode, nextMode);
         if (!retainOldPictureUntilTargetFrame) {
@@ -7154,6 +7571,7 @@ public class XrStreamPresenter {
             updateGlancePanel();
             revealDockTemporarily();
             schedulePanelRateReconcile();
+            scheduleGameSourceReconcile();
         }
     }
 
@@ -7163,6 +7581,14 @@ public class XrStreamPresenter {
                                                   String label) {
         if (resetsHostDepthStatusAtTransitionCommit(previousMode, nextMode)) {
             resetHostDepthStatus();
+        }
+        if (previousMode != nextMode && nextMode == PresentationMode.MOVIE_3D) {
+            authoredStereoModeState.reset();
+        }
+        if (previousMode == PresentationMode.GAME_3D && nextMode != PresentationMode.GAME_3D) {
+            gameSourceState.leaveGame();
+            confirmedGamePresentationGeneration = 0;
+            gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
         }
         currentPresenterMode = nextMode;
         // Same-wire and deferred Client SBS switches can commit without a live-quality ACK.
@@ -7362,6 +7788,7 @@ public class XrStreamPresenter {
         }
         pendingDecoderTransitionMode = null;
         decoderTransitionGenerations.clearMode();
+        commitGameTransport(pendingMode);
         surfaceEntity.setAlpha(1.0f);
         if (isAckFirstModeTransitionPending()) {
             StreamQualityTuple applied = acknowledgedLiveQuality;
@@ -7378,6 +7805,7 @@ public class XrStreamPresenter {
         updateGlancePanel();
         revealDockTemporarily();
         schedulePanelRateReconcile();
+        scheduleGameSourceReconcile();
         LimeLog.info(completedPackedClientEntry
                 ? "XR: first fresh packed swap completed mode " + pendingMode
                 : "XR: fresh-IDR output completed mode " + pendingMode);
@@ -7468,6 +7896,23 @@ public class XrStreamPresenter {
     private static int wireModeFor(PresentationMode mode) {
         return mode == PresentationMode.HOST_SBS_AI
                 ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;
+    }
+
+    private int effectiveWireModeFor(PresentationMode mode) {
+        if (mode == PresentationMode.GAME_3D && gameProviderV1Supported) {
+            return currentPresenterMode == PresentationMode.GAME_3D
+                    ? gameWireMode : MoonBridge.SBS_MODE_GAME_MONO;
+        }
+        return wireModeFor(mode);
+    }
+
+    private int effectiveTargetWireMode(PresentationMode mode) {
+        return pendingLiveQualityMode == mode && pendingDesiredWireMode >= 0
+                ? pendingDesiredWireMode : effectiveWireModeFor(mode);
+    }
+
+    static boolean isPackedWireMode(int wireMode) {
+        return wireMode == MoonBridge.SBS_MODE_AI || wireMode == MoonBridge.SBS_MODE_GAME_SBS;
     }
 
     private void reportModeSwitchFailure(String reason) {
@@ -7608,9 +8053,20 @@ public class XrStreamPresenter {
         panelHeightMeters = viewStateStore.restoreHeight();
         PresentationMode savedMode = authoritativeStartupMode != null
                 ? authoritativeStartupMode : PresentationMode.NORMAL;
-        if (savedMode == PresentationMode.HOST_SBS_AI || savedMode == PresentationMode.HOST_SBS_RAW) {
-            // These direct-decoder modes can be correct from frame 1. Host AI is also carried in
-            // StreamConfiguration/NvHTTP so Apollo begins packed output before transport starts.
+        authoredStereoModeState.reset();
+        gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+        if (savedMode == PresentationMode.GAME_3D) {
+            gameSourceState.enterGame();
+            if (activity.getIntent().getBooleanExtra(EXTRA_GAME_WIDEN_FAILURE, false)
+                    && gameRetryQualityKey().equals(
+                            activity.getIntent().getStringExtra(EXTRA_GAME_WIDEN_QUALITY))) {
+                gameSourceState.recordWidenFailure();
+            }
+        }
+        if (savedMode == PresentationMode.HOST_SBS_AI
+                || savedMode == PresentationMode.GAME_3D || savedMode == PresentationMode.MOVIE_3D) {
+            // Restore intent with a known initial interpretation: Host AI's negotiated SBS, or
+            // ordinary mono for Game/Movie. Authored packing never survives a new connection.
             currentPresenterMode = savedMode;
         } else if (savedMode == PresentationMode.CLIENT_SBS_AI) {
             // Client SBS requires a live decoder -> dummy -> GL handoff, so restore it after the
@@ -7634,6 +8090,10 @@ public class XrStreamPresenter {
      * size from the screen's real-world distance.
      */
     public void captureReconnectViewState(Intent reconnectIntent) {
+        reconnectIntent.putExtra(EXTRA_GAME_WIDEN_FAILURE,
+                currentPresenterMode == PresentationMode.GAME_3D
+                        && gameSourceState.hasWidenFailure());
+        reconnectIntent.putExtra(EXTRA_GAME_WIDEN_QUALITY, gameRetryQualityKey());
         float shapeHeight = panelHeightMeters;
         float realWorldScaleY = 1.0f;
         Pose realWorldPose = null;
@@ -7672,7 +8132,16 @@ public class XrStreamPresenter {
         if (!hostControlExtensionsSupported) {
             return MoonBridge.SBS_MODE_OFF;
         }
-        return wireModeFor(currentPresenterMode);
+        // NvConnection gates this launch intent against the freshly negotiated Game capability.
+        return currentPresenterMode == PresentationMode.GAME_3D
+                ? MoonBridge.SBS_MODE_GAME_MONO : wireModeFor(currentPresenterMode);
+    }
+
+    private String gameRetryQualityKey() {
+        // Automatic panel-rate following must not turn reconnect into a new quality choice.
+        return prefConfig.width + "x" + prefConfig.height + ":" + panelRefreshRateState.getUserCeilingHz()
+                + ":" + prefConfig.bitrate + ":" + prefConfig.enableHdr
+                + ":" + prefConfig.videoFormat;
     }
 
     private boolean hostDebugDumpAvailable() {
@@ -7734,6 +8203,9 @@ public class XrStreamPresenter {
 
     /** Quad aspect (width/height), including Raw Half's narrower encoded eye geometry. */
     private float aspectFor(PresentationMode mode) {
+        if (mode == PresentationMode.GAME_3D || mode == PresentationMode.MOVIE_3D) {
+            return authoredStereoModeState.presentationAspect(mode, fullAspect);
+        }
         return presentationAspect(mode, fullAspect, prefConfig.rawSbsPerEyeResolution);
     }
 
@@ -7754,6 +8226,14 @@ public class XrStreamPresenter {
     }
 
     private SurfaceEntity.StereoMode stereoModeFor(PresentationMode mode) {
+        if (mode == PresentationMode.GAME_3D) {
+            return gameWireMode == MoonBridge.SBS_MODE_GAME_SBS
+                    ? SurfaceEntity.StereoMode.SIDE_BY_SIDE : SurfaceEntity.StereoMode.MONO;
+        }
+        if (mode == PresentationMode.MOVIE_3D) {
+            return authoredStereoModeState.isSideBySide(mode)
+                    ? SurfaceEntity.StereoMode.SIDE_BY_SIDE : SurfaceEntity.StereoMode.MONO;
+        }
         return (mode == PresentationMode.NORMAL) ? SurfaceEntity.StereoMode.MONO : SurfaceEntity.StereoMode.SIDE_BY_SIDE;
     }
 
@@ -8297,11 +8777,11 @@ public class XrStreamPresenter {
         }
         int w;
         int h;
-        int requestedWireMode = sbs ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;
-        boolean pendingExactGeometry = pendingDesiredWireMode == requestedWireMode
+        boolean pendingExactGeometry = pendingDesiredWireMode >= 0
+                && isPackedWireMode(pendingDesiredWireMode) == sbs
                 && pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0;
         boolean committedExactGeometry = !pendingExactGeometry
-                && wireModeFor(currentPresenterMode) == requestedWireMode
+                && isPackedWireMode(effectiveWireModeFor(currentPresenterMode)) == sbs
                 && currentExactEncodedWidth > 0 && currentExactEncodedHeight > 0;
         if (pendingExactGeometry) {
             w = pendingExactEncodedWidth;
@@ -8353,6 +8833,10 @@ public class XrStreamPresenter {
         cancelLiveQualityAckTimeout();
         liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
         panelRateReconcilePosted = false;
+        liveQualityHandler.removeCallbacks(gameSourceReconcileRunnable);
+        gameSourceReconcilePosted = false;
+        invalidateGameSourceProof();
+        gameSourceState.leaveGame();
         liveQualityChangeInProgress = false;
         liveQualityConfirmations.clear();
         pendingVideoModeRequestId = -1;

@@ -41,6 +41,17 @@ public class MoonBridgeTerminationSessionTest {
     }
 
     @Test
+    public void gameSourceStatusPreservesUnsignedTokensAndStopsAfterCleanup() {
+        NvConnectionListener listener = mock(NvConnectionListener.class);
+        MoonBridge.setupBridge(null, null, listener);
+        MoonBridge.bridgeClGameSourceStatus(1, 1, 0x89abcdef, 0xfedcba98, 1920, 1080, 3840, 1080);
+        verify(listener).onGameSourceStatus(1, 1, 0x89abcdef, 0xfedcba98, 1920, 1080, 3840, 1080);
+        MoonBridge.cleanupBridge();
+        MoonBridge.bridgeClGameSourceStatus(0, 0, 0x89abcdef, 0xfedcba99, 1920, 1080, 3840, 1080);
+        verifyNoMoreInteractions(listener);
+    }
+
+    @Test
     public void delayedTerminationCannotStopReplacementSession() {
         NvConnectionListener listenerA = mock(NvConnectionListener.class);
         NvConnectionListener listenerB = mock(NvConnectionListener.class);

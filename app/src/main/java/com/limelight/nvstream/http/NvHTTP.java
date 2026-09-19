@@ -971,6 +971,23 @@ public class NvHTTP {
                 : "";
     }
 
+    public static boolean isGameProviderV1Supported(String serverInfo, boolean authenticated)
+            throws XmlPullParserException, IOException {
+        return authenticated && "1".equals(getXmlString(serverInfo, "GameProviderV1Supported", false));
+    }
+
+    static String initialSbsModeQuery(StreamConfiguration configuration,
+                                    boolean hostControlSupported, boolean gameProviderSupported) {
+        if (!hostControlSupported) {
+            return "";
+        }
+        int mode = configuration.getInitialSbsMode();
+        if (mode == MoonBridge.SBS_MODE_GAME_MONO && !gameProviderSupported) {
+            mode = MoonBridge.SBS_MODE_OFF;
+        }
+        return "&sbsMode=" + mode;
+    }
+
     public boolean launchApp(ConnectionContext context, String verb, String appUUID, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
         // Using an FPS value over 60 causes SOPS to default to 720p60,
         // so force it to 0 to ensure the correct resolution is set. We
@@ -1034,8 +1051,8 @@ public class NvHTTP {
                     "&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
             "&virtualDisplay=" + (context.streamConfig.getVirtualDisplay() ? 1 : 0) +
             virtualDisplayOnlyQuery(context.streamConfig, context.virtualDisplayOnlySupported) +
-            (context.hostSessionIdSupported
-                    ? "&sbsMode=" + context.streamConfig.getInitialSbsMode() : "") +
+            initialSbsModeQuery(context.streamConfig, context.hostSessionIdSupported,
+                    context.gameProviderV1Supported) +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
             (resume && context.hostSessionIdSupported

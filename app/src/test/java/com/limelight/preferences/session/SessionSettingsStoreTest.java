@@ -6,6 +6,9 @@ import android.content.SharedPreferences;
 import androidx.preference.PreferenceManager;
 import androidx.test.core.app.ApplicationProvider;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore.AppIdentity;
 import com.limelight.preferences.session.SessionSettingsStore.PcIdentity;
@@ -407,5 +410,106 @@ public final class SessionSettingsStoreTest {
         assertTrue(store.startNewSession(pc, firstApp, null, 0L));
         assertEquals(SessionSettingsStore.SCHEMA_VERSION,
                 store.getCurrentSession(pc).getSchemaVersion());
+    }
+
+    @Test
+    public void legacyRawRestoresMonoAndCopiesOnlyQualityWithoutChangingIdentity() {
+        assertTrue(store.startNewSession(pc, firstApp, "host-old", 123L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(HDR, true, false)
+                .setModeValue(PresentationMode.HOST_SBS_RAW, RESOLUTION,
+                        "3840x2160", "1920x1080")
+                .setModeValue(PresentationMode.HOST_SBS_RAW, FPS, "90", "60")
+                .setModeValue(PresentationMode.HOST_SBS_RAW, BITRATE, 80000, 20000)
+                .setModeValue(PresentationMode.HOST_SBS_RAW,
+                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        "half", "full")
+                .commit());
+        SessionRecord before = store.getCurrentSession(pc);
+        String legacyJson = markStoredRecordAsLegacyRaw();
+
+        SessionRecord migrated = new SessionSettingsStore(storage).getCurrentSession(pc);
+        assertEquals(PresentationMode.NORMAL, migrated.getLastSuccessfulMode());
+        assertEquals(before.getLocalSessionId(), migrated.getLocalSessionId());
+        assertEquals(before.getCurrentApp(), migrated.getCurrentApp());
+        assertEquals(before.getResumeMetadata(), migrated.getResumeMetadata());
+        assertEquals(before.getSharedOverrides(), migrated.getSharedOverrides());
+        assertEquals(before.getModeOverrides(PresentationMode.HOST_SBS_RAW),
+                migrated.getModeOverrides(PresentationMode.HOST_SBS_RAW));
+        Map<String, Object> movie = migrated.getModeOverrides(PresentationMode.MOVIE_3D);
+        assertEquals(3, movie.size());
+        assertEquals("3840x2160", movie.get(RESOLUTION));
+        assertEquals("90", movie.get(FPS));
+        assertEquals(80000, movie.get(BITRATE));
+        assertFalse(movie.containsKey(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertTrue(migrated.getModeOverrides(PresentationMode.GAME_3D).isEmpty());
+        // Reads fail closed even before the next ordinary atomic write makes migration durable.
+        assertEquals(legacyJson, storage.getString("session." + pc.getStorageId(), null));
+    }
+
+    @Test
+    public void legacyMigrationDoesNotOverrideExplicitMovieQuality() {
+        assertTrue(store.startNewSession(pc, firstApp, null, 0L));
+        assertTrue(store.edit(pc, firstApp)
+                .setModeValue(PresentationMode.HOST_SBS_RAW, RESOLUTION,
+                        "3840x2160", "1920x1080")
+                .setModeValue(PresentationMode.HOST_SBS_RAW, FPS, "90", "60")
+                .setModeValue(PresentationMode.MOVIE_3D, FPS, "30", "60")
+                .commit());
+        markStoredRecordAsLegacyRaw();
+
+        Map<String, Object> movie = store.getCurrentSession(pc)
+                .getModeOverrides(PresentationMode.MOVIE_3D);
+        assertEquals(Collections.singletonMap(FPS, "30"), movie);
+    }
+
+    @Test
+    public void invalidLegacyQualityIsPreservedButNotInheritedByMovie() {
+        assertTrue(store.startNewSession(pc, firstApp, null, 0L));
+        assertTrue(store.edit(pc, firstApp)
+                .setModeValue(PresentationMode.HOST_SBS_RAW, RESOLUTION,
+                        "999999999999x2160", "1920x1080")
+                .setModeValue(PresentationMode.HOST_SBS_RAW, FPS, "NaN", "60")
+                .setModeValue(PresentationMode.HOST_SBS_RAW, BITRATE, -1, 20000)
+                .commit());
+        markStoredRecordAsLegacyRaw();
+
+        SessionRecord migrated = store.getCurrentSession(pc);
+        assertTrue(migrated.getModeOverrides(PresentationMode.MOVIE_3D).isEmpty());
+        assertEquals(3, migrated.getModeOverrides(PresentationMode.HOST_SBS_RAW).size());
+        assertEquals(PresentationMode.NORMAL, migrated.getLastSuccessfulMode());
+    }
+
+    @Test
+    public void explicitMovieResetDoesNotRepeatLegacyQualityMigration() {
+        assertTrue(store.startNewSession(pc, firstApp, null, 0L));
+        assertTrue(store.edit(pc, firstApp)
+                .setModeValue(PresentationMode.HOST_SBS_RAW, FPS, "90", "60")
+                .commit());
+        markStoredRecordAsLegacyRaw();
+        assertEquals("90", store.getCurrentSession(pc)
+                .getModeOverrides(PresentationMode.MOVIE_3D).get(FPS));
+
+        assertTrue(store.edit(pc, firstApp)
+                .clearModeOverrides(PresentationMode.MOVIE_3D)
+                .setLastSuccessfulMode(PresentationMode.MOVIE_3D)
+                .commit());
+        SessionRecord reset = new SessionSettingsStore(storage).getCurrentSession(pc);
+        assertEquals(PresentationMode.MOVIE_3D, reset.getLastSuccessfulMode());
+        assertTrue(reset.getModeOverrides(PresentationMode.MOVIE_3D).isEmpty());
+        assertEquals("90", reset.getModeOverrides(PresentationMode.HOST_SBS_RAW).get(FPS));
+        assertTrue(JsonParser.parseString(storage.getString(
+                "session." + pc.getStorageId(), null)).getAsJsonObject()
+                .get("raw_mode_migrated").getAsBoolean());
+    }
+
+    private String markStoredRecordAsLegacyRaw() {
+        String key = "session." + pc.getStorageId();
+        JsonObject json = JsonParser.parseString(storage.getString(key, null)).getAsJsonObject();
+        json.remove("raw_mode_migrated");
+        json.addProperty("last_mode", "HOST_SBS_RAW");
+        String legacy = json.toString();
+        assertTrue(storage.edit().putString(key, legacy).commit());
+        return legacy;
     }
 }

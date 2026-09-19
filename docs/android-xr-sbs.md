@@ -11,44 +11,62 @@ headset's codec, Adreno, OpenCL, or SceneCore performance.
 
 ## Presentation modes
 
-`Game`, `StreamContainer`, and `XrStreamPresenter` maintain one active presentation owner:
+The dock has five choices: **2D**, **Host AI 3D**, **Client AI 3D**, **Game 3D**, and **Movie 3D**.
+Host means the streaming computer; Client means this device. These names do not assume a Windows
+host, headset, phone operating system or vendor.
+This document and implementation cover the Android XR client; these names do not imply that an
+iPhone or non-XR Android client has been changed.
 
-- **Normal** decodes directly into the SceneCore `SurfaceEntity` in mono mode.
-- **Host SBS Raw** treats its selected `W x H` resolution as the intended view aspect. Its
-  **Per-Eye Resolution** choice defaults to **Full**, which negotiates an untouched `2W x H`
-  virtual desktop/stream and preserves `W x H` encoded pixels per eye. **Half** keeps the packed
-  desktop/stream at `W x H`, so each encoded eye is `W/2 x H` and SceneCore presents that same
-  source on a matching `W/(2H)` physical quad to preserve per-eye proportions. Both decode directly
-  into the same entity with `StereoMode.SIDE_BY_SIDE`. Raw is available only for a
-  virtual-display-backed launch, including Apollo's generated **Virtual Display** entry; a physical
-  desktop would only be aspect-fitted into the encoder surface rather than rendered at the selected
-  geometry. The exact packed width must remain within the 8192-pixel HEVC/AV1 transport limit.
-- **Host SBS AI** uses the same direct stereo surface path; Apollo performs depth inference and SBS
+`PresentationMode` records the user's intent and owns its saved quality tuple. `Game`,
+`StreamContainer`, and `XrStreamPresenter` still maintain one active presentation owner, while
+`AuthoredStereoModeState` keeps Movie picture interpretation separate from persisted intent:
+
+- **2D** (`NORMAL`) decodes directly into the SceneCore `SurfaceEntity` in mono mode.
+- **Host AI 3D** (`HOST_SBS_AI`, also called Host SBS AI in the algorithm/protocol sections) uses
+  the direct stereo surface path; Apollo performs depth inference and SBS
   synthesis before encoding. Apollo fits the packed `2W x H` raster inside both encoder axes with
   one even, aspect-preserving scale; the client's pre-ACK fallback mirrors the conservative codec
   limits, while the applied-state ACK remains authoritative for runtime-discovered limits. This
   mode is enabled only when the host advertises the Apollo-3D session/control extension; it is
   disabled on regular Sunshine and Apollo hosts.
-- **Client SBS AI** decodes into an external-OES `SurfaceTexture`, runs the native LiteRT/GLES
+- **Client AI 3D** (`CLIENT_SBS_AI`, also called Client SBS AI below) decodes into an external-OES
+  `SurfaceTexture`, runs the native LiteRT/GLES
   pipeline on the headset, and presents its packed `2W x H` output through the SceneCore entity in
   side-by-side mode. `W x H` is the client request/output contract: Client SBS does not apply a hidden
   post-decode resolution cap. Choose a smaller stream resolution when a smaller GPU/compositor
   workload is required.
+- **Game 3D** (`GAME_3D`) is the source-neutral entry for ReShade or a compatible game-stereo
+  provider. On a host with GameProviderV1 and atomic presentation v2, it enters and resumes with
+  `SBS_MODE_GAME_MONO` (`2`), using ordinary mono encoding at the selected `W x H` source size.
+  A host-confirmed source permits a client-requested transition to `SBS_MODE_GAME_SBS` (`3`),
+  whose encoded raster must be exactly `2W x H`. The game desktop and saved quality remain
+  `W x H`; only the packed stream widens. ReShade is the first implemented provider. Selecting
+  the mode, a Host AI depth-ready phase, a wide frame, or a saved mode does not prove stereo.
+- **Movie 3D** (`MOVIE_3D`) also enters on the ordinary `W x H` stream in 2D. Its manual picture
+  choices are **2D**, **Half SBS**, and **Full SBS**. Half SBS splits the frame into eyes and
+  preserves the normal logical display aspect, restoring horizontally squeezed eyes. Full SBS
+  splits the same captured frame and halves the physical display aspect. Neither choice changes
+  the desktop, encoded dimensions, resolution setting or bitrate. They interpret the pixels
+  already present; they cannot recover detail lost when a player scaled a movie into its desktop.
+  There is no automatic Movie detector or Auto control. The format is volatile: a new presenter,
+  reconnect, or re-entry into Movie from another mode resets it to 2D. Movie quality remains saved
+  independently of this transient format.
 
 Client SBS requires a mono frame from the host application. Sending `SBS_MODE_OFF` disables
 Apollo's Host SBS AI packing, but it cannot un-pack SBS pixels that the application itself already
-rendered for Host SBS Raw. Such a frame would be processed as one mono Client SBS input. On legacy
+rendered as SBS. Such a frame would be processed as one mono Client SBS input. On legacy
 hosts that negotiate the decoded stream below the client request, Client SBS still produces the
 requested `W x H` matched-color/per-eye target by upscaling that lower-resolution input.
 
-Normal and both Host SBS modes are direct MediaCodec-to-SceneCore paths. Do not insert a GL bridge,
+2D, Host AI 3D, Game 3D and Movie 3D are direct MediaCodec-to-SceneCore paths. Do not insert a GL bridge,
 copy, or Client SBS dependency into them.
 
-Regular Sunshine and Apollo are first-class compatibility hosts for **Normal** and **Client SBS
-AI**. **Host SBS Raw** is additionally available when that launch is explicitly backed by a
-virtual display. Apollo-3D-only controls (Host SBS AI, host depth telemetry/debug dump, and live
+Regular Sunshine and Apollo are first-class compatibility hosts for **2D**, **Client AI 3D**, and
+manual **Movie 3D** interpretation. Game 3D remains the ordinary mono stream on these hosts too.
+Apollo-3D-only controls (Host AI 3D, host depth telemetry/debug dump, and live
 video-mode changes) must be capability-gated and must never be sent speculatively to a standard
-host.
+host. Game source status and modes `2`/`3` additionally require GameProviderV1. Without it, Game
+uses `SBS_MODE_OFF` and the source card explains that automatic connection is unavailable.
 
 Client near-identical reuse remains local and works with original Sunshine and Apollo. A separate,
 explicitly negotiated host source-identity capability can identify repeated encoder input. Its wire
@@ -57,17 +75,93 @@ contract is owned by the companion host's
 Neither `hostsessionid`, callback counts, zero latency, nor similar decoded pixels imply support.
 Missing, malformed, ambiguous or retired metadata falls back to the ordinary local pipeline.
 
-Only Raw Full owns a distinct negotiated transport: its `2W x H` stream requires a reconnect when
-entering or leaving that transport, and changing Full/Half while Raw is live likewise reconnects.
-Raw Half is the ordinary `W x H`, `sbs_mode 0` wire stream, so entering or leaving Raw Half is a
-pure SceneCore presentation change when the selected quality tuple fits the live decoder envelope.
-This prevents Client AI from consuming an already-packed Raw Full frame and prevents Host AI from
-repacking it. Live transitions among Normal, Raw Half, Host SBS AI, and Client SBS AI retain their
-guarded surface-handoff behavior. After a live
+Selecting Game or Movie does not double the capture width. Game waits for explicit source proof
+before requesting a packed transport; Movie never requests one.
+Quality changes can still require the ordinary guarded live transaction or reconnect. Transitions
+to and from the two AI producers retain their existing surface-handoff behavior. After a live
 `setOutputSurface()` handoff, reapply the requested surface frame rate because that metadata belongs
-to the replacement `Surface`. Artemis rejects Raw on a physical-capture session and directs the user
-to relaunch Apollo's Virtual Display instead of pretending that a wide aspect-fit is native Raw
-rendering.
+to the replacement `Surface`.
+
+### Guarded Game source integration
+
+GameProviderV1 is advertised as authenticated serverinfo `GameProviderV1Supported=1`, host feature
+`0x02000000`, and client feature `0x80`; it requires atomic presentation v2 on both ends. Connection
+setup freshly gates the initial mode: it may launch Game mono (`2`), never packed Game (`3`). The
+presenter issues a guarded mono request after its first frame to establish an acknowledged
+presentation generation rather than treating launch state as source authority.
+
+Reliable source status `0x300B` has exactly 20 little-endian bytes:
+`{u8 version=1, u8 state, u8 provider, u8 flags=0, u32 presentation_generation,
+u32 source_revision, u16 source_width, u16 source_height, u16 packed_width, u16 packed_height}`.
+States are waiting `0`, ready `1`, and unsupported `2`; providers are none `0` and ReShade `1`.
+Generation and revision are nonzero; every state carries even source dimensions and exact
+`2W x H` packed dimensions. A ready status requires a validated provider. Java accepts only the
+currently confirmed presentation generation and logical source dimensions, with unsigned
+serial-newer revision ordering. Stale, duplicate, malformed, or wrong-generation status cannot
+activate stereo. The host repeats current status about once per second, so a status dropped before
+ACK/fresh-frame completion can establish proof when its unchanged heartbeat arrives afterward.
+
+An independent host capture/encoder rebuild can advance that presentation generation without a
+client request. A valid same-source status with a strictly newer generation triggers one guarded
+request to reconfirm the current Game wire mode (`2` to `2`, or `3` to `3`). It does not accept the
+new status as stereo proof. Source proof is cleared before posting the request, coalescing repeated
+observations; pending transactions ignore observations until their ACK/fresh-frame gate completes.
+Stale/equal/ambiguous generations, malformed status and wrong source geometry cannot trigger this
+recovery. The existing failure latch also blocks it. Once reconfirmed, the host heartbeat can
+establish readiness normally. This keeps source recovery separate from an automatic widening retry.
+Failure of a same-mode reconfirmation does not set the widening latch: an ordinary guarded
+reconnect starts mono and may establish fresh source proof before widening again. Only a failed
+`2` to `3` attempt establishes that latch.
+
+`GameStereoSourceState` keeps source proof separate from intent, actual wire mode, and the
+decoder's geometry. Ready in mono requests mode `3` at the same resolution/FPS/bandwidth. The
+client closes the decoder gate before sending, validates the correlated ACK's exact packed
+raster, then parks, resizes and rebinds the direct surface even when logical `W x H` is unchanged.
+Only a fresh matching decoder frame commits SBS interpretation. Ordinary mono encoder fitting is
+allowed in mode `2`; an unsupported source remains mono. Mode `3` must never apply Host AI's
+codec-fit scaling to authored stereo. Unexpected applied modes or packed rasters fail closed.
+
+Once packed, source loss retains mode `3`; the host fills both eyes with its current mono capture
+and the card changes to **Showing 2D**. Valid source recovery changes the card to **3D active**
+without another resize. Quality transactions invalidate source proof once the request is queued
+and require status for the new confirmed generation. A local decoder-gate or send failure keeps
+the unchanged stream's proof and widening-failure latch. ACK and source-status callbacks run on
+the same main thread, so queued requests retire the old proof before callbacks can process it.
+Exiting Game uses the same ACK and fresh-frame barrier when switching
+to OFF or AI. Host AI remains the AI producer even when the host's separate local AR setting
+selects ReShade; streamed Game has no global provider toggle or host-restart requirement.
+
+A failed automatic widening attempt latches until explicit Game re-entry or a deliberate relevant
+quality change. The latch survives source/receiver/presentation replacement and a same-quality
+automatic reconnect; automatic refresh-rate following cannot clear it. A failed ACK may recover
+mono only when it proves retained mono state and does not require reconnect. An explicit
+`REJECTED_NEEDS_RECONNECT` always reconnects. No failure path repeatedly widens merely because the
+host rebuilt its encoder or sent another readiness revision.
+
+The reusable Game subpane retains its independent Resolution/FPS/Bandwidth controls and shows
+**Waiting for game**, **3D active**, or **Showing 2D** above them. It does not expose a provider
+selector or manual Ready switch. JVM tests cover status ordering, latch behavior, exact raster
+validation, visible status changes, and transitions with the decoder/SceneCore boundary mocked.
+Physical ReShade-to-Galaxy-XR acceptance remains required. Movie detection is still unimplemented;
+its manual format choices are independent of this Game protocol.
+
+### Historical Raw transport compatibility
+
+`HOST_SBS_RAW` and its arithmetic helpers remain only for old data and compatibility tests. Raw is
+absent from the dock and Global Settings, and an old last-mode selection restores **2D**. Valid
+legacy resolution/FPS/bitrate overrides are copied once into Movie when it has no explicit tuple;
+the original Raw data, shared settings and session identity remain preserved. Raw's Full/Half
+field is not copied into Movie or used as readiness evidence.
+
+Historically, Raw **Full** treated the selected `W x H` as per-eye dimensions and negotiated a
+`2W x H` virtual desktop/stream; **Half** kept a `W x H` packed desktop with `W/2 x H` eyes and a
+matching `W/(2H)` physical quad. Full's exact packed width was limited to 8192 pixels; entering or
+leaving Full, or changing Full/Half while Raw was live, required reconnecting. That workflow required
+a virtual-display-backed launch because physical capture only aspect-fitted the desktop. These
+retained legacy semantics do not describe the current Movie format buttons and must not be applied
+to Game or Movie merely because a mode is selected.
+
+### Shared stream behavior
 
 The standard **Video frame pacing** list is the only decoder release-policy control. **Prefer lowest
 latency** nonblockingly drains ready MediaCodec outputs, discards superseded buffers, and immediately
@@ -129,7 +223,7 @@ replacement sessions cannot overlap local teardown.
 The working Galaxy XR sequence is:
 
 1. Create a `SurfaceEntity` with the appropriate mono or side-by-side stereo mode and request
-   `MediaBlendingMode.OPAQUE` before publishing its surface. All four modes present opaque video.
+   `MediaBlendingMode.OPAQUE` before publishing its surface. All five modes present opaque video.
 2. Set its surface pixel dimensions so the SBS split lands on the exact half-frame boundary.
 3. Parent it to `scene.getActivitySpace()`, enable it, and set alpha to one.
 4. Hide the activity's main 2D panel while immersive presentation is active.
@@ -159,7 +253,7 @@ If presentation fails while its EGL context remains current, a specific queued f
 can still drain renderer writes for native cleanup. It checks that exact context before issuing
 `glFinish`; an absent or replacement context cannot acknowledge the old renderer's completion.
 
-Normal, Host AI, and Raw modes keep the Android input/layout holder INVISIBLE; it has no
+2D, Host AI 3D, Game 3D and Movie 3D keep the Android input/layout holder INVISIBLE; it has no
 producer on these direct paths and must not leave an empty BLAST layer for the system compositor.
 Client SBS shows the holder only after decoder parking, before resuming EGL, and hides it only
 after acknowledged EGL detach and direct decoder rebind. Intentional holder removal does not own
@@ -268,7 +362,7 @@ decompress the preceding stream even though those earlier files are not material
 cache avoids that work on later use.
 
 The selected LiteRT model and compiled GPU delegate remain resident for that stream session after
-the first Client SBS activation. Normal, Raw, and Host SBS submit no Client SBS inference work, but
+the first Client SBS activation. 2D, Host AI 3D, Game 3D and Movie 3D submit no Client SBS inference work, but
 retain the idle engine so returning to Client SBS has no model reload or compilation stall. Full
 stream teardown closes it. A process-wide ownership guard permits at most one Client SBS graph to
 be compiling or GPU-resident, including during context recovery and deferred native teardown.
@@ -788,6 +882,8 @@ The central contract is:
 Mode switches are guarded asynchronous surface handoffs. Keep the decoder target, SceneCore surface
 size/stereo mode, renderer generation, and entity visibility synchronized. A stale callback from a
 previous generation must not retarget the decoder or publish a depth result.
+Register the mode owner before validating its target or closing the decoder gate. A failure before
+the host request is queued releases that owner, preserving the current mode and allowing another tap.
 Ordinary live binds run on one decoder-owned serial worker, never the UI thread or the urgent
 frame-rendered callback thread. Each decoder handoff is bounded at two seconds, and the two-bind
 Host resize shares one two-second end-to-end deadline. Timeout invalidates the decoder request
@@ -820,11 +916,12 @@ the EGL owner cannot submit an empty first buffer over the retained SceneCore pi
 The packed-swap watchdog starts only at that decoder-output edge; time spent waiting inside the
 decoder's own bounded fresh-IDR transaction does not consume the renderer's proof budget.
 
-Crossing Client SBS ownership or the live Host SBS AI packed-size boundary changes the decoder
+Crossing Client SBS ownership or a live Host AI/Game packed-size boundary changes the decoder
 target or encoded dimensions. Before those transitions, close the compressed-frame gate and flush
 MediaCodec through its all-thread recovery barrier. After the replacement surface is bound, request
-a new IDR and admit only a serial-newer IDR before reopening the gate. Raw SBS does not use this live
-path: every transition across its packed transport boundary reconnects first.
+a new IDR and admit only a serial-newer IDR before reopening the gate. Game retains ordinary
+capture dimensions while its validated packed stream may be wider; Movie's picture-format choice changes only SceneCore
+interpretation and aspect.
 
 On destroy or mode exit:
 
@@ -847,17 +944,36 @@ capability bit and its nonzero value remains mandatory for exact resume/cancel p
 Sunshine and Apollo omit that element, so they use the standard GameStream running-app identity for
 resume and the standard tokenless cancel request. Absence is not equivalent to an advertised zero.
 
-- A genuinely new host session starts in **Normal** and inherits Global Settings.
+- A genuinely new host session starts in **2D** (`NORMAL`) and inherits Global Settings.
 - Resuming the same host session/app, including the in-place restart after **Apply & reconnect**,
-  starts with the last successfully applied presentation mode and that mode's saved stream-quality
+  starts with the last successfully applied presentation intent and that mode's saved stream-quality
   tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
   required) succeeds.
+- Restored Game intent starts mono and requires fresh source proof before widening; restored Movie
+  intent starts with its format reset to 2D.
+  Neither saved identity proves current stereo content. Legacy Raw restores Normal.
 - Panel height is durable per machine and is restored independently of presentation mode.
 - Apply snapshots the live quad before SceneCore teardown and transiently hands its effective
   height plus real-world pose to the replacement Activity. This preserves both physical size and
   apparent size from the user's chosen distance; pose is not made a durable cross-session setting.
 - Transport, authentication, and pre-frame startup failures preserve the last successful mode;
   fresh launches still start Normal, and only a host-confirmed resume restores it.
+
+An unexpected control-transport disconnect or loss of video traffic during an established stream
+automatically resumes the same session while the Activity remains foreground. Recovery reuses the
+ordinary native-stop, asynchronous XR/surface-release, and in-place Activity recreation path. It
+keeps the established Resume request, saved mode/quality, and captured view pose; it does not apply
+staged settings, cancel the host application, or fall back to a fresh launch. Restored Game and Movie
+still follow the source-proof and 2D-interpretation rules above. The existing HTTP startup retry
+loop runs first; subsequent transient transport/time-out or HTTP 503 failures may schedule another
+attempt with 1/2/4/8/8-second backoff, up to five attempts. The budget resets only after a decoded
+frame followed by ten seconds of connected foreground playback. This is a retry budget, not a
+decision that the host session has expired; fresh serverinfo remains authoritative. A changed or
+ended session, authentication refusal, graceful host termination, protected content, or decoder/
+conversion failure remains terminal. The dock's Disconnect action and the startup spinner's Cancel
+remain available. Explicit exit, backgrounding, or destruction cancels pending recovery; lifecycle
+events belonging to the actual recreate operation cannot finish its replacement. No internet
+validation requirement is imposed on local-network hosts.
 
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
@@ -873,17 +989,20 @@ app identity and tokenless cancel. Their protocol cannot detect a same-app gener
 replacement without a token. Successful establishment replaces the Activity's launch request with
 Resume so Apply and Activity recreation cannot replay replacement authority.
 
-`PresentationMode` is the sole mode identity shared by controls, persistence, and surface routing.
-The current-session record owns the proven mode; `XrViewStateStore` stores only per-PC panel height.
-Existing stored mode names and height keys are unchanged; this cleanup does not reset installed
-preferences or pairings.
+`PresentationMode` is the shared saved intent identity; current Movie picture interpretation is
+separate transient presenter state. The current-session record owns the successfully applied intent;
+`XrViewStateStore` stores only per-PC panel height. Existing Normal/Host AI/Client AI identities and
+height keys remain unchanged. Game and Movie add independent identities. Legacy Raw is retained for
+data compatibility but normalized to Normal on startup, including startup overrides and reconnect.
+Migration copies only compatible Raw quality into an absent Movie profile, preserves the old Raw
+map and all session/resume identity, and records `raw_mode_migrated` on the next atomic write so a
+later Movie reset cannot resurrect old quality. This does not reset preferences or pairings.
 
 Live-quality state remains logical `W x H` in the client. On an extension-capable Apollo-3D host,
-at the `0x3007`/`0x3008` boundary only,
-Raw Full maps that tuple to and from its already-packed `2W x H` desktop. Raw Half and Host SBS AI
-keep base `W x H` control geometry (Host SBS AI performs its doubling inside Apollo). MediaCodec
-recovery state instead retains the actual encoded dimensions: packed Raw Full and packed/capped
-Host SBS AI geometry, but ordinary `W x H` for Raw Half, Normal, and Client SBS.
+the `0x3007`/`0x3008` boundary carries base `W x H` control geometry. Host SBS AI performs its
+packing inside Apollo; Game and Movie do not inherit legacy Raw's desktop width multiplier.
+MediaCodec recovery state instead retains the actual encoded dimensions: packed/capped Host AI,
+exact `2W x H` for packed Game, and ordinary mono encoding for 2D, waiting Game, Movie and Client AI.
 On a regular Sunshine or Apollo host, every stream-quality change follows the standard
 commit-and-reconnect path, and automatic headset-panel-rate following is disabled because there is
 no live video-mode control/ack contract.
@@ -908,7 +1027,7 @@ Compatibility is deliberately asymmetric:
 
 | Client / host | Presentation-control behavior |
 |---|---|
-| Current Moonlight 3D / current Apollo-3D | Atomic v2 for every live quality request and every OFF/AI wire-mode crossing |
+| Current Moonlight 3D / current Apollo-3D | Atomic v2 for every live quality request and OFF/AI wire-mode crossing; negotiated GameProviderV1 adds guarded Game mono/packed modes |
 | Current Moonlight 3D / upstream/original Apollo or Sunshine | No proprietary presentation controls; stream-quality changes use the standard reconnect path |
 
 Older Moonlight 3D clients and pre-v2 Apollo-3D hosts are outside this compatibility contract.
@@ -924,7 +1043,7 @@ overrides, the last proven presentation mode, and a local generation ID that rej
 writes. Global Settings remain the inheritance source across PCs and sessions; a current-session
 override is stored only while it differs from its global value.
 
-Each of the four presentation modes owns an independent stream-quality tuple: **resolution, frame
+Each of the five presentation modes owns an independent stream-quality tuple: **resolution, frame
 rate, and bitrate**. Changing one mode's tuple never changes another mode. Selecting a mode whose
 saved or newly staged tuple cannot apply live commits the complete staged session record and
 reconnects into that tuple before any host presentation request or surface handoff. This also applies
@@ -933,13 +1052,13 @@ live stream. An interim mode ACK must not persist a new HDR/codec choice before 
 Committing the
 whole record ensures that shared or other-mode edits cannot be lost when the Activity is recreated.
 Live-compatible quality changes retain the guarded ACK and first-frame completion paths. Without
-staged reconnect-only work, a same-tuple switch remains live unless it enters or leaves Raw
-Full's distinct `2W x H` transport. Raw Half uses the ordinary `W x H` mono transport, so entering
-or leaving it remains live; changing Raw's Full/Half choice while Raw is live still reconnects.
+staged reconnect-only work, a same-tuple Game/Movie/2D switch remains live. Entering Game starts
+mono; leaving packed Game uses a guarded transition back to the ordinary stream. The AI modes
+retain their guarded wire-mode and decoder-ownership transitions.
 **Apply & reconnect** remains the explicit action when no mode-quality or transport change already
 requires a restart. The Client SBS ZipDepth aspect graph is derived from the pending Client SBS
-resolution and is not an independent setting. Raw's Full/Half choice is mode-specific, persists
-with the current session, and inherits its default from Global Settings.
+resolution and is not an independent setting. Movie's manual format is not a saved preference and
+is not committed with quality or used to change stream geometry.
 
 The resolution ladder keeps its six established landscape choices first, then adds twelve common
 phone/tablet source sizes. One explicit portrait counterpart for each of the eighteen landscape
@@ -986,19 +1105,19 @@ over the real portrait-content grid rather than the wider padded tensor grid. Ev
 is reflected before the decoder transform; mirroring only the center is incorrect where a
 footprint crosses a padding fold.
 
-The settings truly shared by all four modes are **codec, video frame pacing, HDR, Full/Limited video
+The settings truly shared by all five modes are **codec, video frame pacing, HDR, Full/Limited video
 range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
 shared set. Global Settings provide the cross-session defaults for both the shared set and the
 quality baseline inherited independently by each mode.
 
 The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 200 Mbps, HEVC, HDR, Full
-range, and latency pacing**, with stereo audio, host audio off, and Full as Raw SBS per-eye
-resolution. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits the
+range, and latency pacing**, with stereo audio and host audio off. There is no global Raw packing
+picker. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits the
 values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
 **Use session settings** discards staged edits and restores that mode's durable current-session
 values, falling back to its current global values where no session override exists.
 
-Normal, Raw Host SBS, and Host SBS AI therefore begin with a durable **90 FPS ceiling**. Client SBS
+2D, Game, Movie and Host AI 3D therefore begin with a durable **90 FPS ceiling**. Client SBS
 defaults to **1920 x 1080 at 30 FPS with a 72 Hz panel preference**. A headset panel/thermal
 transition may temporarily lower the effective on-wire rate to an offered rung, but it never
 rewrites the selected ceiling; the host
@@ -1074,13 +1193,14 @@ reapply the observed lower rung afterward. If a user-origin staged commit lost i
 mandatory resynchronization still reconnects the last durable record; a stale-settings warning must
 never leave an ambiguous live stream running.
 
-**Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, the Client
-SBS model, and the selected startup mode as one guarded record replacement. It then waits for
+**Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, and the
+selected startup intent as one guarded record replacement. The Client SBS model is fixed; Movie
+packing remains transient. It then waits for
 decoder and deferred GPU/XR cleanup before recreating the singleTask `Game` activity in place. The
 old Activity's ordinary no-history stop path must not finish this intentional replacement, so the
 stream resumes immediately instead of exposing the application grid. A stale panel generation
 cannot write into a replacement session. Legacy records that stored quality as shared values are
-read compatibly and are expanded into all four mode scopes on the next atomic commit.
+read compatibly and are expanded into all mode scopes on the next atomic commit.
 
 ## HDR and color range
 
@@ -1164,15 +1284,17 @@ poses when they open, on video resize/mode change, after screen movement/Cinema 
 existing slow Stats refresh. Never poll head pose from the video frame loop or while the associated
 side panel is hidden.
 
-Presentation modes form one single-select group. Navigation/disconnect actions remain separate
-one-shot controls. A new session highlights Normal; a resumed/restarted session highlights its
-restored mode only after that mode is actually active.
+Presentation intents form one single-select group. Navigation/disconnect actions remain separate
+one-shot controls. A new session highlights 2D; a resumed/restarted session highlights its
+restored intent only after that mode is active. Highlighting Game or Movie does not assert stereo:
+their picture state begins in 2D, and Game stays mono until the negotiated source and frame gates pass.
 
-The Host SBS AI tile and host debug action are disabled when `/serverinfo` does not advertise the
-Apollo-3D session/control extension. Normal and Client SBS remain available; Raw SBS keeps its
-separate virtual-display requirement.
+The Host AI 3D tile and host debug action are disabled when `/serverinfo` does not advertise the
+Apollo-3D session/control extension. 2D, Client AI 3D and manual Movie interpretation remain
+available. Game remains available on all hosts; without GameProviderV1 it stays mono and shows
+automatic source connection as unavailable. No host capability is inferred from its operating system.
 
-The four mode tiles live in one level toolbar `PanelEntity` and share one contextual
+The five mode tiles live in one level toolbar `PanelEntity` and share one contextual
 `PanelEntity` directly beneath it. An inactive mode tile switches modes on its first tap; tapping
 the active tile again toggles that mode's row. A passive down/up chevron with a conventional aspect
 ratio sits centered against the lower edge of the tile and communicates the expandable state
@@ -1186,13 +1308,16 @@ row identifies Global versus Current Session inheritance, shows the tuple curren
 live decoder, and offers the same atomic **Apply & reconnect** action whenever any scoped change
 requires it.
 
-Normal and Host SBS rows also show their presentation/source status. Client SBS adds only its fixed
+2D and Host AI rows also show their presentation/source status. Client AI adds only its fixed
 ZipDepth identity, resolution-derived aspect bucket, and live GPU backend status; it has no model
-selector, strength, convergence, balance, movie-mode, or depth-inference cadence controls. Restoring
+selector, strength, convergence, balance, or depth-inference cadence controls. Game's card identifies
+ReShade or a compatible provider and reflects host-confirmed source status, without a provider
+selector, Ready toggle, or image heuristic. Movie's card exposes only the implemented 2D/Half SBS/Full SBS interpretation
+buttons, with no Auto choice. Restoring
 values is scoped:
 the shared pane's **Use global defaults** stages the currently saved global shared values, while a
-mode row's **Use session settings** restores only that mode's durable quality tuple (plus the Raw
-Full/Half choice for the Raw SBS row).
+mode row's **Use session settings** restores only that mode's durable quality tuple. It does not
+restore transient Movie packing or reinterpret legacy Raw's Full/Half field.
 
 The Settings tile opens the left side panel for values shared by every mode in the current PC
 session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
@@ -1214,12 +1339,18 @@ host behavior and protocol are in
 [Virtual desktop interaction](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/virtual-desktop.md).
 This client/host feature still requires live Galaxy XR verification.
 
-Keep the four modes, Settings, Cinema, Stats, and **Disconnect** visible in the dock.
+Keep **2D**, **Host AI 3D**, **Client AI 3D**, **Game 3D**, **Movie 3D**, Settings, Cinema, Stats,
+and **Disconnect** visible in the dock. Host AI describes processing on the streaming computer;
+Client AI describes processing on this device. These are separate buttons with separate saved
+quality, not a combined AI tile with a second processor-selection step.
 Debug builds append **Dump 3D** immediately after **Disconnect**. All tiles have the same width;
 the panel width follows the actual button count, with no secondary-action expander.
 Disconnect stops streaming and returns directly to the current PC's application library without
-an intermediate machine-selection step or `/cancel`. The host retains the session for its resume
-grace window. There is no separate Library or End session tile in the immersive dock; explicit
+an intermediate machine-selection step or `/cancel`. The explicit dock action cancels reconnect
+and starts the existing asynchronous connection shutdown before navigating, so Android's activity
+transition cannot postpone the host disconnect. Later lifecycle callbacks reuse the idempotent stop;
+native shutdown still precedes decoder/EGL/XR resource destruction. The host retains the session for
+its resume grace window. There is no separate Library or End session tile in the immersive dock; explicit
 End session remains available in the application library. Stats is a direct one-tap toggle.
 Ordinary host controls require an active connection and a Game activity that is neither finishing
 nor destroyed. This closes the interval between Disconnect's `finish()` and `onStop()`: late panel
@@ -1265,18 +1396,23 @@ cannot fit, the entire control becomes a
 full-width connected vertical stack with up to two lines per choice; never produce a ragged wrap or
 make the user scroll an enum sideways. Bitrate follows the same direct-manipulation rule with its
 six-rung connected segmented ladder; do not regress it to an inline slider or bandwidth meter.
-Client SBS has no model selector: its Options row configures stream quality while Stats reports the
-active ZipDepth aspect graph. Raw SBS uses a direct two-button **Full / Half** group labeled
-**Per-Eye Resolution**; it also shows the derived encoded-per-eye and packed-stream
-dimensions so the choice is visible rather than merely numeric. Tapping the running application card resumes it directly; a
+Client AI has no model selector: its Options row configures stream quality while Stats reports the
+active ZipDepth aspect graph. Movie uses a direct **2D / Half SBS / Full SBS** picture-format group;
+this describes the existing picture and does not advertise a newly negotiated per-eye resolution.
+The obsolete Raw **Per-Eye Resolution** picker is removed from the dock and Global Settings.
+Tapping the running application card resumes it directly; a
 compact close button in its top-right corner ends the session. More stays in the bottom-right and is
 reserved for secondary actions such as details, hiding, and shortcut/export tools. The compact card
 aspect fits one complete row inside the Galaxy XR library viewport even while the current-session
 banner is visible, so a single row never creates a pointless vertical scroll range.
 
 After the first decoded frame, the dock may **soft-collapse** after eight seconds of true idle. This
-does not disable or move the dock `PanelEntity`: it hides only the full control row, dims the passive
-glance strip, and leaves a centered, gazeable reveal pill showing the active mode and current status.
+does not disable or move the dock `PanelEntity`: it hides only the full control row and leaves a
+centered, gazeable reveal pill showing the active mode and current status. The passive glance strip
+keeps its normal brightness. The pill has a 320 dp minimum width, the 80 dp choice-control minimum
+height, title-sized text, and a visible accent outline that brightens on hover/focus/press. Its
+actual clickable View supplies the larger target; the collapsed panel crops around that measured
+View at the existing scale and remains bounded by the full dock raster.
 Hovering, focusing, or activating a full-dock control reveals the row and restarts the timer. While
 collapsed, passive hover alone keeps the pill stable; the first focus/press generated by an explicit
 pinch reveals the row (with click activation retained for keyboard/controller input), so a newly
@@ -1420,9 +1556,10 @@ For every mode/surface change, test:
   regular Sunshine, regular Apollo, and Apollo-3D. Verify the two standard hosts never receive
   Apollo-3D control messages, use app-identity resume/tokenless cancel, and reconnect for quality
   changes; verify Apollo-3D retains exact generation-token checks and live controls.
-- A new session starts Normal with inherited global defaults; host-confirmed resume and the
-  Apply-triggered restart restore the last successful mode with that mode's saved quality tuple.
-  Replace a running app, then Apply/reconnect and cross the Raw Full boundary; neither intentional
+- A new session starts 2D with inherited global defaults; host-confirmed resume and the
+  Apply-triggered restart restore the last successful intent with that mode's saved quality tuple.
+  Game starts mono and revalidates the source; Movie resets to 2D on resume. Replace a running app, then Apply/reconnect
+  and switch among mode quality tuples; neither intentional
   resume may replay the initial replacement authority. Race an active session against Start:
   the custom host must reject `/launch` without any client `/cancel`, while an idle retained session
   can be replaced through `/launch`. Standard hosts retain the client's running-app rejection.
@@ -1430,14 +1567,25 @@ For every mode/surface change, test:
   successor or launch with the expired session's preferences. With landscape Normal and portrait Host
   AI saved separately, switching in either direction must reconnect into the target tuple and
   preserve both resolutions.
-- Stage distinct resolution/FPS/bitrate tuples for all four modes and confirm they remain isolated.
+- Stage distinct resolution/FPS/bitrate tuples for all five modes and confirm they remain isolated.
   A successfully selected mode whose tuple differs from the live decoder must reconnect into that
-  tuple automatically. Same-tuple switches stay live when they retain the ordinary `W x H`
-  transport, including transitions into or out of Raw Half. Entering or leaving Raw Full
-  reconnects to cross its `2W x H` transport boundary, and changing Full/Half during Raw also
-  reconnects. Any other staged edits must be
+  tuple automatically. Same-tuple switches stay live through the applicable ACK/frame barrier,
+  including exit from packed Game. Selecting Game begins in mono; only validated source readiness
+  may widen its encoded stream. Neither Game readiness nor Movie format doubles the desktop.
+  Movie format never changes encoded width. Any other staged edits must be
   committed in the same atomic record before that automatic Activity recreation.
-- Normal and Host SBS remain direct and work when Client SBS initialization fails.
+- Game stays mono on hosts without GameProviderV1. On a supporting host, exercise source status
+  before and after ACK/frame completion, exact packed raster acceptance, unsupported mono fitting,
+  source-loss duplicate-eye fallback, overlay/focus recovery, and exit to OFF/AI. Wide frames and
+  Host AI depth-ready callbacks must not activate Game stereo. A refused widening must not retry
+  after new source revisions or automatic reconnect; explicit re-entry or quality edits may retry.
+- Movie initially presents 2D. Explicit Half SBS preserves logical aspect; Full SBS halves the
+  physical aspect for the same captured raster. Leaving and re-entering Movie, creating a new
+  presenter, or reconnecting clears the manual format while retaining Movie's quality tuple.
+- Old Raw last-mode records restore 2D and preserve session identity and original data. Only
+  compatible quality copies to an unset Movie tuple, with no width multiplication or format copy;
+  explicit Movie settings and later defaults resets must survive without repeated migration.
+- 2D, Host AI, Game and Movie remain direct and work when Client SBS initialization fails.
 - Test all three original-Base ZipDepth aspect graphs from
   `client-sbs-zipdepth-models.tar.xz` on Galaxy XR. Every graph must report
   `LITERT_OPENCL_FP16_GL_IO`. The smoke test enforces

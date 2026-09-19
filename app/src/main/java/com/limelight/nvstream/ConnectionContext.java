@@ -28,6 +28,8 @@ public class ConnectionContext {
     // resume/cancel. Standard Sunshine and Apollo hosts use the legacy tokenless contract.
     public boolean hostSessionIdSupported;
     public boolean virtualDisplayOnlySupported;
+    // Fresh authenticated serverinfo capability; also promises atomic presentation v2.
+    public boolean gameProviderV1Supported;
     public String expectedHostSessionId;
     public String hostSessionId;
     public boolean resumedHostSession;

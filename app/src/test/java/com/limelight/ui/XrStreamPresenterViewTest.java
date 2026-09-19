@@ -7,8 +7,12 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
 import android.content.Context;
@@ -24,6 +28,7 @@ import android.widget.TextView;
 
 import androidx.appcompat.widget.AppCompatButton;
 import androidx.xr.scenecore.PanelEntity;
+import androidx.xr.scenecore.SurfaceEntity;
 
 import com.limelight.BuildConfig;
 import com.limelight.R;
@@ -32,8 +37,9 @@ import com.limelight.preferences.XrChoiceGroup;
 import com.limelight.preferences.XrResolutionOptions;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsMetricHistory;
+import com.limelight.ui.xrcontrols.AuthoredStereoModeState;
+import com.limelight.ui.xrcontrols.AuthoredStereoModeState.MoviePictureFormat;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
-import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrResolutionSelector;
 import com.limelight.ui.xrcontrols.XrSparklineView;
@@ -85,7 +91,7 @@ public final class XrStreamPresenterViewTest {
             build.invoke(presenter, 2.0f);
 
             List<?> items = (List<?>) getField(presenter, "barItems");
-            assertEquals(BuildConfig.DEBUG ? 9 : 8, items.size());
+            assertEquals(BuildConfig.DEBUG ? 10 : 9, items.size());
             List<String> labels = new ArrayList<>();
             View disconnect = null;
             for (Object item : items) {
@@ -100,9 +106,22 @@ public final class XrStreamPresenterViewTest {
             }
             assertFalse(labels.contains("Library"));
             assertFalse(labels.contains(activity.getString(R.string.xr_home_end_session)));
-            assertEquals(activity.getString(R.string.game_menu_disconnect), labels.get(7));
+            assertEquals(java.util.Arrays.asList(
+                    activity.getString(R.string.xr_bar_2d),
+                    activity.getString(R.string.xr_bar_host_ai_3d),
+                    activity.getString(R.string.xr_bar_client_ai_3d),
+                    activity.getString(R.string.xr_bar_game_3d),
+                    activity.getString(R.string.xr_bar_movie_3d)), labels.subList(0, 5));
+            assertSame(PresentationMode.HOST_SBS_AI, getField(items.get(1), "selectsMode"));
+            assertSame(PresentationMode.CLIENT_SBS_AI, getField(items.get(2), "selectsMode"));
+            assertSame(PresentationMode.GAME_3D, getField(items.get(3), "selectsMode"));
+            assertSame(PresentationMode.MOVIE_3D, getField(items.get(4), "selectsMode"));
+            assertFalse(labels.contains(activity.getString(R.string.xr_bar_host_sbs_ai)));
+            assertFalse(labels.contains(activity.getString(R.string.xr_bar_client_sbs_ai)));
+            assertFalse(labels.contains(activity.getString(R.string.xr_bar_host_sbs_raw)));
+            assertEquals(activity.getString(R.string.game_menu_disconnect), labels.get(8));
             if (BuildConfig.DEBUG) {
-                assertEquals(activity.getString(R.string.xr_bar_dump), labels.get(8));
+                assertEquals(activity.getString(R.string.xr_bar_dump), labels.get(9));
             }
             assertTrue(disconnect != null && disconnect.performClick());
             assertEquals(1, disconnects[0]);
@@ -114,7 +133,7 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void rawModePaneUsesConnectedFullHalfButtonsAndEmitsHalfChoice()
+    public void movieModePaneStartsIn2dAndOffersOnlyExplicitIncomingPictureFormats()
             throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
@@ -122,39 +141,44 @@ public final class XrStreamPresenterViewTest {
         controller.setup();
 
         PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(activity);
-        prefs.rawSbsPerEyeResolution =
-                PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
-        String[] selectedResolution = new String[1];
+        int streamWidth = prefs.width;
+        int streamHeight = prefs.height;
         XrStreamPresenter presenter = new XrStreamPresenter(
                 activity, prefs, surface -> { }, visible -> { });
-        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
-            @Override
-            public boolean onRawSbsPerEyeResolutionSelected(
-                    String resolutionId, RawSbsModeSettingsModel current) {
-                selectedResolution[0] = resolutionId;
-                return true;
-            }
-        });
+        SurfaceEntity surface = mock(SurfaceEntity.class);
+        setField(presenter, "surfaceEntity", surface);
+        setField(presenter, "currentPresenterMode", PresentationMode.MOVIE_3D);
+        setField(presenter, "streamPresentationReady", true);
+        AuthoredStereoModeState authored = (AuthoredStereoModeState) getField(
+                presenter, "authoredStereoModeState");
         FrameLayout host = new FrameLayout(activity);
         setField(presenter, "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
-        state.toggleModeOptions(PresentationMode.HOST_SBS_RAW.name());
+        state.toggleModeOptions(PresentationMode.MOVIE_3D.name());
 
         Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
         render.invoke(presenter);
 
         XrChoiceGroup group = (XrChoiceGroup) getField(
-                presenter, "rawSbsPerEyeResolutionChoiceGroup");
-        assertEquals(2, group.getChildCount());
+                presenter, "moviePictureFormatChoiceGroup");
+        assertEquals(3, group.getChildCount());
         assertTrue(group.getChildAt(0) instanceof AppCompatButton);
         assertTrue(group.getChildAt(1) instanceof AppCompatButton);
-        assertEquals("Full", group.getButtonAt(0).getText().toString());
-        assertEquals("Half", group.getButtonAt(1).getText().toString());
-        assertEquals(RawSbsModeSettingsModel.FULL_ID, group.getButtonAt(0).getTag());
-        assertEquals(RawSbsModeSettingsModel.HALF_ID, group.getButtonAt(1).getTag());
-        assertEquals(RawSbsModeSettingsModel.FULL_ID, group.getSelectedValue());
+        assertTrue(group.getChildAt(2) instanceof AppCompatButton);
+        assertEquals("2D", group.getButtonAt(0).getText().toString());
+        assertEquals("Half SBS", group.getButtonAt(1).getText().toString());
+        assertEquals("Full SBS", group.getButtonAt(2).getText().toString());
+        assertEquals("2d", group.getButtonAt(0).getTag());
+        assertEquals("half_sbs", group.getButtonAt(1).getTag());
+        assertEquals("full_sbs", group.getButtonAt(2).getTag());
+        assertEquals("2d", group.getSelectedValue());
         assertTrue(group.getButtonAt(0).isActivated());
+        assertTrue(visibleTexts(host).contains(
+                activity.getString(R.string.xr_movie_picture_format)));
+        assertTrue(visibleTexts(host).contains(
+                activity.getString(R.string.xr_mode_movie_detail)));
+        assertFalse(visibleTexts(host).contains("Auto"));
 
         int width = dp(activity, 720);
         group.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
@@ -162,15 +186,56 @@ public final class XrStreamPresenterViewTest {
         group.layout(0, 0, group.getMeasuredWidth(), group.getMeasuredHeight());
         assertEquals(group.getButtonAt(0).getTop(), group.getButtonAt(1).getTop());
         assertEquals(group.getButtonAt(0).getRight(), group.getButtonAt(1).getLeft());
-        assertEquals(group.getMeasuredWidth(), group.getButtonAt(1).getRight());
+        assertEquals(group.getButtonAt(1).getRight(), group.getButtonAt(2).getLeft());
+        assertEquals(group.getMeasuredWidth(), group.getButtonAt(2).getRight());
 
         group.getButtonAt(1).performClick();
-        assertEquals(RawSbsModeSettingsModel.HALF_ID, selectedResolution[0]);
-        assertEquals(RawSbsModeSettingsModel.HALF_ID, group.getSelectedValue());
+        assertEquals(MoviePictureFormat.HALF_SBS, authored.getMoviePictureFormat());
+        assertEquals("half_sbs", group.getSelectedValue());
+        group.getButtonAt(2).performClick();
+        assertEquals(MoviePictureFormat.FULL_SBS, authored.getMoviePictureFormat());
+        assertEquals("full_sbs", group.getSelectedValue());
+        group.getButtonAt(0).performClick();
+        assertEquals(MoviePictureFormat.TWO_D, authored.getMoviePictureFormat());
+        assertEquals("2d", group.getSelectedValue());
+        verify(surface, times(2)).setStereoMode(SurfaceEntity.StereoMode.SIDE_BY_SIDE);
+        verify(surface).setStereoMode(SurfaceEntity.StereoMode.MONO);
+        verify(surface, never()).setSurfacePixelDimensions(any());
+        assertEquals(streamWidth, prefs.width);
+        assertEquals(streamHeight, prefs.height);
 
         state.toggleModeOptions(PresentationMode.NORMAL.name());
         render.invoke(presenter);
-        assertNull(getField(presenter, "rawSbsPerEyeResolutionChoiceGroup"));
+        assertNull(getField(presenter, "moviePictureFormatChoiceGroup"));
+        presenter.onDestroy();
+        controller.destroy();
+    }
+
+    @Test
+    public void gameModePaneDescribesCompatibleSourcesWithoutInventingDetection()
+            throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, PreferenceConfiguration.readPreferences(activity),
+                surface -> { }, visible -> { });
+        FrameLayout host = new FrameLayout(activity);
+        setField(presenter, "modeOptionsHost", host);
+        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
+        state.toggleModeOptions(PresentationMode.GAME_3D.name());
+        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+        render.invoke(presenter);
+
+        List<String> text = visibleTexts(host);
+        assertTrue(text.contains(activity.getString(R.string.xr_mode_game_detail)));
+        assertTrue(text.contains(activity.getString(R.string.xr_game_showing_2d)));
+        assertTrue(text.contains(activity.getString(R.string.xr_game_source_unavailable)));
+        assertFalse(text.contains("Auto"));
+        assertNull(getField(presenter, "moviePictureFormatChoiceGroup"));
+        assertSame(PresentationMode.NORMAL, getField(presenter, "currentPresenterMode"));
         controller.destroy();
     }
 
@@ -299,7 +364,11 @@ public final class XrStreamPresenterViewTest {
                 XrStreamPresenter.SESSION_ROW_TITLE_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_title,
                 XrStreamPresenter.SESSION_META_TEXT_DIMEN);
-        assertEquals("Raw SBS", activity.getString(R.string.xr_bar_host_sbs_raw));
+        assertEquals("2D", activity.getString(R.string.xr_bar_2d));
+        assertEquals("Host AI 3D", activity.getString(R.string.xr_bar_host_ai_3d));
+        assertEquals("Client AI 3D", activity.getString(R.string.xr_bar_client_ai_3d));
+        assertEquals("Game 3D", activity.getString(R.string.xr_bar_game_3d));
+        assertEquals("Movie 3D", activity.getString(R.string.xr_bar_movie_3d));
         assertEquals("Cinema", activity.getString(R.string.xr_bar_cinema_view));
         controller.destroy();
     }
@@ -614,6 +683,23 @@ public final class XrStreamPresenterViewTest {
         assertNotSame(trend, resetFallback);
         assertTrue(resetFallback.getChildAt(1) instanceof TextView);
         controller.destroy();
+    }
+
+    private static List<String> visibleTexts(View root) {
+        List<String> result = new ArrayList<>();
+        if (root.getVisibility() != View.VISIBLE) {
+            return result;
+        }
+        if (root instanceof TextView) {
+            result.add(((TextView) root).getText().toString());
+        }
+        if (root instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) root;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                result.addAll(visibleTexts(group.getChildAt(i)));
+            }
+        }
+        return result;
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {

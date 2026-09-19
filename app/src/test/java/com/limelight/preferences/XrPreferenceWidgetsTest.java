@@ -183,17 +183,7 @@ public final class XrPreferenceWidgetsTest {
                 instanceof SwitchPreferenceCompat);
         assertNull(fragment.findPreference(
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
-        assertTrue(rawPerEyeResolution instanceof InlineListPreference);
-        assertEquals(PreferenceConfiguration.DEFAULT_RAW_SBS_PER_EYE_RESOLUTION,
-                rawPerEyeResolution.getValue());
-        assertEquals(2, rawPerEyeResolution.getEntries().length);
-        assertEquals("Full", rawPerEyeResolution.getEntries()[0].toString());
-        assertEquals("Half", rawPerEyeResolution.getEntries()[1].toString());
-        assertEquals("full", rawPerEyeResolution.getEntryValues()[0].toString());
-        assertEquals("half", rawPerEyeResolution.getEntryValues()[1].toString());
-        XrChoiceGroup rawChoices = bindChoices(rawPerEyeResolution);
-        assertEquals(2, rawChoices.getChildCount());
-        assertEquals("full", rawChoices.getSelectedValue());
+        assertNull(rawPerEyeResolution);
         assertNull(fragment.findPreference("category_xr_3d_settings"));
 
         ViewGroup navigation = (ViewGroup) activity.findViewById(

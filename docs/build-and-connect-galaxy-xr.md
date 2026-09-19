@@ -93,11 +93,32 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   ```bash
   "$ADB" shell am start -n com.limelight.moonlight3ddebug/com.limelight.PcView
   ```
-- **Presentation mode** is chosen from the XR control bar inside an active stream (2D,
-  Raw SBS, Host 3D, or Client 3D). A fresh host connection starts in Normal; only a
-  host-confirmed resume of the same session/app restores the last successful mode. Client SBS has
-  no strength/convergence/balance/movie-mode parameter panel; the old `render_mode_list` and client
-  depth-parameter preferences are not part of the current path.
+- **Presentation mode** is chosen from the five XR dock buttons: **2D**, **Host AI 3D**,
+  **Client AI 3D**, **Game 3D**, and **Movie 3D**. Host means the streaming computer; Client means
+  this device. This app still requires Android XR, and Host AI 3D requires a compatible
+  Sunshine 3D Windows/NVIDIA host. A fresh host connection starts in 2D; only a host-confirmed
+  resume of the same session/app restores the last successful mode. Tap the active mode again
+  to open its settings in the shared pane below the dock. Settings, Cinema, Stats, and Disconnect
+  remain direct actions; debug builds also offer Dump 3D.
+- **Game 3D** is the source-neutral entry for ReShade or another compatible game-stereo provider.
+  Configure the supported export using the
+  [host ReShade guide](https://github.com/dcatcher9/Apollo-3D/blob/master/docs/reshade-sbs.md),
+  then choose Game 3D on a supporting Sunshine 3D host. No host provider toggle or host restart
+  is needed for streaming. Its own Resolution/FPS/Bandwidth pane stays available, with
+  **Waiting for game**, **3D active**, or **Showing 2D** above it. Entry and reconnect start in mono;
+  a validated source triggers a guarded stereo-stream resize after host acknowledgement and a
+  fresh matching decoder frame. The game's desktop stays at the selected resolution. Source loss
+  keeps the established packed stream with the current mono picture in both eyes. If stereo cannot
+  start, change quality or leave and re-enter Game 3D to retry. Hosts without this capability stay
+  safely in 2D and show that source connection is unavailable. Host AI 3D remains AI regardless
+  of the host's separate local AR provider setting. Physical game-to-headset acceptance is still
+  required; JVM tests exercise the protocol/presenter with the device boundary mocked.
+- **Movie 3D** starts in 2D and offers manual **Picture format: 2D / Half SBS / Full SBS**.
+  Choose the movie’s incoming SBS format when it is playing, then return to 2D for the desktop.
+  There is no Auto detector. These choices do not resize the desktop or stream, multiply width,
+  or require a virtual display; reconnecting or re-entering Movie 3D resets the format to 2D.
+- Client AI 3D has no strength/convergence/balance parameter panel; the old `render_mode_list`
+  and client depth-parameter preferences are not part of the current path.
 - Performance logging is opt-in in both debug and release builds so diagnostics do not perturb
   latency or frame-pacing measurements. The first update from the former debug-on policy disables
   that forced value once; subsequent explicit Diagnostics choices persist.

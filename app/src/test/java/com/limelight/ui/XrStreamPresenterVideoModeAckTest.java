@@ -49,6 +49,28 @@ public class XrStreamPresenterVideoModeAckTest {
     }
 
     @Test
+    public void gameAckAllowsOrdinaryMonoFitButRequiresExactFullSbsRaster() {
+        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_GAME_MONO, 19,
+                1920, 1080, 1920, 1080, 6000, 100000));
+        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_GAME_SBS, 20,
+                1920, 1080, 3840, 1080, 6000, 100000));
+        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_GAME_MONO, 21,
+                5120, 2160, 4096, 1728, 6000, 100000));
+        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_GAME_SBS, 20,
+                5120, 2160, 8192, 1728, 6000, 100000));
+        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_GAME_MONO, 19,
+                1920, 1080, 3840, 1080, 6000, 100000));
+        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+                0, MoonBridge.SBS_MODE_GAME_SBS, 20,
+                1920, 1080, 1920, 1080, 6000, 100000));
+    }
+
+    @Test
     public void atomicAckPermitsOnlyBoundedEvenRounding() {
         // 4096 * 2112 / 5000 rounds to the even height 1730, so exact cross products differ.
         assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(

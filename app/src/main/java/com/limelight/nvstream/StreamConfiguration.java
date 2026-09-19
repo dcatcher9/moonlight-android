@@ -132,7 +132,8 @@ public class StreamConfiguration {
         }
 
         public StreamConfiguration.Builder setInitialSbsMode(int mode) {
-            if (mode != MoonBridge.SBS_MODE_OFF && mode != MoonBridge.SBS_MODE_AI) {
+            if (mode != MoonBridge.SBS_MODE_OFF && mode != MoonBridge.SBS_MODE_AI
+                    && mode != MoonBridge.SBS_MODE_GAME_MONO) {
                 throw new IllegalArgumentException("Unknown initial SBS mode: " + mode);
             }
             config.initialSbsMode = mode;

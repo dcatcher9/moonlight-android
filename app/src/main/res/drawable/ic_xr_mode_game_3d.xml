@@ -1,0 +1,26 @@
+<!-- Game controller: game-provided stereo, independent of its provider. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:tint="@color/xr_accent"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M7.1,6.5h9.8c1.4,0 2.6,1 2.9,2.4l1.4,7c0.4,2 -2,3.3 -3.4,1.9l-2.3,-2.3h-7l-2.3,2.3c-1.4,1.4 -3.8,0.1 -3.4,-1.9l1.4,-7c0.3,-1.4 1.5,-2.4 2.9,-2.4z"
+        android:strokeColor="@color/xr_accent"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="@android:color/transparent" />
+    <path
+        android:pathData="M6,10.5h4M8,8.5v4"
+        android:strokeColor="@color/xr_accent"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent" />
+    <path
+        android:pathData="M16,8.5a1,1 0,1 0,0.01,0M18,11a1,1 0,1 0,0.01,0"
+        android:strokeColor="@color/xr_accent"
+        android:strokeWidth="1.2"
+        android:fillColor="@color/xr_accent" />
+</vector>

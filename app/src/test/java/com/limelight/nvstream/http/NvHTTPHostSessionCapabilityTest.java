@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.limelight.nvstream.StreamConfiguration;
+import com.limelight.nvstream.jni.MoonBridge;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -40,7 +41,8 @@ public class NvHTTPHostSessionCapabilityTest {
 
     private static final String VIRTUAL_DISPLAY_SERVER_INFO = response(
             "<appversion>7.1.0.0</appversion>"
-                    + "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>");
+                    + "<VirtualDisplayOnlySupported>1</VirtualDisplayOnlySupported>"
+                    + "<GameProviderV1Supported>1</GameProviderV1Supported>");
 
     private static NvHTTP.ServerInfoResponse fetchServerInfo(boolean hasPinnedCertificate,
             String httpsResponse, IOException httpsFailure, List<String> requestedSchemes)
@@ -68,6 +70,7 @@ public class NvHTTPHostSessionCapabilityTest {
             throws Exception {
         assertEquals(VIRTUAL_DISPLAY_SERVER_INFO, response.xml);
         assertFalse(response.authenticated);
+        assertFalse(NvHTTP.isGameProviderV1Supported(response.xml, response.authenticated));
         boolean virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(
                 response.xml, response.authenticated);
         assertFalse(virtualDisplayOnlySupported);
@@ -85,6 +88,7 @@ public class NvHTTPHostSessionCapabilityTest {
         assertEquals(Arrays.asList("https"), schemes);
         assertTrue(info.authenticated);
         assertTrue(NvHTTP.isVirtualDisplayOnlySupported(info.xml, info.authenticated));
+        assertTrue(NvHTTP.isGameProviderV1Supported(info.xml, info.authenticated));
     }
 
     @Test
@@ -146,6 +150,37 @@ public class NvHTTPHostSessionCapabilityTest {
                 NvHTTP.virtualDisplayOnlyQuery(disabled, true));
         assertEquals("", NvHTTP.virtualDisplayOnlyQuery(enabled, false));
         assertEquals("", NvHTTP.virtualDisplayOnlyQuery(disabled, false));
+    }
+
+    @Test
+    public void gameProviderRequiresExplicitAuthenticatedCapability() throws Exception {
+        assertFalse(NvHTTP.isGameProviderV1Supported(response("<hostsessionid>1</hostsessionid>"), true));
+        for (String value : new String[] {"", "0", "true", "2"}) {
+            assertFalse(NvHTTP.isGameProviderV1Supported(response(
+                    "<GameProviderV1Supported>" + value + "</GameProviderV1Supported>"), true));
+        }
+        String supported = response("<GameProviderV1Supported>1</GameProviderV1Supported>");
+        assertTrue(NvHTTP.isGameProviderV1Supported(supported, true));
+        assertFalse(NvHTTP.isGameProviderV1Supported(supported, false));
+    }
+
+    @Test
+    public void gameLaunchAndResumeRemainMonoAndCannotSendNewModeToOlderHosts() {
+        StreamConfiguration game = new StreamConfiguration.Builder()
+                .setInitialSbsMode(MoonBridge.SBS_MODE_GAME_MONO).build();
+        assertEquals("&sbsMode=2", NvHTTP.initialSbsModeQuery(game, true, true));
+        assertEquals("&sbsMode=0", NvHTTP.initialSbsModeQuery(game, true, false));
+        assertEquals("", NvHTTP.initialSbsModeQuery(game, false, false));
+        assertEquals("", NvHTTP.initialSbsModeQuery(game, false, true));
+        StreamConfiguration ai = new StreamConfiguration.Builder()
+                .setInitialSbsMode(MoonBridge.SBS_MODE_AI).build();
+        assertEquals("&sbsMode=1", NvHTTP.initialSbsModeQuery(ai, true, false));
+        try {
+            new StreamConfiguration.Builder().setInitialSbsMode(MoonBridge.SBS_MODE_GAME_SBS);
+            fail("Packed Game mode may only be requested through a live atomic transaction");
+        } catch (IllegalArgumentException expected) {
+            // Safe restart never inherits the previous session's packed frame interpretation.
+        }
     }
 
     @Test

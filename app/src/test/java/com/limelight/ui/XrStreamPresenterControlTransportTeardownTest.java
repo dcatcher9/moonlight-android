@@ -20,7 +20,9 @@ import androidx.xr.scenecore.SurfaceEntity;
 
 import com.limelight.Game;
 import com.limelight.R;
+import com.limelight.binding.input.ControllerHandler;
 import com.limelight.nvstream.HostSessionLaunchRequest;
+import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
@@ -63,10 +65,10 @@ public final class XrStreamPresenterControlTransportTeardownTest {
 
         game.disconnectFromXrControls();
         assertTrue(game.isFinishing());
-        // Reproduce the interval before Android calls onStop(), while the native stream and
-        // presentation still exist. Disconnect's finish must close ordinary controls already.
-        assertTrue((boolean) getField(game, "connected"));
-        assertFalse((boolean) getField(presenter, "controlTransportClosing"));
+        // No onStop() callback has run. Explicit Disconnect already closes controls and starts
+        // asynchronous native shutdown before Android finishes the library transition.
+        assertFalse((boolean) getField(game, "connected"));
+        assertTrue((boolean) getField(presenter, "controlTransportClosing"));
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 
         assertEquals(0, ShadowMoonBridge.getSetVideoModeV2CallCount());
@@ -136,7 +138,7 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 
         assertEquals(PresentationMode.HOST_SBS_AI, getField(presenter, "currentPresenterMode"));
-        assertEquals(77, gate.currentModeGeneration());
+        assertEquals(0, gate.currentModeGeneration());
         assertSavedHostQuality(presenter);
         presenter.onDestroy();
     }
@@ -239,7 +241,7 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         invoke(presenter, "onLiveQualityAckTimeout");
 
         assertEquals(0, callbacks[0]);
-        assertEquals(target, getField(presenter, "pendingLiveQuality"));
+        assertNull(getField(presenter, "pendingLiveQuality"));
         assertSavedHostQuality(presenter);
         presenter.onDestroy();
     }
@@ -265,7 +267,7 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         assertFalse(presenter.onDecoderPresentationModeTransitionTimedOut(77));
 
         assertEquals(0, reconnects[0]);
-        assertEquals(77, gate.currentModeGeneration());
+        assertEquals(0, gate.currentModeGeneration());
         assertSavedHostQuality(presenter);
         presenter.onDestroy();
     }
@@ -397,8 +399,12 @@ public final class XrStreamPresenterControlTransportTeardownTest {
                 PresentationMode.HOST_SBS_AI, false));
         assertTrue(XrStreamPresenter.isPresentationModeSupported(
                 PresentationMode.CLIENT_SBS_AI, false));
-        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+        assertFalse(XrStreamPresenter.isPresentationModeSupported(
                 PresentationMode.HOST_SBS_RAW, false));
+        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+                PresentationMode.GAME_3D, false));
+        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+                PresentationMode.MOVIE_3D, false));
         assertEquals(MoonBridge.SBS_MODE_OFF, presenter.getInitialHostSbsWireMode());
         assertEquals(0, ShadowMoonBridge.getSetVideoModeV2CallCount());
         assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
@@ -445,7 +451,10 @@ public final class XrStreamPresenterControlTransportTeardownTest {
                 game, "prepareCurrentSessionPreferences");
         PreferenceConfiguration preferences = PreferenceConfiguration.readPreferences(game, startup);
         preferences.smartClipboardSync = false;
+        preferences.enablePip = false;
         setField(game, "prefConfig", preferences);
+        setField(game, "controllerHandler", mock(ControllerHandler.class));
+        setField(game, "conn", mock(NvConnection.class));
         setField(game, "connected", true);
         setField(game, "hostSessionIdSupported", true);
         setField(game, "atomicPresentationV2Supported", true);

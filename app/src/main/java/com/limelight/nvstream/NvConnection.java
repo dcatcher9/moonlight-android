@@ -340,6 +340,8 @@ public class NvConnection {
         context.hostSessionIdSupported = details.hostSessionIdSupported;
         context.virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(
                 serverInfo, serverInfoResponse.authenticated);
+        context.gameProviderV1Supported = NvHTTP.isGameProviderV1Supported(
+                serverInfo, serverInfoResponse.authenticated);
         context.expectedHostSessionId = null;
         context.hostSessionId = null;
 

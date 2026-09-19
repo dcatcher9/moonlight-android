@@ -41,6 +41,7 @@ public class ShadowMoonBridge {
     private static final List<Integer> hostSbsTelemetryResults = new ArrayList<>();
     private static final List<Boolean> hostSbsTelemetryEnabledCalls = new ArrayList<>();
     private static int setVideoModeV2CallCount;
+    private static int setVideoModeV2Result = 1;
     private static int sbsDebugDumpCallCount;
     private static int hostFeatureFlags;
     private static int lastV2DesiredMode;
@@ -75,6 +76,10 @@ public class ShadowMoonBridge {
 
     public static int getSetVideoModeV2CallCount() {
         return setVideoModeV2CallCount;
+    }
+
+    public static void setVideoModeV2Result(int result) {
+        setVideoModeV2Result = result;
     }
 
     public static int[] getLastSetVideoModeV2Request() {
@@ -112,7 +117,7 @@ public class ShadowMoonBridge {
         lastV2RequestId = requestId;
         lastV2SourceWidth = sourceWidth;
         lastV2SourceHeight = sourceHeight;
-        return 1;
+        return setVideoModeV2Result;
     }
 
     @Implementation
@@ -130,6 +135,7 @@ public class ShadowMoonBridge {
         hostSbsTelemetryResults.clear();
         hostSbsTelemetryEnabledCalls.clear();
         setVideoModeV2CallCount = 0;
+        setVideoModeV2Result = 1;
         sbsDebugDumpCallCount = 0;
         hostFeatureFlags = 0;
         lastV2DesiredMode = 0;

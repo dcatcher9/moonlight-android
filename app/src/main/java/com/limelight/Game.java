@@ -202,9 +202,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private volatile String sessionHostSessionId;
     private volatile boolean hostSessionIdSupported;
     private volatile boolean atomicPresentationV2Supported;
+    private volatile boolean gameProviderV1Supported;
     private XrSessionSettingsController xrSessionSettingsController;
     private boolean streamContainerReleasedForReconnect;
     private boolean reconnectScheduled;
+    private boolean streamActivityStarted;
+    private boolean automaticReconnectCancelled;
+    private boolean automaticReconnectScheduled;
+    private boolean reconnectRecreationStarted;
+    private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
 
     private int displayWidth;
     private int displayHeight;
@@ -546,6 +552,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         xrSessionSettingsController.setLiveVideoModeSupported(atomicPresentationV2Supported);
         presenter.setHostControlExtensionsSupported(hostSessionIdSupported);
         presenter.setAtomicPresentationV2Supported(atomicPresentationV2Supported);
+        presenter.setGameProviderV1Supported(gameProviderV1Supported);
         refreshXrSessionSettingsModels();
         presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
             @Override
@@ -836,41 +843,117 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void scheduleXrSessionReconnect() {
+        scheduleXrSessionReconnect(0, 0);
+    }
+
+    private void scheduleXrSessionReconnect(int automaticAttempt, long delayMillis) {
         if (reconnectScheduled) {
             return;
         }
         reconnectScheduled = true;
+        automaticReconnectScheduled = automaticAttempt > 0;
         XrStreamPresenter presenter = streamContainer != null
                 ? streamContainer.getXrPresenter() : null;
         Intent reconnectIntent = createXrReconnectIntent(this, getIntent());
+        if (automaticReconnectScheduled) {
+            reconnectIntent.putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, automaticAttempt);
+        }
         if (presenter != null) {
             presenter.captureReconnectViewState(reconnectIntent);
             presenter.setSessionControlsEnabled(false);
         }
-        showCenteredStreamMessage(getString(R.string.xr_session_reconnecting),
+        showCenteredStreamMessage(automaticReconnectScheduled
+                        ? getString(R.string.xr_session_transport_reconnecting,
+                                automaticAttempt, TransportReconnectPolicy.MAX_ATTEMPTS)
+                        : getString(R.string.xr_session_reconnecting),
                 Toast.LENGTH_SHORT);
 
         stopConnection();
         runAfterConnectionStop(() -> {
+            if (!canCompleteScheduledReconnect()) {
+                return;
+            }
             Runnable restart = () -> {
-                if (isFinishing() || isDestroyed()) {
+                if (!canCompleteScheduledReconnect()) {
                     return;
                 }
                 // Game is singleTask, so self-launching would deliver onNewIntent() to this
                 // instance and a subsequent finish would simply exit the stream. Recreate in
                 // place with the updated intent after native/Surface teardown instead.
+                reconnectRecreationStarted = true;
                 setIntent(reconnectIntent);
                 recreate();
                 overridePendingTransition(0, 0);
             };
-            if (streamContainer != null && !streamContainerReleasedForReconnect) {
-                streamContainerReleasedForReconnect = true;
-                streamContainer.onDestroy(restart);
-            }
-            else {
-                restart.run();
+            Runnable releaseAndRestart = () -> {
+                if (!canCompleteScheduledReconnect()) {
+                    return;
+                }
+                if (streamContainer != null && !streamContainerReleasedForReconnect) {
+                    streamContainerReleasedForReconnect = true;
+                    streamContainer.onDestroy(restart);
+                }
+                else {
+                    restart.run();
+                }
+            };
+            if (delayMillis > 0) {
+                reconnectHandler.postDelayed(releaseAndRestart, delayMillis);
+            } else {
+                releaseAndRestart.run();
             }
         });
+    }
+
+    private boolean canCompleteScheduledReconnect() {
+        return !isFinishing() && !isDestroyed() && (!automaticReconnectScheduled
+                || (streamActivityStarted && !automaticReconnectCancelled));
+    }
+
+    private boolean scheduleTransportReconnect(int errorCode, boolean startupFailure,
+                                                int portFlags) {
+        int previousAttempts = getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0);
+        if (reconnectScheduled || !streamActivityStarted || automaticReconnectCancelled
+                || isFinishing() || isDestroyed() || quitOnStop
+                || (startupFailure ? previousAttempts == 0 : !connected && previousAttempts == 0)
+                || !TransportReconnectPolicy.canRetry(getHostSessionLaunchRequest(getIntent()),
+                        previousAttempts, errorCode, startupFailure, portFlags)) {
+            return false;
+        }
+        int attempt = previousAttempts + 1;
+        LimeLog.info("XR: automatically resuming the interrupted stream, attempt " + attempt
+                + "/" + TransportReconnectPolicy.MAX_ATTEMPTS + ", error " + errorCode);
+        scheduleXrSessionReconnect(attempt, TransportReconnectPolicy.delayMillis(attempt));
+        return true;
+    }
+
+    private void cancelAutomaticReconnect() {
+        automaticReconnectCancelled = true;
+        reconnectHandler.removeCallbacksAndMessages(null);
+        // A background/explicit exit before recreate() is an ordinary terminal stop. Once
+        // recreate() owns the lifecycle transition, preserve the replacement Activity instead.
+        if (automaticReconnectScheduled && !reconnectRecreationStarted) {
+            reconnectScheduled = false;
+        }
+    }
+
+    private void acknowledgeTransportRecoveryFrame() {
+        if ((!connecting && !connected) || reconnectScheduled || automaticReconnectCancelled
+                || isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (getIntent().hasExtra(TransportReconnectPolicy.EXTRA_ATTEMPT)) {
+            LimeLog.info("XR: automatic stream resume rendered its first frame");
+            // A reconnect that produces one frame and fails again is still the same recovery
+            // episode. Reset its budget only after sustained playback, not the handshake.
+            reconnectHandler.postDelayed(() -> {
+                if (connected && streamActivityStarted && !reconnectScheduled
+                        && !automaticReconnectCancelled && !isFinishing() && !isDestroyed()) {
+                    getIntent().removeExtra(TransportReconnectPolicy.EXTRA_ATTEMPT);
+                    LimeLog.info("XR: automatic stream resume is stable");
+                }
+            }, TransportReconnectPolicy.STABLE_PLAYBACK_MILLIS);
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -979,7 +1062,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Start the spinner
         spinner = SpinnerDialog.displayDialog(this, getResources().getString(R.string.conn_establishing_title),
-                getResources().getString(R.string.conn_establishing_msg), true);
+                getIntent().hasExtra(TransportReconnectPolicy.EXTRA_ATTEMPT)
+                        ? getString(R.string.xr_session_transport_reconnecting,
+                                getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 1),
+                                TransportReconnectPolicy.MAX_ATTEMPTS)
+                        : getString(R.string.conn_establishing_msg), true);
 
 
         Display currentDisplay = null;
@@ -1269,6 +1356,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     streamContainer.getDecodedSourceIdentityTracker());
         }
         decoderRenderer.setFirstFrameRenderedListener(() -> runOnUiThread(() -> {
+            acknowledgeTransportRecoveryFrame();
             if (streamContainer != null && streamContainer.getXrPresenter() != null) {
                 XrStreamPresenter presenter = streamContainer.getXrPresenter();
                 // Native video can render before connectionStarted(). RTSP feature negotiation is
@@ -1279,6 +1367,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     xrSessionSettingsController.setLiveVideoModeSupported(atomicV2);
                 }
                 presenter.setAtomicPresentationV2Supported(atomicV2);
+                presenter.setGameProviderV1Supported(refreshGameProviderV1Support());
                 refreshXrSessionSettingsModels();
                 presenter.onFirstVideoFrameRendered();
             }
@@ -2373,6 +2462,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onDestroy() {
+        cancelAutomaticReconnect();
         // Drop the display callback before teardown: it dereferences streamContainer.
         stopListeningForPanelRefreshRateChanges();
         // Native connection teardown must complete before codec/EGL/XR resources disappear.
@@ -2443,6 +2533,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onStart() {
         super.onStart();
+        streamActivityStarted = true;
         if (streamContainer != null && streamContainer.getXrPresenter() != null) {
             streamContainer.getXrPresenter().onHostActivityStarted();
         }
@@ -2450,6 +2541,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     protected void onStop() {
+        streamActivityStarted = false;
+        cancelAutomaticReconnect();
         if (streamContainer != null && streamContainer.getXrPresenter() != null) {
             streamContainer.getXrPresenter().onHostActivityStopped();
         }
@@ -4357,7 +4450,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (errorCode == 0 && portFlags != 0) {
             runOnUiThread(() -> {
                 if (connecting && spinner != null) {
-                    spinner.setMessage(getResources().getString(R.string.unlocking_or_starting));
+                    spinner.setMessage(getIntent().hasExtra(TransportReconnectPolicy.EXTRA_ATTEMPT)
+                            ? getString(R.string.xr_session_transport_reconnecting,
+                                    getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 1),
+                                    TransportReconnectPolicy.MAX_ATTEMPTS)
+                            : getString(R.string.unlocking_or_starting));
                 }
             });
             return true;
@@ -4374,6 +4471,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (spinner != null) {
                     spinner.dismiss();
                     spinner = null;
+                }
+
+                if (scheduleTransportReconnect(errorCode, true, portFlags)) {
+                    return;
                 }
 
                 if (!displayedFailureDialog) {
@@ -4452,6 +4553,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 // Ungrab input
                 setInputGrabState(false);
+
+                if (scheduleTransportReconnect(errorCode, false, portFlags)) {
+                    return;
+                }
 
                 if (!displayedFailureDialog) {
                     displayedFailureDialog = true;
@@ -4544,6 +4649,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void connectionStarted() {
         final boolean negotiatedAtomicPresentationV2 =
                 refreshAtomicPresentationV2Support();
+        final boolean negotiatedGameProviderV1 = refreshGameProviderV1Support();
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -4565,6 +4671,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (presenter != null) {
                     presenter.setAtomicPresentationV2Supported(
                             negotiatedAtomicPresentationV2);
+                    presenter.setGameProviderV1Supported(negotiatedGameProviderV1);
                 }
                 if (xrSessionSettingsController != null) {
                     xrSessionSettingsController.setLiveVideoModeSupported(
@@ -4763,6 +4870,26 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 (MoonBridge.getHostFeatureFlags()
                         & MoonBridge.LI_FF_ATOMIC_PRESENTATION_MODE_V2) != 0;
         return atomicPresentationV2Supported;
+    }
+
+    private boolean refreshGameProviderV1Support() {
+        gameProviderV1Supported = atomicPresentationV2Supported
+                && (MoonBridge.getHostFeatureFlags() & MoonBridge.LI_FF_GAME_PROVIDER_V1) != 0;
+        return gameProviderV1Supported;
+    }
+
+    @Override
+    public void onGameSourceStatus(int state, int provider, int presentationGeneration,
+                                    int sourceRevision, int sourceWidth, int sourceHeight,
+                                    int packedWidth, int packedHeight) {
+        runOnUiThread(() -> {
+            if (isConnectionUiActive() && streamContainer != null
+                    && streamContainer.getXrPresenter() != null) {
+                streamContainer.getXrPresenter().onGameSourceStatus(state, provider,
+                        presentationGeneration, sourceRevision,
+                        sourceWidth, sourceHeight, packedWidth, packedHeight);
+            }
+        });
     }
 
     @Override
@@ -5534,6 +5661,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     public void disconnect() {
+        cancelAutomaticReconnect();
         if (prefConfig.smartClipboardSync) {
             getClipboard(-1);
         }
@@ -5568,6 +5696,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return;
         }
         LimeLog.info("XR control bar: disconnect requested");
+        // Android can defer onStop until the library transition finishes. Start the existing
+        // asynchronous shutdown now so host display restoration does not wait for navigation.
+        cancelAutomaticReconnect();
+        stopConnection();
         // CLEAR_TOP recreates AppView with this PC's identity, including shortcut launches
         // that have no app-selection Activity beneath the stream.
         startActivity(createLibraryIntent(this, getIntent()));
@@ -5575,6 +5707,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void finishAndQuitSession() {
+        cancelAutomaticReconnect();
         quitOnStop = true;
         finish();
     }

@@ -55,4 +55,5 @@
     <dimen name="xr_control_standard">56dp</dimen>
     <dimen name="xr_control_primary">64dp</dimen>
     <dimen name="xr_control_choice">80dp</dimen>
+    <dimen name="xr_dock_reveal_min_width">320dp</dimen>
 </resources>

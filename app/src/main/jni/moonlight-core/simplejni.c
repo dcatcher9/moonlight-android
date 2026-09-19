@@ -21,6 +21,13 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendSetVideoModeV2(JNIEnv *env, jclas
                                                               jint sourceWidth, jint sourceHeight,
                                                               jint framerateX100,
                                                               jint totalWireBitrateKbps) {
+    // Validate before narrowing Java values to the wire types. Request IDs retain all 32 bits.
+    if (desiredMode < SBS_MODE_OFF || desiredMode > SBS_MODE_GAME_SBS ||
+            sourceWidth < 2 || sourceWidth > 16384 || (sourceWidth & 1) ||
+            sourceHeight < 2 || sourceHeight > 16384 || (sourceHeight & 1) ||
+            framerateX100 < 100 || framerateX100 > 100000 || totalWireBitrateKbps <= 0) {
+        return -1;
+    }
     return LiSendSetVideoModeV2((uint8_t) desiredMode, (uint32_t) requestId,
                                 (uint16_t) sourceWidth, (uint16_t) sourceHeight,
                                 (uint32_t) framerateX100,
