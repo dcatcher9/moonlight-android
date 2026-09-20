@@ -240,8 +240,8 @@ the revision you need, use the source-build steps below.
 
 ## Build from source
 
-Moonlight 3D uses the Gradle 9.7.1 wrapper, Android Gradle Plugin 9.3.2, Android SDK 37.0,
-JDK 17–25 (JDK 25 is the development standard), and Android NDK `27.3.13750724`.
+Moonlight 3D uses the Gradle 9.7.1 wrapper, Android Gradle Plugin 9.4.1, Android SDK 37.0,
+JDK 17–25 (JDK 25 is the development standard), and Android NDK r30 LTS (`30.0.16248370`).
 Set `JAVA_HOME` to a supported JDK before running Gradle. The app targets Android API 34, requires
 API 24 or later plus the XR spatial feature, and compiles Java sources at Java 11 compatibility.
 Declared versions live in [app/build.gradle](./app/build.gradle), [build.gradle](./build.gradle),
