@@ -210,18 +210,18 @@ dependencies {
     // These libraries declare minSdk 23/24, which is satisfied now that the app's
     // minSdk is 24, so no manifest overrideLibrary is needed. XR APIs are still only
     // exercised on actual XR devices (API 34+), gated by runtime device detection.
-    // NOTE: these are pre-1.0 (beta) APIs; pin the version and verify symbols against
+    // NOTE: these are pre-1.0 APIs; pin the version and verify symbols against
     // https://developer.android.com/jetpack/androidx/releases/xr-scenecore
     // IMPORTANT: the Jetpack XR modules version INDEPENDENTLY; keep the five below on one
-    // matched release (currently 1.0.0-beta02, 2026-08-12).
+    // matched release (currently 1.0.0-rc01, 2026-09-09).
     // (arcore-openxr/runtime-openxr are pinned explicitly so the arcore.openxr native lib
     // and its Kotlin classes stay on the same build — a mismatch there crashes the
     // JNI ViewCameraState construction.)
-    implementation 'androidx.xr.scenecore:scenecore:1.0.0-beta02'
-    implementation 'androidx.xr.runtime:runtime:1.0.0-beta02'
-    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-beta02'
-    implementation 'androidx.xr.arcore:arcore:1.0.0-beta02'
-    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-beta02'
+    implementation 'androidx.xr.scenecore:scenecore:1.0.0-rc01'
+    implementation 'androidx.xr.runtime:runtime:1.0.0-rc01'
+    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-rc01'
+    implementation 'androidx.xr.arcore:arcore:1.0.0-rc01'
+    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-rc01'
 
     // Unit test dependencies
     testImplementation 'junit:junit:4.13.2'

@@ -1532,7 +1532,7 @@ These rules come from Galaxy XR observations across SceneCore alpha16 through be
 ## Jetpack XR dependencies and minification
 
 SceneCore, runtime, runtime-openxr, ARCore, and arcore-openxr are pinned together to
-`1.0.0-beta02` (2026-08-12; the alpha16 DP4 matrix and beta01 preceded it). Keep the five artifacts
+`1.0.0-rc01` (2026-09-09; beta02 and the earlier DP4/beta releases preceded it). Keep the five artifacts
 aligned; mixed Java and native OpenXR versions can crash `ViewCameraState` construction.
 
 Debug minification remains disabled. R8 keep rules avoid several reflection/JNI failures, but
