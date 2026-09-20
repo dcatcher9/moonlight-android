@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 import android.content.Intent;
 import android.os.Looper;
 import android.view.Surface;
+import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
@@ -184,6 +185,62 @@ public final class XrGameStereoIntegrationTest {
         presenter.onConnectionStopping();
         ready(11, 4);
         assertEquals(2, ShadowMoonBridge.getSetVideoModeV2CallCount());
+    }
+
+    @Test
+    public void gameDumpUsesExistingCommandForMissingDepthButNotDuringTransitions() throws Exception {
+        View dump = createDumpButton();
+        assertFalse(dump.isEnabled());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(0, ShadowMoonBridge.getSbsDebugDumpCallCount());
+        bootstrap();
+        assertTrue(dump.isEnabled());
+        assertFalse(source.isReady());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(1, ShadowMoonBridge.getSbsDebugDumpCallCount());
+
+        ready(10, 1);
+        assertFalse(dump.isEnabled());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(1, ShadowMoonBridge.getSbsDebugDumpCallCount());
+        ack(MoonBridge.VIDEO_MODE_ACK_APPLIED, MoonBridge.SBS_MODE_GAME_SBS, 11, 3840, 1080);
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(1, ShadowMoonBridge.getSbsDebugDumpCallCount());
+        frame(3840, 1080);
+        assertTrue(dump.isEnabled());
+        assertFalse(source.isReady());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(2, ShadowMoonBridge.getSbsDebugDumpCallCount());
+
+        presenter.onConnectionStopping();
+        assertFalse(dump.isEnabled());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(2, ShadowMoonBridge.getSbsDebugDumpCallCount());
+    }
+
+    @Test
+    public void gameDumpRequiresNegotiatedProviderAndAtomicPresentation() throws Exception {
+        View dump = createDumpButton();
+        bootstrap();
+        presenter.setGameProviderV1Supported(false);
+        // A stale Host AI phase can never authorize a Game dump.
+        presenter.onDepthStatus(2);
+        assertFalse(dump.isEnabled());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(0, ShadowMoonBridge.getSbsDebugDumpCallCount());
+        presenter.setGameProviderV1Supported(true);
+        assertTrue(dump.isEnabled());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(1, ShadowMoonBridge.getSbsDebugDumpCallCount());
+
+        presenter.setAtomicPresentationV2Supported(false);
+        presenter.setGameProviderV1Supported(true);
+        assertFalse(dump.isEnabled());
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(1, ShadowMoonBridge.getSbsDebugDumpCallCount());
+        presenter.setHostControlExtensionsSupported(false);
+        invoke("requestHostDebugDump", new Class<?>[0]);
+        assertEquals(1, ShadowMoonBridge.getSbsDebugDumpCallCount());
     }
 
     @Test
@@ -542,6 +599,19 @@ public final class XrGameStereoIntegrationTest {
         assertEquals(1, decoderCompletions);
         frame(1920, 1080);
         assertEquals(SurfaceEntity.StereoMode.MONO, stereo);
+    }
+
+    private View createDumpButton() throws Exception {
+        Class<?> itemType = Class.forName("com.limelight.ui.XrStreamPresenter$BarItem");
+        Constructor<?> constructor = itemType.getDeclaredConstructor(
+                XrStreamPresenter.class, String.class, int.class, PresentationMode.class);
+        constructor.setAccessible(true);
+        Object item = constructor.newInstance(presenter, "Dump 3D", R.drawable.ic_xr_dump, null);
+        View button = new View(game);
+        ReflectionHelpers.setField(item, "tapTarget", button);
+        ReflectionHelpers.setField(presenter, "dumpItem", item);
+        invoke("updateHostDebugDumpAvailability", new Class<?>[0]);
+        return button;
     }
 
     private void reconnectAndRecoverStereo(int previousRequests) throws Exception {

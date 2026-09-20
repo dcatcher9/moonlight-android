@@ -1331,6 +1331,7 @@ public class XrStreamPresenter {
         } else {
             schedulePanelRateReconcile();
         }
+        updateHostDebugDumpAvailability();
     }
 
     /** Game transport is opt-in and requires the acknowledged presentation protocol. */
@@ -1342,6 +1343,7 @@ public class XrStreamPresenter {
         gameProviderV1Supported = enabled;
         invalidateGameSourceProof();
         updateGameSourceViews();
+        updateHostDebugDumpAvailability();
         scheduleGameSourceReconcile();
     }
 
@@ -2524,19 +2526,19 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Apollo can produce a 3D diagnostic dump only while its own depth pipeline owns the stream.
-     * Raw SBS is already-packed application content, while Normal and Client SBS have no host
+     * Host AI needs a ready depth pipeline; Game diagnostics also cover waiting/missing depth.
+     * Movie is already-packed application content, while Normal and Client AI have no host
      * depth result to capture. Transitions are excluded so one tap cannot be attributed to two
      * different stream geometries or pipeline generations.
      */
     static boolean isHostDebugDumpAvailable(
             PresentationMode mode, boolean streamReady, boolean controlsEnabled,
-            boolean transitionInProgress, boolean depthReady) {
-        return mode == PresentationMode.HOST_SBS_AI
+            boolean transitionInProgress, boolean hostDepthReady, boolean gameProviderSupported) {
+        return ((mode == PresentationMode.HOST_SBS_AI && hostDepthReady)
+                || (mode == PresentationMode.GAME_3D && gameProviderSupported))
                 && streamReady
                 && controlsEnabled
-                && !transitionInProgress
-                && depthReady;
+                && !transitionInProgress;
     }
 
     private void onCinemaTileTapped() {
@@ -4240,7 +4242,7 @@ public class XrStreamPresenter {
      */
     public void onDepthStatus(int phase) {
         // Preserve an early ready/failure push even if the panel hierarchy has not been created
-        // yet. Dump 3D requires an affirmative phase-2 ownership signal, not merely "not busy".
+        // yet. Host AI dumps require an affirmative phase-2 signal, not merely "not busy".
         depthStatusPhase = phase;
         if (depthStatusPanel == null) {
             return;
@@ -8151,7 +8153,7 @@ public class XrStreamPresenter {
         return controlTransportOpen() && hostControlExtensionsSupported
                 && isHostDebugDumpAvailable(
                 currentPresenterMode, streamPresentationReady, sessionControlsEnabled,
-                transitionInProgress, depthStatusPhase == 2);
+                transitionInProgress, depthStatusPhase == 2, gameProviderV1Supported);
     }
 
     private void updateHostDebugDumpAvailability() {
@@ -8160,18 +8162,16 @@ public class XrStreamPresenter {
         }
     }
 
-    /** Client "Dump 3D" button: ask the host to dump one SBS debug frame (2D source / raw depth /
-     *  processed depth / SBS result) to its configured debug dir, for offline diagnosis of the
-     *  host reprojection. */
+    /** Ask the host to capture its current Host AI or Game 3D diagnostic bundle. */
     private void requestHostDebugDump() {
         // Keep the protocol boundary guarded even if a stale accessibility or controller event
         // reaches this listener after the tile was disabled during a mode transition.
         if (!hostDebugDumpAvailable()) {
-            LimeLog.warning("XR: ignoring host SBS debug dump outside stable Host SBS AI");
+            LimeLog.warning("XR: ignoring 3D debug dump outside a supported, stable presentation");
             updateHostDebugDumpAvailability();
             return;
         }
-        LimeLog.info("XR: requesting host SBS debug frame dump");
+        LimeLog.info("XR: requesting 3D debug frame dump for " + currentPresenterMode);
         sendHostDebugDumpControl();
     }
 

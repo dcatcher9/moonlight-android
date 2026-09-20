@@ -8,12 +8,12 @@ import org.junit.Test;
 
 public final class XrStreamPresenterDebugDumpTest {
     @Test
-    public void onlyHostSbsAiOwnsAHostDepthDump() {
+    public void onlyHostAiAndGameSupportHostDumps() {
         for (PresentationMode mode
                 : PresentationMode.values()) {
-            assertEquals(mode == PresentationMode.HOST_SBS_AI,
+            assertEquals(mode == PresentationMode.HOST_SBS_AI || mode == PresentationMode.GAME_3D,
                     XrStreamPresenter.isHostDebugDumpAvailable(
-                            mode, true, true, false, true));
+                            mode, true, true, false, true, true));
         }
     }
 
@@ -23,15 +23,30 @@ public final class XrStreamPresenterDebugDumpTest {
                 PresentationMode.HOST_SBS_AI;
 
         assertTrue(XrStreamPresenter.isHostDebugDumpAvailable(
-                host, true, true, false, true));
+                host, true, true, false, true, false));
         assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
-                host, false, true, false, true));
+                host, false, true, false, true, false));
         assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
-                host, true, false, false, true));
+                host, true, false, false, true, false));
         assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
-                host, true, true, true, true));
+                host, true, true, true, true, false));
         assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
-                host, true, true, false, false));
+                host, true, true, false, false, true));
+    }
+
+    @Test
+    public void gameDumpNeedsNegotiatedSupportAndStableStreamButNotAiDepth() {
+        PresentationMode game = PresentationMode.GAME_3D;
+        assertTrue(XrStreamPresenter.isHostDebugDumpAvailable(
+                game, true, true, false, false, true));
+        assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
+                game, true, true, false, true, false));
+        assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
+                game, false, true, false, false, true));
+        assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
+                game, true, false, false, false, true));
+        assertFalse(XrStreamPresenter.isHostDebugDumpAvailable(
+                game, true, true, true, false, true));
     }
 
     @Test

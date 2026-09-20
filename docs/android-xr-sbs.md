@@ -1345,6 +1345,11 @@ Client AI describes processing on this device. These are separate buttons with s
 quality, not a combined AI tile with a second processor-selection step.
 Debug builds append **Dump 3D** immediately after **Disconnect**. All tiles have the same width;
 the panel width follows the actual button count, with no secondary-action expander.
+Dump is available during a stable connected Host AI presentation after depth reports ready, or
+in Game 3D when GameProviderV1 and atomic presentation v2 are negotiated. Game dump remains
+available while its source is missing or the stream is mono, so those failures can be diagnosed.
+It uses the existing no-payload host dump command; it is disabled during transitions, on
+unsupported hosts, and in Movie 3D, Client AI 3D, and 2D.
 Disconnect stops streaming and returns directly to the current PC's application library without
 an intermediate machine-selection step or `/cancel`. The explicit dock action cancels reconnect
 and starts the existing asynchronous connection shutdown before navigating, so Android's activity
