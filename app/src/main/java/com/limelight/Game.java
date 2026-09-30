@@ -86,12 +86,14 @@ import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
 import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.PersistableBundle;
+import android.os.PowerManager;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Rational;
@@ -210,7 +212,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean automaticReconnectCancelled;
     private boolean automaticReconnectScheduled;
     private boolean reconnectRecreationStarted;
+    // The presenter needs a finite duration; recovery replaces this message when the network returns.
+    private static final long NETWORK_WAIT_MESSAGE_MS = 10 * 60_000L;
+    private Intent scheduledReconnectIntent;
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
+    // No default network exists; a stream transport cannot survive and recovery must wait.
+    private boolean streamNetworkLost;
+    private ConnectivityManager.NetworkCallback streamNetworkCallback;
+    // An automatic recovery step is waiting for the network or the headset to return.
+    private boolean recoveryRestartHeld;
+    // Device sleep (headset removed) holds a pending recovery until onStart instead of ending it.
+    private boolean recoveryHeldForSleep;
+    // Sleep stopped this recovery attempt before it rendered; onStart schedules the next attempt.
+    private boolean recoveryAttemptInterruptedBySleep;
+    private boolean recoveryAttemptRendered;
 
     private int displayWidth;
     private int displayHeight;
@@ -868,46 +883,73 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         : getString(R.string.xr_session_reconnecting),
                 Toast.LENGTH_SHORT);
 
+        scheduledReconnectIntent = reconnectIntent;
         stopConnection();
         runAfterConnectionStop(() -> {
-            if (!canCompleteScheduledReconnect()) {
+            if (holdRecoveryRestart() || !canCompleteScheduledReconnect()) {
                 return;
             }
-            Runnable restart = () -> {
-                if (!canCompleteScheduledReconnect()) {
-                    return;
-                }
-                // Game is singleTask, so self-launching would deliver onNewIntent() to this
-                // instance and a subsequent finish would simply exit the stream. Recreate in
-                // place with the updated intent after native/Surface teardown instead.
-                reconnectRecreationStarted = true;
-                setIntent(reconnectIntent);
-                recreate();
-                overridePendingTransition(0, 0);
-            };
-            Runnable releaseAndRestart = () -> {
-                if (!canCompleteScheduledReconnect()) {
-                    return;
-                }
-                if (streamContainer != null && !streamContainerReleasedForReconnect) {
-                    streamContainerReleasedForReconnect = true;
-                    streamContainer.onDestroy(restart);
-                }
-                else {
-                    restart.run();
-                }
-            };
             if (delayMillis > 0) {
-                reconnectHandler.postDelayed(releaseAndRestart, delayMillis);
+                reconnectHandler.postDelayed(this::continueScheduledReconnect, delayMillis);
             } else {
-                releaseAndRestart.run();
+                continueScheduledReconnect();
             }
         });
+    }
+
+    /**
+     * Advances a scheduled reconnect after native stop: release the stream surfaces, then
+     * recreate. An automatic recovery holds between these steps while the network or headset
+     * is away; re-entering after a release goes straight to recreation.
+     */
+    private void continueScheduledReconnect() {
+        if (holdRecoveryRestart() || !canCompleteScheduledReconnect()) {
+            return;
+        }
+        if (streamContainer != null && !streamContainerReleasedForReconnect) {
+            streamContainerReleasedForReconnect = true;
+            streamContainer.onDestroy(this::continueScheduledReconnect);
+            return;
+        }
+        // Game is singleTask, so self-launching would deliver onNewIntent() to this
+        // instance and a subsequent finish would simply exit the stream. Recreate in
+        // place with the updated intent after native/Surface teardown instead.
+        reconnectRecreationStarted = true;
+        setIntent(scheduledReconnectIntent);
+        recreate();
+        overridePendingTransition(0, 0);
     }
 
     private boolean canCompleteScheduledReconnect() {
         return !isFinishing() && !isDestroyed() && (!automaticReconnectScheduled
                 || (streamActivityStarted && !automaticReconnectCancelled));
+    }
+
+    /** Returns true when an automatic recovery must wait for the network or the headset. */
+    private boolean holdRecoveryRestart() {
+        if (!automaticReconnectScheduled || automaticReconnectCancelled
+                || isFinishing() || isDestroyed()) {
+            return false;
+        }
+        boolean waitForHeadset = recoveryHeldForSleep && !streamActivityStarted;
+        if (!streamNetworkLost && !waitForHeadset) {
+            return false;
+        }
+        if (!recoveryRestartHeld && streamNetworkLost) {
+            LimeLog.info("XR: stream recovery is waiting for the network to return");
+            showCenteredStreamMessage(getString(R.string.xr_session_network_lost),
+                    NETWORK_WAIT_MESSAGE_MS);
+        }
+        recoveryRestartHeld = true;
+        return true;
+    }
+
+    private void releaseHeldRecoveryRestart() {
+        if (!recoveryRestartHeld) {
+            return;
+        }
+        recoveryRestartHeld = false;
+        continueScheduledReconnect();
     }
 
     private boolean scheduleTransportReconnect(int errorCode, boolean startupFailure,
@@ -923,12 +965,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         int attempt = previousAttempts + 1;
         LimeLog.info("XR: automatically resuming the interrupted stream, attempt " + attempt
                 + "/" + TransportReconnectPolicy.MAX_ATTEMPTS + ", error " + errorCode);
-        scheduleXrSessionReconnect(attempt, TransportReconnectPolicy.delayMillis(attempt));
+        // Without a network the restart holds until one returns; that wait replaces the backoff.
+        scheduleXrSessionReconnect(attempt,
+                streamNetworkLost ? 0 : TransportReconnectPolicy.delayMillis(attempt));
         return true;
     }
 
     private void cancelAutomaticReconnect() {
         automaticReconnectCancelled = true;
+        recoveryRestartHeld = false;
+        recoveryHeldForSleep = false;
         reconnectHandler.removeCallbacksAndMessages(null);
         // A background/explicit exit before recreate() is an ordinary terminal stop. Once
         // recreate() owns the lifecycle transition, preserve the replacement Activity instead.
@@ -942,6 +988,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 || isFinishing() || isDestroyed()) {
             return;
         }
+        recoveryAttemptRendered = true;
         if (getIntent().hasExtra(TransportReconnectPolicy.EXTRA_ATTEMPT)) {
             LimeLog.info("XR: automatic stream resume rendered its first frame");
             // A reconnect that produces one frame and fails again is still the same recovery
@@ -954,6 +1001,129 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             }, TransportReconnectPolicy.STABLE_PLAYBACK_MILLIS);
         }
+    }
+
+    private void registerStreamNetworkCallback(ConnectivityManager connMgr) {
+        streamNetworkLost = connMgr.getActiveNetwork() == null;
+        streamNetworkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                runOnUiThread(Game.this::onStreamNetworkAvailable);
+            }
+
+            @Override
+            public void onLost(Network network) {
+                runOnUiThread(Game.this::onStreamNetworkLost);
+            }
+        };
+        try {
+            connMgr.registerDefaultNetworkCallback(streamNetworkCallback);
+        } catch (RuntimeException e) {
+            // The platform caps callbacks per app. Recovery then relies on transport timeouts.
+            LimeLog.warning("Stream network monitoring unavailable: " + e.getMessage());
+            streamNetworkCallback = null;
+            streamNetworkLost = false;
+        }
+    }
+
+    private void unregisterStreamNetworkCallback() {
+        if (streamNetworkCallback == null) {
+            return;
+        }
+        ConnectivityManager connMgr =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        try {
+            connMgr.unregisterNetworkCallback(streamNetworkCallback);
+        } catch (IllegalArgumentException ignored) {
+            // Registration failed or already ended.
+        }
+        streamNetworkCallback = null;
+    }
+
+    /**
+     * A default-network loss ends the stalled transport now rather than after the control
+     * stream's ten-second timeout; the host drops a silent peer sooner than that anyway.
+     */
+    private void onStreamNetworkLost() {
+        if (streamNetworkLost) {
+            return;
+        }
+        streamNetworkLost = true;
+        if (isFinishing() || isDestroyed() || !connected || reconnectScheduled) {
+            // A starting attempt fails through its own HTTP/RTSP error, and a scheduled
+            // recovery holds its next step until a network returns.
+            return;
+        }
+        LimeLog.info("XR: stream network lost; ending the stalled transport");
+        // Report it exactly as moonlight-common-c reports a lost control stream.
+        connectionTerminated(-1);
+    }
+
+    private void onStreamNetworkAvailable() {
+        if (!streamNetworkLost) {
+            // Registration reports the current default network, and a switch between two
+            // networks never lost connectivity.
+            return;
+        }
+        streamNetworkLost = false;
+        LimeLog.info("XR: stream network returned");
+        releaseHeldRecoveryRestart();
+    }
+
+    /** Device sleep during an unfinished recovery holds it; ordinary backgrounding ends it. */
+    private boolean shouldHoldRecoveryForSleep() {
+        if (isFinishing() || isDestroyed() || automaticReconnectCancelled || quitOnStop
+                || reconnectRecreationStarted || displayedFailureDialog) {
+            return false;
+        }
+        boolean recoveryPending = reconnectScheduled
+                ? automaticReconnectScheduled
+                : getIntent().hasExtra(TransportReconnectPolicy.EXTRA_ATTEMPT)
+                        && !recoveryAttemptRendered;
+        return recoveryPending && !isDeviceInteractive();
+    }
+
+    boolean isDeviceInteractive() {
+        PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        return powerManager == null || powerManager.isInteractive();
+    }
+
+    private void holdRecoveryForSleep() {
+        recoveryHeldForSleep = true;
+        if (!reconnectScheduled) {
+            // This attempt had not rendered. Stop it and keep a late Surface from starting
+            // another while asleep; onStart schedules the next attempt through recreate().
+            recoveryAttemptInterruptedBySleep = true;
+            attemptedConnection = true;
+            stopConnection();
+        }
+        // A restart this Activity already scheduled holds itself at its next step.
+        LimeLog.info("XR: device asleep during stream recovery; holding it until the headset is back on");
+    }
+
+    private void resumeRecoveryHeldForSleep() {
+        if (!recoveryHeldForSleep) {
+            return;
+        }
+        recoveryHeldForSleep = false;
+        LimeLog.info("XR: headset is back on; continuing the interrupted stream recovery");
+        if (!recoveryAttemptInterruptedBySleep) {
+            releaseHeldRecoveryRestart();
+            return;
+        }
+        recoveryAttemptInterruptedBySleep = false;
+        // The host remains the authority: an expired session fails the Resume request.
+        int previousAttempts = getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0);
+        if (!TransportReconnectPolicy.canRetry(getHostSessionLaunchRequest(getIntent()),
+                previousAttempts, -1, false, 0)) {
+            LimeLog.info("XR: stream recovery budget was exhausted before the headset returned");
+            finish();
+            return;
+        }
+        int attempt = previousAttempts + 1;
+        LimeLog.info("XR: automatically resuming the interrupted stream, attempt " + attempt
+                + "/" + TransportReconnectPolicy.MAX_ATTEMPTS + ", after device sleep");
+        scheduleXrSessionReconnect(attempt, 0);
     }
 
     @SuppressWarnings("deprecation")
@@ -1243,6 +1413,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (isMetered) {
             displayTransientMessage(getResources().getString(R.string.conn_metered));
         }
+        registerStreamNetworkCallback(connMgr);
 
         // Make sure Wi-Fi is fully powered up
         WifiManager wifiMgr = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -2463,6 +2634,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onDestroy() {
         cancelAutomaticReconnect();
+        unregisterStreamNetworkCallback();
         // Drop the display callback before teardown: it dereferences streamContainer.
         stopListeningForPanelRefreshRateChanges();
         // Native connection teardown must complete before codec/EGL/XR resources disappear.
@@ -2537,12 +2709,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (streamContainer != null && streamContainer.getXrPresenter() != null) {
             streamContainer.getXrPresenter().onHostActivityStarted();
         }
+        resumeRecoveryHeldForSleep();
     }
 
     @Override
     protected void onStop() {
         streamActivityStarted = false;
-        cancelAutomaticReconnect();
+        // Removing the headset sleeps the device mid-recovery; keep this Activity so the
+        // recovery continues when it is worn again instead of dropping to the library.
+        boolean holdForSleep = shouldHoldRecoveryForSleep();
+        if (holdForSleep) {
+            holdRecoveryForSleep();
+        } else {
+            cancelAutomaticReconnect();
+        }
         if (streamContainer != null && streamContainer.getXrPresenter() != null) {
             streamContainer.getXrPresenter().onHostActivityStopped();
         }
@@ -2560,6 +2740,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         if(keyBoardLayoutController!=null){
             keyBoardLayoutController.hide();
+        }
+
+        if (holdForSleep) {
+            return;
         }
 
         // applyXrSessionSettingsAndReconnect() has already stopped the native connection and
@@ -4761,14 +4945,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void showCenteredStreamMessage(CharSequence message, int toastDuration) {
+        showCenteredStreamMessage(message, toastDuration == Toast.LENGTH_LONG ? 3_500L : 2_000L);
+    }
+
+    private void showCenteredStreamMessage(CharSequence message, long durationMs) {
         XrStreamPresenter presenter = streamContainer != null
                 ? streamContainer.getXrPresenter() : null;
-        long durationMs = toastDuration == Toast.LENGTH_LONG ? 3_500L : 2_000L;
         if (presenter != null && presenter.showTransientMessage(message, durationMs)) {
             return;
         }
         // Session startup can report an error before SceneCore creates its message panel.
-        Toast.makeText(this, message, toastDuration).show();
+        Toast.makeText(this, message,
+                durationMs > 2_000L ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
     }
 
     @Override

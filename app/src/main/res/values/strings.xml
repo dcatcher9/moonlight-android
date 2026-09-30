@@ -917,6 +917,7 @@
     <string name="xr_session_stale_settings">The PC session changed. Reopen its settings and try again.</string>
     <string name="xr_session_reconnecting">Applying session settings and reconnecting…</string>
     <string name="xr_session_transport_reconnecting">Connection lost. Reconnecting… (%1$d/%2$d)</string>
+    <string name="xr_session_network_lost">Wi-Fi disconnected. Reconnecting when it returns…</string>
     <string name="xr_setting_source_global">Global</string>
     <string name="xr_setting_source_session">This session</string>
     <string name="xr_setting_pending_active">Active: %1$s &#x00B7; Reconnect required</string>

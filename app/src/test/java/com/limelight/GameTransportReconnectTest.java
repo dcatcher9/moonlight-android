@@ -2,6 +2,8 @@ package com.limelight;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import static org.robolectric.Shadows.shadowOf;
 
@@ -46,12 +48,15 @@ public final class GameTransportReconnectTest {
     // only AndroidX's uninitialized base lifecycle is replaced, like the native platform shadows.
     @Implements(AppCompatActivity.class)
     public static final class ShadowAppCompatStop extends org.robolectric.shadows.ShadowActivity {
+        @Implementation protected void onStart() { }
         @Implementation protected void onStop() { }
     }
 
     public static final class TestGame extends Game {
         Runnable nativeStopCompleted;
         int recreationCount;
+        boolean interactive = true;
+        @Override boolean isDeviceInteractive() { return interactive; }
         @Override public void runAfterConnectionStop(Runnable callback) {
             nativeStopCompleted = callback;
         }
@@ -216,6 +221,127 @@ public final class GameTransportReconnectTest {
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(8));
         surfaceReleased.run();
         assertEquals(5, game.getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0));
+    }
+
+    @Test public void networkLossEndsTransportAndHoldsRecoveryUntilNetworkReturns() {
+        networkLost();
+        assertFalse(game.connected);
+        verify(presenter).onConnectionStopping();
+        game.nativeStopCompleted.run();
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30));
+        assertNull(surfaceReleased);
+        verify(presenter).showTransientMessage(
+                eq(game.getString(R.string.xr_session_network_lost)), anyLong());
+
+        networkAvailable();
+        assertNotNull(surfaceReleased);
+        surfaceReleased.run();
+        assertEquals(1, game.recreationCount);
+        assertEquals(1, game.getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0));
+        assertEquals(HostSessionLaunchRequest.Kind.RESUME,
+                Game.getHostSessionLaunchRequest(game.getIntent()).kind);
+    }
+
+    @Test public void currentNetworkReportWithoutLossLeavesStreamRunning() {
+        networkAvailable();
+        assertTrue(game.connected);
+        assertNull(game.nativeStopCompleted);
+    }
+
+    @Test public void networkLossDuringBackoffHoldsUntilNetworkReturns() {
+        startRecovery();
+        game.nativeStopCompleted.run();
+        networkLost();
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30));
+        assertNull(surfaceReleased);
+        networkAvailable();
+        assertNotNull(surfaceReleased);
+    }
+
+    @Test public void disconnectWhileWaitingForNetworkCannotRecreate() {
+        networkLost();
+        game.nativeStopCompleted.run();
+        game.disconnect();
+        networkAvailable();
+        assertTrue(game.isFinishing());
+        assertNull(surfaceReleased);
+        assertEquals(0, game.recreationCount);
+    }
+
+    @Test public void sleepDuringBackoffHoldsRecoveryUntilHeadsetReturns() {
+        startRecovery();
+        game.nativeStopCompleted.run();
+        game.interactive = false;
+        game.onStop();
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(30));
+        assertFalse(game.isFinishing());
+        assertNull(surfaceReleased);
+
+        game.interactive = true;
+        game.onStart();
+        assertNotNull(surfaceReleased);
+        surfaceReleased.run();
+        assertEquals(1, game.recreationCount);
+        assertEquals(1, game.getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0));
+    }
+
+    @Test public void sleepInterruptsUnrenderedAttemptAndWakeSchedulesTheNextOne() {
+        game.connected = false;
+        ReflectionHelpers.setField(game, "connecting", true);
+        game.getIntent().putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 1);
+        game.interactive = false;
+        game.onStop();
+        assertFalse(game.isFinishing());
+        assertFalse((Boolean) ReflectionHelpers.getField(game, "connecting"));
+        verify(presenter).onConnectionStopping();
+        assertNull(game.nativeStopCompleted);
+
+        game.interactive = true;
+        game.onStart();
+        assertNotNull(game.nativeStopCompleted);
+        game.nativeStopCompleted.run();
+        assertNotNull(surfaceReleased);
+        surfaceReleased.run();
+        assertEquals(1, game.recreationCount);
+        assertEquals(2, game.getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0));
+        assertEquals("exact-token", Game.getHostSessionLaunchRequest(game.getIntent()).expectedToken);
+    }
+
+    @Test public void sleepAfterExhaustedBudgetReturnsToLibraryOnWake() {
+        game.connected = false;
+        ReflectionHelpers.setField(game, "connecting", true);
+        game.getIntent().putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT,
+                TransportReconnectPolicy.MAX_ATTEMPTS);
+        game.interactive = false;
+        game.onStop();
+        assertFalse(game.isFinishing());
+        game.onStart();
+        assertTrue(game.isFinishing());
+        assertEquals(0, game.recreationCount);
+    }
+
+    @Test public void sleepAfterRecoveredFrameEndsStreamLikeOrdinaryStop() {
+        game.getIntent().putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 1);
+        ReflectionHelpers.callInstanceMethod(game, "acknowledgeTransportRecoveryFrame");
+        game.interactive = false;
+        game.onStop();
+        assertTrue(game.isFinishing());
+    }
+
+    @Test public void sleepDuringHealthyStreamEndsStreamLikeOrdinaryStop() {
+        game.interactive = false;
+        game.onStop();
+        assertTrue(game.isFinishing());
+    }
+
+    private void networkLost() {
+        ReflectionHelpers.callInstanceMethod(game, "onStreamNetworkLost");
+        shadowOf(Looper.getMainLooper()).idle();
+    }
+
+    private void networkAvailable() {
+        ReflectionHelpers.callInstanceMethod(game, "onStreamNetworkAvailable");
+        shadowOf(Looper.getMainLooper()).idle();
     }
 
     private void startRecovery() {

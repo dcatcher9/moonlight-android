@@ -971,9 +971,21 @@ frame followed by ten seconds of connected foreground playback. This is a retry 
 decision that the host session has expired; fresh serverinfo remains authoritative. A changed or
 ended session, authentication refusal, graceful host termination, protected content, or decoder/
 conversion failure remains terminal. The dock's Disconnect action and the startup spinner's Cancel
-remain available. Explicit exit, backgrounding, or destruction cancels pending recovery; lifecycle
-events belonging to the actual recreate operation cannot finish its replacement. No internet
-validation requirement is imposed on local-network hosts.
+remain available. Explicit exit, backgrounding while the device is awake, or destruction cancels
+pending recovery; lifecycle events belonging to the actual recreate operation cannot finish its
+replacement. No internet validation requirement is imposed on local-network hosts.
+
+Loss of the device's default network is that same transport loss, reported at once instead of after
+the ten-second control timeout; Apollo drops a silent peer sooner, so waiting cannot save the stream.
+A recovery scheduled without a network skips its backoff, and any recovery holds before surface
+release and recreation while no default network exists, showing that it is waiting for Wi-Fi; the
+returning network releases it immediately instead of spending attempts offline.
+Device sleep (removing the headset) while recovery is scheduled, or before a recovery attempt renders
+its first frame, keeps the stream Activity instead of cancelling. An interrupted attempt is stopped;
+the next `onStart` continues the held restart or schedules the next attempt within the same budget.
+Neither hold is a timer: the resumed request still meets fresh serverinfo, and an expired session
+ends through the Resume check. Sleep during an established or recovered stream remains an ordinary
+stop.
 
 The host's current running-app identity must travel explicitly through the Game intent; elapsed
 client time is not a resume decision.
