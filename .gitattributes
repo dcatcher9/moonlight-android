@@ -1,0 +1,2 @@
+# Keep the build-time native overlay portable across Windows checkouts.
+app/src/main/jni/moonlight-core/stream-gamma-core.patch text eol=lf
