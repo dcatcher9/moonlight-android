@@ -42,6 +42,9 @@ public interface NvConnectionListener {
                                     int sourceRevision, int sourceWidth, int sourceHeight,
                                     int packedWidth, int packedHeight) {}
 
+    default void streamGammaAck(int status, int requestedMode, int appliedMode,
+                               int requestId, int generation, float whiteNits) {}
+
     /**
      * Called after the host accepts launch/resume. Token-capable Apollo-3D hosts return the bound
      * session token; standard Sunshine/Apollo hosts report {@code hostSessionIdSupported=false}

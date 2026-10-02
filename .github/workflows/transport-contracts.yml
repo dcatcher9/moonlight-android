@@ -19,6 +19,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev
+      - name: Apply versioned stream gamma core extension
+        run: git -C app/src/main/jni/moonlight-core/moonlight-common-c apply "$GITHUB_WORKSPACE/app/src/main/jni/moonlight-core/stream-gamma-core.patch"
+      - name: Verify stream gamma control serialization and strict ACK parsing
+        shell: bash
+        run: |
+          core=app/src/main/jni/moonlight-core/moonlight-common-c
+          cc -std=c11 -O2 -flto -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -DLC_DEBUG -DHAS_SOCKLEN_T -D_POSIX_C_SOURCE=200809L \
+            -I "$core/src" -I "$core/reedsolomon" -I "$core/enet/include" \
+            app/src/test/native/StreamGammaControlTest.c "$core/src/ByteBuffer.c" \
+            -pthread -o "$RUNNER_TEMP/stream-gamma-control-test"
+          "$RUNNER_TEMP/stream-gamma-control-test"
       - name: Compile packet negotiation and actual FEC recovery test
         shell: bash
         run: |

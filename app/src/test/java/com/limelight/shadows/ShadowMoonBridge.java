@@ -48,6 +48,15 @@ public class ShadowMoonBridge {
     private static int lastV2RequestId;
     private static int lastV2SourceWidth;
     private static int lastV2SourceHeight;
+    private static boolean streamGammaSupported;
+    private static int streamGammaResult = -1;
+    private static int streamGammaCallCount;
+    private static int lastStreamGammaMode;
+    private static int lastStreamGammaRequestId;
+
+    public static void setStreamGammaResult(int result) { streamGammaResult = result; streamGammaSupported = true; }
+    public static int getStreamGammaCallCount() { return streamGammaCallCount; }
+    public static int[] getLastStreamGammaRequest() { return new int[] {lastStreamGammaMode, lastStreamGammaRequestId}; }
 
     public static void setHostSbsTelemetryResults(int... results) {
         hostSbsTelemetryResults.clear();
@@ -126,6 +135,17 @@ public class ShadowMoonBridge {
     }
 
     @Implementation
+    public static boolean isStreamGammaSupported() { return streamGammaSupported; }
+
+    @Implementation
+    public static int sendStreamGamma(int mode, int requestId) {
+        streamGammaCallCount++;
+        lastStreamGammaMode = mode;
+        lastStreamGammaRequestId = requestId;
+        return streamGammaResult;
+    }
+
+    @Implementation
     public static void sendSbsDebugDump() {
         sbsDebugDumpCallCount++;
     }
@@ -142,6 +162,11 @@ public class ShadowMoonBridge {
         lastV2RequestId = 0;
         lastV2SourceWidth = 0;
         lastV2SourceHeight = 0;
+        streamGammaSupported = false;
+        streamGammaResult = -1;
+        streamGammaCallCount = 0;
+        lastStreamGammaMode = 0;
+        lastStreamGammaRequestId = 0;
     }
 
     // stubbed methods used by code but not relevant to unit tests

@@ -64,6 +64,8 @@ public class NvConnection {
     private HttpCallScope startupHttpCalls = new HttpCallScope();
     private HostSessionLaunchRequest launchRequest;
 
+    public boolean isStreamGammaV1Supported() { return context.streamGammaV1Supported; }
+
     public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert)
     {
         this.appContext = appContext;
@@ -341,6 +343,8 @@ public class NvConnection {
         context.virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(
                 serverInfo, serverInfoResponse.authenticated);
         context.gameProviderV1Supported = NvHTTP.isGameProviderV1Supported(
+                serverInfo, serverInfoResponse.authenticated);
+        context.streamGammaV1Supported = NvHTTP.isStreamGammaV1Supported(
                 serverInfo, serverInfoResponse.authenticated);
         context.expectedHostSessionId = null;
         context.hostSessionId = null;

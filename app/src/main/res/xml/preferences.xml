@@ -52,6 +52,16 @@
             app:iconSpaceReserved="false" />
 
         <com.limelight.preferences.InlineListPreference
+            android:defaultValue="default"
+            android:entries="@array/stream_gamma_names"
+            android:entryValues="@array/stream_gamma_values"
+            android:key="stream_gamma"
+            android:icon="@drawable/ic_xr_hdr"
+            android:summary="@string/summary_stream_gamma"
+            android:title="@string/title_stream_gamma"
+            app:iconSpaceReserved="false" />
+
+        <com.limelight.preferences.InlineListPreference
             android:defaultValue="forceh265"
             android:entries="@array/xr_video_format_names"
             android:entryValues="@array/xr_video_format_values"

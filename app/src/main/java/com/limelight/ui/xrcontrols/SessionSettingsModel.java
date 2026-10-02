@@ -25,6 +25,7 @@ public final class SessionSettingsModel {
         FRAME_RATE(Scope.MODE_STREAM_QUALITY),
         BITRATE(Scope.MODE_STREAM_QUALITY),
         HDR(Scope.SHARED_SESSION),
+        STREAM_GAMMA(Scope.SHARED_SESSION),
         VIDEO_RANGE(Scope.SHARED_SESSION),
         CODEC(Scope.SHARED_SESSION),
         FRAME_PACING(Scope.SHARED_SESSION),
@@ -82,6 +83,8 @@ public final class SessionSettingsModel {
         public final boolean reconnectRequired;
         public final List<Choice> choices;
         public final String selectedChoiceId;
+        public final boolean enabled;
+        public final int descriptionRes;
 
         public Value(String appliedValue, String pendingValue, Source source,
                      boolean reconnectRequired) {
@@ -92,12 +95,21 @@ public final class SessionSettingsModel {
         public Value(String appliedValue, String pendingValue, Source source,
                      boolean reconnectRequired, List<Choice> choices,
                      String selectedChoiceId) {
+            this(appliedValue, pendingValue, source, reconnectRequired, choices,
+                    selectedChoiceId, true, 0);
+        }
+
+        public Value(String appliedValue, String pendingValue, Source source,
+                     boolean reconnectRequired, List<Choice> choices,
+                     String selectedChoiceId, boolean enabled, int descriptionRes) {
             this.appliedValue = requireText(appliedValue, "appliedValue");
             this.pendingValue = requireText(pendingValue, "pendingValue");
             this.source = Objects.requireNonNull(source, "source");
             this.reconnectRequired = reconnectRequired;
             this.choices = immutableChoices(choices, selectedChoiceId);
             this.selectedChoiceId = selectedChoiceId;
+            this.enabled = enabled;
+            this.descriptionRes = descriptionRes;
         }
 
         public boolean hasPendingChange() {
@@ -134,6 +146,11 @@ public final class SessionSettingsModel {
 
     public static final class Builder {
         private final EnumMap<Key, Value> values = new EnumMap<>(Key.class);
+
+        public Builder put(Key key, Value value) {
+            values.put(Objects.requireNonNull(key, "key"), Objects.requireNonNull(value, "value"));
+            return this;
+        }
 
         public Builder put(Key key, String appliedValue, String pendingValue, Source source) {
             values.put(Objects.requireNonNull(key, "key"),

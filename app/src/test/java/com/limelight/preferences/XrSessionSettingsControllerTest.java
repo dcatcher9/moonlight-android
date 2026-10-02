@@ -32,6 +32,67 @@ import org.robolectric.annotation.Config;
         com.limelight.shadows.ShadowGameManager.class,
 })
 public final class XrSessionSettingsControllerTest {
+    @Test
+    public void automaticPreferencesIgnoreInactiveQualityAndInheritanceOnlyChanges() {
+        XrSessionSettingsController controller = controller();
+        assertTrue(controller.ownsCurrentSession());
+        controller.selectModeQualitySetting(PresentationMode.MOVIE_3D, SessionSettingsModel.Key.BITRATE, "80000");
+        assertTrue(controller.pendingChangesRequireReconnect());
+        assertFalse(controller.autoChangesRequireReconnect());
+        assertTrue(controller.commitPending());
+        controller.markAutoPreferencesCommitted();
+        controller.useGlobalModeDefaults(PresentationMode.MOVIE_3D);
+        assertFalse(controller.autoChangesRequireReconnect());
+        assertTrue(controller.commitPending());
+        controller.markAutoPreferencesCommitted();
+        assertFalse(controller.hasPendingChanges());
+        assertTrue(store.startNewSession(pc, app, null, 5));
+        assertFalse(controller.ownsCurrentSession());
+    }
+
+    @Test
+    public void gammaPreferenceCommitsWithoutSavingOtherStagedValuesAndWaitsForAck() {
+        XrSessionSettingsController controller = controller();
+        controller.getStreamGammaState().setSupported(true);
+        controller.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        assertTrue(controller.hasPendingStreamGammaChange());
+        assertFalse(controller.pendingChangesRequireReconnect());
+        controller.selectSharedSetting(SessionSettingsModel.Key.HDR, "true");
+        assertTrue(controller.commitStreamGammaPreference());
+        controller.markStreamGammaPreferenceCommitted();
+        SessionSettingsStore.Snapshot saved = store.snapshot(pc, globals);
+        assertEquals("2.4", saved.sharedPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        assertFalse(saved.sharedPreferences().getBoolean(
+                PreferenceConfiguration.ENABLE_HDR_PREF_STRING, true));
+        assertEquals("default", controller.getSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
+        int id = controller.getStreamGammaState().begin(com.limelight.nvstream.StreamGamma.GAMMA_24);
+        assertTrue(controller.getStreamGammaState().acceptAck(0, 2, 2, id, 1, 203));
+        assertEquals("2.4", controller.getSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
+    }
+
+    @Test
+    public void gammaGlobalDefaultAndSessionOverrideRestoreAsDesiredOnOldHosts() {
+        assertTrue(globals.edit().putString(PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "2.2").commit());
+        XrSessionSettingsController controller = controller();
+        assertEquals("2.2", controller.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        controller.getStreamGammaState().setSupported(false);
+        assertFalse(controller.getSessionModel().get(SessionSettingsModel.Key.STREAM_GAMMA).enabled);
+        assertThrows(IllegalArgumentException.class, () ->
+                controller.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4"));
+        assertFalse(controller.hasPendingChanges());
+        controller.getStreamGammaState().setSupported(true);
+        controller.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        assertTrue(controller.commitStreamGammaPreference());
+        XrSessionSettingsController restored = controller();
+        assertEquals("2.4", restored.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        assertEquals("default", restored.getSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
+    }
     private Context context;
     private SharedPreferences globals;
     private SessionSettingsStore store;

@@ -1,5 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="title_stream_gamma">Stream gamma</string>
+    <string name="stream_gamma_default">Windows default</string>
+    <string name="stream_gamma_22">Gamma 2.2</string>
+    <string name="stream_gamma_24">Gamma 2.4</string>
+    <string name="summary_stream_gamma">Adjust HDR stream shadows on supported hosts. Windows default adds no correction.</string>
+    <string name="xr_stream_gamma_waiting">Waiting for host confirmation.</string>
+    <string name="xr_stream_gamma_host_unsupported">Host does not support stream gamma. Active: Windows default.</string>
+    <string name="xr_stream_gamma_applying">Applying gamma on the host…</string>
+    <string name="xr_stream_gamma_hdr_required">Gamma correction is unavailable for this stream. Active: %1$s.</string>
+    <string name="xr_stream_gamma_applied">Active: %1$s. Applies to the whole stream, including dark HDR content.</string>
+    <string name="xr_stream_gamma_failed">Gamma was not confirmed. Last confirmed: %1$s. Tap the selected option to retry.</string>
+    <string-array name="stream_gamma_names">
+        <item>@string/stream_gamma_default</item>
+        <item>@string/stream_gamma_22</item>
+        <item>@string/stream_gamma_24</item>
+    </string-array>
+    <string-array name="stream_gamma_values">
+        <item>default</item>
+        <item>2.2</item>
+        <item>2.4</item>
+    </string-array>
     <!-- Shortcut strings -->
     <string name="scut_deleted_pc">PC deleted</string>
     <string name="scut_not_paired">PC not paired</string>
@@ -909,9 +930,6 @@
     <string name="xr_session_video_group">Video</string>
     <string name="xr_session_delivery_group">Delivery</string>
     <string name="xr_session_current_pc">Current PC</string>
-    <string name="xr_session_apply_reconnect">Apply &amp; reconnect</string>
-    <string name="xr_session_apply_live">Apply</string>
-    <string name="xr_session_no_reconnect_changes">No reconnect changes</string>
     <string name="xr_session_live_change_failed">The PC could not change the stream live. The previous settings are still active.</string>
     <string name="xr_session_live_change_needs_reconnect">This mode needs a reconnect. Restarting the stream…</string>
     <string name="xr_session_stale_settings">The PC session changed. Reopen its settings and try again.</string>
@@ -922,9 +940,9 @@
     <string name="xr_setting_source_session">This session</string>
     <string name="xr_setting_pending_active">Active: %1$s &#x00B7; Reconnect required</string>
     <string name="xr_mode_quality_live">%1$s &#x00B7; Live %2$s</string>
-    <string name="xr_mode_quality_pending">%1$s &#x00B7; Live %2$s &#x00B7; Staged change</string>
+    <string name="xr_mode_quality_pending">%1$s &#x00B7; Live %2$s &#x00B7; Updating</string>
     <string name="xr_mode_quality_reconnect">%1$s &#x00B7; Live %2$s &#x00B7; Reconnect required</string>
-    <string name="xr_mode_quality_apply_live">%1$s &#x00B7; Live %2$s &#x00B7; Applies without reconnect</string>
+    <string name="xr_mode_quality_apply_live">%1$s &#x00B7; Live %2$s &#x00B7; Updating</string>
     <string name="xr_mode_quality_heading">Stream quality</string>
     <string name="xr_bitrate_recommended">recommended</string>
     <string name="xr_bitrate_codec_too_slow">this codec cannot reach this resolution — switch codec</string>

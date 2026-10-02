@@ -138,6 +138,13 @@ public final class XrChoiceGroup extends ViewGroup {
         return selectedValue;
     }
 
+    private boolean reselectEnabled;
+
+    /** An explicit retry may reuse the selected value without changing ordinary choice semantics. */
+    public void setReselectEnabled(boolean enabled) {
+        reselectEnabled = enabled;
+    }
+
     /** Updates only the visible selection, preserving the existing buttons and gaze focus. */
     public boolean setSelectedValue(@Nullable String value) {
         if (value == null) {
@@ -178,7 +185,7 @@ public final class XrChoiceGroup extends ViewGroup {
     }
 
     private void selectChoice(String value) {
-        if (value.equals(selectedValue)) {
+        if (value.equals(selectedValue) && !reselectEnabled) {
             return;
         }
         if (listener == null || listener.onChoiceSelected(value)) {

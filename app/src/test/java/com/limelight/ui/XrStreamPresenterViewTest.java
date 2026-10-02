@@ -297,9 +297,11 @@ public final class XrStreamPresenterViewTest {
         assertThrows(NoSuchFieldException.class,
                 () -> XrStreamPresenter.class.getDeclaredField("clientModelChoiceGroup"));
 
-        Button modeApply = (Button) getField(presenter, "modeApplyButton");
+        assertThrows(NoSuchFieldException.class,
+                () -> XrStreamPresenter.class.getDeclaredField("modeApplyButton"));
+        Button modeDefaults = (Button) getField(presenter, "modeDefaultsButton");
         assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT,
-                modeApply.getLayoutParams().width);
+                modeDefaults.getLayoutParams().width);
 
         assertTrue(host.getChildAt(0) instanceof ScrollView);
         ScrollView scroll = (ScrollView) host.getChildAt(0);
@@ -317,7 +319,7 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void sharedApplyActionWrapsContentAndAlignsToPaneEnd() throws Exception {
+    public void automaticSettingsHaveOnlyDefaultsInTheFooter() throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
         activity.setTheme(R.style.AppTheme);
@@ -330,21 +332,81 @@ public final class XrStreamPresenterViewTest {
         build.setAccessible(true);
         build.invoke(presenter);
 
-        Button apply = (Button) getField(presenter, "sessionApplyButton");
+        assertThrows(NoSuchFieldException.class,
+                () -> XrStreamPresenter.class.getDeclaredField("sessionApplyButton"));
+        Button defaults = (Button) getField(presenter, "sessionDefaultsButton");
         LinearLayout.LayoutParams params =
-                (LinearLayout.LayoutParams) apply.getLayoutParams();
+                (LinearLayout.LayoutParams) defaults.getLayoutParams();
         assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT, params.width);
 
-        // Alignment moved from the button to the footer that now holds both actions, so assert
-        // the arrangement rather than a gravity flag that no longer lives on the button: reset
-        // first, apply last, and the pair pushed to the pane end.
-        LinearLayout footer = (LinearLayout) apply.getParent();
+        LinearLayout footer = (LinearLayout) defaults.getParent();
         assertEquals(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.END,
                 footer.getGravity());
-        Button defaults = (Button) getField(presenter, "sessionDefaultsButton");
         assertEquals(footer, defaults.getParent());
         assertEquals(0, footer.indexOfChild(defaults));
-        assertEquals(1, footer.indexOfChild(apply));
+        assertEquals(1, footer.getChildCount());
+        controller.destroy();
+    }
+
+    @Test
+    public void rebuildingAndRefreshingSettingsCannotUnlockAPendingTransaction() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+        XrStreamPresenter presenter = new XrStreamPresenter(activity,
+                PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
+        presenter.setSettingsTransactionPending(true);
+        Method build = XrStreamPresenter.class.getDeclaredMethod("buildSessionSettingsView");
+        build.setAccessible(true);
+        build.invoke(presenter);
+        java.util.Map<?, ?> groups = (java.util.Map<?, ?>) getField(presenter, "sessionChoiceGroups");
+        XrChoiceGroup hdr = (XrChoiceGroup) groups.get(com.limelight.ui.xrcontrols.SessionSettingsModel.Key.HDR);
+        assertFalse(hdr.isEnabled());
+        Method update = XrStreamPresenter.class.getDeclaredMethod("updateSessionSettingsView");
+        update.setAccessible(true);
+        update.invoke(presenter);
+        assertFalse(hdr.isEnabled());
+        build.invoke(presenter);
+        hdr = (XrChoiceGroup) groups.get(com.limelight.ui.xrcontrols.SessionSettingsModel.Key.HDR);
+        assertFalse(hdr.isEnabled());
+        presenter.setSettingsTransactionPending(false);
+        assertTrue(hdr.isEnabled());
+        presenter.onDestroy();
+        controller.destroy();
+    }
+
+    @Test
+    public void activeModeTileCancelsTheQueuedDifferentPresentation() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+        XrStreamPresenter presenter = new XrStreamPresenter(activity,
+                PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
+        int[] cancelled = {0};
+        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
+            @Override public void onPresentationModeCommitted(PresentationMode mode) {
+                assertSame(PresentationMode.NORMAL, mode);
+                cancelled[0]++;
+            }
+        });
+        setField(presenter, "streamPresentationReady", true);
+        presenter.setSettingsRequestedPresentationMode(PresentationMode.HOST_SBS_AI);
+        try (MockedStatic<PanelEntity> panels = mockStatic(PanelEntity.class,
+                invocation -> mock(PanelEntity.class))) {
+            Method build = XrStreamPresenter.class.getDeclaredMethod("buildControlBar", float.class);
+            build.setAccessible(true);
+            build.invoke(presenter, 2.0f);
+            java.util.List<?> items = (java.util.List<?>) getField(presenter, "barItems");
+            Object normal = items.get(0);
+            Method tap = XrStreamPresenter.class.getDeclaredMethod("onModeTileTapped", normal.getClass());
+            tap.setAccessible(true);
+            tap.invoke(presenter, normal);
+            assertEquals(1, cancelled[0]);
+            assertNull(getField(presenter, "settingsRequestedPresentationMode"));
+        }
+        presenter.onDestroy();
         controller.destroy();
     }
 

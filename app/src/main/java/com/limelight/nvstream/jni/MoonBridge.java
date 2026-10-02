@@ -427,6 +427,18 @@ public class MoonBridge {
         }
     }
 
+    public static void bridgeClStreamGammaAck(int status, int requestedMode, int appliedMode,
+                                            int requestId, int generation, float whiteNits) {
+        BridgeSession session = bridgeSession;
+        if (session != null) {
+            session.connectionListener.streamGammaAck(status, requestedMode, appliedMode,
+                    requestId, generation, whiteNits);
+        }
+    }
+
+    public static native boolean isStreamGammaSupported();
+    public static native int sendStreamGamma(int mode, int requestId);
+
     public static synchronized long setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         long sessionId = ++nextBridgeSessionId;
         bridgeSession = new BridgeSession(sessionId, videoRenderer, audioRenderer, connectionListener);

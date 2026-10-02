@@ -1,0 +1,230 @@
+diff --git a/src/ControlStream.c b/src/ControlStream.c
+index 9d7a68c..32a64df 100644
+--- a/src/ControlStream.c
++++ b/src/ControlStream.c
+@@ -1,6 +1,7 @@
+ #include "Limelight-internal.h"
+ #include "Ds5HapticsStream.h"
+ #include "Ds5HapticsIrStream.h"
++#include <math.h>
+ 
+ // This is a private header, but it just contains some time macros
+ #include <enet/time.h>
+@@ -1380,6 +1381,35 @@ static bool dispatchAuthoredHaptics(PNVCTL_ENET_PACKET_HEADER_V1 packet, int pac
+     return false;
+ }
+ 
++static bool dispatchStreamGammaAck(PNVCTL_ENET_PACKET_HEADER_V1 packet, int packetLength) {
++    if (packet->type != 0x300D) {
++        return false;
++    }
++    if (!LiIsStreamGammaSupported() || ListenerCallbacks.streamGammaAck == NULL) {
++        return true;
++    }
++    const uint8_t* payload = (const uint8_t*)(packet + 1);
++    if (packetLength != (int)sizeof(*packet) + 16 || payload[0] != 1 ||
++            payload[1] > 3 || payload[2] > 2 || payload[3] > 2 ||
++            (payload[1] == 0 && payload[2] != payload[3])) {
++        return true;
++    }
++    BYTE_BUFFER bb;
++    uint32_t requestId, generation, whiteBits;
++    float whiteNits;
++    BbInitializeWrappedBuffer(&bb, (char*)payload, 4, 12, BYTE_ORDER_LITTLE);
++    BbGet32(&bb, &requestId);
++    BbGet32(&bb, &generation);
++    BbGet32(&bb, &whiteBits);
++    memcpy(&whiteNits, &whiteBits, sizeof(whiteNits));
++    if (generation == 0 || !isfinite(whiteNits) || whiteNits < 40 || whiteNits > 1000) {
++        return true;
++    }
++    ListenerCallbacks.streamGammaAck(payload[1], payload[2], payload[3],
++        requestId, generation, whiteNits);
++    return true;
++}
++
+ static void controlReceiveThreadFunc(void* context) {
+     int err;
+ 
+@@ -1540,6 +1570,10 @@ static void controlReceiveThreadFunc(void* context) {
+             enet_packet_destroy(event.packet);
+ 
+             // All below codepaths must free ctlHdr!!!
++            if (dispatchStreamGammaAck(ctlHdr, packetLength)) {
++                free(ctlHdr);
++                continue;
++            }
+ 
+             // Process HDR data immediately to update global HDR enabled state and HDR metadata.
+             // The actual client callback will be invoked in the async callback thread.
+@@ -2447,6 +2481,26 @@ int LiSendSetVideoModeV2(uint8_t desiredMode, uint32_t requestId,
+     );
+ }
+ 
++bool LiIsStreamGammaSupported(void) {
++    return StreamGammaVersion == 1 && packetTypes == packetTypesGen7Enc &&
++        ListenerCallbacks.streamGammaAck != NULL;
++}
++
++int LiSendStreamGamma(uint8_t mode, uint32_t requestId) {
++    BYTE_BUFFER bb;
++    uint8_t payload[8];
++    if (!LiIsStreamGammaSupported() || mode > 2 || requestId == 0) {
++        return -1;
++    }
++    BbInitializeWrappedBuffer(&bb, (char*)payload, 0, sizeof(payload), BYTE_ORDER_LITTLE);
++    BbPut8(&bb, 1);
++    BbPut8(&bb, mode);
++    BbPut16(&bb, 0);
++    BbPut32(&bb, requestId);
++    return sendMessageAndForget(0x300C, sizeof(payload), payload,
++        CTRL_CHANNEL_SERVERCTL, ENET_PACKET_FLAG_RELIABLE, false);
++}
++
+ int LiSendHostSbsTelemetrySubscription(bool enabled, bool focused,
+                                        uint16_t requestId, uint16_t intervalMs) {
+     BYTE_BUFFER bb;
+diff --git a/src/Limelight-internal.h b/src/Limelight-internal.h
+index ec6a667..e08ddb7 100644
+--- a/src/Limelight-internal.h
++++ b/src/Limelight-internal.h
+@@ -20,6 +20,29 @@ extern struct sockaddr_storage LocalAddr;
+ extern SOCKADDR_LEN AddrLen;
+ extern int AppVersionQuad[4];
+ extern STREAM_CONFIGURATION StreamConfig;
++extern unsigned int StreamGammaVersion;
++
++// Independent extension negotiation is exact and unambiguous; the legacy numeric SDP helper
++// accepts numeric prefixes and is intentionally not used for this capability.
++static inline bool supportsStreamGammaV1Sdp(const char* payload) {
++    const char prefix[] = "a=x-ss-video.streamGammaVersion:";
++    const size_t prefixLength = sizeof(prefix) - 1;
++    unsigned int matches = 0;
++    bool versionOne = false;
++    if (payload == NULL) return false;
++    while (*payload) {
++        const char* end = strchr(payload, '\n');
++        size_t length = end != NULL ? (size_t)(end - payload) : strlen(payload);
++        if (length && payload[length - 1] == '\r') length--;
++        if (length >= prefixLength && memcmp(payload, prefix, prefixLength) == 0) {
++            matches++;
++            versionOne = length == prefixLength + 1 && payload[prefixLength] == '1';
++        }
++        if (end == NULL) break;
++        payload = end + 1;
++    }
++    return matches == 1 && versionOne;
++}
+ extern CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
+ extern DECODER_RENDERER_CALLBACKS VideoCallbacks;
+ extern AUDIO_RENDERER_CALLBACKS AudioCallbacks;
+diff --git a/src/Limelight.h b/src/Limelight.h
+index 50af219..7964d1a 100644
+--- a/src/Limelight.h
++++ b/src/Limelight.h
+@@ -561,6 +561,13 @@ typedef void(*ConnListenerGameSourceStatus)(uint8_t state, uint8_t provider,
+                                             uint16_t sourceWidth, uint16_t sourceHeight,
+                                             uint16_t packedWidth, uint16_t packedHeight);
+ 
++// Stream gamma v1: 0x300C request / 0x300D ACK, negotiated independently in SDP.
++// This callback runs on the control receive thread and must return promptly.
++typedef void(*ConnListenerStreamGammaAck)(uint8_t status, uint8_t requestedMode,
++    uint8_t appliedMode, uint32_t requestId, uint32_t generation, float whiteNits);
++bool LiIsStreamGammaSupported(void);
++int LiSendStreamGamma(uint8_t mode, uint32_t requestId);
++
+ // Authored DualSense haptics captured from the host's virtual USB audio
+ // endpoint. PCM is signed 16-bit little-endian, interleaved haptic-left then
+ // haptic-right. The buffer is valid only for the duration of the callback.
+@@ -636,6 +643,7 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
+     ConnListenerDs5HapticsPcm ds5HapticsPcm;
+     ConnListenerDs5HapticsIrV2 ds5HapticsIrV2;
+     ConnListenerGameSourceStatus gameSourceStatus;
++    ConnListenerStreamGammaAck streamGammaAck;
+ } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
+ 
+ // Use this function to zero the connection callbacks when allocated on the stack or heap
+diff --git a/src/RtspConnection.c b/src/RtspConnection.c
+index 50ddbfc..0cd4447 100644
+--- a/src/RtspConnection.c
++++ b/src/RtspConnection.c
+@@ -16,6 +16,7 @@ static char urlAddr[URLSAFESTRING_LEN];
+ static bool useEnet;
+ static char* controlStreamId;
+ static bool encryptedRtspEnabled;
++unsigned int StreamGammaVersion;
+ 
+ static PPLT_CRYPTO_CONTEXT encryptionCtx;
+ static PPLT_CRYPTO_CONTEXT decryptionCtx;
+@@ -930,6 +931,7 @@ bool parseSdpAttributeToInt(const char* payload, const char* name, int* val) {
+ 
+ // Perform RTSP Handshake with the streaming server machine as part of the connection process
+ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
++    StreamGammaVersion = 0;
+     int ret;
+ 
+     LC_ASSERT(RtspPortNumber != 0);
+@@ -1143,6 +1145,13 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
+             SunshineFeatureFlags = 0;
+         }
+ 
++        // Look for the Sunshine encryption flags in the SDP attributes
++        StreamGammaVersion = 0;
++        if (IS_SUNSHINE() && ListenerCallbacks.streamGammaAck != NULL &&
++                supportsStreamGammaV1Sdp(response.payload)) {
++            StreamGammaVersion = 1;
++        }
++
+         // Look for the Sunshine encryption flags in the SDP attributes
+         if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionSupported", &EncryptionFeaturesSupported)) {
+             EncryptionFeaturesSupported = 0;
+diff --git a/src/SdpGenerator.c b/src/SdpGenerator.c
+index 0342ea5..727f8bd 100644
+--- a/src/SdpGenerator.c
++++ b/src/SdpGenerator.c
+@@ -286,6 +286,9 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr, int videoPacketSizeMaximu
+             ListenerCallbacks.ds5HapticsPcm != NULL, ListenerCallbacks.ds5HapticsIrV2 != NULL);
+         snprintf(payloadStr, sizeof(payloadStr), "%u", moonlightFeatureFlags);
+         err |= addAttributeString(&optionHead, "x-ml-general.featureFlags", payloadStr);
++        if (StreamGammaVersion == 1) {
++            err |= addAttributeString(&optionHead, "x-ml-video.streamGammaVersion", "1");
++        }
+ 
+         // New-style control stream encryption is low overhead, so we enable it any time it is supported
+         if (EncryptionFeaturesSupported & SS_ENC_CONTROL_V2) {
+diff --git a/tests/AuthoredHapticsTest.c b/tests/AuthoredHapticsTest.c
+index 15d43b0..f2c4206 100644
+--- a/tests/AuthoredHapticsTest.c
++++ b/tests/AuthoredHapticsTest.c
+@@ -9,6 +9,7 @@
+ int AppVersionQuad[4] = {7, 1, 500, -1};
+ CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
+ uint32_t SunshineFeatureFlags;
++unsigned int StreamGammaVersion;
+ 
+ int initializePlatformSockets(void) { assert(false); return -1; }
+ void cleanupPlatformSockets(void) { assert(false); }
+diff --git a/tests/ControlTelemetryTest.c b/tests/ControlTelemetryTest.c
+index e1d4871..5436e56 100644
+--- a/tests/ControlTelemetryTest.c
++++ b/tests/ControlTelemetryTest.c
+@@ -9,6 +9,7 @@
+ int AppVersionQuad[4] = {7, 1, 500, -1};
+ CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
+ uint32_t SunshineFeatureFlags;
++unsigned int StreamGammaVersion;
+ static int sends;
+ static uint8_t subscription[8];
+ static int modeSends;
+diff --git a/tests/VideoPacketSizeTest.c b/tests/VideoPacketSizeTest.c
+index 96a6d7d..6e54a99 100644
+--- a/tests/VideoPacketSizeTest.c
++++ b/tests/VideoPacketSizeTest.c
+@@ -18,6 +18,7 @@ uint32_t EncryptionFeaturesSupported;
+ uint32_t EncryptionFeaturesRequested;
+ uint32_t EncryptionFeaturesEnabled;
+ uint32_t SunshineFeatureFlags;
++unsigned int StreamGammaVersion;
+ bool AudioEncryptionEnabled;
+ bool HighQualitySurroundSupported;
+ bool HighQualitySurroundEnabled;

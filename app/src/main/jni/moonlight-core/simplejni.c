@@ -39,6 +39,20 @@ Java_com_limelight_nvstream_jni_MoonBridge_getHostFeatureFlags(JNIEnv *env, jcla
     return (jint)LiGetHostFeatureFlags();
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_isStreamGammaSupported(JNIEnv *env, jclass clazz) {
+    return LiIsStreamGammaSupported() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_sendStreamGamma(JNIEnv *env, jclass clazz,
+        jint mode, jint requestId) {
+    if (mode < 0 || mode > 2 || requestId == 0) {
+        return -1;
+    }
+    return LiSendStreamGamma((uint8_t)mode, (uint32_t)requestId);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendHostSbsTelemetrySubscription(
         JNIEnv *env, jclass clazz, jboolean enabled, jboolean focused,

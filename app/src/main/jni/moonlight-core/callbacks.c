@@ -38,6 +38,7 @@ static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
 static jmethodID BridgeClDepthStatusMethod;
 static jmethodID BridgeClVideoModeAckV2Method;
+static jmethodID BridgeClStreamGammaAckMethod;
 static jmethodID BridgeClHostSbsTelemetryStateMethod;
 static jmethodID BridgeClGameSourceStatusMethod;
 static jbyteArray DecodedFrameBuffer;
@@ -107,6 +108,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClDepthStatusMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClDepthStatus", "(I)V");
     BridgeClVideoModeAckV2Method = (*env)->GetStaticMethodID(
             env, clazz, "bridgeClVideoModeAckV2", "(IIIIIIIIIII)V");
+    BridgeClStreamGammaAckMethod = (*env)->GetStaticMethodID(
+            env, clazz, "bridgeClStreamGammaAck", "(IIIIIF)V");
     BridgeClHostSbsTelemetryStateMethod = (*env)->GetStaticMethodID(
             env, clazz, "bridgeClHostSbsTelemetryState", "([B)V");
     BridgeClGameSourceStatusMethod = (*env)->GetStaticMethodID(
@@ -484,6 +487,17 @@ void BridgeClVideoModeAckV2(uint8_t status, uint8_t appliedMode, uint8_t flags,
     }
 }
 
+void BridgeClStreamGammaAck(uint8_t status, uint8_t requestedMode, uint8_t appliedMode,
+        uint32_t requestId, uint32_t generation, float whiteNits) {
+    JNIEnv* env = GetThreadEnv();
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClStreamGammaAckMethod,
+        (jint)status, (jint)requestedMode, (jint)appliedMode,
+        (jint)requestId, (jint)generation, (jfloat)whiteNits);
+    if ((*env)->ExceptionCheck(env)) {
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
 void BridgeClGameSourceStatus(uint8_t state, uint8_t provider,
                               uint32_t presentationGeneration, uint32_t sourceRevision,
                               uint16_t sourceWidth, uint16_t sourceHeight,
@@ -592,6 +606,7 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .hostSbsTelemetryState = BridgeClHostSbsTelemetryState,
         .videoModeAckV2 = BridgeClVideoModeAckV2,
         .gameSourceStatus = BridgeClGameSourceStatus,
+        .streamGammaAck = BridgeClStreamGammaAck,
 };
 
 JNIEXPORT jint JNICALL

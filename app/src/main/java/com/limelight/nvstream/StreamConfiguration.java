@@ -30,6 +30,7 @@ public class StreamConfiguration {
     private int colorSpace;
     private boolean enableUltraLowLatency;
     private int initialSbsMode;
+    private StreamGamma streamGamma = StreamGamma.WINDOWS_DEFAULT;
     private HostSessionLaunchRequest launchRequest = HostSessionLaunchRequest.start();
 
     public static class Builder {
@@ -145,6 +146,11 @@ public class StreamConfiguration {
             return this;
         }
 
+        public StreamConfiguration.Builder setStreamGamma(StreamGamma gamma) {
+            config.streamGamma = java.util.Objects.requireNonNull(gamma);
+            return this;
+        }
+
         public StreamConfiguration build() {
             return config;
         }
@@ -255,6 +261,8 @@ public class StreamConfiguration {
     public int getInitialSbsMode() {
         return initialSbsMode;
     }
+
+    public StreamGamma getStreamGamma() { return streamGamma; }
 
     public HostSessionLaunchRequest getLaunchRequest() {
         return launchRequest;

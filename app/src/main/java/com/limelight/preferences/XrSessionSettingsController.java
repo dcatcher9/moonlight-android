@@ -1,6 +1,9 @@
 package com.limelight.preferences;
 
 import com.limelight.ui.PresentationMode;
+import com.limelight.R;
+import com.limelight.nvstream.StreamGamma;
+import com.limelight.ui.xrcontrols.StreamGammaState;
 import android.content.SharedPreferences;
 
 import com.limelight.preferences.session.SessionSettingsStore;
@@ -58,6 +61,8 @@ public final class XrSessionSettingsController {
             choice("false", "Off"), choice("true", "On"));
     private static final List<SessionSettingsModel.Choice> VIDEO_RANGE_CHOICES = choices(
             choice("false", "Limited"), choice("true", "Full"));
+    private static final List<SessionSettingsModel.Choice> GAMMA_CHOICES = choices(
+            choice("default", "default"), choice("2.2", "2.2"), choice("2.4", "2.4"));
     private static final List<SessionSettingsModel.Choice> CODEC_CHOICES = choices(
             choice(CODEC_AUTO, "Auto"),
             choice(CODEC_AV1, "AV1"),
@@ -89,6 +94,8 @@ public final class XrSessionSettingsController {
                 PreferenceConfiguration.BITRATE_PREF_STRING);
         PREF_KEYS.put(SessionSettingsModel.Key.HDR,
                 PreferenceConfiguration.ENABLE_HDR_PREF_STRING);
+        PREF_KEYS.put(SessionSettingsModel.Key.STREAM_GAMMA,
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING);
         PREF_KEYS.put(SessionSettingsModel.Key.VIDEO_RANGE,
                 PreferenceConfiguration.FULL_RANGE_PREF_STRING);
         PREF_KEYS.put(SessionSettingsModel.Key.CODEC,
@@ -128,7 +135,7 @@ public final class XrSessionSettingsController {
 
     private final PreferenceConfiguration.RawSbsPerEyeResolution
             globalRawSbsPerEyeResolution;
-    private final SessionSettingsModel.Source appliedRawSbsPerEyeResolutionSource;
+    private SessionSettingsModel.Source appliedRawSbsPerEyeResolutionSource;
     private final PresentationMode startupMode;
     /**
      * The tuple backing the live decoder, expressed in user-request semantics: acknowledged
@@ -152,6 +159,7 @@ public final class XrSessionSettingsController {
     private int liveResolutionMaxHeight;
     /** Whether the connected host implements Apollo-3D's live video-mode control extension. */
     private boolean liveVideoModeSupported = true;
+    private final StreamGammaState streamGammaState;
     private boolean sharedInheritanceResetRequested;
     private boolean rawSbsPerEyeResolutionInheritanceResetRequested;
     private final EnumSet<PresentationMode> modeInheritanceResetRequested =
@@ -265,6 +273,8 @@ public final class XrSessionSettingsController {
         }
         startupPreferences = snapshot.preferencesForModeWithOverrides(
                 startupMode, startupOverrides);
+        streamGammaState = new StreamGammaState(StreamGamma.fromPreference(
+                (String) appliedSharedValues.get(SessionSettingsModel.Key.STREAM_GAMMA)));
 
     }
 
@@ -420,7 +430,7 @@ public final class XrSessionSettingsController {
         return true;
     }
 
-    /** Updates model state only. The caller decides when to perform Apply & reconnect. */
+    /** Updates model state only. The caller owns the guarded live transaction or restart. */
     public void selectPresentationMode(PresentationMode mode) {
         selectedMode = Objects.requireNonNull(mode, "mode");
         if (selectedMode == PresentationMode.HOST_SBS_RAW) {
@@ -515,6 +525,10 @@ public final class XrSessionSettingsController {
             // call selectModeQualitySetting() with their explicit mode.
             selectModeQualitySetting(selectedMode, key, choiceId);
             return;
+        }
+        if (key == SessionSettingsModel.Key.STREAM_GAMMA &&
+                (!streamGammaState.isSupported() || streamGammaState.isPending())) {
+            throw new IllegalArgumentException("Stream gamma is unavailable");
         }
         if (!containsChoice(choicesFor(key, appliedSharedValues.get(key),
                 pendingSharedValues.get(key)),
@@ -725,7 +739,8 @@ public final class XrSessionSettingsController {
     }
 
     public boolean hasPendingChanges() {
-        if (sharedInheritanceResetRequested
+        if (hasPendingStreamGammaChange()
+                || sharedInheritanceResetRequested
                 || rawSbsPerEyeResolutionInheritanceResetRequested
                 || !modeInheritanceResetRequested.isEmpty()
                 || !pendingSharedValues.equals(appliedSharedValues)
@@ -765,13 +780,13 @@ public final class XrSessionSettingsController {
      * True when anything staged beyond the selected mode's live-applicable quality delta is
      * pending. Shared settings, Raw packing, inheritance resets, and other
      * modes' tuples are all committed as one guarded record replacement, so they keep the
-     * established Apply &amp; reconnect behavior.
+     * established atomic record replacement behavior.
      */
     public boolean pendingChangesRequireReconnect() {
         if (sharedInheritanceResetRequested
                 || rawSbsPerEyeResolutionInheritanceResetRequested
                 || !modeInheritanceResetRequested.isEmpty()
-                || !pendingSharedValues.equals(appliedSharedValues)
+                || sharedChangesRequireReconnect()
                 || pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution
                 || modeRequiresReconnect(selectedMode)) {
             return true;
@@ -784,6 +799,86 @@ public final class XrSessionSettingsController {
             }
         }
         return false;
+    }
+
+    /** Only changes to this running stream require a restart; other mode defaults are durable data. */
+    public boolean autoChangesRequireReconnect() {
+        return sharedChangesRequireReconnect() || modeRequiresReconnect(selectedMode)
+                || (selectedMode == PresentationMode.HOST_SBS_RAW
+                    && pendingRawSbsPerEyeResolution != appliedRawSbsPerEyeResolution);
+    }
+
+    public boolean ownsCurrentSession() {
+        SessionSettingsStore.SessionRecord record = store.snapshot(pc, globalPreferences).getRecord();
+        return record != null && expectedLocalSessionId != null
+                && expectedLocalSessionId.equals(record.getLocalSessionId())
+                && Objects.equals(app, record.getCurrentApp());
+    }
+
+    /** Records preferences that need no encoder change after the guarded durable write succeeds. */
+    public void markAutoPreferencesCommitted() {
+        appliedSharedValues.putAll(pendingSharedValues);
+        for (SessionSettingsModel.Key key : pendingSharedValues.keySet()) {
+            appliedSharedSources.put(key, Objects.equals(pendingSharedValues.get(key), globalValues.get(key))
+                    ? SessionSettingsModel.Source.GLOBAL : SessionSettingsModel.Source.CURRENT_SESSION);
+        }
+        for (PresentationMode mode : PresentationMode.values()) {
+            appliedModeQuality.get(mode).putAll(pendingModeQuality.get(mode));
+            for (SessionSettingsModel.Key key : pendingModeQuality.get(mode).keySet()) {
+                putAppliedQualityValue(appliedModeQuality.get(mode), appliedModeQualitySources.get(mode),
+                        key, pendingModeQuality.get(mode).get(key));
+            }
+        }
+        appliedRawSbsPerEyeResolution = pendingRawSbsPerEyeResolution;
+        appliedRawSbsPerEyeResolutionSource = pendingRawSbsPerEyeResolution == globalRawSbsPerEyeResolution
+                ? SessionSettingsModel.Source.GLOBAL : SessionSettingsModel.Source.CURRENT_SESSION;
+        sharedInheritanceResetRequested = false;
+        rawSbsPerEyeResolutionInheritanceResetRequested = false;
+        modeInheritanceResetRequested.clear();
+    }
+
+    private boolean sharedChangesRequireReconnect() {
+        for (SessionSettingsModel.Key key : pendingSharedValues.keySet()) {
+            if (key != SessionSettingsModel.Key.STREAM_GAMMA &&
+                    !Objects.equals(pendingSharedValues.get(key), appliedSharedValues.get(key))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public StreamGammaState getStreamGammaState() { return streamGammaState; }
+
+    public StreamGamma getPendingStreamGamma() {
+        return StreamGamma.fromPreference(
+                (String) pendingSharedValues.get(SessionSettingsModel.Key.STREAM_GAMMA));
+    }
+
+    public boolean hasPendingStreamGammaChange() {
+        return streamGammaState.isSupported() && !streamGammaState.isPending() &&
+                (!Objects.equals(pendingSharedValues.get(SessionSettingsModel.Key.STREAM_GAMMA),
+                        appliedSharedValues.get(SessionSettingsModel.Key.STREAM_GAMMA))
+                || streamGammaState.getStatus() == StreamGammaState.FAILED
+                || (streamGammaState.isConfirmed() &&
+                    streamGammaState.getStatus() != StreamGammaState.UNSUPPORTED &&
+                    streamGammaState.getApplied() != getPendingStreamGamma()));
+    }
+
+    /** Persists the desired gamma independently of unrelated staged quality/settings. */
+    public boolean commitStreamGammaPreference() {
+        if (expectedLocalSessionId == null) return false;
+        return store.edit(pc, app, expectedLocalSessionId).setSharedValue(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING,
+                pendingSharedValues.get(SessionSettingsModel.Key.STREAM_GAMMA),
+                globalValues.get(SessionSettingsModel.Key.STREAM_GAMMA)).commit();
+    }
+
+    public void markStreamGammaPreferenceCommitted() {
+        Object desired = pendingSharedValues.get(SessionSettingsModel.Key.STREAM_GAMMA);
+        appliedSharedValues.put(SessionSettingsModel.Key.STREAM_GAMMA, desired);
+        appliedSharedSources.put(SessionSettingsModel.Key.STREAM_GAMMA,
+                Objects.equals(desired, globalValues.get(SessionSettingsModel.Key.STREAM_GAMMA))
+                        ? SessionSettingsModel.Source.GLOBAL : SessionSettingsModel.Source.CURRENT_SESSION);
     }
 
     boolean modeRequiresReconnect(PresentationMode mode) {
@@ -938,6 +1033,26 @@ public final class XrSessionSettingsController {
     private void addSharedValues(SessionSettingsModel.Builder builder) {
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
             if (!key.isModeStreamQuality()) {
+                if (key == SessionSettingsModel.Key.STREAM_GAMMA) {
+                    int description = !streamGammaState.isCapabilityKnown()
+                            ? R.string.xr_stream_gamma_waiting
+                            : !streamGammaState.isSupported() ? R.string.xr_stream_gamma_host_unsupported
+                            : streamGammaState.isPending() ? R.string.xr_stream_gamma_applying
+                            : streamGammaState.getStatus() == StreamGammaState.FAILED ? R.string.xr_stream_gamma_failed
+                            : !streamGammaState.isConfirmed() ? R.string.xr_stream_gamma_waiting
+                            : streamGammaState.getStatus() == StreamGammaState.UNSUPPORTED
+                                    ? R.string.xr_stream_gamma_hdr_required
+                            : streamGammaState.getStatus() == StreamGammaState.APPLIED
+                                    ? R.string.xr_stream_gamma_applied : R.string.xr_stream_gamma_failed;
+                    builder.put(key, new SessionSettingsModel.Value(
+                            streamGammaState.getApplied().preferenceValue,
+                            displayValue(key, pendingSharedValues.get(key)),
+                            sourceFor(key, appliedSharedValues.get(key), pendingSharedValues.get(key),
+                                    appliedSharedSources.get(key)), false, GAMMA_CHOICES,
+                            choiceId(key, pendingSharedValues.get(key)),
+                            streamGammaState.isSupported() && !streamGammaState.isPending(), description));
+                    continue;
+                }
                 builder.put(key, displayValue(key, appliedSharedValues.get(key)),
                         displayValue(key, pendingSharedValues.get(key)),
                         sourceFor(key, appliedSharedValues.get(key),
@@ -1065,6 +1180,9 @@ public final class XrSessionSettingsController {
         output.put(SessionSettingsModel.Key.HDR, preferences.getBoolean(
                 PreferenceConfiguration.ENABLE_HDR_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_ENABLE_HDR));
+        output.put(SessionSettingsModel.Key.STREAM_GAMMA, StreamGamma.fromPreference(
+                preferences.getString(PreferenceConfiguration.STREAM_GAMMA_PREF_STRING,
+                        "default")).preferenceValue);
         output.put(SessionSettingsModel.Key.VIDEO_RANGE, preferences.getBoolean(
                 PreferenceConfiguration.FULL_RANGE_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_FULL_RANGE));
@@ -1138,6 +1256,8 @@ public final class XrSessionSettingsController {
                 return ON_OFF_CHOICES;
             case VIDEO_RANGE:
                 return VIDEO_RANGE_CHOICES;
+            case STREAM_GAMMA:
+                return GAMMA_CHOICES;
             case CODEC:
                 return CODEC_CHOICES;
             case FRAME_PACING:

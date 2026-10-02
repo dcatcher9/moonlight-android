@@ -976,6 +976,15 @@ public class NvHTTP {
         return authenticated && "1".equals(getXmlString(serverInfo, "GameProviderV1Supported", false));
     }
 
+    public static boolean isStreamGammaV1Supported(String serverInfo, boolean authenticated)
+            throws XmlPullParserException, IOException {
+        return authenticated && "1".equals(getXmlString(serverInfo, "StreamGammaV1Supported", false));
+    }
+
+    static String streamGammaQuery(StreamConfiguration configuration, boolean supported) {
+        return supported ? "&streamGamma=" + configuration.getStreamGamma().wireValue : "";
+    }
+
     static String initialSbsModeQuery(StreamConfiguration configuration,
                                     boolean hostControlSupported, boolean gameProviderSupported) {
         if (!hostControlSupported) {
@@ -1053,6 +1062,7 @@ public class NvHTTP {
             virtualDisplayOnlyQuery(context.streamConfig, context.virtualDisplayOnlySupported) +
             initialSbsModeQuery(context.streamConfig, context.hostSessionIdSupported,
                     context.gameProviderV1Supported) +
+            streamGammaQuery(context.streamConfig, context.streamGammaV1Supported) +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
             (resume && context.hostSessionIdSupported

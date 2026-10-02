@@ -163,6 +163,44 @@ to Game or Movie merely because a mode is selected.
 
 ### Shared stream behavior
 
+**Stream gamma** is shared by every presentation mode, with a global default and a current-session
+override. Windows default requests no additional stream correction; Gamma 2.2 and Gamma 2.4 request
+the host's Gloam-style HDR shadow transform. The host applies it once during encoding. No gamma
+operation is added to SceneCore, the direct decoder surface, or Client SBS model preprocessing.
+Host-corrected pixels do reach Client SBS's existing decoded-input pipeline and may therefore
+change inferred depth; this feature does not claim to preserve the model's input pixels.
+
+The setting requires fresh authenticated `StreamGammaV1Supported=1` serverinfo plus mutually
+negotiated SDP `x-ss-video.streamGammaVersion:1` / `x-ml-video.streamGammaVersion:1`. Launch and
+resume send `streamGamma=0|1|2` only to a supporting host. Original Sunshine/Apollo receive neither
+the launch field nor gamma control packets, and Settings reports Windows default as active.
+Gamma 2.2/2.4 currently require HDR output; an SDR refusal preserves the desired preference and
+reports Windows default as active. The shadow mapping cannot identify a pixel's SDR/HDR origin,
+so dark native HDR values are affected too. It does not increase the headset's physical peak nits.
+
+The reliable encrypted control request `0x300C` is exactly eight little-endian bytes:
+`{u8 version=1, u8 mode, u16 flags=0, u32 request_id}`. Modes are Windows default `0`, Gamma 2.2 `1`,
+and Gamma 2.4 `2`; live IDs are nonzero. ACK `0x300D` is exactly 16 bytes:
+`{u8 version=1, u8 status, u8 requested, u8 applied, u32 request_id, u32 generation, f32 white_nits}`.
+Statuses are applied `0`, invalid `1`, unsupported `2`, and failed `3`. Generation must be nonzero;
+SDR white must be finite and within 40–1000 nits. The host acknowledges actual conversion after an
+encoded frame. Stored desired settings never prove applied output. Only a matching request/mode,
+valid ACK, and non-regressed generation change the active label. ID zero supplies initial proof and
+strictly newer encoder rebuild/white-level synchronization for the same acknowledged requested
+mode. Valid synchronization may change the actual mode, for example from an SDR refusal to Gamma
+2.4 after HDR returns, while preserving the desired Gamma 2.4 request. Pending requests ignore this
+unsolicited synchronization. A five-second live timeout leaves the last confirmed label and releases
+the settings controls without an automatic retry loop. A late matching reply may still prove the
+latest timed-out request if no newer request has started. After a failure, tapping the selected
+gamma option deliberately retries; selecting the already active option otherwise sends no request.
+Reconnect restores the desired setting through launch/resume.
+
+The pinned native submodule receives this extension from the tracked
+`app/src/main/jni/moonlight-core/stream-gamma-core.patch`. Gradle's `prepareStreamGammaCore` task
+applies it before native configuration/build, accepts an already applied patch, and fails on a
+conflict without overwriting source changes. Native transport CI applies the same patch explicitly.
+The parent repository's pinned submodule commit remains unchanged until the extension is published.
+
 The standard **Video frame pacing** list is the only decoder release-policy control. **Prefer lowest
 latency** nonblockingly drains ready MediaCodec outputs, discards superseded buffers, and immediately
 submits only the newest. **Balanced** alone uses the two-buffer Choreographer queue. The former LFR /
@@ -945,7 +983,7 @@ Sunshine and Apollo omit that element, so they use the standard GameStream runni
 resume and the standard tokenless cancel request. Absence is not equivalent to an advertised zero.
 
 - A genuinely new host session starts in **2D** (`NORMAL`) and inherits Global Settings.
-- Resuming the same host session/app, including the in-place restart after **Apply & reconnect**,
+- Resuming the same host session/app, including an automatic in-place settings restart,
   starts with the last successfully applied presentation intent and that mode's saved stream-quality
   tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
   required) succeeds.
@@ -953,7 +991,7 @@ resume and the standard tokenless cancel request. Absence is not equivalent to a
   intent starts with its format reset to 2D.
   Neither saved identity proves current stereo content. Legacy Raw restores Normal.
 - Panel height is durable per machine and is restored independently of presentation mode.
-- Apply snapshots the live quad before SceneCore teardown and transiently hands its effective
+- A settings restart snapshots the live quad before SceneCore teardown and transiently hands its effective
   height plus real-world pose to the replacement Activity. This preserves both physical size and
   apparent size from the user's chosen distance; pose is not made a durable cross-session setting.
 - Transport, authentication, and pre-frame startup failures preserve the last successful mode;
@@ -999,7 +1037,7 @@ expired session instead of silently launching with old preferences. Replace canc
 captured session; after successful cancel, its retry authority becomes Start. Standard hosts use
 app identity and tokenless cancel. Their protocol cannot detect a same-app generation
 replacement without a token. Successful establishment replaces the Activity's launch request with
-Resume so Apply and Activity recreation cannot replay replacement authority.
+Resume so settings restarts and Activity recreation cannot replay replacement authority.
 
 `PresentationMode` is the shared saved intent identity; current Movie picture interpretation is
 separate transient presenter state. The current-session record owns the successfully applied intent;
@@ -1056,21 +1094,32 @@ writes. Global Settings remain the inheritance source across PCs and sessions; a
 override is stored only while it differs from its global value.
 
 Each of the five presentation modes owns an independent stream-quality tuple: **resolution, frame
-rate, and bitrate**. Changing one mode's tuple never changes another mode. Selecting a mode whose
-saved or newly staged tuple cannot apply live commits the complete staged session record and
-reconnects into that tuple before any host presentation request or surface handoff. This also applies
-when any staged setting requires a reconnect, even if the target quality tuple already matches the
-live stream. An interim mode ACK must not persist a new HDR/codec choice before the stream adopts it.
-Committing the
-whole record ensures that shared or other-mode edits cannot be lost when the Activity is recreated.
-Live-compatible quality changes retain the guarded ACK and first-frame completion paths. Without
-staged reconnect-only work, a same-tuple Game/Movie/2D switch remains live. Entering Game starts
+rate, and bitrate**. Changing one mode's tuple never changes another mode. In-session choices apply
+automatically after a short debounce; there is no Apply button. Rapid choices within that window
+coalesce into the final target. Gamma and live quality transactions are serialized, and settings
+and presentation choices are disabled while a transaction is outstanding so an ACK cannot consume
+a later edit. Live-compatible quality changes retain the guarded ACK and first-frame completion
+paths. A failure releases controls and reports the last proven state without repeatedly resending
+the failed target.
+
+Selecting a mode whose saved or newly selected tuple cannot apply live commits the complete pending
+session record and restarts into that tuple before any host presentation request or surface handoff.
+Shared settings that require stream negotiation, such as HDR or codec, use the same automatic
+restart. An interim mode ACK must not persist a new HDR/codec choice before the stream adopts it.
+Committing the whole record ensures shared and other-mode choices survive Activity recreation.
+The owned-stream restart disconnects only the stream, waits for native and XR resource cleanup,
+and resumes the established session with its bound app identity and host token. It requires no
+confirmation because it neither quits the game nor replaces a host session. A changed or ended
+session is rejected by the existing Resume checks; automatic settings work must never bypass them
+or fall back to Start, Replace, or `/cancel`. Actions that explicitly end or replace a game retain
+their separate confirmation and ownership policy.
+
+With no reconnect-only work, a same-tuple Game/Movie/2D switch remains live. Entering Game starts
 mono; leaving packed Game uses a guarded transition back to the ordinary stream. The AI modes
-retain their guarded wire-mode and decoder-ownership transitions.
-**Apply & reconnect** remains the explicit action when no mode-quality or transport change already
-requires a restart. The Client SBS ZipDepth aspect graph is derived from the pending Client SBS
-resolution and is not an independent setting. Movie's manual format is not a saved preference and
-is not committed with quality or used to change stream geometry.
+retain their guarded wire-mode and decoder-ownership transitions. The Client SBS ZipDepth aspect
+graph is derived from the pending Client SBS resolution and is not an independent setting. Movie's
+manual format is not a saved preference and is not committed with quality or used to change stream
+geometry.
 
 The resolution ladder keeps its six established landscape choices first, then adds twelve common
 phone/tablet source sizes. One explicit portrait counterpart for each of the eighteen landscape
@@ -1117,16 +1166,16 @@ over the real portrait-content grid rather than the wider padded tensor grid. Ev
 is reflected before the decoder transform; mirroring only the center is incorrect where a
 footprint crosses a padding fold.
 
-The settings truly shared by all five modes are **codec, video frame pacing, HDR, Full/Limited video
-range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
+The settings truly shared by all five modes are **codec, video frame pacing, HDR, stream gamma,
+Full/Limited video range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
 shared set. Global Settings provide the cross-session defaults for both the shared set and the
 quality baseline inherited independently by each mode.
 
 The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 200 Mbps, HEVC, HDR, Full
 range, and latency pacing**, with stereo audio and host audio off. There is no global Raw packing
-picker. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits the
-values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
-**Use session settings** discards staged edits and restores that mode's durable current-session
+picker. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits and automatically
+applies the values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
+**Use session settings** discards pending edits and restores that mode's durable current-session
 values, falling back to its current global values where no session override exists.
 
 2D, Game, Movie and Host AI 3D therefore begin with a durable **90 FPS ceiling**. Client SBS
@@ -1205,10 +1254,10 @@ reapply the observed lower rung afterward. If a user-origin staged commit lost i
 mandatory resynchronization still reconnects the last durable record; a stale-settings warning must
 never leave an ambiguous live stream running.
 
-**Apply & reconnect** commits every staged shared setting, every per-mode quality tuple, and the
-selected startup intent as one guarded record replacement. The Client SBS model is fixed; Movie
-packing remains transient. It then waits for
-decoder and deferred GPU/XR cleanup before recreating the singleTask `Game` activity in place. The
+An automatic settings restart commits every pending shared setting, every per-mode quality tuple,
+and the selected startup intent as one guarded record replacement. The Client SBS model is fixed;
+Movie packing remains transient. It then waits for decoder and deferred GPU/XR cleanup before
+recreating the singleTask `Game` activity in place. The
 old Activity's ordinary no-history stop path must not finish this intentional replacement, so the
 stream resumes immediately instead of exposing the application grid. A stale panel generation
 cannot write into a replacement session. Legacy records that stored quality as shared values are
@@ -1317,8 +1366,8 @@ when the panel is narrow. FPS uses a compact segmented control, and bitrate uses
 six-rung segmented ladder at **50 / 70 / 100 / 140 / 200 / 300 Mbps**, with the stream-shape
 recommendation marked on its rung. The
 row identifies Global versus Current Session inheritance, shows the tuple currently backing the
-live decoder, and offers the same atomic **Apply & reconnect** action whenever any scoped change
-requires it.
+live decoder, and automatically applies selections through a guarded live transaction or an owned
+stream restart.
 
 2D and Host AI rows also show their presentation/source status. Client AI adds only its fixed
 ZipDepth identity, resolution-derived aspect bucket, and live GPU backend status; it has no model
@@ -1327,12 +1376,12 @@ ReShade or a compatible provider and reflects host-confirmed source status, with
 selector, Ready toggle, or image heuristic. Movie's card exposes only the implemented 2D/Half SBS/Full SBS interpretation
 buttons, with no Auto choice. Restoring
 values is scoped:
-the shared pane's **Use global defaults** stages the currently saved global shared values, while a
+the shared pane's **Use global defaults** selects and automatically applies the currently saved global shared values, while a
 mode row's **Use session settings** restores only that mode's durable quality tuple. It does not
 restore transient Movie packing or reinterpret legacy Raw's Full/Half field.
 
 The Settings tile opens the left side panel for values shared by every mode in the current PC
-session. Its six controls use two short semantic columns: Video (HDR, range, codec) and Delivery
+session. Its controls use two short semantic columns: Video (HDR, gamma, range, codec) and Delivery
 (pacing, audio layout, host audio), with large XR-readable labels, choice targets, and status text.
 Each setting is a distinct raised card under a strong semantic heading; mode options likewise group
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
@@ -1438,7 +1487,7 @@ exposed mode tile can never replace the target beneath the pointer or require a 
 Auto-collapse is allowed only while session controls are enabled, no dock child is hovered or
 focused, no Settings/Stats/mode-options pane is open, no reconnect-required change is pending,
 and no mode switch, decoder handoff/IDR gate, or depth-engine transition is active. If any guard
-becomes active, cancel the timer and keep the full dock visible so work and Apply actions cannot be
+becomes active, cancel the timer and keep the full dock visible so settings work and its status cannot be
 hidden. This is a soft visibility policy only; it must not alter the dock pose or presentation mode.
 
 ### Stats content and telemetry
@@ -1574,8 +1623,8 @@ For every mode/surface change, test:
   Apollo-3D control messages, use app-identity resume/tokenless cancel, and reconnect for quality
   changes; verify Apollo-3D retains exact generation-token checks and live controls.
 - A new session starts 2D with inherited global defaults; host-confirmed resume and the
-  Apply-triggered restart restore the last successful intent with that mode's saved quality tuple.
-  Game starts mono and revalidates the source; Movie resets to 2D on resume. Replace a running app, then Apply/reconnect
+  automatic settings restart restore the last successful intent with that mode's saved quality tuple.
+  Game starts mono and revalidates the source; Movie resets to 2D on resume. Replace a running app, then change a reconnect-only setting
   and switch among mode quality tuples; neither intentional
   resume may replay the initial replacement authority. Race an active session against Start:
   the custom host must reject `/launch` without any client `/cancel`, while an idle retained session
@@ -1584,13 +1633,25 @@ For every mode/surface change, test:
   successor or launch with the expired session's preferences. With landscape Normal and portrait Host
   AI saved separately, switching in either direction must reconnect into the target tuple and
   preserve both resolutions.
-- Stage distinct resolution/FPS/bitrate tuples for all five modes and confirm they remain isolated.
+- Select distinct resolution/FPS/bitrate tuples for all five modes and confirm they remain isolated.
   A successfully selected mode whose tuple differs from the live decoder must reconnect into that
   tuple automatically. Same-tuple switches stay live through the applicable ACK/frame barrier,
   including exit from packed Game. Selecting Game begins in mono; only validated source readiness
   may widen its encoded stream. Neither Game readiness nor Movie format doubles the desktop.
-  Movie format never changes encoded width. Any other staged edits must be
+  Movie format never changes encoded width. Any other pending edits must be
   committed in the same atomic record before that automatic Activity recreation.
+- Change several bitrate rungs or quality choices within the debounce window and verify only the
+  final tuple is sent. Combine gamma and quality choices; each transaction must settle before the
+  next starts, with controls disabled only while actual work is outstanding. A timeout or refused
+  gamma choice leaves the last confirmed active label, releases controls, and never creates a retry
+  loop. Stop or recreate before the debounce fires; no delayed edit or old ACK may affect the new
+  connection.
+- Change HDR, codec, or another reconnect-only choice during an established owned session. The
+  stream must restart automatically without a confirmation or `/cancel`, preserve the game and
+  pose, and resume the same app/token. Test fresh serverinfo reporting a changed app, changed token,
+  and ended session: every Resume must fail closed without quitting a successor or launching a new
+  game. Reset to the currently saved global defaults and verify inheritance plus unrelated mode
+  tuples survive the same guarded record write.
 - Game stays mono on hosts without GameProviderV1. On a supporting host, exercise source status
   before and after ACK/frame completion, exact packed raster acceptance, unsupported mono fitting,
   source-loss duplicate-eye fallback, overlay/focus recovery, and exit to OFF/AI. Wide frames and
@@ -1667,7 +1728,7 @@ For every mode/surface change, test:
   available during the host's grace window. End session in the library explicitly cancels it.
 - After eight idle seconds the dock leaves its reveal/status pill, then expands on the first
   explicit press/pinch.
-  It must remain expanded while a pane, pending Apply, depth preparation,
+  It must remain expanded while a pane, pending settings transaction, depth preparation,
   mode/decoder transition, or focused/hovered control is active.
 - Repeated disconnect/resume/mode switches do not leak surfaces, entities, EGL contexts, leases, or
   fences and do not recreate LiteRT during a stable stream.

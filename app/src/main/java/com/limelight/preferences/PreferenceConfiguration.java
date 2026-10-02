@@ -140,6 +140,7 @@ public class PreferenceConfiguration {
     private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
     public static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
+    public static final String STREAM_GAMMA_PREF_STRING = "stream_gamma";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
     private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
@@ -449,6 +450,7 @@ public class PreferenceConfiguration {
     public boolean onlyL3R3;
     public boolean showGuideButton;
     public boolean enableHdr;
+    public com.limelight.nvstream.StreamGamma streamGamma;
     public boolean enablePip;
 
     public boolean enablePerfOverlay;
@@ -802,6 +804,7 @@ public class PreferenceConfiguration {
                 .remove(ENABLE_HDR_PREF_STRING)
                 .remove(UNLOCK_FPS_STRING)
                 .remove(FULL_RANGE_PREF_STRING)
+                .remove(STREAM_GAMMA_PREF_STRING)
                 .apply();
     }
 
@@ -1058,6 +1061,8 @@ public class PreferenceConfiguration {
         config.onlyL3R3 = prefs.getBoolean(ONLY_L3_R3_PREF_STRING, ONLY_L3_R3_DEFAULT);
         config.showGuideButton = prefs.getBoolean(SHOW_GUIDE_BUTTON_PREF_STRING, SHOW_GUIDE_BUTTON_DEFAULT);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
+        config.streamGamma = com.limelight.nvstream.StreamGamma.fromPreference(
+                prefs.getString(STREAM_GAMMA_PREF_STRING, "default"));
         config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfOverlayLite = prefs.getBoolean("checkbox_enable_perf_overlay_lite",DEFAULT_ENABLE_PERF_OVERLAY);

@@ -187,9 +187,6 @@ public class XrStreamPresenter {
         default void onUseGlobalDefaultsRequested(SessionSettingsModel current) {
         }
 
-        default void onApplyAndReconnectRequested(SessionSettingsModel pending) {
-        }
-
         default boolean onModeQualitySettingSelected(PresentationMode mode,
                                                      SessionSettingsModel.Key key,
                                                      String choiceId,
@@ -262,7 +259,7 @@ public class XrStreamPresenter {
     private final StatsVisibilityListener statsVisibilityListener;
     private ControlActionListener controlActionListener;
     private final XrViewStateStore viewStateStore;
-    /** Apply-only handoff. Pose is intentionally not a durable per-PC preference. */
+    /** Settings-restart handoff. Pose is intentionally not a durable per-PC preference. */
     private final XrReconnectViewState reconnectViewState;
 
     private Session session;
@@ -330,7 +327,7 @@ public class XrStreamPresenter {
             new EnumMap<>(PresentationMode.class);
     private ClientSbsModeSettingsModel clientSbsModeSettingsModel;
     private RawSbsModeSettingsModel rawSbsModeSettingsModel;
-    /** Anything staged differs from the live connection (the Apply button's enabled state). */
+    /** A requested setting still differs from the live connection. */
     private boolean reconnectPending;
     /** Whether applying that staged state must reconnect rather than change the stream live. */
     private boolean applyRequiresReconnect = true;
@@ -408,6 +405,8 @@ public class XrStreamPresenter {
         reconcilePanelRefreshRate();
     };
     private boolean sessionControlsEnabled = true;
+    private boolean settingsTransactionPending;
+    private PresentationMode settingsRequestedPresentationMode;
     private final EnumMap<SessionSettingsModel.Key, XrChoiceGroup> sessionChoiceGroups =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private final EnumMap<SessionSettingsModel.Key, XrBitrateControl> sessionBitrateControls =
@@ -417,14 +416,12 @@ public class XrStreamPresenter {
     private final EnumMap<SessionSettingsModel.Key, TextView> sessionPendingViews =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private Button sessionDefaultsButton;
-    private Button sessionApplyButton;
     private PresentationMode renderedModeOptionsMode;
     private XrResolutionSelector modeResolutionSelector;
     private XrSegmentedLadder modeFpsLadder;
     private XrBitrateControl modeBitrateControl;
     private TextView modeQualityCueView;
     private Button modeDefaultsButton;
-    private Button modeApplyButton;
     private TextView clientModelNameView;
     private TextView clientAspectBucketView;
     private TextView clientRuntimeStatusView;
@@ -1307,7 +1304,7 @@ public class XrStreamPresenter {
         }
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
-                item.setEnabled(streamPresentationReady && sessionControlsEnabled
+                item.setEnabled(streamPresentationReady && settingsControlsEnabled()
                         && isPresentationModeSupported(
                                 item.selectsMode, hostControlExtensionsSupported));
             }
@@ -1400,7 +1397,7 @@ public class XrStreamPresenter {
 
     private boolean canReconcileGameSource() {
         return controlTransportOpen() && gameProviderV1Supported && streamPresentationReady
-                && sessionControlsEnabled && currentPresenterMode == PresentationMode.GAME_3D
+                && settingsControlsEnabled() && currentPresenterMode == PresentationMode.GAME_3D
                 && !modeSwitchInProgress && !liveQualityTransactionBusy()
                 && pendingDecoderTransitionMode == null && !clientSbsHdrTransitionInProgress
                 && !gameSourceState.hasWidenFailure();
@@ -1501,7 +1498,6 @@ public class XrStreamPresenter {
             updateModeOptionsView();
         } else if (controlUiState.getVisibleSurface()
                 == XrControlUiState.Surface.SESSION_SETTINGS && auxiliaryContentHost != null) {
-            updateSessionApplyButton();
         }
     }
 
@@ -1547,11 +1543,36 @@ public class XrStreamPresenter {
         updateDockVisibilityPolicy();
     }
 
-    /** Prevent late settings or mode-choice taps after Apply has begun stream teardown. */
+    /** Prevent late settings or mode-choice taps after stream teardown begins. */
     public void setSessionControlsEnabled(boolean enabled) {
         sessionControlsEnabled = enabled;
-        for (XrChoiceGroup group : sessionChoiceGroups.values()) {
-            group.setEnabled(enabled);
+        updateSessionControlAvailability();
+    }
+
+    /** Live setting transactions keep the picture and Disconnect available. */
+    public void setSettingsTransactionPending(boolean pending) {
+        if (settingsTransactionPending == pending) return;
+        settingsTransactionPending = pending;
+        updateSessionControlAvailability();
+        if (!pending) {
+            schedulePanelRateReconcile();
+            scheduleGameSourceReconcile();
+        }
+    }
+
+    public void setSettingsRequestedPresentationMode(PresentationMode mode) {
+        settingsRequestedPresentationMode = mode;
+    }
+
+    private boolean settingsControlsEnabled() {
+        return sessionControlsEnabled && !settingsTransactionPending;
+    }
+
+    private void updateSessionControlAvailability() {
+        boolean enabled = settingsControlsEnabled();
+        for (Map.Entry<SessionSettingsModel.Key, XrChoiceGroup> entry : sessionChoiceGroups.entrySet()) {
+            SessionSettingsModel.Value value = sessionSettingsModel.get(entry.getKey());
+            entry.getValue().setEnabled(enabled && value != null && value.enabled);
         }
         if (sessionDefaultsButton != null) {
             sessionDefaultsButton.setEnabled(enabled);
@@ -1578,9 +1599,6 @@ public class XrStreamPresenter {
         if (modeDefaultsButton != null) {
             modeDefaultsButton.setEnabled(enabled);
         }
-        if (modeApplyButton != null) {
-            modeApplyButton.setEnabled(enabled && reconnectPending);
-        }
         updateCinemaOptionsView();
         for (BarItem item : barItems) {
             if (item.selectsMode != null && item.tapTarget != null) {
@@ -1589,7 +1607,6 @@ public class XrStreamPresenter {
                                 item.selectsMode, hostControlExtensionsSupported));
             }
         }
-        updateSessionApplyButton();
         updateGlancePanel();
         revealDockTemporarily();
     }
@@ -1989,7 +2006,7 @@ public class XrStreamPresenter {
             bar.addView(tile, lp);
             item.root = tile;
             if (isMode) {
-                item.setEnabled(streamPresentationReady && sessionControlsEnabled
+                item.setEnabled(streamPresentationReady && settingsControlsEnabled()
                         && isPresentationModeSupported(
                                 item.selectsMode, hostControlExtensionsSupported));
             }
@@ -2241,7 +2258,7 @@ public class XrStreamPresenter {
                 prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
                         : activity.getString(R.string.xr_glance_sdr)));
 
-        boolean liveStatus = streamPresentationReady && sessionControlsEnabled
+        boolean liveStatus = streamPresentationReady && sessionControlsEnabled && !settingsTransactionPending
                 && !modeSwitchInProgress && !liveQualityTransactionBusy()
                 && pendingDecoderTransitionMode == null
                 && !isDepthBusy() && !reconnectPending;
@@ -2252,7 +2269,7 @@ public class XrStreamPresenter {
         else if (!sessionControlsEnabled) {
             statusText = R.string.xr_glance_reconnecting;
         }
-        else if (modeSwitchInProgress || pendingDecoderTransitionMode != null || isDepthBusy()) {
+        else if (settingsTransactionPending || modeSwitchInProgress || pendingDecoderTransitionMode != null || isDepthBusy()) {
             statusText = R.string.xr_glance_switching;
         }
         else if (reconnectPending) {
@@ -2482,8 +2499,14 @@ public class XrStreamPresenter {
 
     private void onModeTileTapped(BarItem item) {
         revealDockTemporarily();
-        if (!streamPresentationReady || modeSwitchInProgress || item.selectsMode == null) {
+        if (!settingsControlsEnabled() || !streamPresentationReady || modeSwitchInProgress || item.selectsMode == null) {
             return;
+        }
+
+        // A tap on the active mode cancels a debounced reconnect to a different mode.
+        if (settingsRequestedPresentationMode != null && item.selectsMode == currentPresenterMode) {
+            settingsRequestedPresentationMode = null;
+            controlActionListener.onPresentationModeCommitted(currentPresenterMode);
         }
         if (!isPresentationModeSupported(
                 item.selectsMode, hostControlExtensionsSupported)) {
@@ -2542,7 +2565,7 @@ public class XrStreamPresenter {
     }
 
     private void onCinemaTileTapped() {
-        if (!sessionControlsEnabled || !controlTransportOpen()) {
+        if (!settingsControlsEnabled() || !controlTransportOpen()) {
             return;
         }
         long now = android.os.SystemClock.uptimeMillis();
@@ -2559,7 +2582,7 @@ public class XrStreamPresenter {
     }
 
     private void onCinemaActionTapped() {
-        if (!sessionControlsEnabled || !controlTransportOpen()) {
+        if (!settingsControlsEnabled() || !controlTransportOpen()) {
             return;
         }
         long now = android.os.SystemClock.uptimeMillis();
@@ -2899,7 +2922,7 @@ public class XrStreamPresenter {
 
     private void updateCinemaOptionsView() {
         if (cinemaEnvironmentChoiceGroup != null) {
-            cinemaEnvironmentChoiceGroup.setEnabled(sessionControlsEnabled);
+            cinemaEnvironmentChoiceGroup.setEnabled(settingsControlsEnabled());
             cinemaEnvironmentChoiceGroup.setSelectedValue(
                     prefConfig.cinemaEnvironment.preferenceValue);
         }
@@ -2950,7 +2973,7 @@ public class XrStreamPresenter {
         resolutionColumn.addView(resolutionTitle);
         modeResolutionSelector = XrResolutionSelector.forModeSubpane(activity);
         modeResolutionSelector.setSelectedResolutionId(model.pendingQuality.resolution);
-        modeResolutionSelector.setEnabled(sessionControlsEnabled);
+        modeResolutionSelector.setEnabled(settingsControlsEnabled());
         modeResolutionSelector.setOnResolutionSelectedListener(choiceId ->
                 controlActionListener.onModeQualitySettingSelected(mode,
                         SessionSettingsModel.Key.RESOLUTION, choiceId,
@@ -2982,7 +3005,7 @@ public class XrStreamPresenter {
         fpsCard.addView(fpsHeading);
         modeFpsLadder = new XrSegmentedLadder(activity);
         configureFpsLadder(mode, fps, model);
-        modeFpsLadder.setEnabled(sessionControlsEnabled);
+        modeFpsLadder.setEnabled(settingsControlsEnabled());
         fpsCard.addView(modeFpsLadder, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -3010,7 +3033,7 @@ public class XrStreamPresenter {
                         controlActionListener.onModeQualitySettingSelected(mode,
                                 SessionSettingsModel.Key.BITRATE, choiceId,
                                 modeStreamQualityModels.get(mode)));
-        modeBitrateControl.setEnabled(sessionControlsEnabled);
+        modeBitrateControl.setEnabled(settingsControlsEnabled());
         bitrateCard.addView(modeBitrateControl, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -3050,21 +3073,11 @@ public class XrStreamPresenter {
 
         modeDefaultsButton = compactButton(
                 activity.getString(R.string.xr_session_use_session));
-        modeDefaultsButton.setEnabled(sessionControlsEnabled);
+        modeDefaultsButton.setEnabled(settingsControlsEnabled());
         modeDefaultsButton.setOnClickListener(v -> controlActionListener
                 .onUseSessionModeDefaultsRequested(mode, modeStreamQualityModels.get(mode)));
         footer.addView(modeDefaultsButton);
 
-        modeApplyButton = compactButton(applyButtonLabel());
-        modeApplyButton.setBackgroundResource(R.drawable.xr_home_primary_action_background);
-        modeApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
-        modeApplyButton.setOnClickListener(v -> controlActionListener
-                .onApplyAndReconnectRequested(sessionSettingsModel));
-        LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        applyParams.leftMargin = dimen(R.dimen.xr_space_md);
-        footer.addView(modeApplyButton, applyParams);
         root.addView(footer);
     }
 
@@ -3213,7 +3226,7 @@ public class XrStreamPresenter {
                 new SessionSettingsModel.Choice("half_sbs", activity.getString(R.string.xr_movie_format_half_sbs)),
                 new SessionSettingsModel.Choice("full_sbs", activity.getString(R.string.xr_movie_format_full_sbs))),
                 moviePictureFormatId(), "", this::onMoviePictureFormatSelected);
-        moviePictureFormatChoiceGroup.setEnabled(sessionControlsEnabled && streamPresentationReady);
+        moviePictureFormatChoiceGroup.setEnabled(settingsControlsEnabled() && streamPresentationReady);
         card.addView(moviePictureFormatChoiceGroup);
     }
 
@@ -3226,7 +3239,7 @@ public class XrStreamPresenter {
     }
 
     private boolean onMoviePictureFormatSelected(String choiceId) {
-        if (!controlTransportOpen() || !sessionControlsEnabled || !streamPresentationReady
+        if (!controlTransportOpen() || !settingsControlsEnabled() || !streamPresentationReady
                 || currentPresenterMode != PresentationMode.MOVIE_3D
                 || modeSwitchInProgress || liveQualityTransactionBusy()
                 || surfaceEntity == null || surfaceEntity.isDisposed()) {
@@ -3283,7 +3296,7 @@ public class XrStreamPresenter {
                 model.choices, model.selectedChoiceId, model.pendingResolutionName,
                 choiceId -> controlActionListener.onRawSbsPerEyeResolutionSelected(
                         choiceId, rawSbsModeSettingsModel));
-        rawSbsPerEyeResolutionChoiceGroup.setEnabled(sessionControlsEnabled);
+        rawSbsPerEyeResolutionChoiceGroup.setEnabled(settingsControlsEnabled());
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -3368,7 +3381,6 @@ public class XrStreamPresenter {
         modeBitrateControl = null;
         modeQualityCueView = null;
         modeDefaultsButton = null;
-        modeApplyButton = null;
         clientModelNameView = null;
         clientAspectBucketView = null;
         clientRuntimeStatusView = null;
@@ -3395,13 +3407,13 @@ public class XrStreamPresenter {
         }
 
         modeResolutionSelector.setSelectedResolutionId(model.pendingQuality.resolution);
-        modeResolutionSelector.setEnabled(sessionControlsEnabled);
+        modeResolutionSelector.setEnabled(settingsControlsEnabled());
         SessionSettingsModel.Value fps = model.get(SessionSettingsModel.Key.FRAME_RATE);
         String fpsId = qualityChoiceId(fps, model.pendingQuality.frameRate);
         if (!modeFpsLadder.setSelectedChoiceId(fpsId)) {
             configureFpsLadder(mode, fps, model);
         }
-        modeFpsLadder.setEnabled(sessionControlsEnabled);
+        modeFpsLadder.setEnabled(settingsControlsEnabled());
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
         String bitrateId = qualityChoiceId(bitrate,
                 String.valueOf(model.pendingQuality.bitrateKbps));
@@ -3413,16 +3425,14 @@ public class XrStreamPresenter {
                         controlActionListener.onModeQualitySettingSelected(mode,
                                 SessionSettingsModel.Key.BITRATE, choiceId,
                                 modeStreamQualityModels.get(mode)));
-        modeBitrateControl.setEnabled(sessionControlsEnabled);
+        modeBitrateControl.setEnabled(settingsControlsEnabled());
         modeQualityCueView.setText(modeQualityCue(model));
         modeQualityCueView.setTextColor(model.requiresReconnect()
                 ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_text_secondary));
-        modeDefaultsButton.setEnabled(sessionControlsEnabled);
-        modeApplyButton.setText(applyButtonLabel());
-        modeApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
+        modeDefaultsButton.setEnabled(settingsControlsEnabled());
         if (moviePictureFormatChoiceGroup != null) {
             moviePictureFormatChoiceGroup.setSelectedValue(moviePictureFormatId());
-            moviePictureFormatChoiceGroup.setEnabled(sessionControlsEnabled && streamPresentationReady
+            moviePictureFormatChoiceGroup.setEnabled(settingsControlsEnabled() && streamPresentationReady
                     && !modeSwitchInProgress && !liveQualityTransactionBusy());
         }
         if (mode == PresentationMode.CLIENT_SBS_AI) {
@@ -3447,7 +3457,7 @@ public class XrStreamPresenter {
                     choiceId -> controlActionListener.onRawSbsPerEyeResolutionSelected(
                             choiceId, rawSbsModeSettingsModel));
         }
-        rawSbsPerEyeResolutionChoiceGroup.setEnabled(sessionControlsEnabled);
+        rawSbsPerEyeResolutionChoiceGroup.setEnabled(settingsControlsEnabled());
         rawSbsPerEyeResolutionSourceView.setText(rawSbsSourceText(model));
         rawSbsGeometryView.setText(rawSbsGeometryText(model));
         updateRawSbsPendingView(model);
@@ -3571,7 +3581,7 @@ public class XrStreamPresenter {
             SessionSettingsModel.Value value = sessionSettingsModel.get(key);
             if (value != null) {
                 (sharedSettingColumn(key) == 0 ? videoColumn : deliveryColumn)
-                        .addView(buildSessionSettingRow(key, value));
+                        .addView(buildSessionSettingRow(key, localizeSessionSettingValue(key, value)));
             }
         }
         LinearLayout.LayoutParams videoParams = new LinearLayout.LayoutParams(
@@ -3589,10 +3599,7 @@ public class XrStreamPresenter {
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f));
 
-        // Both actions sit in one footer, matching the mode pane. "Use global defaults" used to
-        // live in the header, where it competed with the title and left the two buttons in
-        // opposite corners of the pane; a reset and its apply belong side by side, reset first so
-        // the primary action stays where the eye finishes.
+        // Defaults follow the same automatic setting path as individual choices.
         LinearLayout footer = new LinearLayout(activity);
         footer.setOrientation(LinearLayout.HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
@@ -3600,21 +3607,11 @@ public class XrStreamPresenter {
 
         sessionDefaultsButton = compactButton(
                 activity.getString(R.string.xr_session_use_global));
-        sessionDefaultsButton.setEnabled(sessionControlsEnabled);
+        sessionDefaultsButton.setEnabled(settingsControlsEnabled());
         sessionDefaultsButton.setOnClickListener(v -> controlActionListener
                 .onUseGlobalDefaultsRequested(sessionSettingsModel));
         footer.addView(sessionDefaultsButton);
 
-        sessionApplyButton = compactButton(applyButtonLabel());
-        sessionApplyButton.setBackgroundResource(R.drawable.xr_home_primary_action_background);
-        sessionApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
-        sessionApplyButton.setOnClickListener(v -> controlActionListener
-                .onApplyAndReconnectRequested(sessionSettingsModel));
-        LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        applyParams.leftMargin = dimen(R.dimen.xr_space_md);
-        footer.addView(sessionApplyButton, applyParams);
         root.addView(footer);
         return root;
     }
@@ -3635,6 +3632,7 @@ public class XrStreamPresenter {
     static int sharedSettingColumn(SessionSettingsModel.Key key) {
         switch (key) {
             case HDR:
+            case STREAM_GAMMA:
             case VIDEO_RANGE:
             case CODEC:
                 return 0;
@@ -3682,7 +3680,9 @@ public class XrStreamPresenter {
         XrChoiceGroup choices = buildChoiceGroup(value.choices, value.selectedChoiceId,
                 value.pendingValue, choiceId -> controlActionListener.onSharedSettingSelected(
                         key, choiceId, sessionSettingsModel));
-        choices.setEnabled(sessionControlsEnabled);
+        choices.setReselectEnabled(key == SessionSettingsModel.Key.STREAM_GAMMA
+                && value.descriptionRes == R.string.xr_stream_gamma_failed);
+        choices.setEnabled(settingsControlsEnabled() && value.enabled);
         sessionChoiceGroups.put(key, choices);
         LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -3701,6 +3701,21 @@ public class XrStreamPresenter {
         lp.bottomMargin = dimen(R.dimen.xr_space_md);
         row.setLayoutParams(lp);
         return row;
+    }
+
+    private SessionSettingsModel.Value localizeSessionSettingValue(SessionSettingsModel.Key key,
+                                                                    SessionSettingsModel.Value value) {
+        if (key != SessionSettingsModel.Key.STREAM_GAMMA) return value;
+        List<SessionSettingsModel.Choice> choices = new ArrayList<>();
+        for (SessionSettingsModel.Choice choice : value.choices) {
+            choices.add(new SessionSettingsModel.Choice(choice.id, activity.getString(
+                    com.limelight.nvstream.StreamGamma.fromPreference(choice.id).labelRes)));
+        }
+        return new SessionSettingsModel.Value(activity.getString(
+                    com.limelight.nvstream.StreamGamma.fromPreference(value.appliedValue).labelRes),
+                activity.getString(com.limelight.nvstream.StreamGamma.fromPreference(value.pendingValue).labelRes),
+                value.source, value.reconnectRequired, choices, value.selectedChoiceId,
+                value.enabled, value.descriptionRes);
     }
 
     private View buildSessionBitrateSettingRow(SessionSettingsModel.Key key,
@@ -3743,7 +3758,7 @@ public class XrStreamPresenter {
                 value.selectedChoiceId, value.pendingValue, choiceId ->
                         controlActionListener.onSharedSettingSelected(
                                 key, choiceId, sessionSettingsModel));
-        bitrateControl.setEnabled(sessionControlsEnabled);
+        bitrateControl.setEnabled(settingsControlsEnabled());
         sessionBitrateControls.put(key, bitrateControl);
         row.addView(bitrateControl, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -3798,7 +3813,6 @@ public class XrStreamPresenter {
         sessionPendingViews.clear();
         sessionBitrateControls.clear();
         sessionDefaultsButton = null;
-        sessionApplyButton = null;
     }
 
     private void updateSessionSettingsView() {
@@ -3810,6 +3824,7 @@ public class XrStreamPresenter {
             if (value == null) {
                 continue;
             }
+            value = localizeSessionSettingValue(key, value);
             if (key == SessionSettingsModel.Key.BITRATE) {
                 XrBitrateControl bitrateControl = sessionBitrateControls.get(key);
                 if (bitrateControl != null) {
@@ -3817,7 +3832,7 @@ public class XrStreamPresenter {
                             value.selectedChoiceId, value.pendingValue, choiceId ->
                                     controlActionListener.onSharedSettingSelected(
                                             key, choiceId, sessionSettingsModel));
-                    bitrateControl.setEnabled(sessionControlsEnabled);
+                    bitrateControl.setEnabled(settingsControlsEnabled());
                 }
             }
             else {
@@ -3831,7 +3846,9 @@ public class XrStreamPresenter {
                                     controlActionListener.onSharedSettingSelected(
                                             key, choiceId, sessionSettingsModel));
                 }
-                group.setEnabled(sessionControlsEnabled);
+                group.setEnabled(settingsControlsEnabled() && value.enabled);
+                group.setReselectEnabled(key == SessionSettingsModel.Key.STREAM_GAMMA
+                        && value.descriptionRes == R.string.xr_stream_gamma_failed);
             }
             TextView sourceView = sessionSourceViews.get(key);
             if (sourceView != null) {
@@ -3842,14 +3859,18 @@ public class XrStreamPresenter {
             updateSessionPendingView(sessionPendingViews.get(key), value);
         }
         if (sessionDefaultsButton != null) {
-            sessionDefaultsButton.setEnabled(sessionControlsEnabled);
+            sessionDefaultsButton.setEnabled(settingsControlsEnabled());
         }
-        updateSessionApplyButton();
     }
 
     private void updateSessionPendingView(TextView pending,
                                           SessionSettingsModel.Value value) {
         if (pending == null) {
+            return;
+        }
+        if (value.descriptionRes != 0) {
+            pending.setVisibility(View.VISIBLE);
+            pending.setText(activity.getString(value.descriptionRes, value.appliedValue));
             return;
         }
         pending.setVisibility(value.hasPendingChange() ? View.VISIBLE : View.GONE);
@@ -3859,23 +3880,6 @@ public class XrStreamPresenter {
         }
     }
 
-    private void updateSessionApplyButton() {
-        if (sessionApplyButton == null) {
-            return;
-        }
-        sessionApplyButton.setText(applyButtonLabel());
-        sessionApplyButton.setEnabled(sessionControlsEnabled && reconnectPending);
-    }
-
-    /** Three-state Apply label: nothing pending / apply live / apply &amp; reconnect. */
-    private String applyButtonLabel() {
-        if (!reconnectPending) {
-            return activity.getString(R.string.xr_session_no_reconnect_changes);
-        }
-        return applyRequiresReconnect
-                ? activity.getString(R.string.xr_session_apply_reconnect)
-                : activity.getString(R.string.xr_session_apply_live);
-    }
 
     private LinearLayout panelColumn() {
         LinearLayout root = new LinearLayout(activity);
@@ -4045,6 +4049,7 @@ public class XrStreamPresenter {
             case CODEC:
                 return R.drawable.ic_xr_codec;
             case HDR:
+            case STREAM_GAMMA:
                 return R.drawable.ic_xr_hdr;
             case VIDEO_RANGE:
                 return R.drawable.ic_xr_video_range;
@@ -4069,6 +4074,8 @@ public class XrStreamPresenter {
                 return activity.getString(R.string.title_bitrate_ceiling);
             case HDR:
                 return activity.getString(R.string.title_enable_hdr);
+            case STREAM_GAMMA:
+                return activity.getString(R.string.title_stream_gamma);
             case VIDEO_RANGE:
                 return activity.getString(R.string.title_full_range);
             case CODEC:
@@ -5882,7 +5889,7 @@ public class XrStreamPresenter {
         reconcileHostSbsTelemetrySubscription();
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
-                item.setEnabled(sessionControlsEnabled && isPresentationModeSupported(
+                item.setEnabled(settingsControlsEnabled() && isPresentationModeSupported(
                         item.selectsMode, hostControlExtensionsSupported));
             }
         }
@@ -5940,7 +5947,7 @@ public class XrStreamPresenter {
      * the width changes (when the aspect changes), so the screen keeps its vertical size.
      */
     private void selectMode(BarItem item) {
-        if (!controlTransportOpen() || !streamPresentationReady || item.selectsMode == null
+        if (!settingsControlsEnabled() || !controlTransportOpen() || !streamPresentationReady || item.selectsMode == null
                 || !isPresentationModeSupported(
                         item.selectsMode, hostControlExtensionsSupported)
                 || surfaceEntity == null
@@ -6202,14 +6209,14 @@ public class XrStreamPresenter {
      *
      * <p>Main-thread only: every SceneCore call below is Activity-bound.</p>
      */
-    public void applyLiveStreamQuality(StreamQualityTuple target) {
+    public boolean applyLiveStreamQuality(StreamQualityTuple target) {
         if (!controlTransportOpen() || target == null) {
-            return;
+            return false;
         }
         if (!atomicPresentationV2Supported) {
             LimeLog.info("XR: host without atomic presentation v2 requires reconnect for stream-quality changes");
             controlActionListener.onLiveStreamQualityNeedsReconnect();
-            return;
+            return false;
         }
         float requestedCeiling = parseFrameRate(target.frameRate, prefConfig.fps);
         int effectiveFps = panelRefreshRateState.capUserTarget(
@@ -6218,8 +6225,13 @@ public class XrStreamPresenter {
                 ? target
                 : new StreamQualityTuple(
                         target.resolution, String.valueOf(effectiveFps), target.bitrateKbps);
-        applyLiveStreamQuality(
+        return applyLiveStreamQuality(
                 effectiveTarget, LiveQualityRequestOrigin.USER, target);
+    }
+
+    public boolean isStreamQualityTransactionBusy() {
+        return liveQualityTransactionBusy() || modeSwitchInProgress
+                || pendingDecoderTransitionMode != null || clientSbsHdrTransitionInProgress;
     }
 
     /**
@@ -6284,7 +6296,7 @@ public class XrStreamPresenter {
      * pending; its completion schedules this method again.
      */
     private void reconcilePanelRefreshRate() {
-        if (!controlTransportOpen()) {
+        if (!controlTransportOpen() || settingsTransactionPending) {
             return;
         }
         boolean blocked = !streamPresentationReady || surfaceEntity == null
@@ -8087,7 +8099,7 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Snapshots the live rendered geometry before Apply tears down SceneCore. The replacement
+     * Snapshots the live rendered geometry before a settings restart tears down SceneCore. The replacement
      * Activity consumes this transient Intent state, preserving both physical size and apparent
      * size from the screen's real-world distance.
      */

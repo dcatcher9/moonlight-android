@@ -1,5 +1,40 @@
 apply plugin: 'com.android.application'
 
+// Keep the native extension reproducible while moonlight-common-c is pinned to its upstream
+// commit. Apply only a clean, context-checked patch; never discard local submodule edits.
+def prepareStreamGammaCore = tasks.register('prepareStreamGammaCore') {
+    group = 'build setup'
+    description = 'Apply the versioned stream-gamma extension to moonlight-common-c'
+    inputs.file('src/main/jni/moonlight-core/stream-gamma-core.patch')
+    outputs.upToDateWhen { false }
+    doLast {
+        def core = file('src/main/jni/moonlight-core/moonlight-common-c')
+        def patch = file('src/main/jni/moonlight-core/stream-gamma-core.patch')
+        def runGit = { List<String> args ->
+            def command = ['git', '-C', core.absolutePath, 'apply'] + args + [patch.absolutePath]
+            def process = new ProcessBuilder(command).redirectErrorStream(true).start()
+            def output = process.inputStream.getText('UTF-8')
+            def code = process.waitFor()
+            [code: code, output: output]
+        }
+        if (!file("${core}/src/Limelight.h").exists()) {
+            throw new GradleException('Initialize git submodules before building stream gamma')
+        }
+        if (runGit(['--reverse', '--check']).code == 0) return
+        def check = runGit(['--check'])
+        if (check.code != 0) {
+            throw new GradleException("Stream gamma core patch conflicts with the checkout; " + check.output)
+        }
+        def applied = runGit([])
+        if (applied.code != 0) throw new GradleException(applied.output)
+    }
+}
+tasks.configureEach {
+    if (name == 'preBuild' || name.startsWith('configureNdkBuild') || name.startsWith('buildNdkBuild')) {
+        dependsOn prepareStreamGammaCore
+    }
+}
+
 android {
     ndkVersion = "30.0.16248370"
 
