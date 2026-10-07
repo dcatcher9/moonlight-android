@@ -1930,7 +1930,7 @@ public class XrStreamPresenter {
         BarItem movie = new BarItem(activity.getString(R.string.xr_bar_movie_3d),
                 R.drawable.ic_xr_mode_movie_3d, PresentationMode.MOVIE_3D);
         BarItem settings = new BarItem(
-                activity.getString(R.string.xr_home_settings),
+                activity.getString(R.string.xr_session_settings_title),
                 R.drawable.ic_settings, /* selectsMode= */ null);
         BarItem cinemaView = new BarItem(
                 activity.getString(R.string.xr_bar_cinema_view),
@@ -5849,7 +5849,7 @@ public class XrStreamPresenter {
                 rotation);
     }
 
-    /** Session Settings sits to the video's left and tilts inward toward the viewer. */
+    /** App Settings sits to the video's left and tilts inward toward the viewer. */
     private Pose sessionSettingsPose(float videoHeightMeters) {
         Vector3 viewer = statsViewerPositionLocal();
         StatsPanelPlacement placement = calculateLeftPanelPlacement(

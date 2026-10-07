@@ -441,19 +441,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             publishedHostSessionId))) {
                 // The user explicitly selected Resume from a fresh serverinfo snapshot. A new
                 // token generation (or a standard host with no saved local record) may be
-                // resumed, but stale per-session overrides must not cross that boundary.
+                // resumed with fresh ownership and this app's saved settings.
                 sessionSettingsStore.startNewSession(sessionPc, sessionApp,
                         hostSessionIdSupported ? publishedHostSessionId : null,
                         System.currentTimeMillis());
             }
         }
         else {
-            // A non-resume launch is a genuinely new host session even when it starts the same
-            // application as the previous one. Reusing that record would also reuse its saved
-            // presentation mode and per-session quality, causing a fresh stream to restore Client
-            // SBS after frame 1. Settings restarts and host-confirmed Resume both take the
-            // branch above, so they retain the exact record while a fresh launch starts Normal
-            // with inherited defaults.
+            // A non-resume launch gets a fresh local generation and host capability. Its settings
+            // come from this app's profile on this PC, independently of the ended session identity.
             sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
                     System.currentTimeMillis());
         }

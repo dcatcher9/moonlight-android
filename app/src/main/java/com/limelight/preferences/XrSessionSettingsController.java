@@ -308,7 +308,7 @@ public final class XrSessionSettingsController {
                 .setQualityDeltaRequiresReconnect(modeQualityDeltaRequiresReconnect(mode));
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
             if (key.isModeStreamQuality()) {
-                builder.put(key, valueForModel(key, applied.get(key), pending.get(key),
+                builder.put(key, valueForModel(mode, key, applied.get(key), pending.get(key),
                         appliedModeQualitySources.get(mode).get(key)));
             }
         }
@@ -386,21 +386,22 @@ public final class XrSessionSettingsController {
         EnumMap<SessionSettingsModel.Key, Object> appliedValues = appliedModeQuality.get(mode);
         EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source> sources =
                 appliedModeQualitySources.get(mode);
-        putAppliedQualityValue(appliedValues, sources,
+        putAppliedQualityValue(mode, appliedValues, sources,
                 SessionSettingsModel.Key.RESOLUTION, applied.resolution);
-        putAppliedQualityValue(appliedValues, sources,
+        putAppliedQualityValue(mode, appliedValues, sources,
                 SessionSettingsModel.Key.FRAME_RATE, applied.frameRate);
-        putAppliedQualityValue(appliedValues, sources,
+        putAppliedQualityValue(mode, appliedValues, sources,
                 SessionSettingsModel.Key.BITRATE, applied.bitrateKbps);
         modeInheritanceResetRequested.remove(mode);
     }
 
     private void putAppliedQualityValue(
+            PresentationMode mode,
             EnumMap<SessionSettingsModel.Key, Object> appliedValues,
             EnumMap<SessionSettingsModel.Key, SessionSettingsModel.Source> sources,
             SessionSettingsModel.Key key, Object value) {
         appliedValues.put(key, value);
-        sources.put(key, Objects.equals(value, globalValues.get(key))
+        sources.put(key, Objects.equals(value, inheritedModeValue(mode, key))
                 ? SessionSettingsModel.Source.GLOBAL
                 : SessionSettingsModel.Source.CURRENT_SESSION);
     }
@@ -711,7 +712,7 @@ public final class XrSessionSettingsController {
                 for (PresentationMode mode
                         : PresentationMode.values()) {
                     editor.setModeValue(mode, entry.getValue(),
-                            pendingModeQuality.get(mode).get(key), globalValues.get(key));
+                            pendingModeQuality.get(mode).get(key), inheritedModeValue(mode, key));
                 }
             }
             else {
@@ -825,7 +826,7 @@ public final class XrSessionSettingsController {
         for (PresentationMode mode : PresentationMode.values()) {
             appliedModeQuality.get(mode).putAll(pendingModeQuality.get(mode));
             for (SessionSettingsModel.Key key : pendingModeQuality.get(mode).keySet()) {
-                putAppliedQualityValue(appliedModeQuality.get(mode), appliedModeQualitySources.get(mode),
+                putAppliedQualityValue(mode, appliedModeQuality.get(mode), appliedModeQualitySources.get(mode),
                         key, pendingModeQuality.get(mode).get(key));
             }
         }
@@ -1070,7 +1071,7 @@ public final class XrSessionSettingsController {
         EnumMap<SessionSettingsModel.Key, Object> pending = pendingModeQuality.get(mode);
         for (SessionSettingsModel.Key key : SessionSettingsModel.Key.values()) {
             if (key.isModeStreamQuality()) {
-                SessionSettingsModel.Value value = valueForModel(key, applied.get(key),
+                SessionSettingsModel.Value value = valueForModel(mode, key, applied.get(key),
                         pending.get(key), appliedModeQualitySources.get(mode).get(key));
                 builder.put(key, value.appliedValue, value.pendingValue, value.source,
                         value.choices, value.selectedChoiceId);
@@ -1079,11 +1080,24 @@ public final class XrSessionSettingsController {
     }
 
     private SessionSettingsModel.Value valueForModel(
-            SessionSettingsModel.Key key, Object applied, Object pending,
+            PresentationMode mode, SessionSettingsModel.Key key, Object applied, Object pending,
             SessionSettingsModel.Source appliedSource) {
+        SessionSettingsModel.Source source = Objects.equals(applied, pending) ? appliedSource
+                : Objects.equals(pending, inheritedModeValue(mode, key))
+                        ? SessionSettingsModel.Source.GLOBAL : SessionSettingsModel.Source.CURRENT_SESSION;
         return new SessionSettingsModel.Value(displayValue(key, applied),
-                displayValue(key, pending), sourceFor(key, applied, pending, appliedSource), true,
+                displayValue(key, pending), source, true,
                 choicesFor(key, applied, pending), choiceId(key, pending));
+    }
+
+    private Object inheritedModeValue(PresentationMode mode, SessionSettingsModel.Key key) {
+        // Compare against the same per-mode baseline that readModeValues() restores. An explicit
+        // Client SBS 60 FPS choice must not disappear merely because Global Settings also say 60.
+        if (mode == PresentationMode.CLIENT_SBS_AI) {
+            if (key == SessionSettingsModel.Key.RESOLUTION) return CLIENT_SBS_DEFAULT_RESOLUTION;
+            if (key == SessionSettingsModel.Key.FRAME_RATE) return CLIENT_SBS_DEFAULT_FPS;
+        }
+        return globalValues.get(key);
     }
 
     private SessionSettingsModel.Source sourceFor(

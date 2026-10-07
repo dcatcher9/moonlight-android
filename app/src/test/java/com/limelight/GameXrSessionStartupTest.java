@@ -60,7 +60,7 @@ public final class GameXrSessionStartupTest {
     }
 
     @Test
-    public void freshSameAppLaunchReplacesStaleClientModeWithNormalAndGlobalQuality() {
+    public void freshSameAppLaunchRestoresAppSettingsWithNewSessionOwnership() {
         SessionSettingsStore.SessionRecord staleRecord = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, staleRecord.getLocalSessionId())
                 .setModeValue(PresentationMode.CLIENT_SBS_AI,
@@ -76,16 +76,18 @@ public final class GameXrSessionStartupTest {
         PreferenceConfiguration configuration =
                 PreferenceConfiguration.readPreferences(game, startup);
 
-        assertEquals(PresentationMode.NORMAL,
+        assertEquals(PresentationMode.CLIENT_SBS_AI,
                 game.getXrStartupPresenterMode());
-        assertEquals(3840, configuration.width);
-        assertEquals(2160, configuration.height);
-        assertEquals(90.0f, configuration.fps, 0.001f);
+        assertEquals(1920, configuration.width);
+        assertEquals(1080, configuration.height);
+        assertEquals(30.0f, configuration.fps, 0.001f);
         SessionSettingsStore.SessionRecord replacement = store.getCurrentSession(pc);
         assertNotEquals(staleRecord.getLocalSessionId(), replacement.getLocalSessionId());
-        assertEquals(PresentationMode.NORMAL,
+        assertEquals(PresentationMode.CLIENT_SBS_AI,
                 replacement.getLastSuccessfulMode());
-        assertFalse(store.snapshot(pc, PreferenceManager.getDefaultSharedPreferences(context))
+        assertFalse(replacement.getResumeMetadata().isHostConfirmedResume());
+        assertEquals(null, replacement.getResumeMetadata().getHostSessionId());
+        assertTrue(store.snapshot(pc, PreferenceManager.getDefaultSharedPreferences(context))
                 .isModeOverridden(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.RESOLUTION_PREF_STRING));
     }

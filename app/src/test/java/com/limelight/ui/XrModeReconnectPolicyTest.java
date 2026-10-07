@@ -92,6 +92,9 @@ public final class XrModeReconnectPolicyTest {
             assertTrue(store.startNewSession(pc, app, null, 3L));
             SessionSettingsStore.SessionRecord record = store.snapshot(pc, globals).getRecord();
             assertTrue(store.edit(pc, app, record.getLocalSessionId())
+                    .clearSharedOverrides()
+                    .clearModeOverrides(PresentationMode.NORMAL)
+                    .clearModeOverrides(PresentationMode.HOST_SBS_AI)
                     .setLastSuccessfulMode(from).commit());
             XrSessionSettingsController controller = new XrSessionSettingsController(
                     store, pc, app, globals, store.snapshot(pc, globals));
@@ -147,7 +150,7 @@ public final class XrModeReconnectPolicyTest {
         SessionSettingsStore.Snapshot replacement = store.snapshot(pc, globals);
         assertEquals(PresentationMode.NORMAL,
                 replacement.getRecord().getLastSuccessfulMode());
-        assertEquals("1920x1080", replacement.preferencesForMode(
+        assertEquals("1080x1920", replacement.preferencesForMode(
                 PresentationMode.HOST_SBS_AI)
                 .getString(PreferenceConfiguration.RESOLUTION_PREF_STRING, null));
     }

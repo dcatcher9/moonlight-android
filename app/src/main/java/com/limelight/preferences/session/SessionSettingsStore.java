@@ -29,12 +29,12 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Persists the single host session that Artemis knows about for each PC.
+ * Persists the active host session and saved settings for each application on each PC.
  *
- * <p>The complete record is encoded in one SharedPreferences string. Every mutation reloads the
- * latest record and synchronously commits one replacement string while holding a process-wide
- * lock. This avoids partially applied reconnect settings and prevents editors created by separate
- * store instances from overwriting each other's unrelated changes.</p>
+ * <p>Each active record and app profile is encoded in its own SharedPreferences string. Every
+ * mutation reloads the latest record and commits both strings in one editor under a process-wide
+ * lock. This avoids partially applied reconnect settings and prevents separate store instances
+ * from overwriting each other's unrelated changes.</p>
  *
  * <p>Global defaults deliberately remain in the application's existing default
  * SharedPreferences. This store contains only values that differ from those defaults. A caller
@@ -46,6 +46,7 @@ public final class SessionSettingsStore {
     public static final int SCHEMA_VERSION = 1;
 
     private static final String RECORD_PREFIX = "session.";
+    private static final String SETTINGS_PREFIX = "settings.";
     private static final Object WRITE_LOCK = new Object();
     private static final Object REMOVE = new Object();
     private static final Gson GSON = new Gson();
@@ -272,6 +273,23 @@ public final class SessionSettingsStore {
 
         public ResumeMetadata getResumeMetadata() {
             return resumeMetadata;
+        }
+    }
+
+    /** Saved intent only: no local session generation or host resume capability. */
+    private static final class SavedSettings {
+        final AppIdentity app;
+        final Map<String, Object> sharedOverrides;
+        final Map<PresentationMode, Map<String, Object>> modeOverrides;
+        final PresentationMode lastSuccessfulMode;
+
+        SavedSettings(AppIdentity app, Map<String, Object> sharedOverrides,
+                      Map<PresentationMode, Map<String, Object>> modeOverrides,
+                      PresentationMode lastSuccessfulMode) {
+            this.app = app;
+            this.sharedOverrides = immutablePreferenceMap(sharedOverrides);
+            this.modeOverrides = immutableModeMap(modeOverrides);
+            this.lastSuccessfulMode = PresentationMode.safeStartupMode(lastSuccessfulMode);
         }
     }
 
@@ -551,7 +569,7 @@ public final class SessionSettingsStore {
     }
 
     /**
-     * Removes one effective mode override from every current-session record.
+     * Removes one effective mode override from active sessions and saved app profiles.
      *
      * <p>This is intentionally narrower than clearing a mode or session. It is used by explicit
      * setting migrations and device A/B helpers, so an existing per-PC session cannot silently
@@ -565,7 +583,8 @@ public final class SessionSettingsStore {
         synchronized (WRITE_LOCK) {
             SharedPreferences.Editor editor = null;
             for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
-                if (!entry.getKey().startsWith(RECORD_PREFIX)
+                boolean session = entry.getKey().startsWith(RECORD_PREFIX);
+                if ((!session && !entry.getKey().startsWith(SETTINGS_PREFIX))
                         || !(entry.getValue() instanceof String)) {
                     continue;
                 }
@@ -583,10 +602,12 @@ public final class SessionSettingsStore {
                             || schema.getAsInt() != SCHEMA_VERSION) {
                         continue;
                     }
-                    if (fromDto(GSON.fromJson(root, RecordDto.class)) == null) {
+                    if (session ? fromDto(GSON.fromJson(root, RecordDto.class)) == null
+                            : fromSettingsDto(GSON.fromJson(root, SettingsDto.class)) == null) {
                         continue;
                     }
-                } catch (JsonParseException | IllegalStateException | NumberFormatException ignored) {
+                } catch (JsonParseException | IllegalStateException | IllegalArgumentException
+                         | ClassCastException ignored) {
                     continue;
                 }
 
@@ -617,19 +638,35 @@ public final class SessionSettingsStore {
     }
 
     /**
-     * Starts a genuinely new host session, replacing any previous record for this PC. New sessions
-     * have no overrides and always start in Normal mode.
+     * Starts a genuinely new host session with fresh ownership and this app's saved settings.
+     * An application without saved settings inherits the global defaults and starts in Normal mode.
      */
     public boolean startNewSession(PcIdentity pc, AppIdentity app,
                                    String hostSessionId, long hostConfirmedAtEpochMillis) {
         Objects.requireNonNull(pc, "pc");
         Objects.requireNonNull(app, "app");
-        SessionRecord record = new SessionRecord(UUID.randomUUID().toString(), app,
-                Collections.emptyMap(),
-                Collections.emptyMap(), PresentationMode.NORMAL,
-                new ResumeMetadata(false, hostSessionId, hostConfirmedAtEpochMillis));
         synchronized (WRITE_LOCK) {
-            return writeRecord(pc, record);
+            SessionRecord current = readRecord(pc);
+            SavedSettings currentProfile = current != null
+                    ? readSavedSettings(pc, current.currentApp) : null;
+            AppIdentity currentIdentity = currentProfile != null
+                    ? currentProfile.app : current != null ? current.currentApp : null;
+            SavedSettings saved = readSavedSettings(pc, app);
+            if (currentIdentity != null && currentIdentity.isSameApplication(app)
+                    && (app.appUuid == null || currentIdentity.appUuid != null || saved == null)) {
+                saved = savedSettings(current);
+            }
+            SessionRecord record = new SessionRecord(UUID.randomUUID().toString(), app,
+                    saved != null ? saved.sharedOverrides : Collections.emptyMap(),
+                    saved != null ? saved.modeOverrides : Collections.emptyMap(),
+                    saved != null ? saved.lastSuccessfulMode : PresentationMode.NORMAL,
+                    new ResumeMetadata(false, hostSessionId, hostConfirmedAtEpochMillis));
+            SharedPreferences.Editor editor = preferences.edit();
+            if (current != null) {
+                putSavedSettings(editor, pc, current);
+            }
+            putRecord(editor, pc, record);
+            return editor.commit();
         }
     }
 
@@ -719,7 +756,7 @@ public final class SessionSettingsStore {
         }
     }
 
-    /** Call after the host confirms an explicit end, or confirms that no session is running. */
+    /** Ends active ownership after host confirmation, retaining this app's saved settings. */
     public boolean clearCurrentSession(PcIdentity pc) {
         Objects.requireNonNull(pc, "pc");
         synchronized (WRITE_LOCK) {
@@ -800,11 +837,102 @@ public final class SessionSettingsStore {
     }
 
     private boolean writeRecord(PcIdentity pc, SessionRecord record) {
-        return preferences.edit().putString(recordKey(pc), GSON.toJson(toDto(record))).commit();
+        SharedPreferences.Editor editor = preferences.edit();
+        putRecord(editor, pc, record);
+        return editor.commit();
     }
 
     private boolean removeRecord(PcIdentity pc) {
-        return preferences.edit().remove(recordKey(pc)).commit();
+        SharedPreferences.Editor editor = preferences.edit().remove(recordKey(pc));
+        SessionRecord current = readRecord(pc);
+        if (current != null) {
+            // Also migrates a pre-profile active record when ending or invalidating that session.
+            putSavedSettings(editor, pc, current);
+        }
+        return editor.commit();
+    }
+
+    private void putRecord(SharedPreferences.Editor editor, PcIdentity pc, SessionRecord record) {
+        editor.putString(recordKey(pc), GSON.toJson(toDto(record)));
+        putSavedSettings(editor, pc, record);
+    }
+
+    private void putSavedSettings(SharedPreferences.Editor editor, PcIdentity pc,
+                                  SessionRecord record) {
+        SavedSettings previous = readSavedSettings(pc, record.currentApp);
+        AppIdentity identity = previous == null ? record.currentApp : new AppIdentity(
+                record.currentApp.appId != null ? record.currentApp.appId : previous.app.appId,
+                record.currentApp.appUuid != null ? record.currentApp.appUuid : previous.app.appUuid,
+                record.currentApp.displayName != null
+                        ? record.currentApp.displayName : previous.app.displayName);
+        String key = settingsKey(pc, identity);
+        // Stronger host app identity can arrive later (for example, a UUID after a numeric ID).
+        // Retire compatible aliases so they cannot restore older settings on a later launch.
+        for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
+            if (entry.getKey().startsWith(settingsPrefix(pc)) && !entry.getKey().equals(key)) {
+                SavedSettings saved = parseSavedSettings(entry.getValue());
+                if (saved != null && saved.app.isSameApplication(identity)
+                        && (identity.appUuid != null || saved.app.appUuid == null)
+                        && (identity.appId != null || saved.app.appId == null)) {
+                    editor.remove(entry.getKey());
+                }
+            }
+        }
+        SettingsDto dto = new SettingsDto();
+        copySettingsToDto(record, dto);
+        dto.currentApp.appId = identity.appId;
+        dto.currentApp.appUuid = identity.appUuid;
+        dto.currentApp.displayName = identity.displayName;
+        editor.putString(key, GSON.toJson(dto));
+    }
+
+    private SavedSettings readSavedSettings(PcIdentity pc, AppIdentity app) {
+        String key = settingsKey(pc, app);
+        SavedSettings saved = parseSavedSettings(preferences.getAll().get(key));
+        if (saved != null && saved.app.isSameApplication(app)) {
+            return saved;
+        }
+        SavedSettings match = null;
+        for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
+            if (entry.getKey().startsWith(settingsPrefix(pc)) && !entry.getKey().equals(key)) {
+                saved = parseSavedSettings(entry.getValue());
+                if (saved != null && saved.app.isSameApplication(app)) {
+                    if (match != null && !match.app.isSameApplication(saved.app)) {
+                        // A weaker lookup must not choose between two distinct UUID identities.
+                        return null;
+                    }
+                    match = saved;
+                }
+            }
+        }
+        return match;
+    }
+
+    private static SavedSettings parseSavedSettings(Object json) {
+        if (!(json instanceof String)) {
+            return null;
+        }
+        try {
+            return fromSettingsDto(GSON.fromJson((String) json, SettingsDto.class));
+        } catch (JsonParseException | IllegalArgumentException | ClassCastException ignored) {
+            return null;
+        }
+    }
+
+    private static SavedSettings savedSettings(SessionRecord record) {
+        return new SavedSettings(record.currentApp, record.sharedOverrides,
+                record.modeOverrides, record.lastSuccessfulMode);
+    }
+
+    private static String settingsPrefix(PcIdentity pc) {
+        return SETTINGS_PREFIX + pc.storageId + ".app.";
+    }
+
+    private static String settingsKey(PcIdentity pc, AppIdentity app) {
+        String identity = app.appUuid != null ? "uuid." + app.appUuid.toLowerCase(Locale.US)
+                : app.appId != null ? "id." + app.appId
+                : "name." + app.displayName.toLowerCase(Locale.US);
+        return settingsPrefix(pc) + safeComponent(identity, true);
     }
 
     private static String recordKey(PcIdentity pc) {
@@ -1123,8 +1251,18 @@ public final class SessionSettingsStore {
 
     private static RecordDto toDto(SessionRecord record) {
         RecordDto dto = new RecordDto();
-        dto.schemaVersion = SCHEMA_VERSION;
+        copySettingsToDto(record, dto);
         dto.localSessionId = record.localSessionId;
+        dto.resumeMetadata = new ResumeDto();
+        dto.resumeMetadata.hostConfirmedResume = record.resumeMetadata.hostConfirmedResume;
+        dto.resumeMetadata.hostSessionId = record.resumeMetadata.hostSessionId;
+        dto.resumeMetadata.hostConfirmedAtEpochMillis =
+                record.resumeMetadata.hostConfirmedAtEpochMillis;
+        return dto;
+    }
+
+    private static void copySettingsToDto(SessionRecord record, SettingsDto dto) {
+        dto.schemaVersion = SCHEMA_VERSION;
         dto.currentApp = new AppDto();
         dto.currentApp.appId = record.currentApp.appId;
         dto.currentApp.appUuid = record.currentApp.appUuid;
@@ -1138,17 +1276,27 @@ public final class SessionSettingsStore {
         dto.lastSuccessfulMode = record.lastSuccessfulMode.name();
         // A later explicit Movie reset must not copy the preserved Raw tuple again.
         dto.rawModeMigrated = true;
-        dto.resumeMetadata = new ResumeDto();
-        dto.resumeMetadata.hostConfirmedResume = record.resumeMetadata.hostConfirmedResume;
-        dto.resumeMetadata.hostSessionId = record.resumeMetadata.hostSessionId;
-        dto.resumeMetadata.hostConfirmedAtEpochMillis =
-                record.resumeMetadata.hostConfirmedAtEpochMillis;
-        return dto;
     }
 
     private static SessionRecord fromDto(RecordDto dto) {
-        if (dto == null || dto.schemaVersion != SCHEMA_VERSION || dto.currentApp == null
-                || clean(dto.localSessionId) == null) {
+        if (dto == null || clean(dto.localSessionId) == null) {
+            return null;
+        }
+        SavedSettings saved = fromSettingsDto(dto);
+        if (saved == null) {
+            return null;
+        }
+        ResumeMetadata metadata = dto.resumeMetadata != null
+                ? new ResumeMetadata(dto.resumeMetadata.hostConfirmedResume,
+                        dto.resumeMetadata.hostSessionId,
+                        dto.resumeMetadata.hostConfirmedAtEpochMillis)
+                : new ResumeMetadata(false, null, 0L);
+        return new SessionRecord(dto.localSessionId, saved.app, saved.sharedOverrides,
+                saved.modeOverrides, saved.lastSuccessfulMode, metadata);
+    }
+
+    private static SavedSettings fromSettingsDto(SettingsDto dto) {
+        if (dto == null || dto.schemaVersion != SCHEMA_VERSION || dto.currentApp == null) {
             return null;
         }
         AppIdentity app = new AppIdentity(dto.currentApp.appId, dto.currentApp.appUuid,
@@ -1186,12 +1334,7 @@ public final class SessionSettingsStore {
                 lastMode = PresentationMode.NORMAL;
             }
         }
-        ResumeMetadata metadata = dto.resumeMetadata != null
-                ? new ResumeMetadata(dto.resumeMetadata.hostConfirmedResume,
-                        dto.resumeMetadata.hostSessionId,
-                        dto.resumeMetadata.hostConfirmedAtEpochMillis)
-                : new ResumeMetadata(false, null, 0L);
-        return new SessionRecord(dto.localSessionId, app, shared, modes, lastMode, metadata);
+        return new SavedSettings(app, shared, modes, lastMode);
     }
 
     /**
@@ -1258,14 +1401,17 @@ public final class SessionSettingsStore {
         return result;
     }
 
-    private static final class RecordDto {
+    private static class SettingsDto {
         @SerializedName("schema") int schemaVersion;
-        @SerializedName("local_id") String localSessionId;
         @SerializedName("app") AppDto currentApp;
         @SerializedName("shared") Map<String, ValueDto> sharedOverrides;
         @SerializedName("modes") Map<String, Map<String, ValueDto>> modeOverrides;
         @SerializedName("last_mode") String lastSuccessfulMode;
         @SerializedName("raw_mode_migrated") boolean rawModeMigrated;
+    }
+
+    private static final class RecordDto extends SettingsDto {
+        @SerializedName("local_id") String localSessionId;
         @SerializedName("resume") ResumeDto resumeMetadata;
     }
 

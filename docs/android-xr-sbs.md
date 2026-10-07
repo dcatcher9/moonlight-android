@@ -163,9 +163,10 @@ to Game or Movie merely because a mode is selected.
 
 ### Shared stream behavior
 
-**Stream gamma** is shared by every presentation mode, with a global default and a current-session
-override. Windows default requests no additional stream correction; Gamma 2.2 and Gamma 2.4 request
-the host's Gloam-style HDR shadow transform. The host applies it once during encoding. No gamma
+**Stream gamma** is shared by every presentation mode, with a global default and an override saved
+separately for each app on each paired PC. Windows default requests no additional stream correction;
+Gamma 2.2 and Gamma 2.4 request the host's Gloam-style HDR shadow transform. The host applies it
+once during encoding. No gamma
 operation is added to SceneCore, the direct decoder surface, or Client SBS model preprocessing.
 Host-corrected pixels do reach Client SBS's existing decoded-input pipeline and may therefore
 change inferred depth; this feature does not claim to preserve the model's input pixels.
@@ -193,7 +194,8 @@ unsolicited synchronization. A five-second live timeout leaves the last confirme
 the settings controls without an automatic retry loop. A late matching reply may still prove the
 latest timed-out request if no newer request has started. After a failure, tapping the selected
 gamma option deliberately retries; selecting the already active option otherwise sends no request.
-Reconnect restores the desired setting through launch/resume.
+Reconnect and later launches of the same app on the same PC restore the desired setting through
+launch/resume. Every new connection still requires fresh host confirmation before reporting it active.
 
 The pinned native submodule receives this extension from the tracked
 `app/src/main/jni/moonlight-core/stream-gamma-core.patch`. Gradle's `prepareStreamGammaCore` task
@@ -982,7 +984,9 @@ capability bit and its nonzero value remains mandatory for exact resume/cancel p
 Sunshine and Apollo omit that element, so they use the standard GameStream running-app identity for
 resume and the standard tokenless cancel request. Absence is not equivalent to an advertised zero.
 
-- A genuinely new host session starts in **2D** (`NORMAL`) and inherits Global Settings.
+- A new host session restores that app's saved settings and last successfully applied presentation
+  intent on that PC. An app without a saved profile inherits Global Settings and starts in **2D**
+  (`NORMAL`). The new active-session record receives fresh ownership and generation identity.
 - Resuming the same host session/app, including an automatic in-place settings restart,
   starts with the last successfully applied presentation intent and that mode's saved stream-quality
   tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
@@ -994,8 +998,8 @@ resume and the standard tokenless cancel request. Absence is not equivalent to a
 - A settings restart snapshots the live quad before SceneCore teardown and transiently hands its effective
   height plus real-world pose to the replacement Activity. This preserves both physical size and
   apparent size from the user's chosen distance; pose is not made a durable cross-session setting.
-- Transport, authentication, and pre-frame startup failures preserve the last successful mode;
-  fresh launches still start Normal, and only a host-confirmed resume restores it.
+- Transport, authentication, and pre-frame startup failures preserve the last successful saved mode.
+  Restoring its intent never supplies current host, stereo-source, or gamma proof.
 
 An unexpected control-transport disconnect or loss of video traffic during an established stream
 automatically resumes the same session while the Activity remains foreground. Recovery reuses the
@@ -1040,7 +1044,8 @@ replacement without a token. Successful establishment replaces the Activity's la
 Resume so settings restarts and Activity recreation cannot replay replacement authority.
 
 `PresentationMode` is the shared saved intent identity; current Movie picture interpretation is
-separate transient presenter state. The current-session record owns the successfully applied intent;
+separate transient presenter state. The per-app/per-PC settings profile owns the successfully applied
+intent;
 `XrViewStateStore` stores only per-PC panel height. Existing Normal/Host AI/Client AI identities and
 height keys remain unchanged. Game and Movie add independent identities. Legacy Raw is retained for
 data compatibility but normalized to Normal on startup, including startup overrides and reconnect.
@@ -1087,11 +1092,25 @@ presentation control is available only after mutual atomic-v2 feature negotiatio
 This live presentation transaction is independent of offline whole-clip conversion. In particular,
 the offline/online no-lookahead policy does not change these control packets or their ordering.
 
-Artemis stores exactly one current-session record per PC. A new host app replaces that record;
-resuming the same host app preserves it. The record contains shared stream overrides, per-mode
-overrides, the last proven presentation mode, and a local generation ID that rejects stale panel
-writes. Global Settings remain the inheritance source across PCs and sessions; a current-session
-override is stored only while it differs from its global value.
+Artemis stores a settings profile separately for each app on each paired PC. Profiles contain shared
+stream overrides, independent per-mode overrides, and the last successfully applied presentation
+intent. Ending the host app or starting another app preserves these profiles; returning to the same
+app on the same PC restores its profile. The same app on another PC has a separate profile.
+Global Settings remain the inheritance source wherever a profile has no override, and an override
+is stored only while it differs from its current global value.
+
+The settings hierarchy is **Global Settings → app on a paired PC → presentation mode**. Global
+Settings supply defaults across apps and PCs. **App Settings** saves the shared choices for one
+app on one PC, and each presentation mode within that profile saves its own quality tuple. Shared
+app choices apply to every mode; a mode's quality override applies only to that mode in that app/PC
+profile. Choosing another app, PC, or mode never overwrites its siblings' saved overrides.
+
+Exactly one active-session record per PC owns the current app metadata, host session token, and
+local generation ID used to reject stale panel writes. A new session receives fresh active ownership
+while loading its settings profile. Retained profiles never authorize Resume, Replace, or Cancel,
+and never prove that gamma or stereo content is active on a new connection. Existing valid legacy
+current-session settings are retained as that app's profile on the next save, end, or start; migration
+does not carry an old token or panel generation into a new session.
 
 Each of the five presentation modes owns an independent stream-quality tuple: **resolution, frame
 rate, and bitrate**. Changing one mode's tuple never changes another mode. In-session choices apply
@@ -1167,16 +1186,17 @@ is reflected before the decoder transform; mirroring only the center is incorrec
 footprint crosses a padding fold.
 
 The settings truly shared by all five modes are **codec, video frame pacing, HDR, stream gamma,
-Full/Limited video range, audio layout, and play audio on the host PC**. The Session Settings pane edits only this
-shared set. Global Settings provide the cross-session defaults for both the shared set and the
-quality baseline inherited independently by each mode.
+Full/Limited video range, audio layout, and play audio on the host PC**. The App Settings pane
+edits only this shared set for the current app on the current PC. Global Settings provide the defaults
+for both the shared set and the quality baseline inherited independently by each mode.
 
 The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 200 Mbps, HEVC, HDR, Full
 range, and latency pacing**, with stereo audio and host audio off. There is no global Raw packing
 picker. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits and automatically
-applies the values currently saved in Global Settings rather than forcing this factory baseline. A mode row's
-**Use session settings** discards pending edits and restores that mode's durable current-session
-values, falling back to its current global values where no session override exists.
+applies the values currently saved in Global Settings rather than forcing this factory baseline,
+clearing the corresponding saved profile overrides through the usual guarded commit. A mode row's
+**Use saved settings** discards pending edits and restores that mode's durable app/PC values,
+falling back to its current global values where no profile override exists.
 
 2D, Game, Movie and Host AI 3D therefore begin with a durable **90 FPS ceiling**. Client SBS
 defaults to **1920 x 1080 at 30 FPS with a 72 Hz panel preference**. A headset panel/thermal
@@ -1255,8 +1275,9 @@ mandatory resynchronization still reconnects the last durable record; a stale-se
 never leave an ambiguous live stream running.
 
 An automatic settings restart commits every pending shared setting, every per-mode quality tuple,
-and the selected startup intent as one guarded record replacement. The Client SBS model is fixed;
-Movie packing remains transient. It then waits for decoder and deferred GPU/XR cleanup before
+and the selected startup intent as one guarded replacement of the active record and its app/PC
+profile. The Client SBS model is fixed; Movie packing remains transient. It then waits for decoder
+and deferred GPU/XR cleanup before
 recreating the singleTask `Game` activity in place. The
 old Activity's ordinary no-history stop path must not finish this intentional replacement, so the
 stream resumes immediately instead of exposing the application grid. A stale panel generation
@@ -1332,7 +1353,7 @@ viewer while leaving the dock pose unchanged. When fitting mode content between 
 baseline and 0.90 m cap, keep the hosted Android raster and physical quad consistent with the
 runtime pixel density and entity scale. Derive target dimensions from the original raster/metre
 pair so repeated mode refreshes cannot accumulate rounding drift; retain the whole-pane
-`ScrollView` beyond the cap. Session Settings opens to the **left** of the video;
+`ScrollView` beyond the cap. App Settings opens to the **left** of the video;
 its inner edge remains anchored outside the video and the panel yaws inward toward the viewer's
 face. **Stats** uses the **right** side as a compact, single-column panel whose
 inner edge is anchored just beyond the video's right edge. It yaws inward around local Y so its
@@ -1346,8 +1367,8 @@ existing slow Stats refresh. Never poll head pose from the video frame loop or w
 side panel is hidden.
 
 Presentation intents form one single-select group. Navigation/disconnect actions remain separate
-one-shot controls. A new session highlights 2D; a resumed/restarted session highlights its
-restored intent only after that mode is active. Highlighting Game or Movie does not assert stereo:
+one-shot controls. A session highlights its app/PC profile's restored intent only after that mode is
+active; an app without a saved profile starts in 2D. Highlighting Game or Movie does not assert stereo:
 their picture state begins in 2D, and Game stays mono until the negotiated source and frame gates pass.
 
 The Host AI 3D tile and host debug action are disabled when `/serverinfo` does not advertise the
@@ -1365,7 +1386,7 @@ first group and every portrait choice beginning on the row below; either group m
 when the panel is narrow. FPS uses a compact segmented control, and bitrate uses a connected
 six-rung segmented ladder at **50 / 70 / 100 / 140 / 200 / 300 Mbps**, with the stream-shape
 recommendation marked on its rung. The
-row identifies Global versus Current Session inheritance, shows the tuple currently backing the
+row identifies Global versus This App inheritance, shows the tuple currently backing the
 live decoder, and automatically applies selections through a guarded live transaction or an owned
 stream restart.
 
@@ -1377,12 +1398,13 @@ selector, Ready toggle, or image heuristic. Movie's card exposes only the implem
 buttons, with no Auto choice. Restoring
 values is scoped:
 the shared pane's **Use global defaults** selects and automatically applies the currently saved global shared values, while a
-mode row's **Use session settings** restores only that mode's durable quality tuple. It does not
+mode row's **Use saved settings** restores only that mode's durable app/PC quality tuple. It does not
 restore transient Movie packing or reinterpret legacy Raw's Full/Half field.
 
-The Settings tile opens the left side panel for values shared by every mode in the current PC
-session. Its controls use two short semantic columns: Video (HDR, gamma, range, codec) and Delivery
-(pacing, audio layout, host audio), with large XR-readable labels, choice targets, and status text.
+The **App Settings** tile opens the left App Settings panel for values saved for the current app on the
+current PC and shared by every mode. Its controls use two short semantic columns: Video (HDR,
+gamma, range, codec) and Delivery (pacing, audio layout, host audio), with large XR-readable labels,
+choice targets, and status text.
 Each setting is a distinct raised card under a strong semantic heading; mode options likewise group
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
 surfaces rather than one undifferentiated row.
@@ -1455,7 +1477,7 @@ only passthrough control. If the required capabilities are unavailable, the scre
 usable. Runtime application is asynchronous. Temporary shell-controlled scene overrides remain
 removed.
 
-Enum values in both Global Settings and the current-session panel are ordinary buttons in one
+Enum values in both Global Settings and the App Settings panel are ordinary buttons in one
 connected segmented surface, not radio dialogs or cycle-only rows. Compact choices use equal-width,
 single-line horizontal segments with an 80 dp minimum gaze-target height. If every localized label
 cannot fit, the entire control becomes a
@@ -1611,7 +1633,7 @@ Use [client-sbs-evaluation.md](client-sbs-evaluation.md) for exact unit, assembl
 update-install, log, and sustained-stream procedures.
 
 On the user's physical Galaxy XR, never run Gradle's connected Android test task: it uninstalls the
-target application afterward and erases global defaults, current-session settings, certificates,
+target application afterward and erases global defaults, saved app/PC settings, certificates,
 and pairings. Install
 the main and test APKs with `adb install -r`, invoke instrumentation manually, and uninstall only
 `com.limelight.moonlight3ddebug.test`.
@@ -1622,8 +1644,15 @@ For every mode/surface change, test:
   regular Sunshine, regular Apollo, and Apollo-3D. Verify the two standard hosts never receive
   Apollo-3D control messages, use app-identity resume/tokenless cancel, and reconnect for quality
   changes; verify Apollo-3D retains exact generation-token checks and live controls.
-- A new session starts 2D with inherited global defaults; host-confirmed resume and the
+- Set gamma, shared settings, and distinct mode quality tuples; end the host app and launch it again.
+  The same app on the same PC must restore those settings and its last successful intent. Launch
+  another app on that PC and the same app on another PC to verify independent profiles. An app
+  without a profile starts 2D with inherited global defaults. Host-confirmed resume and the
   automatic settings restart restore the last successful intent with that mode's saved quality tuple.
+  A restored gamma preference must wait for fresh host confirmation before being labelled active.
+  End or replace the session with a settings panel or ACK outstanding: stale work must not update
+  either the successor's active record or its profile. Load a valid legacy current-session record,
+  then save, end, or launch and verify that its app/PC settings migrate without reviving ownership.
   Game starts mono and revalidates the source; Movie resets to 2D on resume. Replace a running app, then change a reconnect-only setting
   and switch among mode quality tuples; neither intentional
   resume may replay the initial replacement authority. Race an active session against Start:

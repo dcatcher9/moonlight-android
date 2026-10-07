@@ -93,6 +93,253 @@ public final class XrSessionSettingsControllerTest {
         assertEquals("default", restored.getSessionModel()
                 .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
     }
+
+    @Test
+    public void liveGammaChoiceSurvivesEndingAppButNeedsFreshHostAck() {
+        XrSessionSettingsController controller = controller();
+        controller.getStreamGammaState().setSupported(true);
+        controller.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        assertTrue(controller.commitStreamGammaPreference());
+        controller.markStreamGammaPreferenceCommitted();
+        int requestId = controller.getStreamGammaState().begin(
+                com.limelight.nvstream.StreamGamma.GAMMA_24);
+        assertTrue(controller.getStreamGammaState().acceptAck(0, 2, 2, requestId, 1, 203));
+        assertEquals("2.4", controller.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
+
+        assertTrue(store.clearCurrentSession(pc));
+        store = new SessionSettingsStore(context);
+        assertTrue(store.startNewSession(pc, app, "new-host-session", 2L));
+        XrSessionSettingsController fresh = controller();
+
+        assertEquals("2.4", fresh.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        assertEquals("2.4", fresh.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).selectedChoiceId);
+        assertEquals("default", fresh.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
+        assertFalse(fresh.getStreamGammaState().isConfirmed());
+        fresh.getStreamGammaState().setSupported(true);
+        assertFalse(fresh.getStreamGammaState().acceptAck(0, 0, 0, 0, 1, 203));
+        assertTrue(fresh.getStreamGammaState().acceptAck(0, 2, 2, 0, 1, 203));
+        assertEquals("2.4", fresh.getSharedSessionModel()
+                .get(SessionSettingsModel.Key.STREAM_GAMMA).appliedValue);
+    }
+
+    @Test
+    public void allSavedSharedAndModeSettingsRestoreAfterEndingSameApp() {
+        XrSessionSettingsController controller = controller();
+        controller.getStreamGammaState().setSupported(true);
+        controller.selectSharedSetting(SessionSettingsModel.Key.HDR, "true");
+        controller.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        controller.selectSharedSetting(SessionSettingsModel.Key.VIDEO_RANGE, "true");
+        controller.selectSharedSetting(SessionSettingsModel.Key.CODEC, "forceh265");
+        controller.selectSharedSetting(SessionSettingsModel.Key.FRAME_PACING, "balanced");
+        controller.selectSharedSetting(SessionSettingsModel.Key.AUDIO_LAYOUT, "71");
+        controller.selectSharedSetting(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC, "true");
+        stageQuality(controller, PresentationMode.NORMAL, "2560x1440", "90", "40000");
+        stageQuality(controller, PresentationMode.GAME_3D, "3840x2160", "120", "60000");
+        stageQuality(controller, PresentationMode.MOVIE_3D, "2560x1080", "30", "80000");
+        stageQuality(controller, PresentationMode.HOST_SBS_AI, "1920x1080", "90", "100000");
+        stageQuality(controller, PresentationMode.CLIENT_SBS_AI, "3840x2160", "60", "140000");
+        stageQuality(controller, PresentationMode.HOST_SBS_RAW, "2560x1440", "30", "60000");
+        controller.selectRawSbsPerEyeResolution(RawSbsModeSettingsModel.HALF_ID);
+        controller.selectPresentationMode(PresentationMode.MOVIE_3D);
+        assertTrue(controller.commitPending());
+        SessionSettingsStore.SessionRecord saved = store.getCurrentSession(pc);
+
+        assertTrue(store.clearCurrentSession(pc));
+        store = new SessionSettingsStore(context);
+        assertTrue(store.startNewSession(pc, app, "new-host-session", 2L));
+        XrSessionSettingsController fresh = controller();
+        SessionSettingsStore.SessionRecord restored = store.getCurrentSession(pc);
+
+        assertEquals(saved.getSharedOverrides(), restored.getSharedOverrides());
+        assertEquals(saved.getAllModeOverrides(), restored.getAllModeOverrides());
+        assertEquals(PresentationMode.MOVIE_3D, fresh.getStartupMode());
+        assertEquals(new StreamQualityTuple("2560x1080", "30", 80000),
+                fresh.getLiveStreamQuality());
+        assertEquals("true", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.HDR)
+                .selectedChoiceId);
+        assertEquals("2.4", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.STREAM_GAMMA)
+                .selectedChoiceId);
+        assertEquals("true", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.VIDEO_RANGE)
+                .selectedChoiceId);
+        assertEquals("forceh265", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.CODEC)
+                .selectedChoiceId);
+        assertEquals("balanced", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.FRAME_PACING)
+                .selectedChoiceId);
+        assertEquals("71", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.AUDIO_LAYOUT)
+                .selectedChoiceId);
+        assertEquals("true", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.PLAY_AUDIO_ON_PC)
+                .selectedChoiceId);
+        for (PresentationMode mode : PresentationMode.values()) {
+            assertEquals(controller.getModeStreamQualityModel(mode).pendingQuality,
+                    fresh.getModeStreamQualityModel(mode).pendingQuality);
+        }
+        assertEquals(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
+                fresh.getRawSbsModel().pendingResolution);
+    }
+
+    @Test
+    public void scopedGlobalResetsSurviveEndingAppAndKeepUnrelatedModeSettings() {
+        XrSessionSettingsController controller = controller();
+        controller.getStreamGammaState().setSupported(true);
+        controller.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        controller.selectSharedSetting(SessionSettingsModel.Key.CODEC, "forceh265");
+        stageQuality(controller, PresentationMode.MOVIE_3D, "3840x2160", "90", "80000");
+        stageQuality(controller, PresentationMode.GAME_3D, "2560x1440", "90", "40000");
+        assertTrue(controller.commitPending());
+
+        controller = controller();
+        controller.useGlobalSharedDefaults();
+        controller.useGlobalModeDefaults(PresentationMode.MOVIE_3D);
+        assertTrue(controller.commitPending());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "2.2")
+                .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "forceav1")
+                .putString(PreferenceConfiguration.RESOLUTION_PREF_STRING, "2560x1080")
+                .putString(PreferenceConfiguration.FPS_PREF_STRING, "120")
+                .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 140000)
+                .commit());
+        store = new SessionSettingsStore(context);
+        assertTrue(store.startNewSession(pc, app, null, 2L));
+        XrSessionSettingsController fresh = controller();
+
+        assertEquals("2.2", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.STREAM_GAMMA)
+                .selectedChoiceId);
+        assertEquals("forceav1", fresh.getSharedSessionModel().get(SessionSettingsModel.Key.CODEC)
+                .selectedChoiceId);
+        assertEquals(new StreamQualityTuple("2560x1080", "120", 140000),
+                fresh.getModeStreamQualityModel(PresentationMode.MOVIE_3D).pendingQuality);
+        assertEquals(new StreamQualityTuple("2560x1440", "90", 40000),
+                fresh.getModeStreamQualityModel(PresentationMode.GAME_3D).pendingQuality);
+        SessionSettingsStore.Snapshot restored = store.snapshot(pc, globals);
+        assertFalse(restored.isSharedOverridden(PreferenceConfiguration.STREAM_GAMMA_PREF_STRING));
+        assertFalse(restored.isSharedOverridden(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING));
+        assertFalse(restored.isModeOverridden(PresentationMode.MOVIE_3D,
+                PreferenceConfiguration.RESOLUTION_PREF_STRING));
+        assertTrue(restored.isModeOverridden(PresentationMode.GAME_3D,
+                PreferenceConfiguration.RESOLUTION_PREF_STRING));
+    }
+
+    @Test
+    public void staleGammaAndFullCommitsCannotChangeSavedAppSettings() {
+        XrSessionSettingsController seed = controller();
+        seed.getStreamGammaState().setSupported(true);
+        seed.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        seed.selectSharedSetting(SessionSettingsModel.Key.HDR, "true");
+        stageQuality(seed, PresentationMode.MOVIE_3D, "3840x2160", "90", "40000");
+        assertTrue(seed.commitPending());
+        SessionSettingsStore.SessionRecord saved = store.getCurrentSession(pc);
+
+        XrSessionSettingsController stale = controller();
+        stale.getStreamGammaState().setSupported(true);
+        stale.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.2");
+        stale.selectSharedSetting(SessionSettingsModel.Key.HDR, "false");
+        stageQuality(stale, PresentationMode.MOVIE_3D, "2560x1440", "60", "80000");
+        assertTrue(store.clearCurrentSession(pc));
+        assertFalse(stale.commitStreamGammaPreference());
+        assertFalse(stale.commitPending());
+        assertTrue(store.startNewSession(pc, app, null, 2L));
+        assertFalse(stale.commitStreamGammaPreference());
+        assertFalse(stale.commitPending());
+
+        assertTrue(store.clearCurrentSession(pc));
+        store = new SessionSettingsStore(context);
+        assertTrue(store.startNewSession(pc, app, null, 3L));
+        SessionSettingsStore.SessionRecord restored = store.getCurrentSession(pc);
+        assertEquals(saved.getSharedOverrides(), restored.getSharedOverrides());
+        assertEquals(saved.getAllModeOverrides(), restored.getAllModeOverrides());
+        assertEquals("2.4", controller().getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+    }
+
+    @Test
+    public void savedAppSettingsAreIndependentAcrossAppsAndHosts() {
+        XrSessionSettingsController original = controller();
+        original.getStreamGammaState().setSupported(true);
+        original.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        stageQuality(original, PresentationMode.MOVIE_3D, "3840x2160", "90", "40000");
+        assertTrue(original.commitPending());
+        assertTrue(store.clearCurrentSession(pc));
+
+        SessionSettingsStore.AppIdentity otherApp =
+                new SessionSettingsStore.AppIdentity("8", "app-8", "Other game");
+        assertTrue(store.startNewSession(pc, otherApp, null, 2L));
+        XrSessionSettingsController other = new XrSessionSettingsController(
+                store, pc, otherApp, globals, store.snapshot(pc, globals));
+        assertEquals("default", other.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        assertEquals(new StreamQualityTuple("1920x1080", "60", 200000),
+                other.getModeStreamQualityModel(PresentationMode.MOVIE_3D).pendingQuality);
+        other.getStreamGammaState().setSupported(true);
+        other.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.2");
+        stageQuality(other, PresentationMode.MOVIE_3D, "2560x1440", "120", "80000");
+        assertTrue(other.commitPending());
+        assertTrue(store.clearCurrentSession(pc));
+
+        SessionSettingsStore.PcIdentity otherPc =
+                new SessionSettingsStore.PcIdentity("pc-2", "192.0.2.2");
+        assertTrue(store.startNewSession(otherPc, app, null, 3L));
+        XrSessionSettingsController otherHost = new XrSessionSettingsController(
+                store, otherPc, app, globals, store.snapshot(otherPc, globals));
+        assertEquals("default", otherHost.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        otherHost.getStreamGammaState().setSupported(true);
+        otherHost.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.2");
+        assertTrue(otherHost.commitStreamGammaPreference());
+        assertTrue(store.clearCurrentSession(otherPc));
+
+        store = new SessionSettingsStore(context);
+        assertTrue(store.startNewSession(pc, app, null, 4L));
+        XrSessionSettingsController restored = controller();
+        assertEquals("2.4", restored.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        assertEquals(new StreamQualityTuple("3840x2160", "90", 40000),
+                restored.getModeStreamQualityModel(PresentationMode.MOVIE_3D).pendingQuality);
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, otherApp, null, 5L));
+        other = new XrSessionSettingsController(
+                store, pc, otherApp, globals, store.snapshot(pc, globals));
+        assertEquals("2.2", other.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+        assertEquals(new StreamQualityTuple("2560x1440", "120", 80000),
+                other.getModeStreamQualityModel(PresentationMode.MOVIE_3D).pendingQuality);
+    }
+
+    @Test
+    public void weakerActiveIdentityCannotCopySavedGammaToDistinctUuidWithSameAppId() {
+        XrSessionSettingsController original = controller();
+        original.getStreamGammaState().setSupported(true);
+        original.selectSharedSetting(SessionSettingsModel.Key.STREAM_GAMMA, "2.4");
+        assertTrue(original.commitStreamGammaPreference());
+        assertTrue(store.clearCurrentSession(pc));
+
+        SessionSettingsStore.AppIdentity idOnly =
+                new SessionSettingsStore.AppIdentity("7", null, "Game");
+        assertTrue(store.startNewSession(pc, idOnly, null, 2L));
+        XrSessionSettingsController weak = new XrSessionSettingsController(
+                store, pc, idOnly, globals, store.snapshot(pc, globals));
+        assertEquals("2.4", weak.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+
+        SessionSettingsStore.AppIdentity differentUuid =
+                new SessionSettingsStore.AppIdentity("7", "different-app", "Game");
+        assertTrue(store.startNewSession(pc, differentUuid, null, 3L));
+        XrSessionSettingsController different = new XrSessionSettingsController(
+                store, pc, differentUuid, globals, store.snapshot(pc, globals));
+        assertEquals("default", different.getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+
+        assertTrue(store.clearCurrentSession(pc));
+        store = new SessionSettingsStore(context);
+        assertTrue(store.startNewSession(pc, app, null, 4L));
+        assertEquals("2.4", controller().getStartupPreferences().getString(
+                PreferenceConfiguration.STREAM_GAMMA_PREF_STRING, "default"));
+    }
+
     private Context context;
     private SharedPreferences globals;
     private SessionSettingsStore store;

@@ -47,6 +47,7 @@ public final class SessionSettingsStoreTest {
     private static final String BITRATE = "seekbar_bitrate_kbps";
     private static final String HDR = "checkbox_enable_hdr";
     private static final String MODEL = "list_client_sbs_depth_model";
+    private static final String GAMMA = PreferenceConfiguration.STREAM_GAMMA_PREF_STRING;
 
     private Context context;
     private SharedPreferences storage;
@@ -69,21 +70,29 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
-    public void oneRecordPerPcIsReplacedRatherThanScopedByApplication() {
+    public void sameApplicationStartsNewSessionIdentityAndRestoresSavedSettings() {
         assertTrue(store.startNewSession(pc, firstApp, "host-session-one", 100L));
         assertTrue(store.edit(pc, firstApp)
                 .setSharedValue(FPS, "90", "60")
+                .setModeValue(PresentationMode.MOVIE_3D, BITRATE, 60000, 20000)
+                .setLastSuccessfulMode(PresentationMode.MOVIE_3D)
                 .commit());
+        String previousLocalId = store.getCurrentSession(pc).getLocalSessionId();
 
-        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
-        assertTrue(store.startNewSession(pc, secondApp, "host-session-two", 200L));
+        AppIdentity renamedApp = new AppIdentity("42", "app-cyberpunk", "Cyberpunk Updated");
+        assertTrue(store.startNewSession(pc, renamedApp, "host-session-two", 200L));
 
         SessionRecord current = store.getCurrentSession(pc);
         assertNotNull(current);
-        assertEquals(secondApp, current.getCurrentApp());
-        assertTrue(current.getSharedOverrides().isEmpty());
-        assertTrue(current.getAllModeOverrides().isEmpty());
-        assertEquals(PresentationMode.NORMAL, current.getLastSuccessfulMode());
+        assertEquals(renamedApp, current.getCurrentApp());
+        assertNotEquals(previousLocalId, current.getLocalSessionId());
+        assertEquals(Collections.singletonMap(FPS, "90"), current.getSharedOverrides());
+        assertEquals(Collections.singletonMap(BITRATE, 60000),
+                current.getModeOverrides(PresentationMode.MOVIE_3D));
+        assertEquals(PresentationMode.MOVIE_3D, current.getLastSuccessfulMode());
+        assertFalse(current.getResumeMetadata().isHostConfirmedResume());
+        assertEquals("host-session-two", current.getResumeMetadata().getHostSessionId());
+        assertEquals(200L, current.getResumeMetadata().getHostConfirmedAtEpochMillis());
     }
 
     @Test
@@ -95,12 +104,102 @@ public final class SessionSettingsStoreTest {
         assertTrue(store.startNewSession(secondPc, secondApp, "second", 2L));
         assertTrue(store.edit(pc, firstApp)
                 .setSharedValue(FPS, "90", "60")
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+        assertTrue(store.edit(secondPc, secondApp)
+                .setSharedValue(GAMMA, "2.2", "default")
+                .setModeValue(PresentationMode.MOVIE_3D, BITRATE, 40000, 20000)
                 .commit());
 
         assertEquals(firstApp, store.getCurrentSession(pc).getCurrentApp());
         assertEquals("90", store.getCurrentSession(pc).getSharedOverrides().get(FPS));
         assertEquals(secondApp, store.getCurrentSession(secondPc).getCurrentApp());
-        assertTrue(store.getCurrentSession(secondPc).getSharedOverrides().isEmpty());
+        assertEquals("2.2", store.getCurrentSession(secondPc).getSharedOverrides().get(GAMMA));
+
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.clearCurrentSession(secondPc));
+        store = new SessionSettingsStore(storage);
+        assertTrue(store.startNewSession(pc, firstApp, "new-first", 3L));
+        assertTrue(store.startNewSession(secondPc, secondApp, "new-second", 4L));
+
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertEquals("90", store.getCurrentSession(pc).getSharedOverrides().get(FPS));
+        assertEquals(PresentationMode.CLIENT_SBS_AI,
+                store.getCurrentSession(pc).getLastSuccessfulMode());
+        assertTrue(store.getCurrentSession(pc).getAllModeOverrides().isEmpty());
+        assertEquals("2.2", store.getCurrentSession(secondPc).getSharedOverrides().get(GAMMA));
+        assertFalse(store.getCurrentSession(secondPc).getSharedOverrides().containsKey(FPS));
+        assertEquals(40000, store.getCurrentSession(secondPc)
+                .getModeOverrides(PresentationMode.MOVIE_3D).get(BITRATE));
+        assertEquals(PresentationMode.NORMAL,
+                store.getCurrentSession(secondPc).getLastSuccessfulMode());
+    }
+
+    @Test
+    public void eachApplicationOnTheSamePcRestoresOnlyItsOwnSettings() {
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setSharedValue(HDR, true, false)
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60")
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+        SessionRecord firstSaved = store.getCurrentSession(pc);
+        assertTrue(store.clearCurrentSession(pc));
+
+        assertTrue(store.startNewSession(pc, secondApp, "second", 2L));
+        SessionRecord secondFresh = store.getCurrentSession(pc);
+        assertTrue(secondFresh.getSharedOverrides().isEmpty());
+        assertTrue(secondFresh.getAllModeOverrides().isEmpty());
+        assertEquals(PresentationMode.NORMAL, secondFresh.getLastSuccessfulMode());
+        assertTrue(store.edit(pc, secondApp)
+                .setSharedValue(GAMMA, "2.2", "default")
+                .setModeValue(PresentationMode.MOVIE_3D, BITRATE, 40000, 20000)
+                .setLastSuccessfulMode(PresentationMode.MOVIE_3D)
+                .commit());
+        SessionRecord secondSaved = store.getCurrentSession(pc);
+        assertTrue(store.clearCurrentSession(pc));
+
+        store = new SessionSettingsStore(storage);
+        assertTrue(store.startNewSession(pc, firstApp, "third", 3L));
+        SessionRecord firstRestored = store.getCurrentSession(pc);
+        assertEquals(firstSaved.getSharedOverrides(), firstRestored.getSharedOverrides());
+        assertEquals(firstSaved.getAllModeOverrides(), firstRestored.getAllModeOverrides());
+        assertEquals(PresentationMode.CLIENT_SBS_AI, firstRestored.getLastSuccessfulMode());
+        assertNotEquals(firstSaved.getLocalSessionId(), firstRestored.getLocalSessionId());
+
+        // Replacing the active app directly must preserve both app profiles too.
+        assertTrue(store.startNewSession(pc, secondApp, "fourth", 4L));
+        SessionRecord secondRestored = store.getCurrentSession(pc);
+        assertEquals(secondSaved.getSharedOverrides(), secondRestored.getSharedOverrides());
+        assertEquals(secondSaved.getAllModeOverrides(), secondRestored.getAllModeOverrides());
+        assertEquals(PresentationMode.MOVIE_3D, secondRestored.getLastSuccessfulMode());
+        assertEquals(secondApp, secondRestored.getCurrentApp());
+        assertEquals("fourth", secondRestored.getResumeMetadata().getHostSessionId());
+    }
+
+    @Test
+    public void sameApplicationProfilesRemainIsolatedAcrossHosts() {
+        PcIdentity secondPc = new PcIdentity("second-pc", "192.168.1.3");
+        assertTrue(store.startNewSession(pc, firstApp, "first-host", 1L));
+        assertTrue(store.startNewSession(secondPc, firstApp, "second-host", 2L));
+        assertTrue(store.edit(pc, firstApp).setSharedValue(GAMMA, "2.4", "default")
+                .setModeValue(PresentationMode.NORMAL, BITRATE, 80000, 20000).commit());
+        assertTrue(store.edit(secondPc, firstApp)
+                .setSharedValue(GAMMA, "2.2", "default").commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.clearCurrentSession(secondPc));
+
+        assertTrue(store.startNewSession(pc, firstApp, "new-first-host", 3L));
+        assertTrue(store.startNewSession(secondPc, firstApp, "new-second-host", 4L));
+
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertEquals(80000, store.getCurrentSession(pc)
+                .getModeOverrides(PresentationMode.NORMAL).get(BITRATE));
+        assertEquals("2.2", store.getCurrentSession(secondPc).getSharedOverrides().get(GAMMA));
+        assertTrue(store.getCurrentSession(secondPc).getAllModeOverrides().isEmpty());
     }
 
     @Test
@@ -149,6 +248,36 @@ public final class SessionSettingsStoreTest {
                 .commit());
 
         assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, firstApp, null, 1L));
+        assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+    }
+
+    @Test
+    public void clearingOverridesPersistsInheritanceAcrossEndAndFreshLaunch() {
+        assertTrue(globals.edit().putString(GAMMA, "2.2").putString(FPS, "60").commit());
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "2.2")
+                .setSharedValue(HDR, true, false)
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60")
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+        assertTrue(store.edit(pc, firstApp)
+                .clearSharedOverrides()
+                .clearModeOverrides(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(globals.edit().putString(GAMMA, "default").putString(FPS, "120").commit());
+
+        assertTrue(new SessionSettingsStore(storage)
+                .startNewSession(pc, firstApp, "next", 2L));
+        Snapshot restored = store.snapshot(pc, globals);
+        assertTrue(restored.getRecord().getSharedOverrides().isEmpty());
+        assertTrue(restored.getRecord().getAllModeOverrides().isEmpty());
+        assertEquals("default", restored.sharedPreferences().getString(GAMMA, null));
+        assertEquals("120", restored.preferencesForMode(PresentationMode.CLIENT_SBS_AI)
+                .getString(FPS, null));
     }
 
     @Test
@@ -227,6 +356,100 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
+    public void modelOverrideClearingAlsoUpdatesOfflineAppProfilesAcrossHosts() {
+        PcIdentity secondPc = new PcIdentity("second-pc", "192.168.1.3");
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(MODEL, "legacy-shared", "global")
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "first-model", "global")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60")
+                .commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, secondApp, "second", 2L));
+        assertTrue(store.edit(pc, secondApp)
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "second-model", "global")
+                .setModeValue(PresentationMode.HOST_SBS_AI, MODEL, "host-value", "global")
+                .commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(secondPc, firstApp, "third", 3L));
+        assertTrue(store.edit(secondPc, firstApp)
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "third-model", "global")
+                .commit());
+        assertTrue(store.clearCurrentSession(secondPc));
+        String firstProfileKey = profileKey(pc, firstApp);
+        JsonObject firstProfile = JsonParser.parseString(storage.getString(
+                firstProfileKey, null)).getAsJsonObject();
+        firstProfile.addProperty("future_marker", "keep");
+        String malformed = "{\"schema\":1,\"modes\":{}}";
+        String unknown = "{\"schema\":999,\"modes\":{}}";
+        assertTrue(storage.edit().putString(firstProfileKey, firstProfile.toString())
+                .putString("settings.malformed", malformed)
+                .putString("settings.unknown", unknown).commit());
+
+        assertTrue(store.clearModeValueOverridesForAllCurrentSessions(
+                PresentationMode.CLIENT_SBS_AI, MODEL));
+
+        assertNull(store.getCurrentSession(pc));
+        assertNull(store.getCurrentSession(secondPc));
+        assertTrue(storage.getString(firstProfileKey, "").contains(
+                "\"future_marker\":\"keep\""));
+        assertEquals(malformed, storage.getString("settings.malformed", null));
+        assertEquals(unknown, storage.getString("settings.unknown", null));
+        assertTrue(store.startNewSession(pc, firstApp, "new-first", 4L));
+        SessionRecord first = store.getCurrentSession(pc);
+        assertFalse(first.getSharedOverrides().containsKey(MODEL));
+        assertFalse(first.getModeOverrides(PresentationMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertEquals("2.4", first.getSharedOverrides().get(GAMMA));
+        assertEquals("90", first.getModeOverrides(PresentationMode.CLIENT_SBS_AI).get(FPS));
+        assertTrue(store.startNewSession(pc, secondApp, "new-second", 5L));
+        SessionRecord second = store.getCurrentSession(pc);
+        assertFalse(second.getModeOverrides(PresentationMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertEquals("host-value", second.getModeOverrides(PresentationMode.HOST_SBS_AI).get(MODEL));
+        assertTrue(store.startNewSession(secondPc, firstApp, "new-third", 6L));
+        assertFalse(store.getCurrentSession(secondPc)
+                .getModeOverrides(PresentationMode.CLIENT_SBS_AI).containsKey(MODEL));
+    }
+
+    @Test
+    public void modelOverrideClearingSkipsMalformedProfilesAndCommitsValidChanges() {
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(MODEL, "legacy-shared", "global")
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "saved-model", "global")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60").commit());
+        assertTrue(store.clearCurrentSession(pc));
+        String validProfile = storage.getString(profileKey(pc, firstApp), null);
+        JsonObject emptyApp = JsonParser.parseString(validProfile).getAsJsonObject();
+        emptyApp.add("app", new JsonObject());
+        JsonObject invalidValue = JsonParser.parseString(validProfile).getAsJsonObject();
+        invalidValue.getAsJsonObject("shared").getAsJsonObject(MODEL)
+                .addProperty("type", "unsupported");
+        JsonObject wrongAppType = JsonParser.parseString(validProfile).getAsJsonObject();
+        wrongAppType.addProperty("app", 7);
+        assertTrue(storage.edit()
+                .putString("settings.malformed-empty-app", emptyApp.toString())
+                .putString("settings.malformed-value", invalidValue.toString())
+                .putString("settings.malformed-app-type", wrongAppType.toString()).commit());
+
+        assertTrue(store.clearModeValueOverridesForAllCurrentSessions(
+                PresentationMode.CLIENT_SBS_AI, MODEL));
+
+        assertNull(store.getCurrentSession(pc));
+        assertEquals(emptyApp.toString(), storage.getString("settings.malformed-empty-app", null));
+        assertEquals(invalidValue.toString(), storage.getString("settings.malformed-value", null));
+        assertEquals(wrongAppType.toString(), storage.getString("settings.malformed-app-type", null));
+        assertTrue(store.startNewSession(pc, firstApp, "next", 2L));
+        SessionRecord restored = store.getCurrentSession(pc);
+        assertFalse(restored.getSharedOverrides().containsKey(MODEL));
+        assertFalse(restored.getModeOverrides(PresentationMode.CLIENT_SBS_AI).containsKey(MODEL));
+        assertEquals("2.4", restored.getSharedOverrides().get(GAMMA));
+        assertEquals("90", restored.getModeOverrides(PresentationMode.CLIENT_SBS_AI).get(FPS));
+    }
+
+    @Test
     public void legacyHostResumePreservesSettingsUsingApplicationIdentity() {
         assertTrue(store.startNewSession(pc, firstApp, null, 100L));
         assertTrue(store.edit(pc, firstApp)
@@ -294,18 +517,47 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
-    public void explicitEndClearsAllSessionSettings() {
+    public void explicitEndClearsResumeStateAndNextSessionRestoresSavedSettings() {
         assertTrue(store.startNewSession(pc, firstApp, "host", 1L));
         assertTrue(store.edit(pc, firstApp)
                 .setSharedValue(FPS, "90", "60")
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setSharedValue(HDR, true, false)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL, "midas", "da-v2")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, RESOLUTION,
+                        "2560x1440", "1920x1080")
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
+        SessionRecord original = store.getCurrentSession(pc);
 
         assertTrue(store.clearCurrentSession(pc));
 
         assertNull(store.getCurrentSession(pc));
         assertEquals("60", store.snapshot(pc, globals).sharedPreferences()
                 .getString(FPS, "60"));
+        assertEquals("default", store.snapshot(pc, globals).sharedPreferences()
+                .getString(GAMMA, "default"));
+
+        store = new SessionSettingsStore(storage);
+        assertTrue(store.startNewSession(pc, firstApp, "next-host", 2L));
+        SessionRecord next = store.getCurrentSession(pc);
+        assertEquals(original.getSharedOverrides(), next.getSharedOverrides());
+        assertEquals(original.getAllModeOverrides(), next.getAllModeOverrides());
+        assertEquals(original.getLastSuccessfulMode(), next.getLastSuccessfulMode());
+        assertNotEquals(original.getLocalSessionId(), next.getLocalSessionId());
+        assertEquals(firstApp, next.getCurrentApp());
+        assertFalse(next.getResumeMetadata().isHostConfirmedResume());
+        assertEquals("next-host", next.getResumeMetadata().getHostSessionId());
+        assertEquals(2L, next.getResumeMetadata().getHostConfirmedAtEpochMillis());
+        assertEquals("2.4", store.snapshot(pc, globals).sharedPreferences()
+                .getString(GAMMA, "default"));
+        assertFalse(globals.contains(GAMMA));
+        JsonObject saved = JsonParser.parseString(storage.getString(
+                profileKey(pc, firstApp), null)).getAsJsonObject();
+        assertEquals("app-cyberpunk", saved.getAsJsonObject("app")
+                .get("uuid").getAsString());
+        assertFalse(saved.has("local_id"));
+        assertFalse(saved.has("resume"));
     }
 
     @Test
@@ -338,6 +590,50 @@ public final class SessionSettingsStoreTest {
         assertNotEquals(firstLocalSessionId, current.getLocalSessionId());
         assertTrue(current.getSharedOverrides().isEmpty());
         assertThrows(IllegalStateException.class, staleEditor::commit);
+    }
+
+    @Test
+    public void staleEditorCannotOverwriteSavedProfileOfReplacementSession() {
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default").commit());
+        SessionSettingsStore.Editor staleEditor = store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.2", "default")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "120", "60");
+        assertTrue(store.startNewSession(pc, firstApp, "second", 2L));
+        assertTrue(store.edit(pc, firstApp)
+                .setModeValue(PresentationMode.NORMAL, BITRATE, 80000, 20000).commit());
+        String savedProfile = storage.getString(profileKey(pc, firstApp), null);
+
+        assertFalse(staleEditor.commit());
+
+        assertEquals(savedProfile, storage.getString(profileKey(pc, firstApp), null));
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, firstApp, "third", 3L));
+        SessionRecord restored = store.getCurrentSession(pc);
+        assertEquals("2.4", restored.getSharedOverrides().get(GAMMA));
+        assertEquals(80000, restored.getModeOverrides(PresentationMode.NORMAL).get(BITRATE));
+        assertTrue(restored.getModeOverrides(PresentationMode.CLIENT_SBS_AI).isEmpty());
+    }
+
+    @Test
+    public void staleEditorForAnotherAppCannotOverwriteEitherSavedProfile() {
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default").commit());
+        SessionSettingsStore.Editor staleEditor = store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.2", "default");
+        assertTrue(store.startNewSession(pc, secondApp, "second", 2L));
+        assertTrue(store.edit(pc, secondApp)
+                .setSharedValue(FPS, "90", "60").commit());
+        String firstSaved = storage.getString(profileKey(pc, firstApp), null);
+        String secondSaved = storage.getString(profileKey(pc, secondApp), null);
+
+        assertFalse(staleEditor.commit());
+
+        assertEquals(firstSaved, storage.getString(profileKey(pc, firstApp), null));
+        assertEquals(secondSaved, storage.getString(profileKey(pc, secondApp), null));
     }
 
     @Test
@@ -410,6 +706,172 @@ public final class SessionSettingsStoreTest {
         assertTrue(store.startNewSession(pc, firstApp, null, 0L));
         assertEquals(SessionSettingsStore.SCHEMA_VERSION,
                 store.getCurrentSession(pc).getSchemaVersion());
+    }
+
+    @Test
+    public void legacyActiveSessionMigratesSavedSettingsBeforeExplicitEnd() {
+        assertTrue(store.startNewSession(pc, firstApp, "legacy-host", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60")
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+        SessionRecord legacy = store.getCurrentSession(pc);
+        assertTrue(storage.edit().remove(profileKey(pc, firstApp)).commit());
+
+        SessionSettingsStore upgraded = new SessionSettingsStore(storage);
+        assertTrue(upgraded.clearCurrentSession(pc));
+        assertNull(upgraded.getCurrentSession(pc));
+        assertTrue(upgraded.startNewSession(pc, firstApp, "new-host", 2L));
+
+        SessionRecord restored = upgraded.getCurrentSession(pc);
+        assertEquals(legacy.getSharedOverrides(), restored.getSharedOverrides());
+        assertEquals(legacy.getAllModeOverrides(), restored.getAllModeOverrides());
+        assertEquals(legacy.getLastSuccessfulMode(), restored.getLastSuccessfulMode());
+        assertNotEquals(legacy.getLocalSessionId(), restored.getLocalSessionId());
+        assertEquals("new-host", restored.getResumeMetadata().getHostSessionId());
+    }
+
+    @Test
+    public void replacingLegacyActiveAppPreservesItsOwnProfileForLaterLaunch() {
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, firstApp, "legacy-host", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setModeValue(PresentationMode.CLIENT_SBS_AI, FPS, "90", "60").commit());
+        assertTrue(storage.edit().remove(profileKey(pc, firstApp)).commit());
+
+        assertTrue(new SessionSettingsStore(storage)
+                .startNewSession(pc, secondApp, "second-host", 2L));
+        assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+        assertTrue(store.getCurrentSession(pc).getAllModeOverrides().isEmpty());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, firstApp, "next-host", 3L));
+
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertEquals("90", store.getCurrentSession(pc)
+                .getModeOverrides(PresentationMode.CLIENT_SBS_AI).get(FPS));
+    }
+
+    @Test
+    public void invalidSavedProfilesCannotRestoreSettingsOrResumeCapability() {
+        assertTrue(store.startNewSession(pc, firstApp, "original-host", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default").commit());
+        String key = profileKey(pc, firstApp);
+        String valid = storage.getString(key, null);
+        JsonObject unknown = JsonParser.parseString(valid).getAsJsonObject();
+        unknown.addProperty("schema", 999);
+        JsonObject invalidValue = JsonParser.parseString(valid).getAsJsonObject();
+        invalidValue.getAsJsonObject("shared").getAsJsonObject(GAMMA)
+                .addProperty("type", "unsupported");
+
+        for (String invalid : new String[]{"not-json", unknown.toString(),
+                invalidValue.toString()}) {
+            // Simulate an offline profile with no compatible active record to inherit.
+            assertTrue(storage.edit().remove("session." + pc.getStorageId())
+                    .putString(key, invalid).commit());
+
+            assertTrue(new SessionSettingsStore(storage)
+                    .startNewSession(pc, firstApp, "fresh-host", 2L));
+
+            SessionRecord fresh = store.getCurrentSession(pc);
+            assertTrue(fresh.getSharedOverrides().isEmpty());
+            assertTrue(fresh.getAllModeOverrides().isEmpty());
+            assertEquals(PresentationMode.NORMAL, fresh.getLastSuccessfulMode());
+            assertFalse(fresh.getResumeMetadata().isHostConfirmedResume());
+            assertEquals("fresh-host", fresh.getResumeMetadata().getHostSessionId());
+        }
+        assertTrue(storage.edit().remove("session." + pc.getStorageId())
+                .putInt(key, 7).commit());
+        assertTrue(store.startNewSession(pc, firstApp, null, 3L));
+        assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+        assertNull(store.getCurrentSession(pc).getResumeMetadata().getHostSessionId());
+    }
+
+    @Test
+    public void savedAppIdentityUsesUuidAndCanMatchIdFallback() {
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default").commit());
+        assertTrue(store.clearCurrentSession(pc));
+
+        AppIdentity sameUuidChangedId = new AppIdentity("99", "APP-CYBERPUNK", "New Name");
+        assertTrue(store.startNewSession(pc, sameUuidChangedId, "second", 2L));
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertTrue(store.clearCurrentSession(pc));
+
+        AppIdentity idFallback = new AppIdentity("99", null, "New Name");
+        assertTrue(store.startNewSession(pc, idFallback, "third", 3L));
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        JsonObject saved = JsonParser.parseString(storage.getString(
+                profileKey(pc, firstApp), null)).getAsJsonObject();
+        assertEquals("APP-CYBERPUNK", saved.getAsJsonObject("app").get("uuid").getAsString());
+    }
+
+    @Test
+    public void strongerAppIdentityReplacesCompatibleFallbackProfile() {
+        AppIdentity idOnly = new AppIdentity("42", null, "Cyberpunk 2077");
+        assertTrue(store.startNewSession(pc, idOnly, "first", 1L));
+        assertTrue(store.edit(pc, idOnly)
+                .setSharedValue(GAMMA, "2.4", "default").commit());
+        String weakerKey = profileKey(pc, idOnly);
+        assertTrue(store.clearCurrentSession(pc));
+
+        assertTrue(store.startNewSession(pc, firstApp, "second", 2L));
+
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertFalse(storage.contains(weakerKey));
+        String strongerKey = profileKey(pc, firstApp);
+        assertNotEquals(weakerKey, strongerKey);
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, idOnly, "third", 3L));
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertEquals(strongerKey, profileKey(pc, firstApp));
+        assertFalse(storage.contains(weakerKey));
+    }
+
+    @Test
+    public void differentAppUuidsNeverShareSettingsWhenNumericIdIsRecycled() {
+        AppIdentity recycledIdApp = new AppIdentity("42", "different-app-uuid", "Different Game");
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(GAMMA, "2.4", "default").commit());
+        assertTrue(store.clearCurrentSession(pc));
+
+        assertTrue(store.startNewSession(pc, recycledIdApp, "second", 2L));
+        assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+        assertTrue(store.edit(pc, recycledIdApp)
+                .setSharedValue(GAMMA, "2.2", "default").commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, firstApp, "third", 3L));
+        assertEquals("2.4", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, recycledIdApp, "fourth", 4L));
+        assertEquals("2.2", store.getCurrentSession(pc).getSharedOverrides().get(GAMMA));
+    }
+
+    @Test
+    public void strongAppProfileWinsOverActiveAmbiguousNumericIdentity() {
+        AppIdentity first = new AppIdentity("7", "app-first", "First Game");
+        AppIdentity second = new AppIdentity("7", "app-second", "Second Game");
+        AppIdentity idOnly = new AppIdentity("7", null, null);
+        assertTrue(globals.edit().putString(FPS, "60").commit());
+        assertTrue(store.startNewSession(pc, first, "first-host", 1L));
+        assertTrue(store.edit(pc, first).setSharedValue(FPS, "90", "60").commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, second, "second-host", 2L));
+        assertTrue(store.edit(pc, second).setSharedValue(FPS, "120", "60").commit());
+        assertTrue(store.clearCurrentSession(pc));
+
+        assertTrue(store.startNewSession(pc, idOnly, "ambiguous-host", 3L));
+        assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+        assertEquals("60", store.snapshot(pc, globals).sharedPreferences().getString(FPS, null));
+
+        assertTrue(store.startNewSession(pc, second, "new-second-host", 4L));
+        assertEquals("120", store.getCurrentSession(pc).getSharedOverrides().get(FPS));
+        assertTrue(store.startNewSession(pc, first, "new-first-host", 5L));
+        assertEquals("90", store.getCurrentSession(pc).getSharedOverrides().get(FPS));
     }
 
     @Test
@@ -501,6 +963,31 @@ public final class SessionSettingsStoreTest {
         assertTrue(JsonParser.parseString(storage.getString(
                 "session." + pc.getStorageId(), null)).getAsJsonObject()
                 .get("raw_mode_migrated").getAsBoolean());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, firstApp, "new-host", 1L));
+        assertTrue(store.getCurrentSession(pc)
+                .getModeOverrides(PresentationMode.MOVIE_3D).isEmpty());
+        assertEquals("90", store.getCurrentSession(pc)
+                .getModeOverrides(PresentationMode.HOST_SBS_RAW).get(FPS));
+    }
+
+    private String profileKey(PcIdentity profilePc, AppIdentity profileApp) {
+        String prefix = "settings." + profilePc.getStorageId() + ".";
+        for (Map.Entry<String, ?> entry : storage.getAll().entrySet()) {
+            if (!entry.getKey().startsWith(prefix) || !(entry.getValue() instanceof String)) {
+                continue;
+            }
+            JsonObject json = JsonParser.parseString((String) entry.getValue()).getAsJsonObject();
+            JsonObject app = json.getAsJsonObject("app");
+            AppIdentity storedApp = new AppIdentity(
+                    app.has("id") ? app.get("id").getAsString() : null,
+                    app.has("uuid") ? app.get("uuid").getAsString() : null,
+                    app.has("name") ? app.get("name").getAsString() : null);
+            if (profileApp.isSameApplication(storedApp)) {
+                return entry.getKey();
+            }
+        }
+        throw new AssertionError("No saved settings profile for " + profileApp.getDisplayName());
     }
 
     private String markStoredRecordAsLegacyRaw() {
