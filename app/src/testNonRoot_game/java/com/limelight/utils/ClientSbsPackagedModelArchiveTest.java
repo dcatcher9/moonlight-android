@@ -72,7 +72,7 @@ public class ClientSbsPackagedModelArchiveTest {
     public void packagedModelNoticesAreCompleteAndUnchanged() throws Exception {
         Context context = ApplicationProvider.getApplicationContext();
         String[][] expectedAssets = {
-                {"NOTICE.txt", "25f8e224dba7b038a8808057f3dde261334a7b6cb208d80329b6cfcbb5d2f0af"},
+                {"NOTICE.txt", "08981f4c44de8ff4e81a422f456e5211e7928063dd6ea3289e2446cc39050552"},
                 {"LICENSE-APACHE-2.0.txt", "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
                 {"LICENSE-ZIPDEPTH-MIT.txt", "0007e2ff761f1b89ad89327870b807cd4de00cb657b442b62de2f92fdc87d508"},
         };
@@ -92,7 +92,7 @@ public class ClientSbsPackagedModelArchiveTest {
                 readAsset(context, MODEL_NOTICE_DIRECTORY + "NOTICE.txt"),
                 StandardCharsets.UTF_8);
         assertTrue(notice.contains("ZipDepth original base relative depth"));
-        assertTrue(notice.contains("LiteRT 2.2.0 native runtime and accelerator"));
+        assertTrue(notice.contains("LiteRT 2.3.0 native runtime and accelerator"));
         assertTrue(notice.contains("modified TFLite conversions"));
         assertTrue(notice.contains("LICENSE-APACHE-2.0.txt"));
         assertTrue(notice.contains("LICENSE-ZIPDEPTH-MIT.txt"));

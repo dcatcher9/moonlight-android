@@ -101,10 +101,14 @@ struct LrtQualcommOptionsT {
   std::optional<LrtQualcommOptionsHtpPerformanceMode> htp_performance_mode;
   std::optional<LrtQualcommOptionsDspPerformanceMode> dsp_performance_mode;
   std::optional<LrtQualcommOptionsHtpPerfCtrlMode> htp_perf_ctrl_mode;
+  std::optional<LrtQualcommOptionsHtpPdSession> htp_pd_session;
   std::optional<LrtQualcommOptionsDspPerfCtrlMode> dsp_perf_ctrl_mode;
+  std::optional<LrtQualcommOptionsDspPdSession> dsp_pd_session;
+  std::optional<LrtQualcommOptionsDspEncoding> dsp_encoding;
   std::optional<std::vector<std::int32_t>> dump_tensor_ids;
   std::optional<std::string> ir_json_dir;
   std::optional<std::string> dlc_dir;
+  std::optional<std::string> graph_transform;
   std::optional<std::uint32_t> vtcm_size;
   std::optional<std::uint32_t> num_hvx_threads;
   std::optional<LrtQualcommOptionsOptimizationLevel> optimization_level;
@@ -114,6 +118,14 @@ struct LrtQualcommOptionsT {
       graph_io_tensor_mem_type;
   std::optional<std::string> schematic_dir;
   std::optional<CustomOpPackage> custom_op_package;
+  std::optional<LrtQualcommOptionsLpaiTarget> lpai_target;
+  std::optional<std::uint32_t> lpai_fps;
+  std::optional<std::uint32_t> lpai_ftrt_ratio;
+  std::optional<LrtQualcommOptionsLpaiClientPerfType> lpai_client_perf_type;
+  std::optional<LrtQualcommOptionsLpaiCoreAffinityType> lpai_core_affinity_type;
+  std::optional<std::uint32_t> lpai_core_selection;
+  std::optional<std::string> qnn_lib_dir;
+  std::optional<std::string> dsp_skel_dir;
 };
 
 LiteRtStatus LrtCreateQualcommOptionsFromToml(const char* toml_payload,
@@ -196,12 +208,31 @@ LiteRtStatus LrtCreateQualcommOptionsFromToml(const char* toml_payload,
           status = LrtQualcommOptionsSetHtpPerfCtrlMode(
               parsed_options,
               static_cast<LrtQualcommOptionsHtpPerfCtrlMode>(*v));
+        } else if (key == "htp_pd_session") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetHtpPdSession(
+              parsed_options, static_cast<LrtQualcommOptionsHtpPdSession>(*v));
         } else if (key == "dsp_perf_ctrl_mode") {
           auto v = litert::internal::ParseTomlInt(value);
           if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
           status = LrtQualcommOptionsSetDspPerfCtrlMode(
               parsed_options,
               static_cast<LrtQualcommOptionsDspPerfCtrlMode>(*v));
+        } else if (key == "dsp_pd_session") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetDspPdSession(
+              parsed_options, static_cast<LrtQualcommOptionsDspPdSession>(*v));
+        } else if (key == "dsp_encoding") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          if (*v < kLiteRtQualcommDspEncodingStatic ||
+              *v > kLiteRtQualcommDspEncodingDynamic) {
+            return kLiteRtStatusErrorInvalidArgument;
+          }
+          status = LrtQualcommOptionsSetDspEncoding(
+              parsed_options, static_cast<LrtQualcommOptionsDspEncoding>(*v));
         } else if (key == "dump_tensor_ids") {
           auto parts = litert::internal::ParseTomlStringArray(value);
           if (!parts) return litert::ToLiteRtStatus(parts.Error().StatusCC());
@@ -219,6 +250,9 @@ LiteRtStatus LrtCreateQualcommOptionsFromToml(const char* toml_payload,
         } else if (key == "dlc_dir") {
           status = LrtQualcommOptionsSetDlcDir(parsed_options,
                                                std::string(value).c_str());
+        } else if (key == "graph_transform") {
+          status = LrtQualcommOptionsSetGraphTransform(
+              parsed_options, std::string(value).c_str());
         } else if (key == "vtcm_size") {
           auto v = litert::internal::ParseTomlInt(value);
           if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
@@ -258,6 +292,44 @@ LiteRtStatus LrtCreateQualcommOptionsFromToml(const char* toml_payload,
           if (status == kLiteRtStatusOk) {
             parsed_options->custom_op_package = package;
           }
+        } else if (key == "lpai_target") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetLpaiTarget(
+              parsed_options, static_cast<LrtQualcommOptionsLpaiTarget>(*v));
+        } else if (key == "lpai_fps") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetLpaiFps(parsed_options,
+                                                static_cast<uint32_t>(*v));
+        } else if (key == "lpai_ftrt_ratio") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetLpaiFtrtRatio(
+              parsed_options, static_cast<uint32_t>(*v));
+        } else if (key == "lpai_client_perf_type") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetLpaiClientPerfType(
+              parsed_options,
+              static_cast<LrtQualcommOptionsLpaiClientPerfType>(*v));
+        } else if (key == "lpai_core_affinity_type") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetLpaiCoreAffinityType(
+              parsed_options,
+              static_cast<LrtQualcommOptionsLpaiCoreAffinityType>(*v));
+        } else if (key == "lpai_core_selection") {
+          auto v = litert::internal::ParseTomlInt(value);
+          if (!v) return litert::ToLiteRtStatus(v.Error().StatusCC());
+          status = LrtQualcommOptionsSetLpaiCoreSelection(
+              parsed_options, static_cast<uint32_t>(*v));
+        } else if (key == "qnn_lib_dir") {
+          status = LrtQualcommOptionsSetQnnLibDir(parsed_options,
+                                                  std::string(value).c_str());
+        } else if (key == "dsp_skel_dir") {
+          status = LrtQualcommOptionsSetDspSkelDir(parsed_options,
+                                                   std::string(value).c_str());
         }
 
         return status;
@@ -344,9 +416,21 @@ LiteRtStatus LrtGetOpaqueQualcommOptionsData(LrtQualcommOptions options,
     toml << "htp_perf_ctrl_mode = "
          << static_cast<int>(*options->htp_perf_ctrl_mode) << "\n";
   }
+  if (options->htp_pd_session.has_value()) {
+    toml << "htp_pd_session = " << static_cast<int>(*options->htp_pd_session)
+         << "\n";
+  }
   if (options->dsp_perf_ctrl_mode.has_value()) {
     toml << "dsp_perf_ctrl_mode = "
          << static_cast<int>(*options->dsp_perf_ctrl_mode) << "\n";
+  }
+  if (options->dsp_pd_session.has_value()) {
+    toml << "dsp_pd_session = " << static_cast<int>(*options->dsp_pd_session)
+         << "\n";
+  }
+  if (options->dsp_encoding.has_value()) {
+    toml << "dsp_encoding = " << static_cast<int>(*options->dsp_encoding)
+         << "\n";
   }
   if (options->dump_tensor_ids.has_value()) {
     toml << "dump_tensor_ids = [";
@@ -361,6 +445,9 @@ LiteRtStatus LrtGetOpaqueQualcommOptionsData(LrtQualcommOptions options,
   }
   if (options->dlc_dir.has_value()) {
     toml << "dlc_dir = \"" << *options->dlc_dir << "\"\n";
+  }
+  if (options->graph_transform.has_value()) {
+    toml << "graph_transform = \"" << *options->graph_transform << "\"\n";
   }
   if (options->vtcm_size.has_value()) {
     toml << "vtcm_size = " << *options->vtcm_size << "\n";
@@ -388,15 +475,38 @@ LiteRtStatus LrtGetOpaqueQualcommOptionsData(LrtQualcommOptions options,
   }
   if (options->custom_op_package.has_value()) {
     const auto& package = *options->custom_op_package;
-    toml << "custom_op_package = \""
-         << "name:" << package.name << ";"
+    toml << "custom_op_package = \"" << "name:" << package.name << ";"
          << "interface_provider:" << package.interface_provider << ";"
          << "compile_package_path:" << package.compile_package_path << ";"
          << "dispatch_package_path:" << package.dispatch_package_path << ";"
-         << "target:" << package.target << ";"
-         << "\"\n";
+         << "target:" << package.target << ";" << "\"\n";
   }
-
+  if (options->lpai_target.has_value()) {
+    toml << "lpai_target = " << static_cast<int>(*options->lpai_target) << "\n";
+  }
+  if (options->lpai_fps.has_value()) {
+    toml << "lpai_fps = " << *options->lpai_fps << "\n";
+  }
+  if (options->lpai_ftrt_ratio.has_value()) {
+    toml << "lpai_ftrt_ratio = " << *options->lpai_ftrt_ratio << "\n";
+  }
+  if (options->lpai_client_perf_type.has_value()) {
+    toml << "lpai_client_perf_type = "
+         << static_cast<int>(*options->lpai_client_perf_type) << "\n";
+  }
+  if (options->lpai_core_affinity_type.has_value()) {
+    toml << "lpai_core_affinity_type = "
+         << static_cast<int>(*options->lpai_core_affinity_type) << "\n";
+  }
+  if (options->lpai_core_selection.has_value()) {
+    toml << "lpai_core_selection = " << *options->lpai_core_selection << "\n";
+  }
+  if (options->qnn_lib_dir.has_value()) {
+    toml << "qnn_lib_dir = \"" << *options->qnn_lib_dir << "\"\n";
+  }
+  if (options->dsp_skel_dir.has_value()) {
+    toml << "dsp_skel_dir = \"" << *options->dsp_skel_dir << "\"\n";
+  }
   *identifier = LrtQualcommOptionsGetIdentifier();
   std::string toml_str = toml.str();
   litert::internal::MakeCStringPayload(toml_str, payload, payload_deleter);
@@ -860,6 +970,29 @@ LiteRtStatus LrtQualcommOptionsGetHtpPerfCtrlMode(
   return kLiteRtStatusOk;
 }
 
+LiteRtStatus LrtQualcommOptionsSetHtpPdSession(
+    LrtQualcommOptions options, LrtQualcommOptionsHtpPdSession htp_pd_session) {
+  if (options == nullptr || htp_pd_session < kLiteRtQualcommHtpUnsignedPd ||
+      htp_pd_session > kLiteRtQualcommHtpAdaptivePd) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->htp_pd_session = htp_pd_session;
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetHtpPdSession(
+    LrtQualcommOptions options,
+    LrtQualcommOptionsHtpPdSession* htp_pd_session) {
+  if (options == nullptr || htp_pd_session == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *htp_pd_session =
+      options->htp_pd_session.value_or(kLiteRtQualcommHtpUnsignedPd);
+  return kLiteRtStatusOk;
+}
+
 LiteRtStatus LrtQualcommOptionsSetDspPerfCtrlMode(
     LrtQualcommOptions options,
     LrtQualcommOptionsDspPerfCtrlMode dsp_perf_ctrl_mode) {
@@ -881,6 +1014,54 @@ LiteRtStatus LrtQualcommOptionsGetDspPerfCtrlMode(
 
   *dsp_perf_ctrl_mode = options->dsp_perf_ctrl_mode.value_or(
       kLiteRtQualcommDspPerfCtrlModeManual);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetDspPdSession(
+    LrtQualcommOptions options, LrtQualcommOptionsDspPdSession dsp_pd_session) {
+  if (options == nullptr || dsp_pd_session < kLiteRtQualcommDspUnsignedPd ||
+      dsp_pd_session > kLiteRtQualcommDspAdaptivePd) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->dsp_pd_session = dsp_pd_session;
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetDspPdSession(
+    LrtQualcommOptions options,
+    LrtQualcommOptionsDspPdSession* dsp_pd_session) {
+  if (options == nullptr || dsp_pd_session == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *dsp_pd_session =
+      options->dsp_pd_session.value_or(kLiteRtQualcommDspUnsignedPd);
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetDspEncoding(
+    LrtQualcommOptions options, LrtQualcommOptionsDspEncoding dsp_encoding) {
+  if (options == nullptr ||
+      dsp_encoding < kLiteRtQualcommDspEncodingStatic ||
+      dsp_encoding > kLiteRtQualcommDspEncodingDynamic) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->dsp_encoding = dsp_encoding;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetDspEncoding(
+    LrtQualcommOptions options, LrtQualcommOptionsDspEncoding* dsp_encoding) {
+  if (options == nullptr || dsp_encoding == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *dsp_encoding =
+      options->dsp_encoding.value_or(kLiteRtQualcommDspEncodingStatic);
 
   return kLiteRtStatusOk;
 }
@@ -926,6 +1107,30 @@ LiteRtStatus LrtQualcommOptionsGetDlcDir(LrtQualcommOptions options,
   }
 
   *dlc_dir = options->dlc_dir.has_value() ? options->dlc_dir->c_str() : "";
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetGraphTransform(LrtQualcommOptions options,
+                                                 const char* graph_transform) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->graph_transform = graph_transform;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetGraphTransform(LrtQualcommOptions options,
+                                                 const char** graph_transform) {
+  if (options == nullptr || graph_transform == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *graph_transform = options->graph_transform.has_value()
+                         ? options->graph_transform->c_str()
+                         : "";
 
   return kLiteRtStatusOk;
 }
@@ -1042,6 +1247,192 @@ LiteRtStatus LrtQualcommOptionsGetBackend(
   }
 
   *qnn_backend = options->qnn_backend.value_or(kLiteRtQualcommBackendHtp);
+
+  return kLiteRtStatusOk;
+}
+
+// LPAI OPTIONS ////////////////////////////////////////////////////////////////
+
+LiteRtStatus LrtQualcommOptionsSetLpaiTarget(
+    LrtQualcommOptions options, LrtQualcommOptionsLpaiTarget lpai_target) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->lpai_target = lpai_target;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetLpaiTarget(
+    LrtQualcommOptions options, LrtQualcommOptionsLpaiTarget* lpai_target) {
+  if (options == nullptr || lpai_target == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *lpai_target = options->lpai_target.value_or(kLiteRtQualcommLpaiTargetAdsp);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetLpaiFps(LrtQualcommOptions options,
+                                          std::uint32_t lpai_fps) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->lpai_fps = lpai_fps;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetLpaiFps(LrtQualcommOptions options,
+                                          std::uint32_t* lpai_fps) {
+  if (options == nullptr || lpai_fps == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *lpai_fps = options->lpai_fps.value_or(1);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetLpaiFtrtRatio(LrtQualcommOptions options,
+                                                std::uint32_t lpai_ftrt_ratio) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->lpai_ftrt_ratio = lpai_ftrt_ratio;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetLpaiFtrtRatio(
+    LrtQualcommOptions options, std::uint32_t* lpai_ftrt_ratio) {
+  if (options == nullptr || lpai_ftrt_ratio == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *lpai_ftrt_ratio = options->lpai_ftrt_ratio.value_or(10);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetLpaiClientPerfType(
+    LrtQualcommOptions options,
+    LrtQualcommOptionsLpaiClientPerfType lpai_client_perf_type) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->lpai_client_perf_type = lpai_client_perf_type;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetLpaiClientPerfType(
+    LrtQualcommOptions options,
+    LrtQualcommOptionsLpaiClientPerfType* lpai_client_perf_type) {
+  if (options == nullptr || lpai_client_perf_type == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *lpai_client_perf_type = options->lpai_client_perf_type.value_or(
+      kLiteRtQualcommLpaiClientPerfTypeDefault);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetLpaiCoreAffinityType(
+    LrtQualcommOptions options,
+    LrtQualcommOptionsLpaiCoreAffinityType lpai_core_affinity_type) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->lpai_core_affinity_type = lpai_core_affinity_type;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetLpaiCoreAffinityType(
+    LrtQualcommOptions options,
+    LrtQualcommOptionsLpaiCoreAffinityType* lpai_core_affinity_type) {
+  if (options == nullptr || lpai_core_affinity_type == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *lpai_core_affinity_type = options->lpai_core_affinity_type.value_or(
+      kLiteRtQualcommLpaiCoreAffinityTypeDefault);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetLpaiCoreSelection(
+    LrtQualcommOptions options, std::uint32_t lpai_core_selection) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->lpai_core_selection = lpai_core_selection;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetLpaiCoreSelection(
+    LrtQualcommOptions options, std::uint32_t* lpai_core_selection) {
+  if (options == nullptr || lpai_core_selection == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *lpai_core_selection = options->lpai_core_selection.value_or(0);
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetQnnLibDir(LrtQualcommOptions options,
+                                            const char* qnn_lib_dir) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->qnn_lib_dir = qnn_lib_dir;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetQnnLibDir(LrtQualcommOptions options,
+                                            const char** qnn_lib_dir) {
+  if (options == nullptr || qnn_lib_dir == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *qnn_lib_dir =
+      options->qnn_lib_dir.has_value() ? options->qnn_lib_dir->c_str() : "";
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsSetDspSkelDir(LrtQualcommOptions options,
+                                             const char* dsp_skel_dir) {
+  if (options == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  options->dsp_skel_dir = dsp_skel_dir;
+
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LrtQualcommOptionsGetDspSkelDir(LrtQualcommOptions options,
+                                             const char** dsp_skel_dir) {
+  if (options == nullptr || dsp_skel_dir == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  *dsp_skel_dir =
+      options->dsp_skel_dir.has_value() ? options->dsp_skel_dir->c_str() : "";
 
   return kLiteRtStatusOk;
 }

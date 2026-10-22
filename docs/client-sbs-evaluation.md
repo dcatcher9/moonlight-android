@@ -1410,6 +1410,14 @@ The offscreen render gate also passed on SM-I610 at `672 x 384 -> 1344 x 384`; a
 parallax field produced the expected distinct center-gradient samples (`119 / 135`) for the left and
 right eyes with no GL error. This is a shader/format/orientation gate, not a live-stream timing result.
 
+The complete gate passed again on SM-I610 on 2026-10-22 after the LiteRT 2.2.0 to 2.3.0 runtime
+update: all four classes (10 tests) reported `OK`. Every bucket replaced 163 of 163 nodes with one
+`LITERT_CL` partition, confirmed complete delegation and CL/GL interop, and returned the all-zero
+packed-stride sentinel (`strides=[0,0]`) with 12-byte input and 4-byte output pixel strides. Each
+slot's output repeated exactly across passes. The disparity gate measured
+`28.775 / 8.421 / 1.378 ms` at `672 x 384`, `18.710 / 7.715 / 1.619 ms` at `896 x 384`, and
+`3.791 / 8.354 / 1.659 ms` at `928 x 384`.
+
 ### Historical retired-family measurements
 
 Every canonical DA-V2 bucket delegated its 683-operation core in one `LITERT_CL` partition and used
@@ -1455,16 +1463,19 @@ testing.
 ### Current ZipDepth isolated measurements
 
 The original-Base ZipDepth graphs were measured with the production low-priority hint, 20 discarded
-warm-ups, 100 measured invocations, thermal status 0, and complete one-partition OpenCL delegation:
+warm-ups, 100 measured invocations, thermal status 0, and complete one-partition OpenCL delegation.
+The LiteRT 2.3.0 run on 2026-10-22 used `ClientSbsProductionGpuBenchmarkInstrumentedTest` with a
+partial wake lock and thermal status 0 before and after each bucket:
 
-| Shape | LiteRT median / p95 | Output-ready median / p95 |
-| --- | ---: | ---: |
-| `672 x 384` | 10.089 / 10.310 ms | 10.670 / 10.919 ms |
-| `896 x 384` | 12.991 / 13.189 ms | 13.599 / 13.815 ms |
-| `928 x 384` | 13.308 / 13.488 ms | 13.924 / 14.128 ms |
+| Shape | LiteRT 2.3.0 median / p95 | Output-ready median / p95 | LiteRT 2.2.0 median / p95 |
+| --- | ---: | ---: | ---: |
+| `672 x 384` | 8.772 / 9.147 ms | 9.444 / 9.947 ms | 10.089 / 10.310 ms |
+| `896 x 384` | 11.241 / 11.672 ms | 11.930 / 12.600 ms | 12.991 / 13.189 ms |
+| `928 x 384` | 11.604 / 12.000 ms | 12.306 / 12.831 ms | 13.308 / 13.488 ms |
 
 Representative real-frame FP16 output retained Pearson `0.9976`–`0.9992` and affine
-range-normalized RMSE `1.16%`–`1.43%` against FP32 across the three shapes. These numbers exclude
+range-normalized RMSE `1.16%`–`1.43%` against FP32 across the three shapes; that precision comparison
+predates LiteRT 2.3.0 and was not repeated with it. These numbers exclude
 decoder, input pack, depth processing, reprojection, and XR composition; they do not establish
 sustained stream thermals.
 
@@ -1674,6 +1685,34 @@ visible Stats panel for rates, reuse decisions, wall timings, GPU stage samples,
 use operational logs for startup, transitions, errors and bounded playback recovery. Closing Stats
 disables its timer queries, health copies/polling, detailed counters and formatting. Reopening starts
 fresh CPU, Client-SBS, health and GL timer windows; hidden time is not part of the first sample.
+
+### LiteRT 2.3.0 live check, 2026-10-22
+
+A short Client AI 3D stream on SM-I610 (Apollo-Dev desktop with an embedded playing video;
+host-applied `CLIENT_SBS_AI` at `1920 x 1080 @ 30`, HEVC Main 10 HDR) selected
+`zipdepth-base-static-672x384`. Startup logged 163 of 163 nodes in one `LITERT_CL` partition,
+complete delegation, CL/GL interop, 2818 ms compile/init, and the production
+`RG16F 1x 11-iteration seed + 2x-horizontal x1 refinement, packed single draw` path. No GL, fence,
+slot, or LiteRT error appeared.
+
+Seven two-second Stats windows with real inference, read over about one minute, reported:
+
+- Latch and output at 30 FPS except one 21.5 FPS window; infer 1.0–15.7/s with near-identical
+  reuse supplying the rest.
+- LiteRT wall avg 12.29–14.34 ms, max 14.34–16.13 ms. The first window after opening Stats held
+  one inference at 21.71 ms.
+- Depth result age avg 16.78–20.64 ms, max 19.79–23.02 ms.
+- Decision read avg 1.43–1.73 ms. Model input GPU 0.78–0.85 ms, matched color 0.16 ms, SBS compose
+  0.39–0.42 ms. Depth / cut reported `0.00 ms` with completed samples, a sub-resolution timer
+  result.
+- All fault counters 0; V2 `ready yes | current valid yes`, valid 100%.
+- App CPU about 0.5 core; device GPU 41–70% at 421–788 MHz.
+
+Android thermal status moved from Moderate (2) to Severe (3) for about one minute and returned to
+Moderate, with AP and skin near 68 °C and the fan at step 5. The headset had been in continuous use
+since the GPU gate and a 3840 x 2160 @ 90 Host AI 3D stream, so this reading is not attributable to
+the runtime change. No live LiteRT figures were recorded for 2.2.0, so this check is not an A/B
+comparison and does not replace the sustained comparison below.
 
 ## Sustained comparison
 

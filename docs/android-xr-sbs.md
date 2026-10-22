@@ -429,9 +429,9 @@ remains available as historical evidence in `docs/client-sbs-evaluation.md`,
 families are not selectable, are not fallback backends, and are not present in the APK.
 
 The original-Base ZipDepth graphs pass isolated Galaxy XR validation with 163/163
-operations in one OpenCL partition, CL/GL interop, and finite structured output. Controlled
-low-priority LiteRT median/p95 times were 10.089/10.310 ms at `672 x 384`, 12.991/13.189 ms at `896 x 384`, and
-13.308/13.488 ms at `928 x 384`; output-ready medians were 10.670, 13.599, and 13.924 ms. These are
+operations in one OpenCL partition, CL/GL interop, and finite structured output. With LiteRT 2.3.0,
+controlled low-priority LiteRT median/p95 times were 8.772/9.147 ms at `672 x 384`, 11.241/11.672 ms at `896 x 384`, and
+11.604/12.000 ms at `928 x 384`; output-ready medians were 9.444, 11.930, and 12.306 ms. These are
 isolated model results, not sustained decode/reprojection or thermal qualification.
 
 Native initialization extracts and SHA-verifies the selected complete archive entry, verifies its
@@ -1696,8 +1696,8 @@ For every mode/surface change, test:
   extraction/SHA verification, compile/init, and warm invocation latency for every aspect graph.
 - All three original-Base ZipDepth graphs have passed the isolated physical-device graph gate in
   one OpenCL partition with CL/GL interop and finite structured output. Controlled low-priority
-  LiteRT median/p95 times are 10.089/10.310 ms for `672 x 384`, 12.991/13.189 ms for `896 x 384`, and
-  13.308/13.488 ms for `928 x 384`. These are not end-to-end stream or thermal results.
+  LiteRT 2.3.0 median/p95 times are 8.772/9.147 ms for `672 x 384`, 11.241/11.672 ms for `896 x 384`, and
+  11.604/12.000 ms for `928 x 384`. These are not end-to-end stream or thermal results.
 - The SM-I610 disparity hardware gate has compiled and dispatched all three four-pass conditioner
   shapes without a GL error. Mean repeated-dispatch wall time over 20 dispatches plus a final
   `glFinish()` was 1.336, 1.579, and 1.620 ms for `672 x 384`, `896 x 384`, and `928 x 384`.

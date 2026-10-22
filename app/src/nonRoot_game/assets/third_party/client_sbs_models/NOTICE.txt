@@ -28,11 +28,11 @@ Large. The upstream repository does not provide a separate model-weight license
 or an analysis of that training relationship; review and clear the complete
 checkpoint redistribution chain before any commercial release.
 
-LiteRT 2.2.0 native runtime and accelerator
+LiteRT 2.3.0 native runtime and accelerator
 -------------------------------------------
 Upstream project: https://github.com/google-ai-edge/LiteRT
-Upstream release: https://github.com/google-ai-edge/LiteRT/releases/tag/v2.2.0
-The non-root APK ships the official LiteRT 2.2.0 Android libLiteRt.so runtime
+Upstream release: https://github.com/google-ai-edge/LiteRT/releases/tag/v2.3.0
+The non-root APK ships the official LiteRT 2.3.0 Android libLiteRt.so runtime
 and libLiteRtClGlAccelerator.so OpenCL/OpenGL accelerator for its packaged ABI.
 The source distribution records the official download URLs and SHA-256 values
 for both supported ABIs. These binaries are redistributed under Apache-2.0;

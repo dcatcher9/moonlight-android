@@ -154,7 +154,7 @@ static bool check_status(ClientSbsGpuEngine* engine, LiteRtStatus status,
     if (status == kLiteRtStatusOk) {
         return true;
     }
-    // LiteRT 2.2.0 public header declares LiteRtGetStatusString(), but the
+    // The LiteRT 2.3.0 public header declares LiteRtGetStatusString(), but the
     // Android runtime binary does not export it. Keep diagnostics numeric so
     // this bridge only depends on symbols available in the shipped runtime.
     set_error(engine, "%s failed: status %d", operation, (int) status);
@@ -557,7 +557,7 @@ static bool validate_packed_strides(ClientSbsGpuEngine* engine,
         return true;
     }
     if (strides[0] == 0) {
-        // LiteRT 2.2.0's OpenCL accelerator returns two zero stride entries for packed GL
+        // LiteRT 2.3.0's OpenCL accelerator returns two zero stride entries for packed GL
         // buffers, even when the public tensor is rank-4 NHWC. This is the accelerator's
         // unspecified/packed sentinel rather than a two-dimensional layout. Accept any-length
         // all-zero sentinel, but continue to fail closed for mixed zero/non-zero metadata.
@@ -853,7 +853,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
     environment_options[1].value.type = kLiteRtAnyTypeString;
     environment_options[1].value.str_value = engine->cache_dir;
     environment_options[2].tag = kLiteRtEnvOptionTagEglDisplay;
-    // LiteRT 2.2.0's GPU environment reader requires EGL handles in the integer union member.
+    // LiteRT 2.3.0's GPU environment reader requires EGL handles in the integer union member.
     // Supplying VoidPtr is silently ignored and falls back to whichever context is ambient.
     environment_options[2].value.type = kLiteRtAnyTypeInt;
     environment_options[2].value.int_value = (int64_t) (intptr_t) engine->display;
