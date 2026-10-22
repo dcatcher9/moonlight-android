@@ -104,10 +104,10 @@ android {
             excludes.add('**/libLiteRt*Qualcomm.so')
             excludes.add('**/libQairt*.so')
             excludes.add('**/libQnn*.so')
-            // The arcore-openxr artifact bundles both the arcore and runtime OpenXR native
-            // libs, which collide with the ones from runtime-openxr. With all androidx.xr.*
-            // pinned to one matched version (see deps below) the duplicates are identical, so
-            // picking either resolves the packaging merge without a version mismatch.
+            // Guard only: in 1.0.0-rc01 and 1.0.0, arcore-openxr and runtime-openxr each ship
+            // just their own libandroidx.xr.*.openxr.so, so nothing currently collides. If a
+            // duplicate appears, all androidx.xr.* are pinned to one matched version (see deps
+            // below), so picking either copy cannot mix versions.
             pickFirsts.add('**/libandroidx.xr.*.openxr.so')
         }
     }
@@ -199,9 +199,9 @@ dependencies {
     implementation 'org.bouncycastle:bcprov-jdk18on:1.86'
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.86'
     implementation 'org.jcodec:jcodec:0.2.5'
-    implementation 'com.squareup.okhttp3:okhttp:5.5.0'
+    implementation 'com.squareup.okhttp3:okhttp:5.5.1'
     implementation 'com.google.code.gson:gson:2.14.0'
-    implementation 'androidx.annotation:annotation:1.10.0'
+    implementation 'androidx.annotation:annotation:1.11.0'
     implementation 'androidx.appcompat:appcompat:1.8.0'
     implementation 'androidx.preference:preference:1.2.1'
     implementation 'com.google.android.material:material:1.14.0'
@@ -210,18 +210,18 @@ dependencies {
     // These libraries declare minSdk 23/24, which is satisfied now that the app's
     // minSdk is 24, so no manifest overrideLibrary is needed. XR APIs are still only
     // exercised on actual XR devices (API 34+), gated by runtime device detection.
-    // NOTE: these are pre-1.0 APIs; pin the version and verify symbols against
+    // NOTE: pin the version and verify symbols against
     // https://developer.android.com/jetpack/androidx/releases/xr-scenecore
     // IMPORTANT: the Jetpack XR modules version INDEPENDENTLY; keep the five below on one
-    // matched release (currently 1.0.0-rc01, 2026-09-09).
+    // matched release (currently 1.0.0, 2026-10-21).
     // (arcore-openxr/runtime-openxr are pinned explicitly so the arcore.openxr native lib
     // and its Kotlin classes stay on the same build — a mismatch there crashes the
     // JNI ViewCameraState construction.)
-    implementation 'androidx.xr.scenecore:scenecore:1.0.0-rc01'
-    implementation 'androidx.xr.runtime:runtime:1.0.0-rc01'
-    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0-rc01'
-    implementation 'androidx.xr.arcore:arcore:1.0.0-rc01'
-    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0-rc01'
+    implementation 'androidx.xr.scenecore:scenecore:1.0.0'
+    implementation 'androidx.xr.runtime:runtime:1.0.0'
+    implementation 'androidx.xr.runtime:runtime-openxr:1.0.0'
+    implementation 'androidx.xr.arcore:arcore:1.0.0'
+    implementation 'androidx.xr.arcore:arcore-openxr:1.0.0'
 
     // Unit test dependencies
     testImplementation 'junit:junit:4.13.2'
@@ -230,7 +230,7 @@ dependencies {
     // Robolectric delegates javax.* to the parent loader. Supply the standard EGL/GL API types
     // there for external-EGL lifecycle tests; this dependency is absent from the installed APK.
     testImplementation 'org.khronos:opengl-api:gl1.1-android-2.1_r1'
-    testImplementation 'org.mockito:mockito-core:5.23.0'
+    testImplementation 'org.mockito:mockito-core:5.24.0'
 
     // On-device native LiteRT GL smoke test (no Espresso/UI dependency required).
     androidTestImplementation 'androidx.test:runner:1.7.0'

@@ -15,8 +15,8 @@ JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-25.0.3.9-hotspot" \
   ./gradlew :app:installNonRoot_gameDebug
 ```
 
-- Build with **JDK 25** (the standard build JDK here). Gradle 9.7 accepts JDK 17–25 but **rejects
-  JDK 26** — point `JAVA_HOME` at JDK 25.
+- Build with **JDK 25** (the standard build JDK here). Gradle 9.8.2 accepts JDK 17–27, but full
+  builds are tested only on JDK 25 — point `JAVA_HOME` at JDK 25.
 - Other useful tasks (same flavor prefix):
   - `:app:assembleNonRoot_gameDebug` — build the APK without installing.
   - `:app:compileNonRoot_gameDebugJavaWithJavac` — fast compile-only sanity check.
