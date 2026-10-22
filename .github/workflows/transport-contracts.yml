@@ -19,8 +19,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev
-      - name: Apply versioned stream gamma core extension
-        run: git -C app/src/main/jni/moonlight-core/moonlight-common-c apply "$GITHUB_WORKSPACE/app/src/main/jni/moonlight-core/stream-gamma-core.patch"
       - name: Verify stream gamma control serialization and strict ACK parsing
         shell: bash
         run: |

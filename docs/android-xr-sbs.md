@@ -197,12 +197,6 @@ gamma option deliberately retries; selecting the already active option otherwise
 Reconnect and later launches of the same app on the same PC restore the desired setting through
 launch/resume. Every new connection still requires fresh host confirmation before reporting it active.
 
-The pinned native submodule receives this extension from the tracked
-`app/src/main/jni/moonlight-core/stream-gamma-core.patch`. Gradle's `prepareStreamGammaCore` task
-applies it before native configuration/build, accepts an already applied patch, and fails on a
-conflict without overwriting source changes. Native transport CI applies the same patch explicitly.
-The parent repository's pinned submodule commit remains unchanged until the extension is published.
-
 The standard **Video frame pacing** list is the only decoder release-policy control. **Prefer lowest
 latency** nonblockingly drains ready MediaCodec outputs, discards superseded buffers, and immediately
 submits only the newest. **Balanced** alone uses the two-buffer Choreographer queue. The former LFR /
