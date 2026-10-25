@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.PowerManager;
 import android.os.Process;
+import android.os.Trace;
 import android.util.Log;
 import android.view.Surface;
 
@@ -50,7 +51,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-public class Stereo3DRenderer implements GLSurfaceView.Renderer {
+public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionRenderer {
 
     // Constants
     private static final int GL_TEXTURE_EXTERNAL_OES = 0x8D65;
@@ -138,6 +139,8 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             new ClientSbsPresentationTransaction();
     private int outputSurfaceValidationEpoch;
     private long outputDrawSequence;
+    /** One-shot eligibility, written and consumed only by the EGL owner. */
+    private boolean frameSubmittedForSwap;
 
     // Final Member Variables
     private final Context context;
@@ -680,12 +683,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         final float effectiveRangeWidth;
         final boolean rangeCollapsed;
         final float popStrength;
-        /**
-         * Settle-latched weighted edge density that selected {@link #popStrength}. Logged because
-         * the band endpoints are a calibration: reading only the resolved pop cannot distinguish
-         * "this scene is genuinely clean" from "the endpoints are wrong for this model", and those
-         * need different fixes.
-         */
+        /** Retired adaptive-pop diagnostic retained only by the source-neutral telemetry ABI. */
         final float edgeFraction;
         final boolean popClassified;
         final float changeFraction;
@@ -696,11 +694,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
          * momentary sample of sceneAge cannot show.
          */
         final long hardCutCount;
-        /** Convergence plane in source pixels; content at this depth has zero disparity. */
+        /** Retired Bestv2 source-pixel anchor, unavailable for the raw-coordinate renderer. */
         final float zeroAnchorShift;
-        /** Depth the anchor is derived from, so anchor movement can be attributed. */
+        /** Retired subject diagnostic retained only for source compatibility. */
         final float subjectDepth;
-        /** False while no profile exists yet: distinguishes "pop is at the floor" from "no pop". */
+        /** Whether persistent raw camera state has been initialized. */
         final boolean profileInitialized;
         /**
          * Whether the cut detector can fire at all. Without it a flat cut count is ambiguous --
@@ -715,8 +713,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         /** Cumulative estimator faults; a climbing count is invisible in any instantaneous value. */
         final long emptyRawFrames;
         final long collapsedRawFrames;
-        final float shotRawMean;
+        final float rawZero;
         final float currentRawMean;
+        final float rawInverseAmplitude;
+        final float targetRawInverseAmplitude;
+        final float rawPercentileLow;
+        final float rawPercentileHigh;
+        final boolean cameraClockArmed;
+        final long sampleSequence;
         final boolean currentDepthValid;
         final boolean historyAdvanced;
         final boolean currentGeometryReady;
@@ -757,8 +761,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             acceptedStructurelessEntryCuts = 0L;
             emptyRawFrames = 0L;
             collapsedRawFrames = 0L;
-            shotRawMean = Float.NaN;
+            rawZero = Float.NaN;
             currentRawMean = Float.NaN;
+            rawInverseAmplitude = Float.NaN;
+            targetRawInverseAmplitude = Float.NaN;
+            rawPercentileLow = Float.NaN;
+            rawPercentileHigh = Float.NaN;
+            cameraClockArmed = false;
+            sampleSequence = 0L;
             currentDepthValid = false;
             historyAdvanced = false;
             currentGeometryReady = false;
@@ -799,8 +809,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     snapshot.getAcceptedStructurelessEntryCutCount();
             emptyRawFrames = snapshot.getEmptyRawFrameCount();
             collapsedRawFrames = snapshot.getCollapsedRawFrameCount();
-            shotRawMean = snapshot.getShotRawMean();
-            currentRawMean = snapshot.getCurrentRawMean();
+            rawZero = profileInitialized ? snapshot.getRawZero() : Float.NaN;
+            currentRawMean = Float.isFinite(snapshot.getTargetRawInverseAmplitude())
+                    ? snapshot.getCurrentRawMean() : Float.NaN;
+            rawInverseAmplitude = profileInitialized
+                    ? snapshot.getRawInverseAmplitude() : Float.NaN;
+            targetRawInverseAmplitude = snapshot.getTargetRawInverseAmplitude();
+            rawPercentileLow = snapshot.getRawPercentileLow();
+            rawPercentileHigh = snapshot.getRawPercentileHigh();
+            cameraClockArmed = snapshot.isCameraClockArmed();
+            sampleSequence = snapshot.getFrameSequence();
             currentDepthValid = snapshot.isCurrentDepthValid();
             historyAdvanced = snapshot.didHistoryAdvance();
             currentGeometryReady = snapshot.isCurrentGeometryReady();
@@ -901,8 +919,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         public final long depthInvalidRawFrames;
         /** Cumulative frames whose diagnostic P2/P98 cut range collapsed. */
         public final long depthCutRangeCollapsedFrames;
-        public final float depthShotRawMean;
+        public final float depthRawZero;
         public final float depthCurrentRawMean;
+        public final float depthRawInverseAmplitude;
+        public final float depthTargetRawInverseAmplitude;
+        public final float depthRawPercentileLow;
+        public final float depthRawPercentileHigh;
+        public final float depthRawAmplitudeFloor;
+        public final boolean depthCameraClockArmed;
+        public final long depthHealthSampleSequence;
         /** Whether the complete current raw field passes both depth and V2 validity gates. */
         public final boolean depthCurrentValid;
         /** Whether this current field advanced the reliable comparison-history tuple. */
@@ -1007,8 +1032,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                     health.acceptedStructurelessEntryCuts;
             this.depthInvalidRawFrames = depthTelemetry.emptyDepthFrames;
             this.depthCutRangeCollapsedFrames = depthTelemetry.collapsedDepthFrames;
-            this.depthShotRawMean = health.shotRawMean;
+            this.depthRawZero = health.rawZero;
             this.depthCurrentRawMean = health.currentRawMean;
+            this.depthRawInverseAmplitude = health.rawInverseAmplitude;
+            this.depthTargetRawInverseAmplitude = health.targetRawInverseAmplitude;
+            this.depthRawPercentileLow = health.rawPercentileLow;
+            this.depthRawPercentileHigh = health.rawPercentileHigh;
+            this.depthRawAmplitudeFloor = owner.aiModel.getV2RawCoordinateScale();
+            this.depthCameraClockArmed = health.cameraClockArmed;
+            this.depthHealthSampleSequence = health.sampleSequence;
             this.depthCurrentValid = health.currentDepthValid;
             this.depthHistoryAdvanced = health.historyAdvanced;
             this.depthCurrentGeometryReady = health.currentGeometryReady;
@@ -2469,12 +2501,17 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             sourceSettled = hasHostSourceSettled(sourceSettlingStartedNs, System.nanoTime());
             if (!sourceSettled) return false;
         }
-        presentedSourceIdentity.copyFrom(latchedSourceIdentity);
-        lastCapturedFrameSequence = latchedFrameSequence;
-        lastProvenSourceRepeatSequence = latchedFrameSequence;
-        cancelStaleDepthWatchdog();
-        recordCounter(perfHostSourceRepeats);
-        return true;
+        Trace.beginSection("ClientSbs.sourceRepeat");
+        try {
+            presentedSourceIdentity.copyFrom(latchedSourceIdentity);
+            lastCapturedFrameSequence = latchedFrameSequence;
+            lastProvenSourceRepeatSequence = latchedFrameSequence;
+            cancelStaleDepthWatchdog();
+            recordCounter(perfHostSourceRepeats);
+            return true;
+        } finally {
+            Trace.endSection();
+        }
     }
 
     static boolean canRetainHostSource(DecodedSourceIdentityTracker.Sample presented,
@@ -2866,7 +2903,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                         aiModel.getOutputWidth(), aiModel.getOutputHeight(),
                         pipelineContract.getModelContentAspect(),
                         !pipelineContract.usesDirectFullFrameResize(),
-                        Math.max(prefConfig.fps, 1));
+                        Math.max(prefConfig.fps, 1), aiModel.getV2RawCoordinateScale());
                 applyHealthSamplingStateOnGlThread(gpuDepthProcessor);
                 gpuComputeReady = gpuDepthProcessor.getOutputWidth() == depthMapWidth
                         && gpuDepthProcessor.getOutputHeight() == depthMapHeight;
@@ -3176,8 +3213,16 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
     @Override
     public void onDrawFrame(GL10 gl) {
         synchronized (glCallbackLifecycleLock) {
+            frameSubmittedForSwap = false;
             onDrawFrameLocked(gl);
         }
+    }
+
+    @Override
+    public boolean consumeFrameForSwap() {
+        boolean submitted = frameSubmittedForSwap;
+        frameSubmittedForSwap = false;
+        return submitted;
     }
 
     private void onDrawFrameLocked(GL10 gl) {
@@ -3232,6 +3277,14 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             captureLatestFrameIfReady();
         }
 
+        if (!shouldSubmitClientSbsFrame(resultAdopted, matchedOutputPresented,
+                presentationCompletion.hasPending(),
+                shouldPresentCurrentFlatForStaleDepth(System.nanoTime()))) {
+            // A dirty request is only a wakeup. Without a new pair, a deadline, or an exact
+            // presentation proof, rotating unchanged EGL buffers adds no current output.
+            return;
+        }
+
         // Presentation is deliberately independent of delegate availability. A backend failure or
         // transition must not throw away the last valid matched stereo pair.
         presentClientSbs();
@@ -3240,6 +3293,13 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             scheduleCaptureAfterSwap(
                     currentClientSbsGeneration, outputSurfaceValidationEpoch);
         }
+    }
+
+    static boolean shouldSubmitClientSbsFrame(boolean resultAdopted,
+                                               boolean matchedOutputPresented,
+                                               boolean presentationProofPending,
+                                               boolean staleDepth) {
+        return resultAdopted || !matchedOutputPresented || presentationProofPending || staleDepth;
     }
 
     /** Clears the proof during a handoff or after the owner's validated timeout. */
@@ -3329,8 +3389,6 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
 
     private void presentClientSbs() {
         if (!clientSbs || !hasFrameForActiveGeneration) {
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
             matchedOutputPresented = false;
             return;
         }
@@ -3342,6 +3400,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             drawFlatSbs();
             matchedOutputPresented = false;
             recordGlOutputSubmit(true, performanceEpoch);
+            frameSubmittedForSwap = true;
             return;
         }
 
@@ -3352,6 +3411,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
         boolean composeGpuTimerStarted = beginGpuTimer(
                 ClientSbsGpuTimer.Stage.SBS_COMPOSE);
         boolean stereoPresented = false;
+        Trace.beginSection("ClientSbs.compose");
         try {
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             if (prepareMatchedDepth()) {
@@ -3362,6 +3422,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                 drawFlatSbs();
             }
         } finally {
+            Trace.endSection();
             endGpuTimer(composeGpuTimerStarted);
         }
         matchedOutputPresented = stereoPresented;
@@ -3383,6 +3444,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             sourceSettled = false;
         }
         recordGlOutputSubmit(!stereoPresented, performanceEpoch);
+        frameSubmittedForSwap = true;
     }
 
     private boolean prepareMatchedDepth() {
@@ -3399,7 +3461,7 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             try {
                 // Feed the source-aligned Float32 ZipDepth output straight into the host-parity
                 // raw V2 conditioner. A client-only prefilter changes silhouettes and rounds the
-                // model field to half precision before subtracting the R32F shot mean.
+                // model field to half precision before subtracting the R32F adaptive zero.
                 gpuParallaxTextureId = disparityProcessor.process(
                         gpuDepthTextureId, gpuProfileTextureId);
                 contractiveDisparityValid = gpuParallaxTextureId != 0;
@@ -4305,7 +4367,15 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
             if (shuttingDown.get() || gpuShutdownRequested.get()) {
                 return false;
             }
-            return adoptLatestGpuInferenceResultLocked();
+            if (latestGpuInferenceResult.get() == null) {
+                return false;
+            }
+            Trace.beginSection("ClientSbs.adopt");
+            try {
+                return adoptLatestGpuInferenceResultLocked();
+            } finally {
+                Trace.endSection();
+            }
         }
     }
 
@@ -4406,11 +4476,11 @@ public class Stereo3DRenderer implements GLSurfaceView.Renderer {
                             outputBufferId, 0, outputPixelStrideBytes,
                             processor.getSceneCutMailboxBufferId(),
                             processor.getSceneCutMailboxByteOffset(result.bufferSlot),
-                            sourceFrameDelta);
+                            sourceFrameDelta, result.colorFrameLease.getCapturedAtNs());
                 } else {
                     processed = processor.processRendererOwned(
                             outputBufferId, 0, outputPixelStrideBytes, false,
-                            sourceFrameDelta);
+                            sourceFrameDelta, result.colorFrameLease.getCapturedAtNs());
                 }
             } finally {
                 endGpuTimer(depthGpuTimerStarted);

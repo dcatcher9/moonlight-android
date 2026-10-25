@@ -533,11 +533,15 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
-    public void clientStatsDescribeOnlyCurrentRawV2State() {
+    public void clientStatsSeparateAdaptiveGeometryFromPrivateCutState() {
         String state = XrStreamPresenter.formatClientV2State(
                 true, true, false, 1.0f);
-        String coordinate = XrStreamPresenter.formatClientV2Coordinate(
-                1.75f, 0.123456f, 0.234567f);
+        String coordinate = XrStreamPresenter.formatClientAdaptiveZero(
+                0.123456f, 0.234567f);
+        String amplitude = XrStreamPresenter.formatClientDepthAmplitude(20.0f, 10.0f);
+        String distribution = XrStreamPresenter.formatClientRawDistribution(
+                0.1f, 0.3f, 0.04864449f);
+        String mapping = XrStreamPresenter.formatClientLinearMapping(1.75f, true, 30L);
         String depthEvidence = XrStreamPresenter.formatClientCutDepthEvidence(
                 0.125f, Float.NaN, 0.75f, 0.2f, 1.25f, false);
         String appearanceEvidence = XrStreamPresenter.formatClientCutAppearanceEvidence(
@@ -548,8 +552,11 @@ public final class XrStreamPresenterViewTest {
                 12L, true);
 
         assertEquals("ready yes | current valid yes | history hold | valid 100.0%", state);
-        assertEquals("fixed pop 1.750 | shotMean 0.123456 | currentMean 0.234567",
+        assertEquals("zero 0.123456 | mean target 0.234567",
                 coordinate);
+        assertEquals("D 0.050000 | inverse 20.0000 | target inverse 10.0000", amplitude);
+        assertEquals("P05 0.100000 | P95 0.300000 | floor 0.048644", distribution);
+        assertEquals("pop 1.750 | source clock armed | sample 30", mapping);
         assertEquals("change 0.125 | range shift n/a | internal 0.750 | baseline 0.200"
                         + " | cut range 1.2500",
                 depthEvidence);
@@ -563,14 +570,30 @@ public final class XrStreamPresenterViewTest {
         assertEquals("color_busy 0 | flat 0 | raw invalid 0 | cut range collapsed 0",
                 XrStreamPresenter.formatClientFaults(0L, 0L, true, 0L, 0L));
 
-        String visible = (state + coordinate + depthEvidence + appearanceEvidence + decision)
+        String visible = (state + coordinate + amplitude + distribution + mapping
+                + depthEvidence + appearanceEvidence + decision)
                 .toLowerCase(Locale.US);
         for (String obsolete : new String[] {
-                "stretch", "recenter", "subject", "bestv2", "adaptive", "anchor", "profile"
+                "stretch", "recenter", "subject", "bestv2", "adaptive pop", "anchor", "shot"
         }) {
             assertFalse("obsolete Client SBS stats concept: " + obsolete,
                     visible.contains(obsolete));
         }
+    }
+
+    @Test
+    public void clientStatsDoNotTurnMissingCameraObservationsIntoZeros() {
+        assertEquals("zero 0.123456 | mean target n/a",
+                XrStreamPresenter.formatClientAdaptiveZero(0.123456f, Float.NaN));
+        assertEquals("D 0.050000 | inverse 20.0000 | target inverse n/a",
+                XrStreamPresenter.formatClientDepthAmplitude(20.0f, Float.NaN));
+        assertEquals("D n/a | inverse n/a | target inverse n/a",
+                XrStreamPresenter.formatClientDepthAmplitude(0.0f, -1.0f));
+        assertEquals("P05 n/a | P95 n/a | floor 0.048644",
+                XrStreamPresenter.formatClientRawDistribution(
+                        Float.NaN, Float.NaN, 0.04864449f));
+        assertEquals("pop 1.750 | source clock disarmed | sample 35",
+                XrStreamPresenter.formatClientLinearMapping(1.75f, false, 35L));
     }
 
     @Test
@@ -612,7 +635,7 @@ public final class XrStreamPresenterViewTest {
         TableRow depthCut = (TableRow) table.getChildAt(2);
         assertEquals("Depth / cut GPU",
                 ((TextView) depthCut.getChildAt(0)).getText().toString());
-        assertEquals("0.33 ms | raw V2 + cut",
+        assertEquals("0.33 ms | adaptive camera + cut",
                 ((TextView) depthCut.getChildAt(1)).getText().toString());
         controller.destroy();
     }

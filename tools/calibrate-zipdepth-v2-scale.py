@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fit static ZipDepth-to-host V2 coordinate scales from saved depth predictions.
+"""Review ZipDepth-to-host calibration from saved paired depth predictions.
 
-The fit mirrors the production coordinate contract without changing production files:
+The historical fit reproduces the September 2026 shot-centered, fixed-divisor policy:
 
     zip_coordinate = (zip_raw - zip_first_frame_mean) / fitted_scale
     host_coordinate = (area_resize(host_raw) - host_first_frame_mean) / 2.25
@@ -9,16 +9,24 @@ The fit mirrors the production coordinate contract without changing production f
 One through-origin least-squares scale is fitted for each ZipDepth graph shape. Every clip owns
 its own first-frame arithmetic-mean shot center. The tool rejects missing pairs, non-finite data,
 unexpected production graph shapes, and a non-positive ZipDepth/host coordinate correlation.
-It writes only JSON to stdout.
+That fit no longer models the live adaptive camera. ``--mode adaptive-audit`` instead reports
+instantaneous mean/robust-amplitude targets, floor activation and collapse-floor margins. It does
+not fit replacement floors, invent source clocks, replay temporal adaptation or write production
+files. Saved predictions alone do not establish current preprocessing/runtime equivalence.
+Both modes write only JSON to stdout.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import platform
 from pathlib import Path
-from typing import Any, Iterable
+import re
+import sys
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 
@@ -35,6 +43,12 @@ DEFAULT_ZIPDEPTH_DIRECTORY = DEFAULT_PREDICTION_ROOT / "zipdepth_base_official38
 DEFAULT_HOST_DIRECTORY = DEFAULT_PREDICTION_ROOT / "host_hybrid_fused"
 PRODUCTION_GRAPH_SHAPES = frozenset({(384, 672), (384, 896), (384, 928)})
 HOST_V2_RAW_SCALE = 2.25
+DEFAULT_CLIENT_MANIFEST = (
+    REPOSITORY_ROOT / "app/src/main/java/com/limelight/utils/ClientSbsModelManifest.java"
+)
+DEFAULT_CLIENT_COORDINATE_CONTRACT = (
+    REPOSITORY_ROOT / "app/src/main/java/com/limelight/sbs/ClientSbsV2CoordinateContract.java"
+)
 
 
 class CalibrationError(RuntimeError):
@@ -98,8 +112,8 @@ def _load_depth(path: Path, *, require_nonnegative: bool) -> np.ndarray:
         raise CalibrationError(f"Cannot load depth prediction {path}: {error}") from error
     if depth.ndim != 2:
         raise CalibrationError(f"Depth prediction must be 2-D: {path} has {depth.shape}")
-    if not np.issubdtype(depth.dtype, np.number):
-        raise CalibrationError(f"Depth prediction is not numeric: {path} has {depth.dtype}")
+    if not np.issubdtype(depth.dtype, np.number) or np.iscomplexobj(depth):
+        raise CalibrationError(f"Depth prediction is not real numeric: {path} has {depth.dtype}")
     if not np.all(np.isfinite(depth)):
         raise CalibrationError(f"Depth prediction contains NaN or infinity: {path}")
     if require_nonnegative and np.any(depth < 0):
@@ -305,6 +319,8 @@ def calibrate(
 
     return {
         "schema_version": 1,
+        "policy": "historical-shot-centered-fixed-divisor",
+        "current_adaptive_calibration": False,
         "fit": "zip_centered / scale ~= host_centered / 2.25 (through origin)",
         "shot_center": "per-clip first-frame arithmetic mean",
         "host_resize": "exact source-cell area",
@@ -317,8 +333,244 @@ def calibrate(
     }
 
 
+def _file_identity(path: Path) -> dict[str, Any]:
+    try:
+        contents = path.read_bytes()
+    except OSError as error:
+        raise CalibrationError(f"Cannot read provenance file {path}: {error}") from error
+    return {
+        "path": str(path.resolve()),
+        "bytes": len(contents),
+        "sha256": hashlib.sha256(contents).hexdigest(),
+    }
+
+
+def production_floors(manifest: Path = DEFAULT_CLIENT_MANIFEST) -> dict[tuple[int, int], float]:
+    """Read the current model priors from their Java owner; never maintain a second value table."""
+    try:
+        source = manifest.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CalibrationError(f"Cannot read client manifest {manifest}: {error}") from error
+    pattern = re.compile(
+        r'createZipDepthBaseManifest\(\s*"zipdepth-base-static-(\d+)x(\d+)"\s*,'
+        r'\s*\w+\s*,\s*\w+\s*,\s*(\d+)\s*,\s*(\d+)\s*,'
+        r'\s*([\d.eE+-]+)f\s*\)'
+    )
+    floors: dict[tuple[int, int], float] = {}
+    for match in pattern.finditer(source):
+        width, height, declared_width, declared_height = map(int, match.groups()[:4])
+        scale = float(match.group(5))
+        shape = (height, width)
+        if (width, height) != (declared_width, declared_height) or shape in floors:
+            raise CalibrationError(f"Ambiguous ZipDepth floor declaration in {manifest}")
+        if not math.isfinite(scale) or scale <= 0.0:
+            raise CalibrationError(f"Invalid ZipDepth floor declaration in {manifest}")
+        floors[shape] = scale
+    if set(floors) != PRODUCTION_GRAPH_SHAPES:
+        raise CalibrationError(f"Incomplete ZipDepth floor declarations in {manifest}")
+    return floors
+
+
+def production_collapse_floor(
+    contract: Path = DEFAULT_CLIENT_COORDINATE_CONTRACT,
+) -> float:
+    try:
+        source = contract.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CalibrationError(f"Cannot read coordinate contract {contract}: {error}") from error
+    matches = re.findall(r'\bCOLLAPSE_ABS_EPSILON\s*=\s*([\d.eE+-]+)f\s*;', source)
+    if len(matches) != 1:
+        raise CalibrationError(f"Ambiguous raw-collapse floor in {contract}")
+    floor = float(matches[0])
+    if not math.isfinite(floor) or floor <= 0.0:
+        raise CalibrationError(f"Invalid raw-collapse floor in {contract}")
+    return floor
+
+
+def raw_geometry_statistics(depth: np.ndarray, floor: float, collapse_floor: float) -> dict[str, Any]:
+    """Audit Float32 histogram bin edges with Float64 diagnostic mean/std reductions.
+
+    Host statistics must use the original native grid. Resizing first changes robust quantiles.
+    The diagnostic reductions are not claimed bit-identical to GPU Welford/parallel reductions.
+    """
+    if not math.isfinite(floor) or floor <= 0 or not math.isfinite(collapse_floor) or collapse_floor <= 0:
+        raise CalibrationError("Amplitude and collapse floors must be finite and positive")
+    if depth.ndim != 2 or depth.size == 0 or not np.isfinite(depth).all():
+        raise CalibrationError("Raw statistics require a nonempty finite 2-D field")
+    raw = np.asarray(depth, dtype=np.float32)
+    if not np.isfinite(raw).all():
+        raise CalibrationError("Raw statistics input is not representable as finite Float32")
+    low = np.min(raw)
+    high = np.max(raw)
+    span = np.float32(high - low)
+    mean = float(np.mean(raw, dtype=np.float64))
+    std = float(np.std(raw, dtype=np.float64))
+    quantiles_valid = bool(np.isfinite(span) and span > 0.0)
+    p05 = p95 = half_span = None
+    if quantiles_valid:
+        bins = np.minimum(
+            (np.clip((raw - low) / span, 0.0, 1.0) * np.float32(256.0)).astype(np.uint32),
+            255,
+        )
+        counts = np.bincount(bins.ravel(), minlength=256)
+        if int(np.sum(counts)) != raw.size:
+            raise CalibrationError("Geometry histogram population mismatch")
+        cumulative = np.cumsum(counts)
+        low_bin = int(np.searchsorted(cumulative, np.float32(0.05) * np.float32(raw.size)))
+        high_bin = int(np.searchsorted(cumulative, np.float32(0.95) * np.float32(raw.size)))
+        width = np.float32(span / np.float32(256.0))
+        p05 = float(np.clip(np.float32(low + np.float32(low_bin) * width), low, high))
+        p95 = float(np.clip(np.float32(low + np.float32(high_bin + 1) * width), low, high))
+        half_span = float(np.float32(0.5) * np.float32(p95 - p05))
+    usable = quantiles_valid and std > collapse_floor
+    return {
+        "shape": list(raw.shape),
+        "pixels": int(raw.size),
+        "minimum": float(low),
+        "maximum": float(high),
+        "mean": mean,
+        "population_std": std,
+        "std_over_amplitude_floor": std / floor,
+        "std_over_collapse_floor": std / collapse_floor,
+        "p05_lower_bin_edge": p05,
+        "p95_upper_bin_edge": p95,
+        "robust_half_span": half_span,
+        "amplitude_floor": floor,
+        "amplitude_floor_active": bool(usable and half_span <= floor),
+        "target_amplitude": max(half_span, floor) if usable else None,
+        "geometry_usable": bool(usable),
+    }
+
+
+def _summary(values: Iterable[float]) -> dict[str, float] | None:
+    numbers = np.asarray(list(values), dtype=np.float64)
+    if numbers.size == 0:
+        return None
+    return {
+        "minimum": float(np.min(numbers)),
+        "median": float(np.median(numbers)),
+        "maximum": float(np.max(numbers)),
+    }
+
+
+def _observation_summary(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    observations = [row[key] for row in rows]
+    return {
+        "frames": len(observations),
+        "usable_frames": sum(row["geometry_usable"] for row in observations),
+        "unusable_frames": sum(not row["geometry_usable"] for row in observations),
+        "floor_active_frames": sum(row["amplitude_floor_active"] for row in observations),
+        **{
+            field: _summary(row[field] for row in observations if row[field] is not None)
+            for field in (
+                "mean", "population_std", "std_over_amplitude_floor", "std_over_collapse_floor",
+                "robust_half_span", "target_amplitude",
+            )
+        },
+    }
+
+
+def audit_adaptive(
+    zipdepth_directory: Path,
+    host_directory: Path,
+    *,
+    floors: Mapping[tuple[int, int], float] | None = None,
+    collapse_floor: float | None = None,
+    expected_shapes: Iterable[tuple[int, int]] | None = PRODUCTION_GRAPH_SHAPES,
+    evidence_files: Iterable[Path] = (),
+) -> dict[str, Any]:
+    """Describe present raw target behavior; this does not perform causal temporal calibration."""
+    floors = production_floors() if floors is None else floors
+    collapse_floor = production_collapse_floor() if collapse_floor is None else collapse_floor
+    zip_clips = _clip_directories(zipdepth_directory)
+    host_clips = _clip_directories(host_directory)
+    if zip_clips.keys() != host_clips.keys():
+        raise CalibrationError("Clip pairing mismatch in adaptive audit")
+    groups: dict[tuple[int, int], dict[str, Any]] = {}
+    identities: list[dict[str, Any]] = []
+    for clip_name in sorted(zip_clips):
+        rows: list[dict[str, Any]] = []
+        shape = host_shape = None
+        accumulator = _empty_accumulator()
+        for zip_path, host_path in _paired_frames(zip_clips[clip_name], host_clips[clip_name]):
+            zip_raw = _load_depth(zip_path, require_nonnegative=True)
+            host_raw = _load_depth(host_path, require_nonnegative=False)
+            if shape is None:
+                shape, host_shape = zip_raw.shape, host_raw.shape
+            if zip_raw.shape != shape or host_raw.shape != host_shape:
+                raise CalibrationError(f"Prediction shape changed within {clip_name}")
+            if shape not in floors:
+                raise CalibrationError(f"No amplitude floor for ZipDepth shape {shape}")
+            zip_stats = raw_geometry_statistics(zip_raw, floors[shape], collapse_floor)
+            host_stats = raw_geometry_statistics(host_raw, HOST_V2_RAW_SCALE, collapse_floor)
+            # Coordinate comparison uses native-grid statistics BEFORE area-resizing host color/depth.
+            if zip_stats["geometry_usable"] and host_stats["geometry_usable"]:
+                host_resized = area_resize(host_raw, shape)
+                _accumulate(
+                    accumulator,
+                    (zip_raw - zip_stats["mean"]) / zip_stats["target_amplitude"],
+                    (host_resized - host_stats["mean"]) / host_stats["target_amplitude"],
+                )
+            row = {"frame": zip_path.name, "zipdepth": zip_stats, "host_native": host_stats}
+            rows.append(row)
+            for producer, path in (("zipdepth", zip_path), ("host", host_path)):
+                identities.append({"producer": producer, "clip": clip_name, **_file_identity(path)})
+        group = groups.setdefault(shape, {"rows": [], "clips": [], "accumulator": _empty_accumulator()})
+        group["rows"].extend(rows)
+        _merge_accumulator(group["accumulator"], accumulator)
+        group["clips"].append({"name": clip_name, "frames": len(rows), "observations": rows})
+    if expected_shapes is not None and set(groups) != set(expected_shapes):
+        raise CalibrationError(f"Unexpected ZipDepth graph shapes: {sorted(groups)}")
+    rendered_groups: dict[str, Any] = {}
+    for (height, width), group in sorted(groups.items(), key=lambda item: item[0][1]):
+        acc = group["accumulator"]
+        # Unit gain compares current target coordinates without quietly fitting another normalization.
+        residual = _fit_metrics(acc, gain=1.0) if int(acc["pixels"]) else None
+        rendered_groups[f"{width}x{height}"] = {
+            "prior_amplitude_floor": floors[(height, width)],
+            "collapse_floor_over_amplitude_floor": collapse_floor / floors[(height, width)],
+            "zipdepth": _observation_summary(group["rows"], "zipdepth"),
+            "host_native": _observation_summary(group["rows"], "host_native"),
+            "instantaneous_target_coordinate_comparison": residual,
+            "clips": group["clips"],
+        }
+    manifest_bytes = json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        "schema_version": 2,
+        "policy": "adaptive-raw-observation-audit",
+        "production_values_changed": False,
+        "replacement_floor_fit": False,
+        "temporal_controller_replayed": False,
+        "source_observation_timestamps": "not supplied; no cadence or reuse schedule invented",
+        "histogram": "256 Float32 min/max bins; P05 lower and P95 upper crossing-bin edges",
+        "diagnostic_reduction": "Float64 mean/std, not bit-exact GPU parallel reduction",
+        "host_statistics_grid": "original native prediction before comparison resize",
+        "host_amplitude_floor": HOST_V2_RAW_SCALE,
+        "raw_collapse_floor": collapse_floor,
+        "runtime": {"executable": sys.executable, "python": sys.version,
+                    "numpy": np.__version__, "platform": platform.platform()},
+        "tool": _file_identity(Path(__file__).resolve()),
+        "evidence_files": [_file_identity(path) for path in evidence_files],
+        "prediction_files": identities,
+        "prediction_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "clips": len(zip_clips),
+        "frames": sum(len(group["rows"]) for group in groups.values()),
+        "limitations": [
+            "Filename pairing and hashes do not prove identical original model inputs or current runtime equivalence.",
+            "No decoded-frame, HDR, reflected-padding, invalid/collapsed holdout or actual inference/reuse timing evidence is inferred.",
+            "Instantaneous targets exclude zero/scale filtering, parallax clamps, slope conditioning, inverse reconstruction and UI policies.",
+            "No floor, collapse threshold or cut threshold is qualified for retuning by this audit alone.",
+        ],
+        "groups": rendered_groups,
+    }
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("historical-fit", "adaptive-audit"),
+                        default="historical-fit", help="historical reproduction or raw target audit")
+    parser.add_argument("--evidence-file", type=Path, action="append", default=[],
+                        help="existing provenance document to hash into an adaptive audit")
     parser.add_argument(
         "--zipdepth-directory",
         type=Path,
@@ -340,7 +592,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        report = calibrate(args.zipdepth_directory, args.host_directory)
+        if args.mode == "adaptive-audit":
+            report = audit_adaptive(args.zipdepth_directory, args.host_directory,
+                                    evidence_files=(DEFAULT_CLIENT_MANIFEST,
+                                                    DEFAULT_CLIENT_COORDINATE_CONTRACT,
+                                                    *args.evidence_file))
+        else:
+            report = calibrate(args.zipdepth_directory, args.host_directory)
     except CalibrationError as error:
         raise SystemExit(f"calibration failed: {error}") from error
     print(json.dumps(report, indent=args.indent, sort_keys=True, allow_nan=False))

@@ -2711,7 +2711,7 @@ public class XrStreamPresenter {
         }
         if (auxiliaryPanel != null && !auxiliaryPanel.isDisposed()) {
             if (showAuxiliary) {
-                auxiliaryPanel.setPose(sessionSettingsPose(panelHeightMeters));
+                updatePanelPose(auxiliaryPanel, sessionSettingsPose(panelHeightMeters));
             }
             auxiliaryPanel.setEnabled(showAuxiliary);
         }
@@ -4728,7 +4728,7 @@ public class XrStreamPresenter {
     private static final String[] CLIENT_GPU_STAGE_DETAILS = {
             "resize + classify (pack on infer worker)",
             "full-res capture",
-            "raw V2 + cut",
+            "adaptive camera + cut",
             "condition + map + draw"
     };
 
@@ -4776,19 +4776,30 @@ public class XrStreamPresenter {
             return;
         }
 
-        addStatsRow("V2 state",
+        addStatsRow(activity.getString(R.string.xr_stats_sampled_geometry),
                 formatClientV2State(clientSbs.depthCurrentGeometryReady,
                         clientSbs.depthCurrentValid, clientSbs.depthHistoryAdvanced,
                         clientSbs.validDepthFraction),
                 clientSbs.depthCurrentGeometryReady
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_status_warn));
-        addStatsRow("V2 coordinate",
-                formatClientV2Coordinate(clientSbs.stereoPopStrength,
-                        clientSbs.depthShotRawMean, clientSbs.depthCurrentRawMean),
+        addStatsRow(activity.getString(R.string.xr_stats_adaptive_zero),
+                formatClientAdaptiveZero(clientSbs.depthRawZero, clientSbs.depthCurrentRawMean),
                 clientSbs.depthCurrentGeometryReady
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_text_disabled));
+        addStatsRow(activity.getString(R.string.xr_stats_depth_amplitude),
+                formatClientDepthAmplitude(clientSbs.depthRawInverseAmplitude,
+                        clientSbs.depthTargetRawInverseAmplitude),
+                paletteColor(R.color.xr_text_primary));
+        addStatsRow(activity.getString(R.string.xr_stats_raw_distribution),
+                formatClientRawDistribution(clientSbs.depthRawPercentileLow,
+                        clientSbs.depthRawPercentileHigh, clientSbs.depthRawAmplitudeFloor),
+                paletteColor(R.color.xr_text_primary));
+        addStatsRow(activity.getString(R.string.xr_stats_linear_mapping),
+                formatClientLinearMapping(clientSbs.stereoPopStrength,
+                        clientSbs.depthCameraClockArmed, clientSbs.depthHealthSampleSequence),
+                paletteColor(R.color.xr_text_secondary));
         addStatsRow("Last cut depth evidence",
                 formatClientCutDepthEvidence(clientSbs.depthLatestChangeFraction,
                         clientSbs.depthLatestRangeShift,
@@ -4823,10 +4834,13 @@ public class XrStreamPresenter {
         if (telemetry.hostPerformance != null) {
             addHostPerformanceRows(telemetry.hostPerformance);
         }
-        addStatsRow("V2 field", formatHostV2Field(telemetry),
+        addStatsRow(activity.getString(R.string.xr_stats_host_depth), formatHostV2Field(telemetry),
                 telemetry.hasRuntime(SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY)
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_text_disabled));
+        addStatsRow(activity.getString(R.string.xr_stats_host_camera),
+                activity.getString(R.string.xr_stats_host_camera_unavailable),
+                paletteColor(R.color.xr_text_disabled));
 
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)) {
             addTrendStatsRow("Cut depth change",
@@ -4922,7 +4936,7 @@ public class XrStreamPresenter {
             return telemetry.availability.description;
         }
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)) {
-            return String.format(Locale.US, "Live | %dx%d | raw V2",
+            return String.format(Locale.US, "Live | %dx%d | host depth telemetry",
                     telemetry.depthWidth, telemetry.depthHeight);
         }
         return "Live | configuration unavailable";
@@ -4941,11 +4955,34 @@ public class XrStreamPresenter {
                 ? String.format(Locale.US, "%.1f%%", validFraction * 100.0f) : "n/a");
     }
 
-    static String formatClientV2Coordinate(float fixedPop, float shotRawMean,
-                                           float currentRawMean) {
-        return "fixed pop " + formatStatsFloat(fixedPop, 3)
-                + " | shotMean " + formatStatsFloat(shotRawMean, 6)
-                + " | currentMean " + formatStatsFloat(currentRawMean, 6);
+    static String formatClientAdaptiveZero(float rawZero, float currentRawMean) {
+        return "zero " + formatStatsFloat(rawZero, 6)
+                + " | mean target " + formatStatsFloat(currentRawMean, 6);
+    }
+
+    static String formatClientDepthAmplitude(float inverseAmplitude, float targetInverse) {
+        inverseAmplitude = Float.isFinite(inverseAmplitude) && inverseAmplitude > 0.0f
+                ? inverseAmplitude : Float.NaN;
+        targetInverse = Float.isFinite(targetInverse) && targetInverse > 0.0f
+                ? targetInverse : Float.NaN;
+        float amplitude = Float.isFinite(inverseAmplitude) && inverseAmplitude > 0.0f
+                ? 1.0f / inverseAmplitude : Float.NaN;
+        return "D " + formatStatsFloat(amplitude, 6)
+                + " | inverse " + formatStatsFloat(inverseAmplitude, 4)
+                + " | target inverse " + formatStatsFloat(targetInverse, 4);
+    }
+
+    static String formatClientRawDistribution(float p05, float p95, float amplitudeFloor) {
+        return "P05 " + formatStatsFloat(p05, 6)
+                + " | P95 " + formatStatsFloat(p95, 6)
+                + " | floor " + formatStatsFloat(amplitudeFloor, 6);
+    }
+
+    static String formatClientLinearMapping(float clientPop, boolean clockArmed,
+                                            long healthSampleSequence) {
+        return "pop " + formatStatsFloat(clientPop, 3)
+                + " | source clock " + (clockArmed ? "armed" : "disarmed")
+                + " | sample " + healthSampleSequence;
     }
 
     static String formatClientCutDepthEvidence(float changeFraction, float rangeShift,
@@ -5000,13 +5037,13 @@ public class XrStreamPresenter {
 
     static String formatHostV2Field(SbsDepthTelemetrySnapshot telemetry) {
         String ready = telemetry.hasRuntime(SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY)
-                ? "ready" : (telemetry.isInitialized() ? "state initialized" : "warming");
+                ? "pipeline ready" : (telemetry.isInitialized() ? "state initialized" : "warming");
         String valid = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION)
                 ? String.format(Locale.US, "%.1f%%", telemetry.validDepthFraction * 100.0f)
                 : "n/a";
         String pop = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_EFFECTIVE)
                 ? formatStatsFloat(telemetry.effectivePop, 3) : "n/a";
-        String result = ready + " | valid " + valid + " | fixed pop " + pop;
+        String result = ready + " | raw valid " + valid + " | reported pop " + pop;
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_RANGE)) {
             result += " | cut range " + formatStatsFloat(telemetry.effectiveRangeWidth, 4);
         }
@@ -5462,8 +5499,7 @@ public class XrStreamPresenter {
 
     /**
      * Row with a history plot after the value. Kept to metrics whose meaning depends on their
-     * recent shape -- a pop of 1.20 is either a risky scene or one re-classified a moment ago, and
-     * only the trend separates those.
+     * recent shape, such as depth change and accepted-cut counters.
      */
     private void addTrendStatsRow(String label, String value, int valueColor,
                                    float[] trend, boolean asDeltas,
@@ -5863,13 +5899,26 @@ public class XrStreamPresenter {
 
     private void repositionStatsPanel() {
         if (statsVisible && statsPanel != null && !statsPanel.isDisposed()) {
-            statsPanel.setPose(statsPose(panelHeightMeters));
+            updatePanelPose(statsPanel, statsPose(panelHeightMeters));
         }
         XrControlUiState.Surface visible = controlUiState.getVisibleSurface();
         if (auxiliaryPanel != null && !auxiliaryPanel.isDisposed()) {
             if (visible == XrControlUiState.Surface.SESSION_SETTINGS) {
-                auxiliaryPanel.setPose(sessionSettingsPose(panelHeightMeters));
+                updatePanelPose(auxiliaryPanel, sessionSettingsPose(panelHeightMeters));
             }
+        }
+    }
+
+    /** Avoid identical native node transactions during the slow stats/position refresh. */
+    static void updatePanelPose(PanelEntity panel, Pose pose) {
+        if (panel == null || panel.isDisposed()) {
+            return;
+        }
+        // SceneCore 1.0.0's PARENT pose is its cached local value; it does not query native
+        // tracking. Read it instead of keeping another cache so reanchors or other callers
+        // cannot leave this comparison stale. Preserve every actual pose change.
+        if (!pose.equals(panel.getPose(Space.PARENT))) {
+            panel.setPose(pose);
         }
     }
 

@@ -3,6 +3,7 @@ package com.limelight.utils;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.ParcelFileDescriptor;
+import android.os.Trace;
 
 import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
@@ -645,9 +646,17 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Near-identical candidate requires a decision buffer, aligned offset, and token");
         }
-        long resultFence = nativeRun(nativeHandle, slotIndex, inputReadyFence,
-                previousOutputConsumedFence, nearIdenticalCandidate,
-                decisionBufferId, decisionByteOffset, decisionToken, modelInputTextureId);
+        long resultFence;
+        // System tracing distinguishes native arbitration/inference from retained-output gaps.
+        // This does not enable profiling, change sampling settings, or read GPU results.
+        Trace.beginSection("ClientSbs.native");
+        try {
+            resultFence = nativeRun(nativeHandle, slotIndex, inputReadyFence,
+                    previousOutputConsumedFence, nearIdenticalCandidate,
+                    decisionBufferId, decisionByteOffset, decisionToken, modelInputTextureId);
+        } finally {
+            Trace.endSection();
+        }
         if (resultFence == 0L) {
             throw new IllegalStateException(nativeGetLastError(nativeHandle));
         }

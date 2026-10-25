@@ -1,70 +1,127 @@
-# Client ↔ host SBS parity audits
+# Client, Host AI and Game 3D pipeline audit
 
-## Current migration review (2026-09-04)
+## Current migration review (2026-10-23)
 
-This review compares Apollo-3D `e827a6fc` with the current Android XR implementation. Host
-production uses a high-grid DA-V2 Small plus frozen ZipDepth convex-2x composite; the client uses
-the original ZipDepth Base head because Galaxy XR must sustain the complete decode, inference,
-reprojection, and SceneCore workload on its GPU. “Follow the host” means matching the coordinate,
-ownership, cut, and failure contracts where the inputs support it—not pretending the two depth
-producers or Windows/Adreno mechanisms are identical.
+This review uses the local Apollo-3D checkout at `12e5266c` and the Android XR implementation.
+It replaces the September 4 comparison against `e827a6fc`. That comparison described a
+shot-latched mean, nonlinear far/near curve and soft container which the host retired on
+October 5; those are no longer the target for Client AI 3D.
 
-| Area | Host contract | Android XR contract / status |
+The source of truth for Android geometry, model calibration, timing and surface ownership is
+[Android XR SBS](android-xr-sbs.md). The companion host's
+[Host SBS contract](https://github.com/dcatcher9/Apollo-3D/blob/12e5266c218845b217f3f36a210db15b5038ccca/docs/host-sbs.md) and
+[Game 3D contract](https://github.com/dcatcher9/Apollo-3D/blob/12e5266c218845b217f3f36a210db15b5038ccca/docs/reshade-sbs.md) own their respective algorithms.
+This audit records shared behavior and remaining differences; it does not define another
+calibration or establish equal output quality.
+
+The inherited Client AI graph priors are not newly qualified amplitude floors. The October 23
+calibration review reproduced the old fit and audited the saved raw observations, but those used
+historical preprocessing/runtime and lack source clocks. It retained production constants and
+identified the current-runtime evidence needed for any recalibration in
+[Client SBS evaluation](client-sbs-evaluation.md#model-calibration-and-stats-review).
+
+### What changed on the host
+
+| Date / commit | Change relevant to the client |
+|---|---|
+| August 28 / `4fc42fbc` | Consolidated Host AI on the fused DAV2 Small plus frozen ZipDepth convex-2x runtime and shared live/offline geometry core. |
+| September 29 / `7b19c442` | Tiled Host vertical/horizontal limiters and mechanically ported them into Game 3D. Shared conditioning moved from Host to Game; the depth producers remained separate. |
+| October 5 / `f9d0a4ca` | Made continuously observed mean zero and robust relative amplitude, linear calibrated displacement, and the adaptive subtitle plane the sole Host AI policy. Removed the shot-latched camera, nonlinear curve, soft container and experimental selector. |
+| October 6 / `cf0330ef` | Allowed two desktop Host SBS pictures in flight through NVENC, following the existing Game 3D encoder strategy. This changes scheduling, not depth calibration. |
+| October 22 / `492dd231` | Replaced coarse subtitle-cover conditioning with native temporal pixel evidence, Gaussian Base/UI-plane blending and shared post-blend slope conditioning. Current OCR covers provide provisional protection while native evidence acquires. |
+| October 22–23 / `37ed8198`, `f2e07acf` | Corrected OCR column projection to exact integer floor/ceil mapping and bounded its input locally. |
+
+Host AI 3D still estimates depth from captured color. Game 3D obtains depth, camera and UI
+resources inside the game, renders there, and exports final SBS. The host does not turn Host AI
+into Game 3D by selecting a different provider. The October 5 Host change explicitly left
+Game 3D's algorithms unchanged. Their current scene-zero and amplitude policies also differ:
+Host uses a mean and robust range; Game uses its native-depth contrast-midpoint and nearest
+reference policy. Original color-plus-depth export for host-side Game warping remains separate
+future work in the host roadmap.
+
+### Client migration and intentional differences
+
+Client AI now follows the current Host AI coordinate structure: continuously observed raw mean
+and robust relative amplitude, linear displacement with a separate hard bound, shared vertical
+and horizontal slope constraints, and the strict contractive inverse. Its per-graph ZipDepth
+calibrations remain model-specific amplitude floors; the migration does not substitute Host's
+model units or Game's native-depth calibration. Fixed client pop remains unchanged.
+
+| Area | Current Host AI / Game 3D behavior | Android XR Client AI behavior |
 |---|---|---|
-| **Production model** | One hybrid DA-V2/ZipDepth composite at a high public grid. | One packaged/selected original ZipDepth Base family, with immutable `672x384`, `896x384`, and `928x384` aspect graphs. Retired DA-V2, MiDaS, and DepthART archives remain only under `tools/model-sources/retired-client-sbs-archives/`. Deliberate model/thermal adaptation. |
-| **Raw camera coordinate** | `(hostRaw - shotArithmeticMean) / 2.25`. | Implemented as `(zipRaw - shotArithmeticMean) / sGraph`, using offline fits `0.04864449`, `0.04707071`, and `0.05421491`. One scale per graph is required; one global ZipDepth scale is not fair. No runtime percentile or per-frame gauge normalization feeds geometry. |
-| **V2 curve/pop/container** | Far `0.75*expm1(c/0.75)`, linear on `[0,1]`, near `1+0.5*log1p((c-1)/0.5)`; pop `1.75`; `0.00375` parallax per pop; odd `+/-0.04` fourth-root container. | Implemented literally after the graph-specific affine coordinate conversion. The former normalized P2/P98 → subject/recenter → Bestv2 → adaptive-pop geometry route is absent from live composition. |
-| **Camera lifetime** | Arithmetic raw mean latched to the shot. A field with population standard deviation `<= 1e-6` is unavailable: a no-cut result retains the prior camera, a cut on that field clears it, and the next usable field reacquires it. | Implemented with per-workgroup Welford records merged in the existing range-resolve pass. The first usable depth and every usable accepted cut latch the complete raw-field mean. A collapsed result can still advance private normalized cut history, but never authorizes renderer geometry or pins the zero plane. No dispatch or readback was added. |
-| **Conditioning/inverse** | Vertical `2/W` upper/lower envelopes with `0.75/0.25` share, horizontal `0.5/W` least majorant, then 11-step unique inverse. | Implemented with four GLES compute passes, a host-exact 11-update 1x `RG16F` seed, and one paired-eye correction into a 2x-horizontal x 1x-depth `RG16F` refined cache. Packed compose still performs one map and one color lookup per output pixel. |
-| **Cut-only normalization** | Percentile/range state supports cut analysis, not V2 geometry scale. | Raw outer-edge P2/P98 and normalized temporal depth remain private to geometry-change/cut detection and diagnostics. They never feed the V2 disparity field. |
-| **Ordinary geometry cuts** | Two-update confirmation with reliable history frozen after the first candidate while live range/temporal state continues. | Implemented. The first geometry-only candidate holds camera/baseline/model-input/scene/reliable-depth history, while range and immediate temporal depth update and the finite current raw field maps through the existing shot camera. A qualifying second valid update accepts the cut and advances the tuple. |
-| **Appearance cuts** | Qualified appearance evidence can accept immediately; only first structureless and first geometry-confirmation states hold the reliable owner. Ordinary exposure advances it and starts a one-update recovery veto. | Implemented with the client GPU ordinal detector and depth corroboration. Geometry and appearance rearm independently. Append-only telemetry separates detector proposals from accepted appearance, geometry, and structureless-return cuts and records the latest causal evidence without another readback. Numeric thresholds remain client-grid calibrated. |
-| **Invalid/failure behavior** | A failed current coordinate transaction is current color flat, never old geometry on new color. | Implemented strictly. Any invalid raw texel, population-collapsed field, invalid raw center/scale, conditioner, seed map, refinement, `RG16F` target, or packed compose failure is flat. The 1x seed is not a geometry fallback; live Bestv2/cached-probe/direct-probe alternatives are not compiled. |
-| **Preprocess resize** | Exact source-cell area downsample; bilinear when upscaling. | Implemented with exact overlap weights and per-cell HDR conversion. Android retains an RGBA8 model-size render target before Float32 packing; direct OES-to-buffer fusion remains open. |
-| **Depth prefilter** | None in the current raw V2 coordinate. | None. Source-aligned raw `R32F` ZipDepth feeds the conditioner directly, avoiding two client-only passes and `R16F` rounding before subtraction against the `R32F` shot mean. |
-| **Near-identical reuse** | GPU conditional execution against the last renderer-valid real-inference owner, with literal pixel/tile/gap/age gates. | Implemented locally with the same bounds and current-color/cached-geometry result. A population-collapsed inference can advance private cut/color history but explicitly invalidates the reuse owner. A guarded 32-byte decision read is the measured Android synchronization adaptation. No host or wire signal is added. |
-| **Busy retention** | A changed source may retain output for at most 250 ms, then must show current flat. | Implemented using the newest successfully latched decoded buffer as the conservative changed-source signal. |
-| **Scheduling** | CUDA/D3D work is coordinated with the host encoder cadence. | Keep the Android readiness-driven, uncapped, single-flight/latest-frame-coalescing scheduler. Thermal status is telemetry, not a hidden cadence controller. |
-| **Exact/damage reuse and ROI metadata** | DDup content clock, route/format authority, dirty/move proof, cursor semantics, and foreground ROI are available host-side. | Deferred. MediaCodec/SurfaceTexture cannot infer this authority. Any later host-assisted path must be a separately versioned, advertised extension whose absence/malformation falls back to local arbitration or inference, preserving original Sunshine/Apollo compatibility. |
-| **Subtitles / local ROI plane** | Foreground-window ROI and independent subtitle detection/conditioning are production features. | Deferred for a separate quality, memory, cadence, and thermal evaluation. No subtitle or ROI-local plane currently influences client geometry. |
-| **Higher-precision/density map** | Host evaluates the conditioned field directly at packed-output pixels on a substantially larger depth field and different interop path. | The client now refines the exact 1x seed on a 2x-horizontal lattice with one correction. This targets interpolation error without a blind 2x-by-2x 11-step solve. Direct/full-resolution `R32F` remains a measured A/B candidate. |
+| **Depth producer and grid** | Host AI uses its authenticated high-grid DAV2/ZipDepth composite. Game uses selected native game depth with paired camera/encoding metadata where available. | Original ZipDepth Base remains the sole packaged model family, with one immutable aspect graph selected per stream. Model, detail, noise and thermal characteristics differ intentionally. |
+| **Coordinate and strength** | Host AI uses an adaptive mean and robust amplitude with a model-specific floor. Game retains its independently calibrated native-depth zero/gain controller. Both apply linear signed displacement and bounded display output. | Adaptive mean and robust amplitude replace the September shot latch and far/linear/near curve. Existing per-graph calibration supplies the amplitude floor, fixed pop supplies artistic strength, and the independent hard bound replaces the soft container. This aligns the Host AI structure without claiming native game-depth equivalence. |
+| **Time and cuts** | Fresh source observations advance Host adaptation; authenticated reuse freezes it. Host cuts remain evidence/ownership events, not a command to relatch scene zero. Game owns its separate capture/reset and native-depth state. | The controller uses the observation paired with the inferred source. Reuse does not spend time or advance zero/scale. Accepted cuts retain their cut/history responsibilities and do not reintroduce a shot-latched camera. Input-domain resets and invalid or interrupted observations follow the Android controller contract. |
+| **Conditioning and inverse** | Host and Game share the vertical-envelope and horizontal-majorant geometry structure. Host evaluates its final conditioned field directly in the packed-output inverse. | Four GLES conditioner passes remain, followed by the exact iteration schedule in a depth-grid two-eye seed and one horizontal refinement correction. These preserve the slope/inverse semantics; the cached map is a deliberate sampling and precision difference. |
+| **UI / subtitle protection** | Host uses PP-OCRv6/OCR8, current-cover authority, native temporal pixel evidence, Gaussian protection and an adaptive plane. Game uses eligible native UI sources and its source-alpha plane/pin-band policy. | No OCR model, subtitle pixel detector, native game UI mask or adaptive UI plane is implemented. The client conditions scene depth only. These features need their own quality, memory, cadence and thermal evaluation. |
+| **ROI and capture authority** | Host can authorize foreground/video crops and exact DDup damage reuse from matched capture metadata. Game has its own depth crop, camera, resource and frame identities. | Decoded mono frames do not carry those authorities. No foreground ROI or host exact/damage proof is inferred from MediaCodec callbacks. A future host extension must be advertised and versioned. |
+| **Cut evidence** | Host sees capture pixels and route state; Game follows the selected provider's captured evidence. | Appearance and geometry decisions remain client-grid calibrated on decoded model-input pixels and private cut depth. Existing confirmation, reliable-history ownership and independent rearming remain distinct from continuous zero/scale tracking. |
+| **Reuse and busy retention** | Host retains complete authenticated depth/UI/final tuples; Game leases completed native resources and exports. | Existing fixed-owner local near-identical reuse retains the complete client geometry and histories while presenting current color. Busy retention stays bounded; a rejected raw field cannot become a reusable geometry owner. |
+| **Failure behavior** | Invalid Host geometry renders current color flat. Missing or invalid current Game input cannot borrow an unrelated camera or old geometry to create stereo. | Invalid raw statistics, controller state, conditioner, seed/refinement or compose stages present current mono color duplicated. There is no legacy curve, seed-only or alternate depth-backend fallback. |
+| **Input and color** | Host owns SDR/HDR preprocessing, native source-color warp and encoder conversion. Game preserves its declared game transfer and export contract. | Exact-area model preprocessing, client HDR handling, matched decoded color and SceneCore output remain Android responsibilities. Similar geometry does not equate their color or tensor-staging paths. |
+| **Platform and scheduling** | Host uses D3D/CUDA/TensorRT/NVENC; Game runs on the game's graphics queue and exports completed SBS. | GLES/OpenCL/LiteRT, single-flight latest-frame coalescing, cached inverse maps and SceneCore remain intentional Galaxy XR adaptations. Thermal status is telemetry, not a hidden cadence controller. |
 
-### Remaining disparities after this migration
+Private P2/P98 normalization still belongs to client cut/history analysis. The adaptive geometry
+uses its separate robust-amplitude statistics; those are not the retired endpoint stretch,
+subject recentering or normalized Bestv2 path. The same distinction exists on Host AI, where
+geometry and cut-normalization histograms can share a traversal without sharing authority.
 
-The core coordinate algorithm now matches, but output quality and cost are not expected to be
-identical. The remaining differences that require an explicit keep/change decision are:
+### Verification boundary and remaining work
 
-1. **Depth producer and grid:** host hybrid high-grid depth versus original ZipDepth at 384 short
-   side. Per-graph affine fitting aligns coordinate scale, not model errors, fine detail, or temporal
-   behavior.
-2. **Map precision/density:** the client still reconstructs from `RG16F` caches rather than solving
-   directly at every packed-output pixel. For `672x384`, its 1x seed is 258,048 texels / 0.98 MiB and
-   its `1344x384` refined cache is 516,096 texels / 1.97 MiB; both total 2.95 MiB. Refinement adds
-   0.516M seed and 1.032M parallax samples per changed depth, versus 22.708M parallax samples for a
-   blind 2x-by-2x 11-step solve. Compose remains one refined-map plus one color lookup per output.
-   September 4 4K windows reached thermal status 4 at 69-98% GPU busy, so the new route still needs
-   a same-clip edge/thermal A/B. RG16F quantization is bounded below 0.06 source pixel at 4K; the
-   remaining edge limits include residual map reconstruction and the ZipDepth/model grid itself.
-3. **Traversal count and staging:** Android still renders a model-size RGBA8 target, packs it in a
-   second pass, performs separate raw/cut/history passes, runs four serial-line conditioner passes,
-   and renders the inverse map. Host fusion and direct tensor writes remain
-   optimization opportunities, subject to exact-output tests.
-4. **Observation domain:** client appearance/reuse evidence sees decoded, tonemapped pixels and uses
-   decoder callbacks as source steps; host sees authoritative capture/route/damage state. Numeric
-   cut thresholds therefore remain client-calibrated even though confirmation/ownership semantics
-   match.
-5. **Optional features:** foreground ROI, subtitle detection/local-plane conditioning, and
-   authenticated host exact/damage metadata are deferred. Standard Sunshine and Apollo sessions
-   remain fully compatible because none is assumed.
-6. **Platform path:** D3D/CUDA/TensorRT/P010 and authenticated HLSL cache behavior cannot be copied
-   to GLES/OpenCL/SceneCore. Device logs and sustained Galaxy XR measurements remain the acceptance
-   authority.
+The migration changes coordinate state and mapping. It does not establish complete Client/Host/
+Game parity, equal model output, a performance improvement or sustained headset acceptance.
+The owning Android document supplies the implemented controller and reset rules; historical
+measurement windows below do not validate the new controller.
 
-The next measurement gate is a same-clip, same-stream comparison of exact-area input, direct raw
-V2 output, exact-seed/refined-cache reconstruction error, cut recovery, near-identical reuse, GPU
-stage times, and 15-minute thermal behavior. A background-only slow gauge correction remains a contingency only if
-that evidence shows within-shot global ZipDepth scale drift; full-frame or foreground percentile
-normalization must not return.
+The final October 23 review gate passed all 1,191 JVM tests across 144 suites, built both debug ABI APKs
+and the instrumentation APK, and executed the exported production compute shaders on the PC's
+ANGLE OpenGL and Vulkan backends. Twenty-one synthetic GPU cases passed on each backend, including
+all three production grids and a reflected-padding/partial-workgroup case. These checks cover controller state, raw statistics, clock gaps and
+invalid inputs, cut independence and linear bounded conditioning. Exact commands, artifacts and
+limits are recorded in [Client SBS evaluation](client-sbs-evaluation.md#adaptive-geometry-migration-2026-10-23).
+
+The October 24 physical Galaxy XR gate also passed 20 selected GPU tests, including all three
+fully delegated OpenCL models, adaptive depth, disparity, inverse rendering and reuse/history.
+Settings and pairings retained identical hashes. See the
+[physical test record](client-sbs-evaluation.md#physical-galaxy-xr-gpu-gate-2026-10-24).
+
+The October 24 live capture obtained about 11 minutes of Client AI 3D before headset sleep;
+the user elected to report that interruption. It observed near-30-FPS producer throughput
+with uneven intervals, device-wide GPU busy averaging 59.5%, and Severe thermal status from
+the start. Recurring app JNI warnings and system XR errors remain unresolved. This is partial
+evidence, with settings/pairings unchanged, and does not close sustained acceptance. See the
+[interrupted capture record](client-sbs-evaluation.md#interrupted-client-ai-3d-streaming-capture-2026-10-24).
+
+The subsequent [client pacing/layout follow-up](client-sbs-evaluation.md#client-pacing-and-xr-layout-follow-up-2026-10-24)
+adds explicit completed-frame swap authorization, removes the producerless visible Android
+holder and avoids identical panel-pose transactions. It changes neither model calibration nor
+geometry/reuse policy. SDK JNI/Node warnings and SystemUI XR call-order errors are not claimed
+resolved by those client corrections alone; the short awake capture below records the runtime
+observations.
+
+The [five-minute post-deployment verification](client-sbs-evaluation.md#five-minute-post-deployment-stream-verification-2026-10-24)
+completed with user-reported smooth output and no black flashes, about 29.8 producer returns/s,
+no observed JNI/empty-Game-holder warnings and identical saved-data hashes. Node-close and
+SystemUI errors persist, and one 119 ms producer gap remains. The different workload/initial
+thermal state prevents a causal performance comparison; this short check does not replace
+uninterrupted sustained acceptance.
+
+Remaining work includes same-clip native-output comparisons and sustained
+Galaxy XR inspection of relief, pumping, edge reconstruction, stage cost and thermal behavior.
+The seed/refined `RG16F` cache, model grid, model-input staging and serial GLES conditioner remain
+independent optimization candidates. A change to any of them needs its own measured evidence.
+Client subtitle/ROI conditioning and host-assisted capture metadata remain absent and must not
+be described as delivered by this geometry migration.
+
+### Historical migration snapshot (2026-09-04)
+
+The September review aligned the client with Host `e827a6fc`: graph-specific raw scales,
+shot-arithmetic-mean latching, the far/linear/near curve and soft container, strict raw-field
+failure handling, four-pass conditioning, the exact inverse seed and horizontal refinement.
+Its per-graph model calibration, inverse-map work and model/platform distinctions remain useful;
+its shot-latched coordinate and curve are superseded by the October 23 migration above.
+September 4 thermal and map-cost measurements remain historical evidence in
+[Android XR SBS](android-xr-sbs.md) and [Client SBS evaluation](client-sbs-evaluation.md).
 
 ## Historical audit (2026-07-25)
 
@@ -75,8 +132,8 @@ experiments were tried. They are not the current contract.
 
 > **Historical terminology:** every use of “current client,” “closed,” “preferred,” or “fallback”
 > below refers to the July normalized-depth/Bestv2 implementation and its later closure work. That
-> geometry has since been removed from live production. The authoritative September contract is the
-> migration matrix above and `android-xr-sbs.md`.
+> geometry has since been removed from live production. The authoritative current contract is the
+> October migration review above and `android-xr-sbs.md`.
 
 ### Historical implementation status
 
@@ -363,14 +420,14 @@ semantics—exposure-invariant appearance evidence, geometry authority, independ
 per accepted cut, and the same relative-spike escape—while each grid keeps its calibrated absolute
 and corroboration bands.
 
-## P3 — host geometry constant (closed)
+## P3 — host geometry constant (historical closure)
 
 `ClientSbsTemporalTuning.APOLLO_MAX_DEPTH_LONG_SIDE` is now **1036**, matching the host's
 2026-07-25 TensorRT profile bound. The audit found the stale value `1008`, which made the client
 mis-predict the host depth shape on ultrawide content. The host increase lets 21:9 resolve to
 `1036x434` and 5K2K to `1022x434`, instead of both dropping to a 420 short side.
 
-## Resolution-dependent parameters — what must NOT be copied verbatim
+## Historical resolution-dependent parameter audit
 
 The client's depth map is 2.4–3.4x coarser on the short side. Three classes:
 

@@ -293,11 +293,10 @@ final class ClientSbsModelManifest {
                     "ZipDepth static dimensions must be divisible by 32");
         }
         // ZipDepth emits nonnegative affine-invariant inverse depth: larger value = nearer.
-        // The raw V2 scale is fit independently for each graph against Apollo's production fused
-        // DAV2 field on the authenticated 192-frame corpus. Each clip uses its first-frame
-        // arithmetic mean as the shot camera; a through-origin least-squares fit then maps
-        // (ZipDepth - ZipDepth shot mean) onto (DAV2 - DAV2 shot mean) / 2.25. This preserves real
-        // within-shot motion instead of cancelling it with per-frame percentile normalization.
+        // These graph-specific priors came from the historical first-frame-centered fit against
+        // Apollo's fused DAV2 field. The adaptive camera uses each as its minimum raw amplitude;
+        // it does not use the old shot-latched mapping. Current preprocessing/runtime and the
+        // new floor policy require matched-data qualification before these values are retuned.
         if (!Float.isFinite(v2RawCoordinateScale) || v2RawCoordinateScale <= 0.0f) {
             throw new IllegalArgumentException(
                     "ZipDepth V2 raw coordinate scale must be finite and positive");
@@ -425,7 +424,7 @@ final class ClientSbsModelManifest {
     private final float v2RawCoordinateScale;
 
     /**
-     * The V2 coordinate assumes HIGH-IS-NEAR relative depth: values above the shot mean map to
+     * The V2 coordinate assumes HIGH-IS-NEAR relative depth: values above the adaptive zero map to
      * positive near parallax. Apollo has an explicit polarity conversion step; the client graphs
      * are authenticated in their final polarity, so a low-is-near graph would render every scene
      * inside-out. Fail at manifest construction rather than silently inverting a future graph.

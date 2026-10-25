@@ -40,6 +40,8 @@ class CalibrateZipDepthV2ScaleTest(unittest.TestCase):
 
             report = TOOL.calibrate(zip_root, host_root, expected_shapes=None)
 
+            self.assertEqual("historical-shot-centered-fixed-divisor", report["policy"])
+            self.assertFalse(report["current_adaptive_calibration"])
             self.assertEqual(3, report["clips"])
             self.assertEqual(9, report["frames"])
             self.assertEqual({"3x2", "4x2"}, set(report["groups"]))
@@ -78,6 +80,95 @@ class CalibrateZipDepthV2ScaleTest(unittest.TestCase):
 
             with self.assertRaisesRegex(TOOL.CalibrationError, "NaN or infinity"):
                 TOOL.calibrate(zip_root, host_root, expected_shapes=None)
+
+    def test_live_model_priors_are_read_from_their_java_owner(self) -> None:
+        floors = TOOL.production_floors()
+        self.assertEqual(TOOL.PRODUCTION_GRAPH_SHAPES, set(floors))
+        self.assertTrue(all(value > 0.0 for value in floors.values()))
+        self.assertGreater(TOOL.production_collapse_floor(), 0.0)
+
+    def test_adaptive_histogram_uses_outer_bin_edges_not_exact_sorted_percentiles(self) -> None:
+        depth = np.zeros((10, 10), dtype=np.float32)
+        depth[-1, -1] = 100.0
+        stats = TOOL.raw_geometry_statistics(depth, 0.1, 1e-6)
+        self.assertEqual(0.0, stats["p05_lower_bin_edge"])
+        self.assertEqual(100.0 / 256.0, stats["p95_upper_bin_edge"])
+        self.assertEqual(100.0 / 512.0, stats["target_amplitude"])
+        self.assertEqual(1.0, stats["mean"])
+        self.assertTrue(stats["geometry_usable"])
+        self.assertFalse(stats["amplitude_floor_active"])
+
+    def test_small_contrast_uses_model_prior_and_collapsed_fields_are_unusable(self) -> None:
+        stats = TOOL.raw_geometry_statistics(
+            np.array([[0.1, 0.101], [0.1, 0.101]], dtype=np.float32), 0.05, 1e-6
+        )
+        self.assertEqual(0.05, stats["target_amplitude"])
+        self.assertTrue(stats["amplitude_floor_active"])
+        self.assertAlmostEqual(stats["population_std"] / 0.05,
+                               stats["std_over_amplitude_floor"])
+        flat = TOOL.raw_geometry_statistics(np.ones((2, 3), dtype=np.float32), 0.05, 1e-6)
+        self.assertFalse(flat["geometry_usable"])
+        self.assertFalse(flat["amplitude_floor_active"])
+        self.assertIsNone(flat["target_amplitude"])
+        self.assertIsNone(flat["robust_half_span"])
+
+    def test_adaptive_audit_preserves_native_host_grid_and_records_exact_inputs(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="zipdepth-adaptive-audit-") as root:
+            root_path = Path(root)
+            zip_root, host_root = root_path / "zip", root_path / "host"
+            (zip_root / "clip").mkdir(parents=True)
+            (host_root / "clip").mkdir(parents=True)
+            coarse = np.arange(4, dtype=np.float32).reshape(2, 2)
+            fine = np.repeat(np.repeat(coarse, 2, axis=0), 2, axis=1)
+            fine += (np.indices((4, 4)).sum(axis=0) % 2) * 8.0
+            for frame in range(2):
+                name = f"frame_{frame:05d}.npy"
+                np.save(zip_root / "clip" / name, 0.2 + coarse + frame)
+                np.save(host_root / "clip" / name, fine + frame)
+
+            report = TOOL.audit_adaptive(
+                zip_root, host_root, floors={(2, 2): 0.05},
+                collapse_floor=1e-6, expected_shapes=None,
+            )
+
+            self.assertFalse(report["production_values_changed"])
+            self.assertFalse(report["replacement_floor_fit"])
+            self.assertFalse(report["temporal_controller_replayed"])
+            self.assertIn("not supplied", report["source_observation_timestamps"])
+            self.assertEqual(4, len(report["prediction_files"]))
+            self.assertEqual(64, len(report["prediction_manifest_sha256"]))
+            observations = report["groups"]["2x2"]["clips"][0]["observations"]
+            self.assertEqual([4, 4], observations[0]["host_native"]["shape"])
+            self.assertGreater(observations[0]["host_native"]["robust_half_span"], 4.0)
+            resized = TOOL.raw_geometry_statistics(TOOL.area_resize(fine, (2, 2)), 2.25, 1e-6)
+            self.assertLess(resized["robust_half_span"], 2.0)
+            original_digest = report["prediction_manifest_sha256"]
+            np.save(zip_root / "clip" / "frame_00001.npy", 0.2 + coarse + 1.01)
+            revised = TOOL.audit_adaptive(
+                zip_root, host_root, floors={(2, 2): 0.05},
+                collapse_floor=1e-6, expected_shapes=None,
+            )
+            self.assertNotEqual(original_digest, revised["prediction_manifest_sha256"])
+
+    def test_adaptive_audit_rejects_missing_pairs_and_unowned_graph_calibration(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="zipdepth-adaptive-pairing-") as root:
+            root_path = Path(root)
+            zip_root, host_root = root_path / "zip", root_path / "host"
+            self._write_affine_clip(zip_root, host_root, "clip", (2, 3), 0.05, 0.0)
+            with self.assertRaisesRegex(TOOL.CalibrationError, "No amplitude floor"):
+                TOOL.audit_adaptive(zip_root, host_root, floors={},
+                                    collapse_floor=1e-6, expected_shapes=None)
+            (host_root / "clip" / "frame_00001.npy").unlink()
+            with self.assertRaisesRegex(TOOL.CalibrationError, "pairing mismatch"):
+                TOOL.audit_adaptive(zip_root, host_root, floors={(2, 3): 0.05},
+                                    collapse_floor=1e-6, expected_shapes=None)
+
+    def test_complex_depth_cannot_silently_discard_an_imaginary_component(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="zipdepth-complex-") as root:
+            path = Path(root) / "depth.npy"
+            np.save(path, np.ones((2, 3), dtype=np.complex64) + 2j)
+            with self.assertRaisesRegex(TOOL.CalibrationError, "real numeric"):
+                TOOL._load_depth(path, require_nonnegative=True)
 
     @staticmethod
     def _write_affine_clip(

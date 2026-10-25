@@ -155,23 +155,27 @@ public final class StreamContainerSurfaceHandoffContractTest {
     }
 
     @Test
-    public void clientHolderVisibilityFollowsAcknowledgedOwnershipNotResizePauses() throws Exception {
+    public void invisibleInputLayoutEpochFollowsAcknowledgedOwnershipNotResizePauses() throws Exception {
         String source = readSource("StreamContainer.java");
         String init = methodBody(source, "public boolean init(Game game,");
         String parked = methodBody(source, "private void continueClientSbsSwitchAfterDecoderPark(");
         String completed = methodBody(source, "private void completeClientSbsSwitch(int generation,");
         String resizeAttach = methodBody(source, "private void attachPendingClientSbsResize()");
 
-        int initialHide = init.indexOf("setClientSbsWindowSurfaceEnabled(false)");
+        int initialHide = init.indexOf("setClientSbsInputLayoutEnabled(false)");
         int publishTarget = parked.indexOf("mExpectedEglOutputSurface = target");
-        int clientShow = parked.indexOf("setClientSbsWindowSurfaceEnabled(true)");
+        int clientShow = parked.indexOf("setClientSbsInputLayoutEnabled(true)");
         assertTrue(initialHide >= 0 && initialHide < init.indexOf("addView(mSurfaceView, childParams)"));
         assertTrue(publishTarget >= 0 && clientShow > publishTarget);
         assertTrue(clientShow < parked.indexOf("glView.requestResume()"));
         String directSuccess = blockBody(completed,
                 completed.indexOf('{', completed.indexOf("if (success && !completedEnable)")));
-        assertTrue(directSuccess.contains("setClientSbsWindowSurfaceEnabled(false)"));
-        assertFalse(resizeAttach.contains("setClientSbsWindowSurfaceEnabled("));
+        assertTrue(directSuccess.contains("setClientSbsInputLayoutEnabled(false)"));
+        assertFalse(resizeAttach.contains("setClientSbsInputLayoutEnabled("));
+        String inputEpoch = methodBody(source, "void setClientSbsInputLayoutEnabled(boolean enabled)");
+        assertTrue(inputEpoch.contains("mSurfaceView.setVisibility(INVISIBLE)"));
+        assertFalse(inputEpoch.contains("VISIBLE : INVISIBLE"));
+        assertFalse(init.contains("holder.addCallback(this)"));
         assertTrue(resizeAttach.contains("requestResume()"));
     }
 

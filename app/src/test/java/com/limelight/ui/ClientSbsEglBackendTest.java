@@ -12,6 +12,7 @@ import org.mockito.InOrder;
 import org.mockito.MockedStatic;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
+import org.robolectric.util.ReflectionHelpers;
 
 import javax.microedition.khronos.egl.EGL10;
 import javax.microedition.khronos.egl.EGLConfig;
@@ -22,6 +23,55 @@ import javax.microedition.khronos.egl.EGLSurface;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public final class ClientSbsEglBackendTest {
+    @Test public void rendererWakeWithoutSubmittedPixelsNeverRotatesTheWindow() {
+        EGL10 egl = mock(EGL10.class);
+        EGLDisplay display = mock(EGLDisplay.class);
+        EGLSurface window = mock(EGLSurface.class);
+        ClientSbsRenderSurface.FrameSubmissionRenderer renderer =
+                mock(ClientSbsRenderSurface.FrameSubmissionRenderer.class);
+        when(renderer.consumeFrameForSwap()).thenReturn(false, true, false);
+        when(egl.eglSwapBuffers(display, window)).thenReturn(true);
+        ClientSbsRenderSurface.EglBackend backend = new ClientSbsRenderSurface.EglBackend(
+                renderer, mock(GLSurfaceView.EGLConfigChooser.class),
+                mock(GLSurfaceView.EGLWindowSurfaceFactory.class));
+        ReflectionHelpers.setField(backend, "egl", egl);
+        ReflectionHelpers.setField(backend, "display", display);
+        ReflectionHelpers.setField(backend, "window", window);
+
+        assertTrue(backend.draw()); // First-frame/lifecycle hold: retain the previous image.
+        assertTrue(backend.draw()); // This callback submitted one complete output.
+        assertTrue(backend.draw()); // An unrelated dirty request is only a wakeup.
+
+        verify(renderer, times(3)).onDrawFrame(null);
+        verify(renderer, times(3)).consumeFrameForSwap();
+        verify(egl).eglSwapBuffers(display, window);
+        verify(egl, never()).eglGetError();
+    }
+
+    @Test public void skippedRendererWakeDoesNotHideARealSwapContextLoss() {
+        EGL10 egl = mock(EGL10.class);
+        EGLDisplay display = mock(EGLDisplay.class);
+        EGLSurface window = mock(EGLSurface.class);
+        ClientSbsRenderSurface.FrameSubmissionRenderer renderer =
+                mock(ClientSbsRenderSurface.FrameSubmissionRenderer.class);
+        when(renderer.consumeFrameForSwap()).thenReturn(false, true);
+        when(egl.eglSwapBuffers(display, window)).thenReturn(false);
+        when(egl.eglGetError()).thenReturn(0x300e); // EGL_CONTEXT_LOST
+        ClientSbsRenderSurface.EglBackend backend = new ClientSbsRenderSurface.EglBackend(
+                renderer, mock(GLSurfaceView.EGLConfigChooser.class),
+                mock(GLSurfaceView.EGLWindowSurfaceFactory.class));
+        ReflectionHelpers.setField(backend, "egl", egl);
+        ReflectionHelpers.setField(backend, "display", display);
+        ReflectionHelpers.setField(backend, "window", window);
+
+        assertTrue(backend.draw());
+        verify(egl, never()).eglSwapBuffers(any(), any());
+        assertFalse(backend.draw());
+        verify(egl).eglSwapBuffers(display, window);
+        verify(egl).eglGetError();
+        assertTrue(ReflectionHelpers.getField(backend, "contextLost"));
+    }
+
     @Test public void failedInitializationHasNoProducerAndCanCompleteTerminalCleanup() {
         EGL10 egl = mock(EGL10.class);
         EGLDisplay display = mock(EGLDisplay.class);

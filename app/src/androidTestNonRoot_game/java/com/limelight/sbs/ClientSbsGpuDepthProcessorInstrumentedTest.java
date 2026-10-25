@@ -29,13 +29,14 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Locale;
 
-/** Physical-device gate for the raw ZipDepth field and shot-latched V2 camera handoff. */
+/** Physical-device gate for raw ZipDepth and the source-time adaptive V2 camera handoff. */
 @RunWith(AndroidJUnit4.class)
 public final class ClientSbsGpuDepthProcessorInstrumentedTest {
     private static final String TAG = "ClientSbsRawV2";
     private static final int EGL_OPENGL_ES3_BIT_KHR = 0x0040;
     private static final int WIDTH = 32;
     private static final int HEIGHT = 32;
+    private static final long REFERENCE_SOURCE_STEP_NS = 16_666_000L;
 
     @Test
     public void fixedUniformsAreReadyBeforeDispatchAndSurviveOtherProcessorsAndReset()
@@ -43,12 +44,12 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
         try (EglFixture ignored = EglFixture.create()) {
             int rawBuffer = createRawBuffer(0.0f, false);
             try (ClientSbsGpuDepthProcessor first = new ClientSbsGpuDepthProcessor(
-                    WIDTH, HEIGHT, 1.0f, false, 60.0f);
+                    WIDTH, HEIGHT, 1.0f, false, 60.0f, 0.05f);
                  ClientSbsGpuDisparityProcessor disparity = new ClientSbsGpuDisparityProcessor(
                          WIDTH, HEIGHT, 0.05f);
                  TextureProbe probe = new TextureProbe()) {
-                assertFixedDepthUniforms(first, WIDTH, HEIGHT);
-                assertFixedDisparityUniforms(disparity, 0.05f);
+                assertFixedDepthUniforms(first, WIDTH, HEIGHT, 0.05f);
+                assertFixedDisparityUniforms(disparity);
                 first.setHealthSamplingEnabled(false);
                 int firstRaw = first.processRendererOwned(
                         rawBuffer, 0, Float.BYTES, false).getDepthTextureId();
@@ -57,21 +58,21 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 // Uniform state is per program, so a second shape/calibration must not overwrite
                 // the first processor, even with interleaved rendering and readback programs.
                 try (ClientSbsGpuDepthProcessor other = new ClientSbsGpuDepthProcessor(
-                        16, 8, 2.0f, false, 60.0f);
+                        16, 8, 2.0f, false, 60.0f, 0.10f);
                      ClientSbsGpuDisparityProcessor otherDisparity =
                              new ClientSbsGpuDisparityProcessor(16, 8, 0.10f)) {
-                    assertFixedDepthUniforms(other, 16, 8);
-                    assertFixedDisparityUniforms(otherDisparity, 0.10f);
-                    assertFixedDepthUniforms(first, WIDTH, HEIGHT);
-                    assertFixedDisparityUniforms(disparity, 0.05f);
+                    assertFixedDepthUniforms(other, 16, 8, 0.10f);
+                    assertFixedDisparityUniforms(otherDisparity);
+                    assertFixedDepthUniforms(first, WIDTH, HEIGHT, 0.05f);
+                    assertFixedDisparityUniforms(disparity);
                 }
                 first.resetTemporalState();
-                assertFixedDepthUniforms(first, WIDTH, HEIGHT);
+                assertFixedDepthUniforms(first, WIDTH, HEIGHT, 0.05f);
                 ClientSbsGpuDepthProcessor.Result after = first.processRendererOwned(
                         rawBuffer, 0, Float.BYTES, false);
                 assertEquals(before, probe.readRed(after.getDepthTextureId(), 7, 11), 0.0f);
                 disparity.process(after.getDepthTextureId(), after.getProfileTextureId());
-                assertFixedDisparityUniforms(disparity, 0.05f);
+                assertFixedDisparityUniforms(disparity);
                 assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
             } finally {
                 GLES30.glDeleteBuffers(1, new int[] {rawBuffer}, 0);
@@ -80,7 +81,8 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
     }
 
     private static void assertFixedDepthUniforms(ClientSbsGpuDepthProcessor processor,
-                                                  int width, int height) throws Exception {
+                                                  int width, int height, float rawScale)
+            throws Exception {
         for (String program : new String[] {
                 "rawMinMaxProgram", "rawHistogramProgram", "temporalProgram"}) {
             assertUniform(processor, program, "uTensorSize", width, height);
@@ -95,14 +97,16 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
         assertUniform(processor, "temporalProgram", "uReliableDepth", 1);
         assertUniform(processor, "temporalProgram", "uSpatialThresholdScale",
                 ClientSbsTemporalTuning.spatialThresholdScale(width, height));
+        assertUniform(processor, "resolveProfileProgram", "uRawCoordinateScale", rawScale);
     }
 
-    private static void assertFixedDisparityUniforms(ClientSbsGpuDisparityProcessor processor,
-                                                      float rawScale) throws Exception {
+    private static void assertFixedDisparityUniforms(ClientSbsGpuDisparityProcessor processor)
+            throws Exception {
         assertUniform(processor, "verticalForwardProgram", "uDepthTexture", 0);
         assertUniform(processor, "verticalForwardProgram", "uProfileTexture", 1);
-        assertUniform(processor, "verticalForwardProgram", "uInverseRawCoordinateScale",
-                1.0f / rawScale);
+        assertEquals("Inverse amplitude must come from the current profile", -1,
+                GLES20.glGetUniformLocation(processorProgram(processor, "verticalForwardProgram"),
+                        "uInverseRawCoordinateScale"));
         assertUniform(processor, "verticalFinishProgram", "uEnvelopeScratch", 0);
         assertUniform(processor, "horizontalForwardProgram", "uVerticalConditioned", 0);
         assertUniform(processor, "horizontalFinishProgram", "uVerticalConditioned", 0);
@@ -200,7 +204,7 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 int[] size = new int[1];
                 GLES30.glGetBufferParameteriv(GLES30.GL_COPY_WRITE_BUFFER,
                         GLES20.GL_BUFFER_SIZE, size, 0);
-                assertEquals(224, ClientSbsGpuDepthProcessor.STATE_BYTES);
+                assertEquals(256, ClientSbsGpuDepthProcessor.STATE_BYTES);
                 assertEquals(ClientSbsGpuDepthProcessor.STATE_BYTES, size[0]);
 
                 // Only the optional staging copy is invalid. Production state/textures stay
@@ -274,7 +278,7 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 // Reverse every ordinal relation and shift the complete raw field. The independent
                 // structure evidence makes this the first geometry-confirmation candidate: Apollo
                 // holds reliable comparison history, but still renders this current valid field
-                // through the already-latched shot camera.
+                // through the continuously observed camera, independently of reliable history.
                 float heldOffset = 10.0f;
                 updateRawBufferReversed(rawBuffer, heldOffset);
                 updateSceneCutBuffer(sceneCutBuffer, 4);
@@ -304,8 +308,11 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                         probe.readRed(heldResult.getDepthTextureId(), 0, 0), 2.0e-5f);
                 float[] heldProfile = probe.readRgba(
                         heldResult.getProfileTextureId(), 0, 0);
-                assertEquals("held result must keep the previous shot camera",
-                        baselineProfile[0], heldProfile[0], 2.0e-5f);
+                assertTrue("holding cut history must not hold adaptive zero",
+                        heldProfile[0] > baselineProfile[0]);
+                float zeroRateBound = REFERENCE_SOURCE_STEP_NS * 1.0e-9f / heldProfile[2];
+                assertTrue("adaptive zero must obey its source-time rate bound",
+                        heldProfile[0] - baselineProfile[0] <= zeroRateBound + 2.0e-5f);
                 assertEquals("profile must publish the current raw mean",
                         expectedMean(heldOffset), heldProfile[1], 2.0e-5f);
                 assertTrue("valid held geometry must remain profile-ready",
@@ -346,7 +353,7 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
     }
 
     @Test
-    public void rawMeanLatchesPerShotAndInvalidFieldPublishesNotReady() {
+    public void rawMeanAdaptsOnSourceTimeAndInvalidFieldPublishesNotReady() {
         try (EglFixture ignored = EglFixture.create()) {
             int rawBuffer = createRawBuffer(0.0f, false);
             try (ClientSbsGpuDepthProcessor processor = new ClientSbsGpuDepthProcessor(
@@ -354,7 +361,8 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
 
                 float firstMean = expectedMean(0.0f);
                 ClientSbsGpuDepthProcessor.Result first =
-                        processor.processRendererOwned(rawBuffer, 0, Float.BYTES, false);
+                         processor.processRendererOwned(rawBuffer, 0, Float.BYTES, false,
+                                 1, 100_000_000L);
                 assertNotEquals(0, first.getDepthTextureId());
                 assertNotEquals(0, first.getProfileTextureId());
                 GLES20.glFinish();
@@ -362,24 +370,34 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                         processor.pollHealthSnapshot();
                 assertNotNull(firstHealth);
                 assertTrue(firstHealth.isCurrentGeometryReady());
-                assertEquals(firstMean, firstHealth.getShotRawMean(), 2.0e-5f);
+                assertEquals(firstMean, firstHealth.getRawZero(), 2.0e-5f);
                 assertEquals(firstMean, firstHealth.getCurrentRawMean(), 2.0e-5f);
+                float firstObservedZero = firstHealth.getRawZero();
 
                 // Stay below cut thresholds. Frame five triggers the focused health cadence.
                 float ordinaryOffset = 0.01f;
                 updateRawBuffer(rawBuffer, ordinaryOffset, false);
                 for (int frame = 2; frame <= 5; frame++) {
-                    processor.processRendererOwned(rawBuffer, 0, Float.BYTES, false);
+                    processor.processRendererOwned(rawBuffer, 0, Float.BYTES, false,
+                            1, frame * 100_000_000L);
                 }
                 GLES20.glFinish();
                 ClientSbsGpuDepthProcessor.HealthSnapshot movedHealth =
                         processor.pollHealthSnapshot();
                 assertNotNull(movedHealth);
                 assertTrue(movedHealth.isCurrentGeometryReady());
-                assertEquals("ordinary motion must not move the shot camera",
-                        firstMean, movedHealth.getShotRawMean(), 2.0e-5f);
+                float expectedZero = firstMean + ordinaryOffset
+                        * (1.0f - (float) Math.exp(-0.4f / 0.5f));
+                assertEquals("ordinary observations must adapt zero on source time",
+                        expectedZero, movedHealth.getRawZero(), 2.0e-5f);
+                assertEquals("camera adaptation must not synthesize a cut", 0L,
+                        movedHealth.getHardCutCount());
                 assertEquals(expectedMean(ordinaryOffset), movedHealth.getCurrentRawMean(),
                         2.0e-5f);
+                // HealthSnapshot is a reused view. Freeze diagnostics before reset/readback
+                // replaces it, just as the renderer copies sampled health into its own state.
+                float movedObservedZero = movedHealth.getRawZero();
+                float movedObservedMean = movedHealth.getCurrentRawMean();
 
                 // Reset requests an immediate health sample. One invalid texel must reject the
                 // complete current transaction instead of publishing partial geometry.
@@ -397,8 +415,8 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
 
                 Log.i(TAG, String.format(Locale.US,
-                        "raw V2 mean first=%.6f current=%.6f invalidReady=%s",
-                        firstHealth.getShotRawMean(), movedHealth.getCurrentRawMean(),
+                        "raw V2 zero first=%.6f adapted=%.6f currentMean=%.6f invalidReady=%s",
+                        firstObservedZero, movedObservedZero, movedObservedMean,
                         invalidHealth.isCurrentGeometryReady()));
             } finally {
                 GLES30.glDeleteBuffers(1, new int[] {rawBuffer}, 0);
@@ -533,7 +551,8 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
     /**
      * Exercise the cut FSM at its reference update interval, independently of driver/CPU speed.
      * Zero resets only the CPU interval measurement so the production coefficient helper selects
-     * one reference update. GPU range, temporal history, shot camera and source age remain intact.
+     * one reference update. Camera time is the deterministic matched source clock below;
+     * GPU range, temporal history, adaptive camera and source age remain intact.
      */
     private static ClientSbsGpuDepthProcessor.Result processReferenceStep(
             ClientSbsGpuDepthProcessor processor, int rawBuffer, int sceneCutBuffer)
@@ -542,8 +561,12 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 .getDeclaredField("lastProcessAtNs");
         lastProcessAtNs.setAccessible(true);
         lastProcessAtNs.setLong(processor, 0L);
+        Field frameSequence = ClientSbsGpuDepthProcessor.class.getDeclaredField("frameSequence");
+        frameSequence.setAccessible(true);
+        long sourceTimestampNs = (frameSequence.getLong(processor) + 1L)
+                * REFERENCE_SOURCE_STEP_NS;
         return processor.processRendererOwnedWithGpuSceneCut(
-                rawBuffer, 0, Float.BYTES, sceneCutBuffer, 0);
+                rawBuffer, 0, Float.BYTES, sceneCutBuffer, 0, 1, sourceTimestampNs);
     }
 
     private static ClientSbsGpuDepthProcessor.HealthSnapshot readCompletedHealth(

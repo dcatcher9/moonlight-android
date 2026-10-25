@@ -229,6 +229,59 @@ public class Stereo3DRendererSchedulingTest {
     }
 
     @Test
+    public void dirtyWakeOnlySubmitsNewPairsFlatFallbackOrExplicitPresentationProof() {
+        // A newer decoder frame can start inference without replacing the already submitted pair.
+        // A wakeup after capture or worker initialization must not rotate that unchanged output.
+        assertFalse(Stereo3DRenderer.shouldSubmitClientSbsFrame(false, true, false, false));
+        assertTrue(Stereo3DRenderer.shouldSubmitClientSbsFrame(true, true, false, false));
+        assertTrue(Stereo3DRenderer.shouldSubmitClientSbsFrame(false, false, false, false));
+        assertTrue(Stereo3DRenderer.shouldSubmitClientSbsFrame(false, true, true, false));
+        assertTrue(Stereo3DRenderer.shouldSubmitClientSbsFrame(false, true, false, true));
+    }
+
+    @Test
+    public void onlyCompletedFramebufferDrawsAuthorizeTheEglOwnersSwap() throws IOException {
+        String source = rendererSource();
+        String callback = source.substring(source.indexOf("public void onDrawFrame(GL10 gl)"),
+                source.indexOf("private void onDrawFrameLocked"));
+        assertTrue(callback.indexOf("frameSubmittedForSwap = false")
+                < callback.indexOf("onDrawFrameLocked(gl)"));
+        assertTrue(callback.contains("public boolean consumeFrameForSwap()"));
+        assertTrue(callback.contains("boolean submitted = frameSubmittedForSwap"));
+
+        String present = source.substring(source.indexOf("private void presentClientSbs()"),
+                source.indexOf("private boolean prepareMatchedDepth()"));
+        assertEquals(2, occurrences(present, "frameSubmittedForSwap = true"));
+        assertFalse(present.contains("glClear("));
+        assertTrue(present.indexOf("drawFlatSbs()")
+                < present.indexOf("frameSubmittedForSwap = true"));
+        assertTrue(present.lastIndexOf("recordGlOutputSubmit(")
+                < present.lastIndexOf("frameSubmittedForSwap = true"));
+    }
+
+    @Test
+    public void traceMarkersSeparateAcceptedHostRetentionFromAdoptionAndComposition()
+            throws IOException {
+        String source = rendererSource();
+        String repeat = source.substring(source.indexOf("private boolean consumeProvenSourceRepeat()"),
+                source.indexOf("static boolean canRetainHostSource("));
+        int acceptedMarker = repeat.indexOf("Trace.beginSection(\"ClientSbs.sourceRepeat\")");
+        assertTrue(acceptedMarker > repeat.lastIndexOf("return false"));
+        assertTrue(repeat.indexOf("return true", acceptedMarker) > acceptedMarker);
+        assertTrue(repeat.contains("finally {\n            Trace.endSection()"));
+
+        String adoption = source.substring(source.indexOf("private boolean adoptLatestGpuInferenceResult()"),
+                source.indexOf("private boolean adoptLatestGpuInferenceResultLocked()"));
+        assertTrue(adoption.indexOf("latestGpuInferenceResult.get() == null")
+                < adoption.indexOf("Trace.beginSection(\"ClientSbs.adopt\")"));
+        assertTrue(adoption.contains("finally {\n                Trace.endSection()"));
+        String compose = source.substring(source.indexOf("private void presentClientSbs()"),
+                source.indexOf("private boolean prepareMatchedDepth()"));
+        assertTrue(compose.contains("Trace.beginSection(\"ClientSbs.compose\")"));
+        assertTrue(compose.contains("finally {\n            Trace.endSection()"));
+    }
+
+    @Test
     public void frameDrainHotPathReusesOneRunnableAndSnapshotsAGuardedTicket()
             throws IOException {
         String source = rendererSource();

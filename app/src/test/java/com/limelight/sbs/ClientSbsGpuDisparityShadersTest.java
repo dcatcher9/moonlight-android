@@ -18,13 +18,22 @@ public class ClientSbsGpuDisparityShadersTest {
         assertTrue(verticalForward.contains("const int FIELD_WIDTH = 672;"));
         assertTrue(verticalForward.contains("const int FIELD_HEIGHT = 384;"));
         assertTrue(verticalForward.contains("2.00000000 / float(FIELD_WIDTH)"));
-        assertTrue(verticalForward.contains("pointwiseContainer"));
+        assertTrue(verticalForward.contains("boundDisplayParallax"));
         assertTrue(verticalForward.contains("0.04000000"));
-        assertTrue(verticalForward.contains("hostV2Curve"));
+        assertTrue(verticalForward.contains("clamp(requested, -0.04000000, 0.04000000)"));
         assertTrue(verticalForward.contains("rawV2Parallax"));
         assertTrue(verticalForward.contains("camera.w > 0.5"));
-        assertTrue(verticalForward.contains("uInverseRawCoordinateScale"));
+        assertTrue(verticalForward.contains("!isnan(camera.z) && !isinf(camera.z)"));
+        assertTrue(verticalForward.contains("camera.z > 0.0"));
+        assertTrue(verticalForward.contains("disparityCandidate(x, 0, camera.x, camera.z)"));
+        assertTrue(verticalForward.contains("(rawDepth - zero) * inverseAmplitude"));
         assertTrue(verticalForward.contains("1.75000000 * 0.00375000"));
+        assertFalse(verticalForward.contains("uInverseRawCoordinateScale"));
+        assertFalse(verticalForward.contains("hostV2Curve"));
+        assertFalse(verticalForward.contains("pointwiseContainer"));
+        assertFalse(verticalForward.contains("sqrt("));
+        assertFalse(verticalForward.contains("exp("));
+        assertFalse(verticalForward.contains("log("));
         assertFalse(verticalForward.contains("bestv2RawShift"));
         assertFalse(verticalForward.contains("uSourceSize"));
         assertFalse(verticalForward.contains("max(stereo.z"));
@@ -92,6 +101,35 @@ public class ClientSbsGpuDisparityShadersTest {
         for (int y = 0; y < candidate.length; y++) {
             for (int x = 0; x < candidate[y].length; x++) {
                 assertEquals(candidate[y][x], conditioned[y][x], 1.0e-6f);
+            }
+        }
+    }
+
+    @Test
+    public void linearCameraShiftPreservesAdmissibleReliefThroughConditioning() {
+        float[][] first = new float[3][8];
+        float[][] shifted = new float[3][8];
+        float gain = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH
+                * ClientSbsV2CoordinateContract.PARALLAX_PER_POP;
+        for (int y = 0; y < first.length; y++) {
+            for (int x = 0; x < first[y].length; x++) {
+                float raw = 1.0f + x * 0.25f;
+                first[y][x] = ClientSbsV2CoordinateContract.parallax(raw, 1.0f, 1.0f);
+                shifted[y][x] = ClientSbsV2CoordinateContract.parallax(raw, 1.5f, 1.0f);
+            }
+        }
+        float[][] conditioned = condition(first);
+        float[][] shiftedConditioned = condition(shifted);
+        for (int y = 0; y < first.length; y++) {
+            for (int x = 0; x < first[y].length; x++) {
+                assertEquals(first[y][x], conditioned[y][x], 1.0e-7f);
+                assertEquals(first[y][x] - 0.5f * gain,
+                        shiftedConditioned[y][x], 1.0e-7f);
+                if (x > 0) {
+                    assertEquals(0.25f * gain,
+                            shiftedConditioned[y][x] - shiftedConditioned[y][x - 1],
+                            1.0e-7f);
+                }
             }
         }
     }

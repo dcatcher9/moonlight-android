@@ -20,6 +20,12 @@ import javax.microedition.khronos.egl.EGLSurface;
  * Renderer callbacks, queued events, context changes, and swaps all run on the same owner thread.
  */
 public final class ClientSbsRenderSurface extends SurfaceView {
+    /** The EGL owner swaps only when this callback produced a complete output framebuffer. */
+    public interface FrameSubmissionRenderer extends GLSurfaceView.Renderer {
+        /** Called once, on the same EGL owner thread, immediately after onDrawFrame(). */
+        boolean consumeFrameForSwap();
+    }
+
     private final Handler main = new Handler(Looper.getMainLooper());
     private AsyncEglRenderLoop loop;
 
@@ -149,6 +155,12 @@ public final class ClientSbsRenderSurface extends SurfaceView {
 
         @Override public boolean draw() {
             renderer.onDrawFrame(null);
+            if (renderer instanceof FrameSubmissionRenderer
+                    && !((FrameSubmissionRenderer) renderer).consumeFrameForSwap()) {
+                // A lifecycle/first-frame hold or a no-adoption wake did not populate this back
+                // buffer. Keep SceneCore's retained picture and leave context recovery unchanged.
+                return true;
+            }
             if (egl.eglSwapBuffers(display, window)) {
                 recovering = false;
                 return true;

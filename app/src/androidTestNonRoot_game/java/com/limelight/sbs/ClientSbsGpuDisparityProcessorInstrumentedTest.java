@@ -83,6 +83,8 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
                 null, GLES30.GL_STREAM_READ);
         try (ClientSbsGpuDisparityProcessor processor = new ClientSbsGpuDisparityProcessor(
                 width, height, width >= 672 ? rawScaleForWidth(width) : 0.04864449f)) {
+            float inverseAmplitude = 1.0f
+                    / (width >= 672 ? rawScaleForWidth(width) : 0.04864449f);
             java.lang.reflect.Field verticalField = ClientSbsGpuDisparityProcessor.class
                     .getDeclaredField("verticalTexture");
             verticalField.setAccessible(true);
@@ -104,7 +106,8 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
                         GLES30.GL_RED, GLES20.GL_FLOAT, values);
                 FloatBuffer camera = ByteBuffer.allocateDirect(4 * Float.BYTES)
                         .order(ByteOrder.nativeOrder()).asFloatBuffer();
-                camera.put(new float[] {0.5f, 0, 0, frame == 3 ? 0 : 1}).flip();
+                camera.put(new float[] {0.5f, 0, inverseAmplitude,
+                        frame == 3 ? 0 : 1}).flip();
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, profile);
                 GLES30.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 1, 1,
                         GLES30.GL_RGBA, GLES20.GL_FLOAT, camera);
@@ -124,6 +127,19 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
                     }
                     assertTrue("Published parallax must be finite",
                             Float.isFinite(Float.intBitsToFloat(observed[pixel])));
+                }
+                if (frame < 2) {
+                    boolean hasStereo = false;
+                    for (int word : observed) {
+                        hasStereo |= Float.intBitsToFloat(word) != 0.0f;
+                    }
+                    assertTrue("Ready profile must exercise stereo rather than flat fallback",
+                            hasStereo);
+                } else {
+                    for (int word : observed) {
+                        assertEquals("Zero coordinate or unavailable profile must render flat",
+                                0.0f, Float.intBitsToFloat(word), 0.0f);
+                    }
                 }
             }
         } finally {
@@ -212,6 +228,7 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
 
     private static void runShape(int width, int height, int profileTexture) {
         int depthTexture = createDepthTexture(width, height);
+        setProfileAmplitude(profileTexture, 1.0f / rawScaleForWidth(width));
         try {
             long initializationStartedNs = System.nanoTime();
             ClientSbsGpuDisparityProcessor created =
@@ -281,15 +298,25 @@ public final class ClientSbsGpuDisparityProcessorInstrumentedTest {
         FloatBuffer values = ByteBuffer.allocateDirect(16 * Float.BYTES)
                 .order(ByteOrder.nativeOrder())
                 .asFloatBuffer();
-        // Texel zero is the production camera contract: shot mean in X and current-frame
+        // Texel zero carries adaptive zero in X, inverse amplitude in Z and current-frame
         // geometry readiness in W. Keep all retired percentile/Bestv2 profile texels zero.
         values.put(new float[] {
-                0.5f, 0.0f, 0.0f, 1.0f,
+                0.5f, 0.0f, 1.0f / rawScaleForWidth(672), 1.0f,
                 0.0f, 0.0f, 0.0f, 0.0f,
                 0.0f, 0.0f, 0.0f, 0.0f,
                 0.0f, 0.0f, 0.0f, 0.0f,
         }).flip();
         return createTexture(4, 1, GLES30.GL_RGBA32F, GLES30.GL_RGBA, values);
+    }
+
+    private static void setProfileAmplitude(int profileTexture, float inverseAmplitude) {
+        FloatBuffer camera = ByteBuffer.allocateDirect(4 * Float.BYTES)
+                .order(ByteOrder.nativeOrder()).asFloatBuffer();
+        camera.put(new float[] {0.5f, 0.0f, inverseAmplitude, 1.0f}).flip();
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, profileTexture);
+        GLES30.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 1, 1,
+                GLES30.GL_RGBA, GLES20.GL_FLOAT, camera);
+        assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
     }
 
     private static int createTexture(int width, int height, int internalFormat, int format,

@@ -97,6 +97,53 @@ public class ClientSbsGpuDepthShadersTest {
     }
 
     @Test
+    public void robustGeometryHistogramKeepsFloatRangeSeparateFromCutNormalization() {
+        String minMax = ClientSbsGpuDepthShaders.rawMinMax(false);
+        String histogram = ClientSbsGpuDepthShaders.rawHistogram(false);
+        String resolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
+        assertTrue(minMax.contains("floatBitsToUint(rawValue == 0.0 ? 0.0 : rawValue)"));
+        assertTrue(minMax.contains("atomicMin(geometryMinimum"));
+        assertTrue(histogram.contains("shared uint localGeometryHistogram[256]"));
+        assertTrue(histogram.contains("uintBitsToFloat(geometryMinimum)"));
+        assertTrue(histogram.contains("(rawValue - minimumValue) / rangeValueFloat"));
+        assertTrue(histogram.contains("float(value - rawMinimum) * 256.0"));
+        assertTrue(resolve.contains("geometryPopulation == geometryValidCount"));
+        assertTrue(resolve.contains("geometryValidCount == rawValidCount"));
+        assertTrue(resolve.contains("geometryPercentile(0.05, geometryLow, binWidth, 0.0)"));
+        assertTrue(resolve.contains("geometryPercentile(0.95, geometryLow, binWidth, 1.0)"));
+        assertTrue(resolve.contains("percentileValue(0.02, minimumValue, binWidth, 0.0)"));
+        assertTrue(resolve.contains("percentileValue(0.98, minimumValue, binWidth, 1.0)"));
+        assertTrue(resolve.contains("adaptiveCamera.zw = vec2(0.0)"));
+    }
+
+    @Test
+    public void adaptiveCameraUsesSplitSourceTimeAndDoesNotDependOnAcceptedCuts() {
+        String shader = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
+        int controllerStart = shader.indexOf("void observeAdaptiveCamera(");
+        int controllerEnd = shader.indexOf("void publishProfile()", controllerStart);
+        String controller = shader.substring(controllerStart, controllerEnd);
+        assertFalse(controller.contains("uniform"));
+        assertTrue(shader.contains("uniform uvec2 uSourceTimestampUs"));
+        assertTrue(controller.contains("now.y > previous.y"));
+        assertTrue(controller.contains("now.x < previous.x ? 1u : 0u"));
+        assertTrue(controller.contains("elapsed.y == 0u"));
+        assertTrue(controller.contains("elapsed.x <= 250000u"));
+        assertTrue(controller.contains("max(halfSpan, uRawCoordinateScale)"));
+        assertTrue(controller.contains("log(targetInverse) - log(adaptiveCamera.x)"));
+        assertTrue(controller.contains("zeroBound = seconds / nextInverse"));
+        assertFalse(controller.contains("acceptedCut"));
+        assertFalse(controller.contains("historyAdvances"));
+        assertFalse(controller.contains("uReferenceFrameAdvance"));
+        assertFalse(controller.contains("uSourceFrameDelta"));
+        assertTrue(shader.indexOf("observeAdaptiveCamera(rawGeometryUsable)")
+                < shader.indexOf("if (!rawFieldComplete)"));
+        assertTrue(shader.contains("v2FrameValid && cameraClock.w == 1u"));
+        assertTrue(ClientSbsGpuDepthShaders.RESET_STATE.contains(
+                "adaptiveCamera = vec4(0.0)"));
+        assertTrue(ClientSbsGpuDepthShaders.RESET_STATE.contains("cameraClock = uvec4(0u)"));
+    }
+
+    @Test
     public void oneDispatchClearsOnlyRawRangeScratch() {
         String shader = ClientSbsGpuDepthShaders.RESET_ALL_STATS;
         assertTrue(shader.contains("rawHistogram[index] = 0u"));
@@ -118,7 +165,7 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(blockEnd > blockStart);
 
         String stateBlock = shader.substring(blockStart, blockEnd);
-        assertEquals(15, occurrences(stateBlock, ";"));
+        assertEquals(17, occurrences(stateBlock, ";"));
         assertTrue(stateBlock.indexOf("vec4 rangeState;")
                 < stateBlock.indexOf("vec4 profileA;"));
         assertTrue(stateBlock.indexOf("vec4 profileA;")
@@ -149,7 +196,13 @@ public class ClientSbsGpuDepthShadersTest {
                 < stateBlock.indexOf("uvec4 cutEventMeta;"));
         assertEquals(144, ClientSbsGpuDepthProcessor.CUT_REASON_COUNTERS_BYTE_OFFSET);
         assertEquals(208, ClientSbsGpuDepthProcessor.CUT_EVENT_META_BYTE_OFFSET);
-        assertEquals(224, ClientSbsGpuDepthProcessor.STATE_BYTES);
+        assertTrue(stateBlock.indexOf("uvec4 cutEventMeta;")
+                < stateBlock.indexOf("vec4 adaptiveCamera;"));
+        assertTrue(stateBlock.indexOf("vec4 adaptiveCamera;")
+                < stateBlock.indexOf("uvec4 cameraClock;"));
+        assertEquals(224, ClientSbsGpuDepthProcessor.ADAPTIVE_CAMERA_BYTE_OFFSET);
+        assertEquals(240, ClientSbsGpuDepthProcessor.CAMERA_CLOCK_BYTE_OFFSET);
+        assertEquals(256, ClientSbsGpuDepthProcessor.STATE_BYTES);
     }
 
     @Test
@@ -239,8 +292,7 @@ public class ClientSbsGpuDepthShadersTest {
     @Test
     public void profileReadyAllowsCurrentValidDepthWhileHistoryIsHeld() {
         String shader = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
-        assertTrue(shader.contains(
-                "else if (v2FrameValid && (!cameraInitialized || acceptedCut))"));
+        assertTrue(shader.contains("observeAdaptiveCamera(rawGeometryUsable)"));
         assertFalse(shader.contains(
                 "else if (historyAdvances && v2FrameValid"));
         assertTrue(shader.contains("uint required = FRAME_STATE_CURRENT_DEPTH_VALID"));
@@ -251,7 +303,8 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(shader.contains(
                 "bool ready = stateFlags.y != 0u && v2Camera.w > 0.5"));
         assertTrue(shader.contains(
-                "vec4(v2Camera.x, v2Camera.y, 0.0, ready ? 1.0 : 0.0)"));
+                "vec4(v2Camera.x, v2Camera.y, adaptiveCamera.x, ready ? 1.0 : 0.0)"));
+        assertTrue(shader.contains("cameraClock.w == 1u"));
         assertTrue(shader.contains("if (!rawFieldComplete)"));
         assertFalse(shader.contains("if (!rawFieldComplete || !historyAdvances)"));
         assertTrue(shader.contains("publishProfile();\n        return;"));
@@ -500,6 +553,9 @@ public class ClientSbsGpuDepthShadersTest {
         String rawResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
         String profile = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
 
+        assertTrue(rawResolve.contains("p05 = clamp(p05, geometryLow, geometryHigh)"));
+        assertTrue(rawResolve.contains("p95 = clamp(p95, geometryLow, geometryHigh)"));
+
         assertTrue(rawMinMax.contains("uvec4 rawGroupMoments[]"));
         assertTrue(rawMinMax.contains("shared float localMean[256]"));
         assertTrue(rawMinMax.contains("shared float localM2[256]"));
@@ -521,9 +577,9 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(rawResolve.contains("currentRawStd > V2_COLLAPSE_ABS_EPSILON"));
         assertTrue(rawResolve.contains("v2Camera.z = float(rawValidCount)"));
         assertTrue(rawResolve.contains("v2Camera.y = currentRawMean"));
-        assertTrue(profile.contains("if (acceptedCut && !v2FrameValid)"));
-        assertTrue(profile.contains("&& (!cameraInitialized || acceptedCut)"));
-        assertTrue(profile.contains("v2Camera.x = currentRawMean"));
+        assertFalse(profile.contains("if (acceptedCut && !v2FrameValid)"));
+        assertFalse(profile.contains("|| acceptedCut))"));
+        assertTrue(profile.contains("v2Camera.x = v2Camera.y"));
         assertTrue(profile.contains("v2Camera.w = 1.0"));
     }
 
@@ -625,6 +681,66 @@ public class ClientSbsGpuDepthShadersTest {
                 snapshot.getEdgeFraction(), 0.0f);
         assertEquals(ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
                 snapshot.getPopStrength(), 0.0f);
+    }
+
+    @Test
+    public void healthSnapshotPublishesAdaptiveCameraFromTheExistingStateTail() {
+        ByteBuffer state = ByteBuffer.allocate(
+                ClientSbsGpuDepthProcessor.STATE_BYTES).order(ByteOrder.nativeOrder());
+        int camera = ClientSbsGpuDepthProcessor.ADAPTIVE_CAMERA_BYTE_OFFSET;
+        int clock = ClientSbsGpuDepthProcessor.CAMERA_CLOCK_BYTE_OFFSET;
+        state.putInt(72, ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_DEPTH_VALID
+                | ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_V2_VALID);
+        state.putFloat(128, 0.3f);
+        state.putFloat(132, 0.4f);
+        state.putFloat(camera, 20.0f);
+        state.putFloat(camera + 4, 10.0f);
+        state.putFloat(camera + 8, 0.1f);
+        state.putFloat(camera + 12, 0.7f);
+        state.putInt(clock + 8, 1);
+        ClientSbsGpuDepthProcessor.HealthSnapshot snapshot =
+                new ClientSbsGpuDepthProcessor.HealthSnapshot();
+        snapshot.updateFromState(state, 30L, 100);
+        assertEquals(0.3f, snapshot.getRawZero(), 0.0f);
+        assertEquals(20.0f, snapshot.getRawInverseAmplitude(), 0.0f);
+        assertEquals(10.0f, snapshot.getTargetRawInverseAmplitude(), 0.0f);
+        assertEquals(0.1f, snapshot.getRawPercentileLow(), 0.0f);
+        assertEquals(0.7f, snapshot.getRawPercentileHigh(), 0.0f);
+        assertTrue(snapshot.hasCompleteRawField());
+        assertTrue(snapshot.isCameraClockArmed());
+        assertEquals(30L, snapshot.getFrameSequence());
+
+        // Invalid raw, collapse or source-clock authority holds the established camera but must
+        // not turn absent current target/quantile measurements into zero-valued observations.
+        state.putInt(72, 0);
+        state.putFloat(camera + 4, 0.0f);
+        state.putFloat(camera + 8, 0.0f);
+        state.putFloat(camera + 12, 0.0f);
+        state.putInt(clock + 8, 0);
+        snapshot.updateFromState(state, 35L, 100);
+        assertEquals(0.3f, snapshot.getRawZero(), 0.0f);
+        assertEquals(20.0f, snapshot.getRawInverseAmplitude(), 0.0f);
+        assertTrue(Float.isNaN(snapshot.getTargetRawInverseAmplitude()));
+        assertTrue(Float.isNaN(snapshot.getRawPercentileLow()));
+        assertTrue(Float.isNaN(snapshot.getRawPercentileHigh()));
+        assertFalse(snapshot.hasCompleteRawField());
+        assertFalse(snapshot.isCameraClockArmed());
+
+        // A repeated source timestamp can retain a complete raw field and positive percentile
+        // scratch; the controller has not accepted that observation, so its target stays absent.
+        state.putInt(72, ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_DEPTH_VALID);
+        state.putFloat(camera + 8, 0.1f);
+        state.putFloat(camera + 12, 0.7f);
+        snapshot.updateFromState(state, 40L, 100);
+        assertTrue(Float.isNaN(snapshot.getRawPercentileLow()));
+        assertTrue(Float.isNaN(snapshot.getRawPercentileHigh()));
+
+        snapshot.reset();
+        assertTrue(Float.isNaN(snapshot.getRawInverseAmplitude()));
+        assertTrue(Float.isNaN(snapshot.getTargetRawInverseAmplitude()));
+        assertTrue(Float.isNaN(snapshot.getRawPercentileLow()));
+        assertTrue(Float.isNaN(snapshot.getRawPercentileHigh()));
+        assertFalse(snapshot.isCameraClockArmed());
     }
 
     @Test

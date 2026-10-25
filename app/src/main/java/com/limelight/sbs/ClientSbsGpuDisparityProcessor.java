@@ -11,10 +11,10 @@ import com.limelight.LimeLog;
 /**
  * Builds a host-style contractive signed-parallax field from the calibrated Client SBS profile.
  *
- * <p>Original ZipDepth uses a separately qualified raw scale per graph. After that one
- * model-specific calibration, this follows Host SBS V2 directly: shot-latched arithmetic-mean
- * camera coordinate, the fixed asymmetric curve and pop, a fourth-root pointwise container,
- * vertical upper/lower Lipschitz envelopes, a horizontal least majorant, and one unique inverse.
+ * <p>The depth processor publishes the adaptive raw zero and inverse amplitude, using the
+ * separately qualified ZipDepth graph scale as its amplitude floor. This processor maps that
+ * coordinate linearly with fixed pop, applies an independent signed display bound, then builds
+ * vertical upper/lower Lipschitz envelopes and a horizontal least majorant for one unique inverse.
  * P2/P98 normalization remains upstream only for scene-cut analysis.</p>
  *
  * <p>Each line is owned by one invocation and scanned serially. The largest production field is
@@ -28,7 +28,6 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
 
     private final int width;
     private final int height;
-    private final float inverseRawCoordinateScale;
     private final EGLContext ownerContext;
     private final int[] integerScratch = new int[1];
 
@@ -41,7 +40,6 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
     private int finalTexture;
     private int verticalForwardDepthUniform;
     private int verticalForwardProfileUniform;
-    private int verticalForwardInverseRawCoordinateScaleUniform;
     private int verticalFinishEnvelopeUniform;
     private int horizontalForwardVerticalUniform;
     private int horizontalFinishVerticalUniform;
@@ -74,14 +72,13 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
 
         this.width = width;
         this.height = height;
-        inverseRawCoordinateScale = 1.0f / rawCoordinateScale;
         ownerContext = currentContext;
         try {
             initializePrograms();
             initializeStorage();
             initializeUniforms();
             LimeLog.info("Client SBS contractive disparity: R32F " + width + "x" + height
-                    + " rawScale=" + rawCoordinateScale
+                    + " rawScaleFloor=" + rawCoordinateScale
                     + ", vertical=0.75/0.25@2/W horizontal=majorant@0.5/W");
         } catch (RuntimeException error) {
             releaseGlResourcesUnchecked();
@@ -195,8 +192,6 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
                 verticalForwardProgram, "uDepthTexture");
         verticalForwardProfileUniform = requiredUniform(
                 verticalForwardProgram, "uProfileTexture");
-        verticalForwardInverseRawCoordinateScaleUniform = requiredUniform(
-                verticalForwardProgram, "uInverseRawCoordinateScale");
         verticalFinishEnvelopeUniform = requiredUniform(
                 verticalFinishProgram, "uEnvelopeScratch");
         horizontalForwardVerticalUniform = requiredUniform(
@@ -205,11 +200,10 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
                 horizontalFinishProgram, "uVerticalConditioned");
 
         // Programs are private to this immutable processor and are never relinked. Set fixed
-        // sampler units and model calibration once, without changing the caller's current program.
+        // sampler units once, without changing the caller's current program. The profile carries
+        // the current adaptive zero and inverse amplitude together with its readiness bit.
         GLES31.glProgramUniform1i(verticalForwardProgram, verticalForwardDepthUniform, 0);
         GLES31.glProgramUniform1i(verticalForwardProgram, verticalForwardProfileUniform, 1);
-        GLES31.glProgramUniform1f(verticalForwardProgram,
-                verticalForwardInverseRawCoordinateScaleUniform, inverseRawCoordinateScale);
         GLES31.glProgramUniform1i(verticalFinishProgram, verticalFinishEnvelopeUniform, 0);
         GLES31.glProgramUniform1i(horizontalForwardProgram, horizontalForwardVerticalUniform, 0);
         GLES31.glProgramUniform1i(horizontalFinishProgram, horizontalFinishVerticalUniform, 0);

@@ -977,6 +977,14 @@
     <string name="xr_glance_load">CPU %1$s · GPU %2$s</string>
     <string name="xr_glance_load_unavailable" translatable="false">n/a</string>
     <string name="xr_stats_host_sample">Host publication</string>
+    <string name="xr_stats_sampled_geometry">Sampled geometry</string>
+    <string name="xr_stats_adaptive_zero">Adaptive zero</string>
+    <string name="xr_stats_depth_amplitude">Depth amplitude</string>
+    <string name="xr_stats_raw_distribution">Raw distribution</string>
+    <string name="xr_stats_linear_mapping">Linear mapping</string>
+    <string name="xr_stats_host_depth">Host depth</string>
+    <string name="xr_stats_host_camera">Host camera state</string>
+    <string name="xr_stats_host_camera_unavailable">Zero / amplitude / source clock not reported by telemetry v2</string>
     <string name="xr_stats_host_sample_value">%1$d | received %2$.1f s ago</string>
     <string name="xr_stats_host_performance">Host performance</string>
     <string name="xr_stats_host_enable_diagnostics">Enable host diagnostics for performance</string>

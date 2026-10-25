@@ -11,6 +11,7 @@ import android.view.KeyEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -138,8 +139,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     private volatile boolean mClientSbsStatsVisible;
 
     private SurfaceView mSurfaceView;
-    /** The holder bridges input/layout while Client SBS owns the external SceneCore EGL output. */
-    private boolean mClientSbsWindowSurfaceEnabled;
+    /** Input geometry follows View attachment/layout; the Android holder never owns a producer. */
+    private boolean mClientSbsInputLayoutEnabled;
+    private boolean mInputLayoutAttached;
+    private boolean mClientSbsInputLayoutCreated;
+    private int mClientSbsInputLayoutWidth;
+    private int mClientSbsInputLayoutHeight;
     private Surface mCurrentSurface;
     private volatile Surface mClientSbsSurface;
     private volatile Surface mBoundDecoderSurface;
@@ -483,19 +488,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // The owner starts paused and does not acquire EGL until an explicit Client request.
             glSurfaceView.requestPause();
             mSurfaceView = glSurfaceView;
-            setClientSbsWindowSurfaceEnabled(false);
+            setClientSbsInputLayoutEnabled(false);
         }
         addView(mSurfaceView, childParams);
 
-        SurfaceHolder holder = mSurfaceView.getHolder();
-        holder.addCallback(this);
-        // If the surface is somehow already valid (no create callback will fire),
-        // drive the lifecycle manually in the correct order: created before changed.
-        Surface existingSurface = holder.getSurface();
-        if (existingSurface != null && existingSurface.isValid()) {
-            surfaceCreated(holder);
-            surfaceChanged(holder, PixelFormat.RGBA_8888, mSurfaceView.getWidth(), mSurfaceView.getHeight());
-        }
+        // SceneCore owns both direct decode and Client SBS EGL. The Android holder remains
+        // invisible and never registers a producer or drives streaming lifecycle callbacks.
         return true;
     }
 
@@ -599,9 +597,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             mCreatedEglAttachGeneration = 0;
             mRequestedEglAttachGeneration = eglOperationGeneration;
             mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
-            // Keep the input/layout holder visible while Client SBS is active. Its lifecycle is
-            // independent of EGL and never waits for the renderer or GPU.
-            setClientSbsWindowSurfaceEnabled(true);
+            // The measured input bridge stays invisible; View attachment/layout supply geometry
+            // independently of the external EGL owner and never wait for renderer/GPU work.
+            setClientSbsInputLayoutEnabled(true);
             glView.requestResume();
         } else {
             // This is an asynchronous owner request. Wait for this exact eglDestroySurface ack.
@@ -894,9 +892,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (success && !completedEnable) {
             mActiveClientSbsDecoderGeneration = 0;
             mClientSbsSurface = null;
-            // The exact EGL detach and direct decoder rebind have both completed. Hiding earlier
-            // could destroy the holder while the Client producer still owns the SceneCore surface.
-            setClientSbsWindowSurfaceEnabled(false);
+            // End only this input-geometry epoch after the exact EGL detach and decoder rebind.
+            // The unused Android holder remains invisible throughout every presentation mode.
+            setClientSbsInputLayoutEnabled(false);
         }
         // The GL detach/attach acknowledgement can arrive just before Activity teardown and be
         // queued on the main thread behind onDestroy(). Revalidate the generation at execution
@@ -1662,13 +1660,93 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         return mSurfaceView;
     }
 
-    void setClientSbsWindowSurfaceEnabled(boolean enabled) {
-        mClientSbsWindowSurfaceEnabled = enabled;
+    void setClientSbsInputLayoutEnabled(boolean enabled) {
+        mClientSbsInputLayoutEnabled = enabled;
         if (mSurfaceView != null) {
             // INVISIBLE preserves the input/layout bridge dimensions while SurfaceView removes
             // its unused compositor surface. GONE would also change measurement and input bounds.
-            mSurfaceView.setVisibility(enabled ? VISIBLE : INVISIBLE);
+            mSurfaceView.setVisibility(INVISIBLE);
         }
+        if (!enabled) {
+            mClientSbsInputLayoutCreated = false;
+            mClientSbsInputLayoutWidth = 0;
+            mClientSbsInputLayoutHeight = 0;
+        } else {
+            // init() precedes Game's PanZoomHandler construction. Defer replay even if a reused
+            // View is already measured, so Game.surfaceChanged() cannot observe partial startup.
+            post(this::publishClientSbsInputLayout);
+        }
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        mInputLayoutAttached = true;
+        post(this::publishClientSbsInputLayout);
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        // PanZoomHandler reads child bounds, which become current only after FrameLayout lays
+        // out its children. onSizeChanged() alone would still expose the previous child size.
+        publishClientSbsInputLayout();
+    }
+
+    private void publishClientSbsInputLayout() {
+        if (mDestroyed || !mInputLayoutAttached || !mClientSbsInputLayoutEnabled
+                || game == null || mSurfaceView == null || mSurfaceView.getParent() != this) {
+            return;
+        }
+        int width = mSurfaceView.getWidth();
+        int height = mSurfaceView.getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        SurfaceHolder holder = mSurfaceView.getHolder();
+        if (!mClientSbsInputLayoutCreated) {
+            game.surfaceCreated(holder);
+            mClientSbsInputLayoutCreated = true;
+        }
+        if (width != mClientSbsInputLayoutWidth || height != mClientSbsInputLayoutHeight) {
+            mClientSbsInputLayoutWidth = width;
+            mClientSbsInputLayoutHeight = height;
+            game.surfaceChanged(holder, PixelFormat.RGBA_8888, width, height);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        mInputLayoutAttached = false;
+        stopClientSbsAfterInputDetach();
+        super.onDetachedFromWindow();
+    }
+
+    @Override
+    public void onViewRemoved(View child) {
+        if (child == mSurfaceView) {
+            stopClientSbsAfterInputDetach();
+        }
+        super.onViewRemoved(child);
+    }
+
+    private void stopClientSbsAfterInputDetach() {
+        if (mDestroyed || !mClientSbsInputLayoutEnabled) {
+            return;
+        }
+        // Container and child detachment may both arrive. Retire the bridge before callbacks so
+        // only one stop is issued, and native streaming stops before decoder/EGL/XR cleanup.
+        mClientSbsInputLayoutEnabled = false;
+        boolean created = mClientSbsInputLayoutCreated;
+        mClientSbsInputLayoutCreated = false;
+        SurfaceHolder holder = mSurfaceView.getHolder();
+        if (!created) {
+            // SceneCore readiness may have started the connection before a positive View layout.
+            // Preserve Game's created-before-destroyed metadata contract even on this early loss.
+            game.surfaceCreated(holder);
+        }
+        game.surfaceDestroyed(holder);
+        game.runAfterConnectionStop(() -> destroyStereoRenderer());
     }
 
     private void notifySurfaceReady() {
@@ -1680,28 +1758,16 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        if (!mDestroyed && mClientSbsWindowSurfaceEnabled) {
-            game.surfaceCreated(holder);
-        }
+        // The unused Android holder has no presentation or lifecycle authority.
     }
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        // XR route: the video surface is delivered via onStereo3DSurfaceReady, not the holder.
-        if (!mDestroyed && mClientSbsWindowSurfaceEnabled) {
-            game.surfaceChanged(holder, format, width, height);
-        }
+        // Input bounds follow View layout; video is delivered through SceneCore.
     }
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        // Normal/Host presentation is owned by SceneCore, not this holder. Its deliberate removal
-        // after Client exit must not stop that stream or destroy a renderer needed for re-entry.
-        // Activity stop/destroy still stops the connection through Game's independent lifecycle.
-        if (mDestroyed || !mClientSbsWindowSurfaceEnabled) {
-            return;
-        }
-        // Stop native streaming before releasing any decoder/EGL/XR surface it may still use.
-        game.surfaceDestroyed(holder);
-        game.runAfterConnectionStop(() -> destroyStereoRenderer());
+        // Holder visibility is always intentional. Actual View detach and Activity lifecycle
+        // still stop streaming independently of this unused surface.
     }
 
     private boolean destroyStereoRenderer() {

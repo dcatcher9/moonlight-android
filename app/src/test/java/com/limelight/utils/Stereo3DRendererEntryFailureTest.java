@@ -62,6 +62,31 @@ public final class Stereo3DRendererEntryFailureTest {
         verifyEntryFailure("liveStreamResizeLock", true);
     }
 
+    @Test public void eglSwapEligibilityIsConsumedOnceAndAnEarlyReturnCannotReuseIt() {
+        TestGame game = Robolectric.buildActivity(TestGame.class).get();
+        PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(game);
+        prefs.width = 1920;
+        prefs.height = 1080;
+        Stereo3DRenderer renderer;
+        try (MockedStatic<ClientSbsModelAssetCache> cache = mockStatic(ClientSbsModelAssetCache.class)) {
+            renderer = new Stereo3DRenderer(mock(ClientSbsRenderSurface.class),
+                    mock(Stereo3DRenderer.OnSurfaceReadyListener.class), game, prefs, false);
+        }
+        try {
+            ReflectionHelpers.setField(renderer, "frameSubmittedForSwap", true);
+            assertTrue(renderer.consumeFrameForSwap());
+            assertFalse(renderer.consumeFrameForSwap());
+
+            // An old successful framebuffer must not authorize the unmodified back buffer from
+            // a callback which exits because its output surface has not been validated.
+            ReflectionHelpers.setField(renderer, "frameSubmittedForSwap", true);
+            renderer.onDrawFrame(null);
+            assertFalse(renderer.consumeFrameForSwap());
+        } finally {
+            ReflectionHelpers.callInstanceMethod(renderer, "shutdownFrameCallbackThread");
+        }
+    }
+
     private void verifyEntryFailure(String lockName, boolean ackFirst) throws Exception {
         TestGame game = Robolectric.buildActivity(TestGame.class).get();
         PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(game);

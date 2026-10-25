@@ -41,18 +41,20 @@ final class ClientSbsGpuDepthShaders {
             "    vec4 profileA;",        // stretch low/high/inverse, subject candidate
             "    vec4 profileB;",        // subject, recenter, anchor shift, settle-latched edge
             "    vec4 profileC;",        // change fraction, pop, pop ratio, cut evidence
-            "    uvec4 stateFlags;",     // range init, profile init, first/hold bits, relatch pulse
+            "    uvec4 stateFlags;",     // range init, profile init, first/hold bits, accepted-cut pulse
             "    ivec4 stateCounters;",  // profile age, cut/hysteresis state, valid samples, frame number
             "    uvec4 healthCounters;", // hard cuts, appearance proposals, empty, collapsed
             "    vec2 cutStateAux;",      // geometry-change EMA, initialized
             "    ivec2 cutStateCounters;", // source-frame age, low-structure scene marker
-            "    vec4 v2Camera;",         // shot mean, current mean, valid count, camera valid
+            "    vec4 v2Camera;",         // active zero, current mean, valid count, camera initialized
             // Append-only causal telemetry. Existing offsets through v2Camera remain unchanged.
             "    uvec4 cutReasonCounters;", // proposals, appearance, geometry, structureless
             "    uvec4 cutAppearanceStats;", // blocks, raw-moderate, raw-delta sum, structural
             "    uvec4 cutAppearanceMeta;", // event current/common support, detector/decision bits
             "    vec4 cutDepthDiagnostics;", // event change, range shift, cut score, baseline
             "    uvec4 cutEventMeta;", // latched-event sequence, reserved
+            "    vec4 adaptiveCamera;", // active inverse amplitude, target inverse, raw P05/P95
+            "    uvec4 cameraClock;", // source microseconds low/high, clock armed, current valid
             "};"
     );
 
@@ -178,6 +180,11 @@ final class ClientSbsGpuDepthShaders {
             "    uint rawValidCount;",
             "    uint rawPadding;",
             "    uint rawHistogram[256];",
+            "    uint geometryMinimum;",
+            "    uint geometryMaximum;",
+            "    uint geometryValidCount;",
+            "    uint geometryPadding;",
+            "    uint geometryHistogram[256];",
             "    uvec4 rawGroupMoments[];",
             "};"
     );
@@ -194,6 +201,11 @@ final class ClientSbsGpuDepthShaders {
             "    uint rawValidCount;",
             "    uint rawPadding;",
             "    uint rawHistogram[256];",
+            "    uint geometryMinimum;",
+            "    uint geometryMaximum;",
+            "    uint geometryValidCount;",
+            "    uint geometryPadding;",
+            "    uint geometryHistogram[256];",
             "    uvec4 rawGroupMoments[];",
             "};"
     );
@@ -283,11 +295,16 @@ final class ClientSbsGpuDepthShaders {
             "void main() {",
             "    uint index = gl_LocalInvocationID.x;",
             "    rawHistogram[index] = 0u;",
+            "    geometryHistogram[index] = 0u;",
             "    if (index == 0u) {",
             "        rawMinimum = 0xffffffffu;",
             "        rawMaximum = 0u;",
             "        rawValidCount = 0u;",
             "        rawPadding = 0u;",
+            "        geometryMinimum = 0xffffffffu;",
+            "        geometryMaximum = 0u;",
+            "        geometryValidCount = 0u;",
+            "        geometryPadding = 0u;",
             "    }",
             "}"
     );
@@ -301,6 +318,7 @@ final class ClientSbsGpuDepthShaders {
                 "shared uvec3 localRange[256];",
                 "shared float localMean[256];",
                 "shared float localM2[256];",
+                "shared uvec2 localGeometryRange[256];",
                 "void main() {",
                 "    uint lane = gl_LocalInvocationIndex;",
                 "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
@@ -326,6 +344,10 @@ final class ClientSbsGpuDepthShaders {
                 "            : uvec3(0xffffffffu, 0u, 0u);",
                 "    localMean[lane] = valid ? rawValue : 0.0;",
                 "    localM2[lane] = 0.0;",
+                // ZipDepth admits only finite nonnegative values, so float bits preserve order.
+                "    localGeometryRange[lane] = valid",
+                "            ? uvec2(floatBitsToUint(rawValue == 0.0 ? 0.0 : rawValue))",
+                "            : uvec2(0xffffffffu, 0u);",
                 "    barrier();",
                 "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
                 "        if (lane < stride) {",
@@ -349,6 +371,10 @@ final class ClientSbsGpuDepthShaders {
                 "            localRange[lane].x = min(localRange[lane].x, right.x);",
                 "            localRange[lane].y = max(localRange[lane].y, right.y);",
                 "            localRange[lane].z += right.z;",
+                "            localGeometryRange[lane].x = min(localGeometryRange[lane].x,",
+                "                    localGeometryRange[lane + stride].x);",
+                "            localGeometryRange[lane].y = max(localGeometryRange[lane].y,",
+                "                    localGeometryRange[lane + stride].y);",
                 "        }",
                 "        barrier();",
                 "    }",
@@ -361,6 +387,8 @@ final class ClientSbsGpuDepthShaders {
                 "            atomicMin(rawMinimum, localRange[0].x);",
                 "            atomicMax(rawMaximum, localRange[0].y);",
                 "            atomicAdd(rawValidCount, localRange[0].z);",
+                "            atomicMin(geometryMinimum, localGeometryRange[0].x);",
+                "            atomicMax(geometryMaximum, localGeometryRange[0].y);",
                 "        }",
                 "    }",
                 "}"
@@ -373,13 +401,18 @@ final class ClientSbsGpuDepthShaders {
         return HEADER + rawInput(removeReflectedPadding) + RAW_STATS + lines(
                 "layout(local_size_x = 16, local_size_y = 16) in;",
                 "shared uint localHistogram[256];",
+                "shared uint localGeometryHistogram[256];",
                 "void main() {",
                 "    uint lane = gl_LocalInvocationIndex;",
                 "    localHistogram[lane] = 0u;",
+                "    localGeometryHistogram[lane] = 0u;",
                 "    barrier();",
                 "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
-                "    uint value = 0u;",
-                "    bool valid = all(lessThan(point, uOutputSize)) && rawFixed(point, value);",
+                "    float rawValue = 0.0;",
+                "    bool valid = all(lessThan(point, uOutputSize))",
+                "            && sourceAlignedRaw(point, rawValue);",
+                "    uint value = valid",
+                "            ? uint(clamp(rawValue, 0.0, 65535.0) * 65536.0 + 0.5) : 0u;",
                 "    if (valid) {",
                 "        uint rangeValue = rawMaximum - rawMinimum;",
                 "        uint bin = rangeValue == 0u ? 0u : min(uint(",
@@ -387,11 +420,23 @@ final class ClientSbsGpuDepthShaders {
                 // Histogram atomics stay in fast workgroup memory; only occupied bins are merged
                 // into the global scratch block once per workgroup below.
                 "        atomicAdd(localHistogram[bin], 1u);",
+                "        float minimumValue = uintBitsToFloat(geometryMinimum);",
+                "        float maximumValue = uintBitsToFloat(geometryMaximum);",
+                "        float rangeValueFloat = maximumValue - minimumValue;",
+                "        uint geometryBin = rangeValueFloat <= 0.0 ? 0u : min(uint(",
+                "                clamp((rawValue - minimumValue) / rangeValueFloat, 0.0, 1.0)",
+                "                        * 256.0), 255u);",
+                "        atomicAdd(localGeometryHistogram[geometryBin], 1u);",
                 "    }",
                 // Every lane must finish contributing before the lane owning each bin publishes it.
                 "    barrier();",
                 "    uint binCount = localHistogram[lane];",
                 "    if (binCount != 0u) atomicAdd(rawHistogram[lane], binCount);",
+                "    uint geometryBinCount = localGeometryHistogram[lane];",
+                "    if (geometryBinCount != 0u) {",
+                "        atomicAdd(geometryHistogram[lane], geometryBinCount);",
+                "        atomicAdd(geometryValidCount, geometryBinCount);",
+                "    }",
                 "}"
         );
     }
@@ -419,11 +464,24 @@ final class ClientSbsGpuDepthShaders {
             "    }",
             "    return minimumValue + (255.0 + edge) * binWidth;",
             "}",
+            "float geometryPercentile(float percentile, float minimumValue, float binWidth,",
+            "        float edge) {",
+            "    float target = percentile * float(geometryValidCount);",
+            "    uint cumulative = 0u;",
+            "    for (uint bin = 0u; bin < 256u; ++bin) {",
+            "        cumulative += geometryHistogram[bin];",
+            "        if (float(cumulative) >= target)",
+            "            return minimumValue + (float(bin) + edge) * binWidth;",
+            "    }",
+            "    return 0.0;",
+            "}",
             "void main() {",
             // These are preliminary current-result bits. The post-temporal resolver replaces them
             // with the authoritative reliable-history decision.
             "    stateFlags.z = 0u;",
             "    stateFlags.w = 0u;",
+            "    adaptiveCamera.zw = vec2(0.0);",
+            "    geometryPadding = 0u;",
             "    stateCounters.z = int(rawValidCount);",
             "    float currentRawMean = 0.0;",
             "    float currentRawM2 = 0.0;",
@@ -463,6 +521,35 @@ final class ClientSbsGpuDepthShaders {
             "    }",
             "    v2Camera.y = currentRawMean;",
             "    bool v2FrameValid = currentRawStd > V2_COLLAPSE_ABS_EPSILON;",
+            // Geometry keeps the unquantized float range. The private cut histogram below retains
+            // its existing 16.16 range and P02/P98 authority.
+            "    float geometryLow = uintBitsToFloat(geometryMinimum);",
+            "    float geometryHigh = uintBitsToFloat(geometryMaximum);",
+            "    float geometryRange = geometryHigh - geometryLow;",
+            "    uint geometryPopulation = 0u;",
+            "    for (uint bin = 0u; bin < 256u; ++bin)",
+            "        geometryPopulation += geometryHistogram[bin];",
+            "    bool quantilesValid = geometryValidCount == rawValidCount",
+            "            && geometryPopulation == geometryValidCount",
+            "            && !isnan(geometryRange) && !isinf(geometryRange)",
+            "            && geometryRange > 0.0;",
+            "    if (quantilesValid) {",
+            "        float binWidth = geometryRange / 256.0;",
+            "        float p05 = geometryPercentile(0.05, geometryLow, binWidth, 0.0);",
+            "        float p95 = geometryPercentile(0.95, geometryLow, binWidth, 1.0);",
+            "        quantilesValid = !isnan(p05) && !isinf(p05)",
+            "                && !isnan(p95) && !isinf(p95)",
+            "                && p05 <= p95;",
+            "        if (quantilesValid) {",
+            // Crossing-bin edges are mathematically inside the raw range. Bound the final
+            // floating-point reconstruction so last-bin rounding cannot reject a valid field.
+            "            p05 = clamp(p05, geometryLow, geometryHigh);",
+            "            p95 = clamp(p95, geometryLow, geometryHigh);",
+            "            adaptiveCamera.zw = vec2(p05, p95);",
+            "            geometryPadding = 1u;",
+            "        }",
+            "    }",
+            "    v2FrameValid = v2FrameValid && quantilesValid;",
             "    float minimumValue = float(rawMinimum) / 65536.0;",
             "    float maximumValue = float(rawMaximum) / 65536.0;",
             "    float rawRange = maximumValue - minimumValue;",
@@ -509,6 +596,8 @@ final class ClientSbsGpuDepthShaders {
             "layout(local_size_x = 1) in;",
             "uniform int uSourceFrameDelta;",
             "uniform int uReferenceFrameAdvance;",
+            "uniform uvec2 uSourceTimestampUs;",
+            "uniform float uRawCoordinateScale;",
             "layout(rgba32f, binding = 1) uniform writeonly highp image2D uProfileTexture;",
             "const uint CUT_DECISION_CURRENT_APPEARANCE_PROPOSAL = "
                     + ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_APPEARANCE_PROPOSAL + "u;",
@@ -601,13 +690,74 @@ final class ClientSbsGpuDepthShaders {
             "    cutDepthDiagnostics = depthDiagnostics;",
             "    cutEventMeta.x = min(cutEventMeta.x + 1u, 0xfffffffeu);",
             "}",
+            "void observeAdaptiveCamera(bool rawUsable) {",
+            "    cameraClock.w = 0u;",
+            "    adaptiveCamera.y = 0.0;",
+            "    uvec2 now = uSourceTimestampUs;",
+            "    uvec2 previous = cameraClock.xy;",
+            "    bool after = now.y > previous.y",
+            "            || (now.y == previous.y && now.x > previous.x);",
+            "    if (all(equal(now, uvec2(0u)))",
+            "            || (any(notEqual(previous, uvec2(0u))) && !after)) {",
+            "        cameraClock.z = 0u;",
+            "        return;",
+            "    }",
+            "    uvec2 elapsed = uvec2(now.x - previous.x,",
+            "            now.y - previous.y - (now.x < previous.x ? 1u : 0u));",
+            "    bool initialized = v2Camera.w > 0.5;",
+            "    bool canMove = initialized && cameraClock.z == 1u && elapsed.y == 0u",
+            "            && elapsed.x <= "
+                    + ClientSbsV2CoordinateContract.ADAPTIVE_MAX_TICK_GAP_US + "u;",
+            "    cameraClock.xy = now;",
+            "    float halfSpan = 0.5 * (adaptiveCamera.w - adaptiveCamera.z);",
+            "    float amplitude = max(halfSpan, uRawCoordinateScale);",
+            "    float targetInverse = 1.0 / amplitude;",
+            "    bool usable = rawUsable && geometryPadding == 1u",
+            "            && !isnan(uRawCoordinateScale) && !isinf(uRawCoordinateScale)",
+            "            && uRawCoordinateScale > 0.0 && !isnan(halfSpan) && !isinf(halfSpan)",
+            "            && halfSpan >= 0.0 && !isnan(targetInverse) && !isinf(targetInverse)",
+            "            && targetInverse > 0.0;",
+            "    if (!usable) {",
+            "        cameraClock.z = 0u;",
+            "        return;",
+            "    }",
+            "    adaptiveCamera.y = targetInverse;",
+            "    if (!initialized) {",
+            "        v2Camera.x = v2Camera.y;",
+            "        adaptiveCamera.x = targetInverse;",
+            "        v2Camera.w = 1.0;",
+            "    } else if (canMove) {",
+            "        float seconds = float(elapsed.x) * 0.000001;",
+            "        float alpha = 1.0 - exp(-seconds / "
+                    + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsV2CoordinateContract.ADAPTIVE_TIME_CONSTANT_SECONDS) + ");",
+            "        float logDelta = alpha * (log(targetInverse) - log(adaptiveCamera.x));",
+            "        float logBound = " + ClientSbsShotCutPolicy.glsl(
+                    ClientSbsV2CoordinateContract.ADAPTIVE_LOG_SCALE_RATE) + " * seconds;",
+            "        float nextInverse = adaptiveCamera.x",
+            "                * exp(clamp(logDelta, -logBound, logBound));",
+            "        float zeroBound = seconds / nextInverse;",
+            "        float zeroDelta = alpha * v2Camera.y - alpha * v2Camera.x;",
+            "        float nextZero = v2Camera.x + clamp(zeroDelta, -zeroBound, zeroBound);",
+            "        if (isnan(nextInverse) || isinf(nextInverse) || nextInverse <= 0.0",
+            "                || isnan(zeroBound) || isinf(zeroBound)",
+            "                || isnan(nextZero) || isinf(nextZero)) {",
+            "            cameraClock.z = 0u;",
+            "            adaptiveCamera.y = 0.0;",
+            "            return;",
+            "        }",
+            "        adaptiveCamera.x = nextInverse;",
+            "        v2Camera.x = nextZero;",
+            "    }",
+            "    cameraClock.zw = uvec2(1u);",
+            "}",
             "void publishProfile() {",
             "    uint required = FRAME_STATE_CURRENT_DEPTH_VALID",
             "            | FRAME_STATE_CURRENT_V2_VALID;",
-            "    bool ready = stateFlags.y != 0u && v2Camera.w > 0.5",
+            "    bool ready = stateFlags.y != 0u && v2Camera.w > 0.5 && cameraClock.w == 1u",
             "            && (stateFlags.z & required) == required;",
             "    imageStore(uProfileTexture, ivec2(0, 0),",
-            "            vec4(v2Camera.x, v2Camera.y, 0.0, ready ? 1.0 : 0.0));",
+            "            vec4(v2Camera.x, v2Camera.y, adaptiveCamera.x, ready ? 1.0 : 0.0));",
             "    imageStore(uProfileTexture, ivec2(1, 0), rangeState);",
             "    imageStore(uProfileTexture, ivec2(2, 0),",
             "            vec4(profileC.x, profileC.w, cutStateAux.x,",
@@ -620,9 +770,8 @@ final class ClientSbsGpuDepthShaders {
             "void main() {",
             "    uint preliminaryFrameState = stateFlags.z;",
             "    stateFlags.z = 0u;",
-            // A shot-relatch bit describes this accepted depth frame only. Raw color evidence
-            // cannot move the zero plane or pop latch until this pass sees moderate depth/geometry
-            // corroboration while the shot detector is armed.
+            // This accepted-cut pulse belongs only to current history/ownership metadata.
+            // Camera adaptation observes every usable real inference independently of that pulse.
             "    stateFlags.w = 0u;",
             "    bool sceneEvidenceAvailable = uSceneEvidenceAvailable != 0;",
             "    uint currentSceneEvidence = externalSceneEvidence();",
@@ -655,6 +804,11 @@ final class ClientSbsGpuDepthShaders {
             "            | (supportedReturn ? CUT_DECISION_SUPPORTED_RETURN : 0u);",
             "    bool rawFieldComplete = (preliminaryFrameState",
             "            & FRAME_STATE_CURRENT_DEPTH_VALID) != 0u;",
+            // Camera observations belong to real inference source time, independently of every
+            // cut/reliable-history decision below. Invalid depth disarms without clearing a camera.
+            "    bool rawGeometryUsable = rawFieldComplete && (preliminaryFrameState",
+            "            & FRAME_STATE_CURRENT_V2_VALID) != 0u;",
+            "    observeAdaptiveCamera(rawGeometryUsable);",
             "    if (!rawFieldComplete) {",
             // Diagnostics may retain the event for the asynchronous HUD, but it has no authority
             // over a later valid field.
@@ -665,7 +819,6 @@ final class ClientSbsGpuDepthShaders {
             "        publishProfile();",
             "        return;",
             "    }",
-            "    float currentRawMean = v2Camera.y;",
             "    bool v2FrameValid = (preliminaryFrameState",
             "            & FRAME_STATE_CURRENT_V2_VALID) != 0u;",
             "    bool firstFrame = (preliminaryFrameState",
@@ -714,11 +867,11 @@ final class ClientSbsGpuDepthShaders {
             "            && (changeFraction >= STANDALONE_DEPTH_CHANGE_ENTER",
             "            || (changeFraction >= STANDALONE_DEPTH_CHANGE_WITH_SHIFT_ENTER",
             "            && distributionShift >= STANDALONE_DISTRIBUTION_SHIFT_ENTER));",
-            // Appearance is a high-recall qualified structural proposal, not authority to relatch
-            // shot geometry. The proposal is qualified on the model-input color grid before it
+            // Appearance is a high-recall qualified structural proposal, not independent authority
+            // to advance cut ownership. It is qualified on the model-input color grid before it
             // reaches this shader.
             // A weaker depth threshold than the standalone detector preserves similar-depth cuts,
-            // while brightness-only transitions cannot move the zero plane.
+            // while brightness-only transitions cannot independently advance cut ownership.
             "    bool colorGeometryCorroborated = changeFraction >= APPEARANCE_DEPTH_CHANGE_ENTER",
             "            || (changeFraction >= APPEARANCE_DEPTH_CHANGE_WITH_SHIFT_ENTER",
             "            && distributionShift >= APPEARANCE_DISTRIBUTION_SHIFT_ENTER);",
@@ -758,7 +911,7 @@ final class ClientSbsGpuDepthShaders {
             "            && distributionShift >= STANDALONE_DISTRIBUTION_SHIFT_ENTER);",
             // Prefer Apollo's independent ordinal corroboration whenever the scene detector exists.
             // If that optional detector fails, retain a bounded two-observation depth-only route so
-            // camera relatching cannot remain pinned forever.
+            // cut history cannot remain pinned forever.
             "    bool ordinalStructureCorroborated = persistentLowStart",
             "            || referenceStructureless",
             "            || structuralChangeFraction >= STRUCTURAL_GEOMETRY_CUT_FLOOR;",
@@ -828,21 +981,7 @@ final class ClientSbsGpuDepthShaders {
             "                cutDecisionFlags, vec4(changeFraction, distributionShift,",
             "                        internalCutEvidence, cutStateAux.x));",
             "    }",
-            // Apollo retains an existing camera across a no-cut collapsed field, clears it when a
-            // cut lands on a collapsed field, and acquires the next usable field. Track camera
-            // validity independently from normalized cut-history initialization so startup and
-            // post-cut recovery do not remain pinned to a meaningless constant output.
-            "    bool cameraInitialized = v2Camera.w > 0.5;",
-            "    if (acceptedCut && !v2FrameValid) {",
-            "        v2Camera.x = 0.0;",
-            "        v2Camera.w = 0.0;",
-            // Camera availability is independent from reliable comparison-history ownership.
-            // Apollo allows the first usable field after a collapsed accepted cut to recover the
-            // camera even when that field is otherwise held for exposure/geometry confirmation.
-            "    } else if (v2FrameValid && (!cameraInitialized || acceptedCut)) {",
-            "        v2Camera.x = currentRawMean;",
-            "        v2Camera.w = 1.0;",
-            "    }",
+            // Accepted cuts affect only history/ownership; they never relatch the adaptive camera.
             // Apollo freezes only the cut baseline for state 2, the recovery tail, and the first
             // confirmation observation. Range and immediate temporal depth remain current.
             "    if (cutStateAux.y <= 0.5 || acceptedCut) {",
@@ -861,7 +1000,8 @@ final class ClientSbsGpuDepthShaders {
             "            | (structurelessGapHold ? FRAME_STATE_STRUCTURELESS_GAP : 0u)",
             "            | (historyAdvances ? FRAME_STATE_HISTORY_ADVANCES : 0u)",
             "            | FRAME_STATE_CURRENT_DEPTH_VALID",
-            "            | (v2FrameValid ? FRAME_STATE_CURRENT_V2_VALID : 0u);",
+            "            | (v2FrameValid && cameraClock.w == 1u",
+            "                    ? FRAME_STATE_CURRENT_V2_VALID : 0u);",
             "    stateFlags.w = acceptedCut ? 1u : 0u;",
             "    cutStateCounters.x = acceptedCut ? 0 : sourceFrameAge;",
             "    cutStateCounters.y = supportedReturn ? 0",
@@ -1051,6 +1191,8 @@ final class ClientSbsGpuDepthShaders {
             "    cutAppearanceMeta = uvec4(0u);",
             "    cutDepthDiagnostics = vec4(0.0);",
             "    cutEventMeta = uvec4(0u);",
+            "    adaptiveCamera = vec4(0.0);",
+            "    cameraClock = uvec4(0u);",
             "    imageStore(uProfileTexture, ivec2(0, 0), vec4(0.0));",
             "    imageStore(uProfileTexture, ivec2(1, 0), vec4(0.0));",
             "    imageStore(uProfileTexture, ivec2(2, 0), vec4(0.0));",

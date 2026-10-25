@@ -41,6 +41,312 @@ new real-owner replacement, reset invalidation and authenticated decision tokens
 slot/fence/fallback path. Build and device qualification for this latest cleanup must be recorded
 separately; the historical test totals and timings below are not results for the new implementation.
 
+## Adaptive geometry migration, 2026-10-23
+
+Client AI now uses the current Host AI mean-zero/robust-amplitude controller and linear signed
+displacement, followed by the shared Host/Game slope and unique-inverse design. Per-graph
+ZipDepth calibration remains the amplitude floor. The current policy and remaining model,
+sampling and UI-source differences are owned by [Android XR SBS](android-xr-sbs.md#adaptive-client-sbs-depth-coordinate-v2)
+and the [three-path audit](client-host-sbs-parity.md).
+
+The final review gate passed on JDK 25 with no skips: all 1,191 JVM tests across 144 suites,
+both debug ABI APKs, and the instrumentation APK. Building the instrumentation APK does not run
+instrumentation or install anything on the headset.
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-25.0.3.9-hotspot'
+.\gradlew.bat :app:testNonRoot_gameDebugUnitTest :app:assembleNonRoot_gameDebug :app:assembleNonRoot_gameDebugAndroidTest --console=plain
+```
+
+Local evidence is under `app/build/client-sbs-adaptive-validation/`, including
+`full-review-final-gradle.log`, the exact Java shader exporter, exported `.comp` sources and hashes,
+the local `validate_adaptive.py` harness, and `results-opengl.json` / `results-vulkan.json`.
+The harness used the installed VS Code ANGLE libraries to create an offscreen GLES 3.1 context
+on the RTX 5080. All 14 exported production compute variants compiled and linked; all 21 cases
+passed on each of its OpenGL and Vulkan backends. Both reports bind the same ordered shader
+closure SHA-256 `d1893fc1233257e8a19a4a25769581713b9a94d8be9076f7b6c8dd442bee372d`
+and record source and compiled-class hashes.
+
+The GPU cases execute the real six-dispatch depth chain and the four disparity passes. They
+cover immediate initialization, graph amplitude floors, independent P05/P95 geometry statistics,
+source-time damping/rate limits, the 250 ms boundary, invalid/repeated/regressed clocks,
+64-bit clock rollover, NaN/infinite/negative/collapsed depth and recovery, signed zero,
+sparse outliers, cuts retaining the camera, linear displacement and hard bounds, unavailable
+profiles producing flat output, complete histogram populations at all three production model
+sizes, and reflected-padding exclusion with partial workgroups and invalid-interior recovery.
+Updated device fixtures publish the new inverse-amplitude profile field and use
+deterministic source observations; ready checker inputs must produce stereo so flat fallback
+cannot silently pass their comparison.
+
+This is PC shader correctness evidence. It does not execute LiteRT, MediaCodec or SceneCore and
+does not establish Adreno behavior, sustained throughput, comfort or thermal improvement. Before
+claiming headset acceptance, update-install the built APKs using the data-preserving procedure
+below, run the depth/disparity and inverse-render instrumentation gates manually, then inspect
+moving foreground, scene cuts, static reuse and long-gap recovery during a sustained stream.
+No device installation or instrumentation was run for the evidence above.
+
+### Model calibration and Stats review
+
+The October 23 follow-up reproduced all three historical graph scales and audited 192 saved
+paired predictions from eight clips. `tools/calibrate-zipdepth-v2-scale.py --mode adaptive-audit`
+now reports native-grid raw statistics, robust amplitude targets, floor activation and collapse
+margins without fitting replacement constants or inventing observation clocks. Its ten focused
+tests passed using `E:\ApolloDev\modelopt-py312\Scripts\python.exe` (Python 3.12.14,
+NumPy 2.5.1). Host percentiles are measured before any area resize used for coordinate comparison.
+
+| Client graph | Observations | Amplitude floor active | Minimum raw standard deviation / current collapse epsilon |
+|---|---:|---:|---:|
+| `672 x 384` | 96 | 4 | 32,282 |
+| `896 x 384` | 48 | 8 | 29,893 |
+| `928 x 384` | 48 | 0 | 48,323 |
+
+Thus the inherited floor controls only 12/192 instantaneous targets in this corpus. The ultrawide
+corpus does not identify a smaller floor at all: every observation already uses its measured
+robust half-span. These results do not prove that the current floors are optimal, and none of
+the clips is a near-collapse/noise control. No amplitude prior, collapse epsilon, cut threshold,
+display bound or controller time constant was changed from this audit.
+
+The client predictions came from source PyTorch FP32 CPU with the old 3x3-footprint/RGBA8 input
+preprocessing. Their metadata is in
+`build/client-sbs-model-eval/results/zipdepth-official384/quality.json`. The saved host derivative
+metadata identifies the September native fused model run, but its original authenticated capture
+directory is no longer present. Current exact-area LiteRT/decoded inputs, HDR, inference/reuse
+clocks and labelled cut/exposure sequences are absent. A fresh matched-input run on every client
+graph is therefore required before claiming adaptive recalibration, temporal acceptance, or
+model/grid-specific collapse or cut retuning. Shared display-space and time-domain policies are
+not raw-model-unit calibration parameters.
+
+Reports are under `app/build/client-sbs-adaptive-validation/calibration-review/`:
+`adaptive-raw-observation-audit.json` and `historical-scale-reproduction.json`. The audit records
+the interpreter, production-owner files, supplied metadata and all 384 paired file hashes;
+its ordered prediction manifest SHA-256 is
+`acdd3c5524ffa2de6d27e89d439b01160f3b47ab320ad9dc7a37b2a65def3ddb`.
+
+The code review covered the raw statistics/controller, split source clock, reset/cut/reuse
+ownership, append-only GPU state, cached inverse and sampled Stats. It corrected the obsolete
+calibration-tool/manifest claims, the documented health-state size, Host's misleading fixed-pop
+and current-geometry labels, and a Client Stats target which could remain visible for a rejected
+observation. Applied zero/inverse remain visible as held values; rejected targets and percentiles
+are unavailable. Host telemetry v2 cannot supply the new camera numbers or identify its geometry
+policy, so the pane explicitly reports that limitation rather than interpreting legacy fields.
+
+## Physical Galaxy XR GPU gate, 2026-10-24
+
+The current arm64 client passed 20 GPU instrumentation tests on the SM-I610 through ten manually
+selected invocations, with zero failures or ignored tests. The main APK already matched the
+installed SHA-256 `89acdb0609d7c392a278d112409df6a08e8b0d99953950ef5e1f16be799463ab`,
+so it did not need another install. Only the test APK was update-installed and removed.
+
+| Coverage | Passing tests |
+|---|---:|
+| Production ZipDepth graphs, all three aspect sizes | 3 |
+| Native Near reuse, slot/fence ownership and lazy-packing fallback | 1 |
+| Adaptive depth, cut/history ownership, validity and diagnostic recovery | 7 |
+| Disparity conditioning, scratch equivalence and production shapes | 2 |
+| Exact inverse seed, refinement and packed offscreen composition | 1 |
+| Scene-cut decisions and long-lived Near ownership | 2 |
+| Reliable-history parity and missing-detector fallback | 2 |
+| Source ordinals, partial tiles and exposure before area resize | 2 |
+
+All three graphs reported 163/163 delegated nodes in one OpenCL partition, Float32 GL buffers,
+FP16 compute and CL/GL interoperability. The packed inverse/refinement check produced the
+expected left/right center samples. The logs contained no unexpected Client GPU shader,
+context, fence, native-slot, teardown or crash errors. Two Near warnings came from deliberate
+malformed-record/authentication cases and their required real-inference fallback. The diagnostic
+copy test intentionally injected a GL error, consumed it and verified recovery. Unrelated system
+and other-package errors in the full device log were not attributed to the client.
+
+Log inspection found a test-only diagnostic bug: the raw-mean test logged reused health views
+after reset, printing zeroed values even though the earlier assertions had passed. The test now
+copies its observed scalars before reset. Its additional on-device recheck passed and logged
+`zero first=1.046500 adapted=1.052007 currentMean=1.056500 invalidReady=false`. This changed no
+production geometry.
+
+The main app was stopped consistently for before/after private-data snapshots. All 11 settings,
+database, certificate/key and identity files retained identical hashes, including host pairings
+and current-session/view preferences. The sole difference among the 12 persistent files was
+`files/profileInstalled`: the 24-byte AndroidX `ProfileVerifier.Cache` marker, independently
+identified from the installed dependency. The raw runner therefore correctly records
+`persistent_data_unchanged=false`; `review.json` classifies that runtime metadata and confirms
+settings/pairings unchanged. No preference, database or credential restoration was needed.
+Temporary recovery archives containing credentials were deleted after verification. The main
+package was never uninstalled or cleared; only `.test` was removed, and the launcher was reopened.
+
+Evidence is under `app/build/client-sbs-headset-gpu-2026-10-24/`: individual instrumentation
+outputs, `device-logcat.txt`, the corrected diagnostic recheck, before/after/final hash manifests,
+`summary.json`, and the classified `review.json`. The manual selectors below now name the current
+methods and omit external-model diagnostics. This passes the physical Adreno/CL-GL correctness
+gate; it does not qualify sustained MediaCodec-to-SceneCore streaming, temporal model calibration,
+visual comfort or thermal performance.
+
+## Interrupted Client AI 3D streaming capture, 2026-10-24
+
+The requested 15-minute streaming test was interrupted when the headset reported `xr_doff` and slept at
+18:03:23.201 device local time. The user chose to report the interrupted capture rather than
+restart it. There were 659.6 seconds (10 minutes 59.6 seconds) of active observation, followed by
+157.7 seconds of asleep/stopped-stream collection. Idle GPU readings and cooling are excluded
+from active statistics. This is partial live evidence, not a completed 15-minute qualification.
+
+The unchanged session was Client AI 3D, 1920 x 1080 at 30 FPS, HDR/full-range HEVC Main 10,
+Qualcomm `c2.qti.hevc.decoder`, lowest-latency/latest-frame pacing and the
+`zipdepth-base-static-672x384` complete OpenCL FP16 graph. Two accessible Stats snapshots,
+about 171 and 453 seconds into the capture, each showed sender/receive, decoder
+output/release/surface and SBS output at 30 FPS, with 0.00% sampled network loss. Their
+latch/infer/reuse/output rates were respectively `30 / 0 / 30 / 30` and
+`30 / 15.5 / 14.5 / 30`. These are mixed reuse/inference windows, not continuous worst-case
+inference load. The second window reported LiteRT call-wall average/maximum 16.63/20.04 ms
+and depth age 22.24/26.43 ms. Both showed valid, ready geometry and zero exceptional fault
+counters. A zero-inference window and rounded `0.00 ms` GPU timer do not mean inference or
+depth processing is free.
+
+The `ClientSbsEgl` producer averaged about 29.8 swap returns per second, but its timing was
+uneven: median interval about 33.0 ms, P95 56.8 ms, P99 64.8 ms and maximum 295.2 ms.
+The pre-sleep result excludes 17 teardown returns: 2,185/19,662 intervals (11.1%) exceeded
+50 ms, including 30 over 100 ms. Twenty-nine of those long gaps clustered around 113–122
+seconds and one occurred near 459 seconds; their cause is not established. This is producer-call
+cadence, including reused depth, rather than real-inference FPS or measured eye-buffer
+presentation. The compositor marker ran at 72 Hz. The sparse app FrameTimeline layers do
+not identify the SceneCore video surface, so no headset video dropped-frame percentage is
+derived from them.
+
+Across 641 active GPU samples, whole-device busy averaged 59.5%, ranged from 45% to 77%,
+and P95 was 69%; sampled clocks ranged from 421 to 788 MHz. All 22 active health probes
+observed the same app PID, an awake/resumed Game and Android thermal status Severe (3).
+The headset was already Severe at the beginning. Current HAL readings, cached readings and
+vendor AP/skin policy sensors must remain distinct; these do not establish physical contact
+temperature. Current HAL GPU0 ranged from 72.0 to 84.9 °C; the AP/skin policy value ranged
+from 70.8 to 76.9 °C. There is no cold baseline, matched Normal/Host comparison or per-app GPU
+execution trace, so these results establish neither thermal improvement nor the cause of
+clock changes.
+
+The app PID had no error/fatal entries, crash, shader, context or fence failure in this log
+window. The log was not clean: it contained 275 non-JNI-local-reference warnings and six
+`CPM.Node.close` warnings in the app, plus many SystemUI XR swapchain call-order errors and
+compositor empty-buffer errors. Their source and effect remain unresolved. An out-of-order
+audio observation disabled fast FEC recovery near 611 seconds; it does not itself prove an
+underrun or backlog. The speculative RFI mode message
+near 145 seconds only re-enables the transport policy; no actual speculative or unrecoverable
+RFI request was observed. Sampled zero loss does not prove a loss-free whole run.
+
+The saved trace spans 816.7 seconds and retains scheduler coverage across the active period.
+Its parser reports 26 negative-timestamp drops of unidentified cause. All 28 ftrace-setup
+notices identify unknown vendor tracepoints; decoded setup statistics have no failed-enable,
+atrace or raw-ftrace-parse error. Preserve the timestamp caveat rather than calling the
+capture lossless. There is no complete start/middle/end Stats
+set or final awake window, and visual quality/comfort were not measured. Longer moving-content
+inspection and a complete sustained run remain open.
+
+The independent trace review also retains six skipped compact scheduler-switch records,
+17 skipped compact waking records and one FrameTimeline parser error. No nonzero buffer
+overwrite/discard or ftrace overrun counter was reported, and all 161 requested flushes succeeded.
+
+All 12 persistent-file fingerprints matched the pre-capture baseline exactly, including
+preferences, pairing database, certificates and identity files. No settings, pairing, package
+or app-data reset was performed. Capture processes were stopped; the local trace hash was
+verified against the device before removing only the temporary capture files.
+
+Evidence is under `app/build/client-sbs-stream-15m-2026-10-24/`, including `REPORT.md`,
+`capture-summary.json`, `resource-analysis.json`, raw GPU/thermal/log data, Stats snapshots,
+the trace and reproducible SQL. The directory name records the requested duration, not a pass.
+
+## Client pacing and XR layout follow-up, 2026-10-24
+
+The interrupted trace's decoder output queues already have 32 intervals over 100 ms, with
+P95/P99 spacing 41.13/48.05 ms, compared with 56.83/64.83 ms at the SBS producer. The worst
+295 ms swap-return gap includes three decoder queues and acquisitions; the EGL owner spends
+about 289.5 ms sleeping and only 4.4 ms running. It is not a 295 ms swap or demonstrated
+`updateTexImage`/CPU-priority stall. The old trace lacks inference and authenticated-retention
+markers, so it cannot distinguish all native waits from intentional source-repeat retention.
+An unchanged retained picture must not be counted as a dropped changed frame.
+
+The client follow-up fixes unconditional EGL swaps after renderer callbacks that did not
+populate a back buffer, and holds ordinary no-adoption wakes without redrawing the previous
+pair. New results, flat fallback, stale-depth deadlines and pending two-draw presentation
+proofs retain their existing behavior. The renderer's one-shot submission authorization is
+consumed by the EGL owner; context-loss recovery and post-swap capture remain guarded by the
+same generation/attachment contract.
+
+The input/layout SurfaceView now remains INVISIBLE in Client mode too. It has no producer;
+the old capture's CPM messages identify this empty Game BLAST layer separately from the
+SceneCore video surface. Attached, positive View bounds now provide deferred created-before-
+changed input metadata, with unchanged sizes suppressed. Unexpected active child/container
+detachment still stops native streaming before renderer cleanup; acknowledged mode exit does
+not stop the stream. Stats/settings positioning also skips identical cached PARENT poses.
+
+Static system-trace sections `ClientSbs.native`, `ClientSbs.adopt`, `ClientSbs.compose` and
+`ClientSbs.sourceRepeat` distinguish native call-wall work, result-adoption attempts/composition calls
+and accepted retained-source events in future captures. They enable no background performance
+logging, inference timer, quality change or tensor readback. They measure CPU call regions,
+not pure GPU execution time.
+
+The warning investigation audited current app-owned JNI reference cleanup and the resolved
+SceneCore/Impress 1.0.0 artifacts. Both Impress 1.0.0 and the available 1.1.0-alpha01 retain
+the incoming-transform-array cleanup seen in the earlier direct warning-site stack. ART treats
+that transition-reference deletion as a no-op while warning under CheckJNI; this is not proof
+of an app reference leak. A fresh current stack remains a confirmation step. The SDK also owns
+its private Node cleanup; the app's public Entity disposal is already recursive. No native
+rebinding, private Node close, binary patch, warning suppression or speculative SDK upgrade is
+used. SystemUI swapchain call-order errors remain a separate unresolved platform issue.
+
+Evidence is under `app/build/client-sbs-pacing-fix-2026-10-24/`, including `INVESTIGATION.md`,
+stage-correlation SQL/JSON, test/build and deployment evidence. SDK evidence is under
+`app/build/jni-warning-review-2026-10-24/` and `app/build/xr-warning-review-2026-10-24/`.
+These fixes do not themselves establish a reduction in frame-gap, GPU, thermal or warning rates;
+an awake moving-content capture is required for that comparison.
+
+The final JDK 25 gate passed all 1,209 JVM tests in 145 suites with no failures, errors or skips,
+and assembled the debug APKs. The arm64 APK was update-installed and read-back hash verified as
+`00a5301d9b3a4254e69aa454b12942bd51c3abf2cc2923e88f4ad68254a25719`. Launcher startup had
+no crash, but retained a HWUI swap-preservation mismatch and framework warnings; it is not a
+Client SBS stream test. The headset remained asleep, so fresh live pacing/warning qualification
+was not performed.
+
+All 12 persistent files matched immediately after installation. Startup then updated only the
+24-byte AndroidX profile cache and `android.app.ActivityThread.IDS.xml`'s single `IDSCount` integer.
+The device framework's `android.app.IdsController` bytecode identifies the latter as UI-observation/
+training state, not a Moonlight setting. All ten settings/database/certificate/identity files
+retained exact hashes. The raw all-files-unchanged result remains false; the classified settings/
+pairings-preserved result is true. No runtime metadata was restored, and the private recovery
+archive was removed after verification. `FIX-REPORT.md`, `deployment.json`, `startup-check.json`
+and `fingerprint-review.json` retain the exact evidence and remaining limitations.
+
+### Five-minute post-deployment stream verification, 2026-10-24
+
+The same installed arm64 build completed 300 seconds of awake/resumed Client AI 3D at the saved
+1080p30 HDR/full-range HEVC settings, with Stats visible. The user reported smooth moving
+content with no black flashes. All 12 before/after persistent fingerprints matched exactly.
+No app error/fatal entry, serious GPU/crash pattern, non-JNI-local-reference warning or empty
+Game SurfaceView buffer warning appeared within the active interval. Eight app Node-close
+warnings and 21,600 SystemUI XR call-order error entries remain. Headset doff/sleep occurred
+after the timed window; later teardown warnings are classified separately.
+
+The trace covers 299.700 seconds of the active interval: its automatic stop precedes the
+resource timer's end by 300 ms. The retained overlap has 8,926 native calls, adoption attempts,
+composition markers and EGL swaps, with 8,927 decoder queue/input-acquire markers. Producer
+first-to-last cadence is 29.782/s; median/P95/P99 intervals are 33.460/52.714/61.612 ms.
+There are 636/8,925 intervals over 50 ms and one 119.360 ms gap over 100 ms. That gap begins
+about 174 ms after the middle UI observation ends; excluding intersecting UI observations
+does not remove it. No host-source-repeat marker was observed. Equal totals support no
+duplicate submissions in this sample, not guaranteed per-frame pairing or final eye-buffer FPS.
+
+Near-start/middle/near-end Stats output was 30/30/29.9 FPS; real inference was respectively
+8.7/0/3.4 FPS, with reuse supplying the rest. All sampled geometry was ready/valid and all
+sampled exceptional fault counters were zero. These are short windows, not whole-run inference
+statistics or continuous worst-case load. Whole-device GPU busy averaged 48.82% over 291
+active reads, range 31–63%, at 421–788 MHz. Thermal moved Light→Moderate→Severe by about
+91 seconds. The earlier run began Severe and used different moving/reuse workloads, so the
+lower observed tails and GPU readings do not establish a controlled improvement.
+
+All 59 flushes succeeded and all scheduling bins retained events, with the known short tail.
+The trace retains one negative-timestamp drop, six/three skipped compact sched-switch/waking
+records, five service-global discarded chunks and 28 unknown-vendor-hook setup notices; raw
+setup packets have no failed-enable, atrace or ftrace-parse error. It is not lossless evidence.
+The owning artifact record is `app/build/client-sbs-postfix-verify-2026-10-24/REPORT.md`, with
+raw data, reproducible SQL, independent reviews and identical manifests. The temporary device
+trace and capture helpers were removed after hash verification. This passes the short entry/continuous-output/
+data-preservation check; uninterrupted 15-minute, thermal and final-presentation qualification
+remain separate.
+
 ## Audio startup and unused XR holder, 2026-09-07
 
 The 11:45 session exposed an empty AudioTrack start during native audio's initial 500 ms
@@ -1333,10 +1639,16 @@ $Adb = Join-Path $env:ANDROID_SDK_ROOT "platform-tools\adb.exe"
 $MainApk = "app\build\outputs\apk\nonRoot_game\debug\app-nonRoot_game-arm64-v8a-debug.apk"
 $TestApk = "app\build\outputs\apk\androidTest\nonRoot_game\debug\app-nonRoot_game-debug-androidTest.apk"
 $Classes = @(
-    "com.limelight.utils.ClientSbsGpuInferenceEngineInstrumentedTest",
-    "com.limelight.sbs.ClientSbsGpuDepthProcessorInstrumentedTest#rawMeanLatchesPerShotAndInvalidFieldPublishesNotReady",
-    "com.limelight.sbs.ClientSbsGpuDisparityProcessorInstrumentedTest#allProductionShapesCompileAndDispatchOnDevice",
-    "com.limelight.utils.ClientSbsContractiveRenderInstrumentedTest#contractiveWarpSeedRefinementAndPackedComposeRenderOffscreen"
+    "com.limelight.utils.ClientSbsGpuInferenceEngineInstrumentedTest#zipDepthBase672x384RunsWithPackedGlBuffers",
+    "com.limelight.utils.ClientSbsGpuInferenceEngineInstrumentedTest#zipDepthBase896x384RunsWithPackedGlBuffers",
+    "com.limelight.utils.ClientSbsGpuInferenceEngineInstrumentedTest#zipDepthBase928x384RunsWithPackedGlBuffers",
+    "com.limelight.utils.ClientSbsGpuInferenceEngineInstrumentedTest#nearReusePreservesSlotsAndLazyPackingHandlesEveryInferenceFallback",
+    "com.limelight.sbs.ClientSbsGpuDepthProcessorInstrumentedTest",
+    "com.limelight.sbs.ClientSbsGpuDisparityProcessorInstrumentedTest",
+    "com.limelight.utils.ClientSbsContractiveRenderInstrumentedTest",
+    "com.limelight.sbs.ClientSbsGpuSceneCutDecisionReasonInstrumentedTest",
+    "com.limelight.sbs.ClientSbsGpuReliableHistoryParityInstrumentedTest",
+    "com.limelight.utils.ClientSbsSourceOrdinalInstrumentedTest"
 )
 
 & $Adb -s $env:ANDROID_SERIAL get-state
@@ -1356,7 +1668,7 @@ foreach ($Class in $Classes) {
         com.limelight.moonlight3ddebug.test/androidx.test.runner.AndroidJUnitRunner 2>&1)
     $TestExit = $LASTEXITCODE
     $TestOutput | ForEach-Object { Write-Host $_ }
-    $TestsPassed = $TestsPassed -and ($TestExit -eq 0) -and [bool]($TestOutput -match '^OK \(')
+    $TestsPassed = $TestsPassed -and ($TestExit -eq 0) -and [bool]($TestOutput -match '^OK \([1-9][0-9]* tests?\)')
 }
 
 & $Adb -s $env:ANDROID_SERIAL uninstall com.limelight.moonlight3ddebug.test
