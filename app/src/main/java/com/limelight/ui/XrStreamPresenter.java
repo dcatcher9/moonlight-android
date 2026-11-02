@@ -1,5 +1,9 @@
 package com.limelight.ui;
 
+import android.animation.ValueAnimator;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.TimeInterpolator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
@@ -9,6 +13,8 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -85,6 +91,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 
 /**
@@ -164,6 +171,14 @@ public class XrStreamPresenter {
     private static final float GLANCE_GAP_METERS = 0.07f;
     private static final float CINEMA_PRESET_DISTANCE_METERS = 2.0f;
     private static final long DOCK_AUTO_HIDE_DELAY_MS = 8000L;
+    private static final float DOCK_REVEAL_ATTENTION_SCALE = 2.0f;
+    private static final long DOCK_REVEAL_EXPAND_DURATION_MS = 280L;
+    private static final long DOCK_REVEAL_SHRINK_DURATION_MS = 380L;
+    private static final long DOCK_REVEAL_SHRINK_DELAY_MS = 250L;
+    private static final TimeInterpolator DOCK_REVEAL_EXPAND_INTERPOLATOR =
+            new OvershootInterpolator(0.8f);
+    private static final TimeInterpolator DOCK_REVEAL_SHRINK_INTERPOLATOR =
+            new DecelerateInterpolator(1.5f);
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -274,6 +289,12 @@ public class XrStreamPresenter {
     private int barRasterHeightPixels;
     private View controlBarRow;
     private TextView dockRevealPill;
+    private XrDockGazeTracker dockGazeTracker;
+    private boolean dockRevealViewAttention;
+    private boolean dockRevealGazeAttention;
+    private ValueAnimator dockRevealAnimator;
+    private float dockRevealScale = 1.0f;
+    private float dockRevealTargetScale = 1.0f;
     /** The control-bar items (one clickable tile each, all hosted in {@link #barPanel}). */
     private final List<BarItem> barItems = new ArrayList<>();
     /** Secondary session actions revealed inline by the compact + / - dock affordance. */
@@ -462,6 +483,8 @@ public class XrStreamPresenter {
     private final android.os.Handler dockVisibilityHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable collapseDockRunnable = this::collapseDockIfIdle;
+    private final Runnable shrinkDockRevealRunnable = this::shrinkDockRevealIfUnattended;
+    private boolean dockRevealShrinkPending;
     private boolean dockCollapsed;
     private View dockHoverTarget;
     private View dockFocusTarget;
@@ -2027,7 +2050,7 @@ public class XrStreamPresenter {
         revealButton.setAllCaps(false);
         // Keep a generous gaze target even when the active mode/status label is short.
         revealButton.setMinWidth(dimen(R.dimen.xr_dock_reveal_min_width));
-        revealButton.setMinHeight(dimen(R.dimen.xr_control_choice));
+        revealButton.setMinHeight(dimen(R.dimen.xr_dock_reveal_min_height));
         dockRevealPill = revealButton;
         dockRevealPill.setGravity(Gravity.CENTER);
         dockRevealPill.setClickable(true);
@@ -2042,10 +2065,10 @@ public class XrStreamPresenter {
                 dimen(R.dimen.xr_space_lg), dimen(R.dimen.xr_space_xl),
                 dimen(R.dimen.xr_space_lg));
         dockRevealPill.setVisibility(View.GONE);
-        // Some XR input paths focus a hosted TextView/Button on the first pinch and do not deliver
-        // its click until the second. Reveal on the first press event as well; the click handler
-        // remains for keyboard/controller activation and both paths are safely idempotent.
-        configureDockRevealInteractions(dockRevealPill, this::revealDockTemporarily);
+        // Gaze/focus enlarges only the pill. Keep the first press path for XR input that focuses
+        // on the first pinch without delivering a click, plus ordinary keyboard/controller clicks.
+        configureDockRevealInteractions(dockRevealPill, this::revealDockTemporarily,
+                this::onDockRevealViewAttentionChanged);
         FrameLayout.LayoutParams pillParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER);
@@ -2072,6 +2095,8 @@ public class XrStreamPresenter {
             barRasterHeightPixels = barFullRasterSize.getHeight();
         }
         barPanel.setEnabled(true);
+        dockGazeTracker = new XrDockGazeTracker(activity, session, barPanel,
+                this::onDockGazeChanged);
 
         // The contextual row is a single panel, not one entity per control. It can therefore tilt
         // toward the face independently while its ordinary child Views retain native gaze taps.
@@ -2191,6 +2216,7 @@ public class XrStreamPresenter {
             return;
         }
         hostActivityStarted = true;
+        updateDockGazeTracking();
         applyCinemaBackground();
         devicePerformanceSampler.resetCpuBaseline();
         reconcileGlanceLoadTicker();
@@ -2200,6 +2226,8 @@ public class XrStreamPresenter {
     public void onHostActivityStopped() {
         restoreCinemaBackground();
         hostActivityStarted = false;
+        updateDockGazeTracking();
+        resetDockRevealAnimation();
         glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
         devicePerformanceSampler.resetCpuBaseline();
     }
@@ -2393,14 +2421,42 @@ public class XrStreamPresenter {
 
     static boolean shouldRevealCollapsedDock(DockRevealInteraction interaction) {
         return interaction == DockRevealInteraction.EXPLICIT_CLICK
-                || interaction == DockRevealInteraction.PRESS_DOWN
-                || interaction == DockRevealInteraction.FOCUS;
+                || interaction == DockRevealInteraction.PRESS_DOWN;
     }
 
     /** Install all Galaxy XR activation paths so the collapsed pill never needs a second pinch. */
-    static void configureDockRevealInteractions(View pill, Runnable revealAction) {
+    static void configureDockRevealInteractions(View pill, Runnable revealAction,
+                                               Consumer<Boolean> attentionAction) {
         java.util.Objects.requireNonNull(pill, "pill");
         java.util.Objects.requireNonNull(revealAction, "revealAction");
+        java.util.Objects.requireNonNull(attentionAction, "attentionAction");
+        // Hover listeners run before View updates isHovered(). Track both sources independently
+        // so losing focus cannot shrink the target while gaze is still on it, or vice versa.
+        class AttentionState {
+            boolean hovered;
+            boolean focused;
+
+            void update() {
+                attentionAction.accept(hovered || focused);
+            }
+        }
+        AttentionState attention = new AttentionState();
+        pill.setOnHoverListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_HOVER_ENTER:
+                case android.view.MotionEvent.ACTION_HOVER_MOVE:
+                    attention.hovered = true;
+                    attention.update();
+                    break;
+                case android.view.MotionEvent.ACTION_HOVER_EXIT:
+                    attention.hovered = false;
+                    attention.update();
+                    break;
+                default:
+                    break;
+            }
+            return false;
+        });
         pill.setOnTouchListener((v, event) -> {
             if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN
                     && shouldRevealCollapsedDock(DockRevealInteraction.PRESS_DOWN)) {
@@ -2409,10 +2465,8 @@ public class XrStreamPresenter {
             return false;
         });
         pill.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus && shouldRevealCollapsedDock(DockRevealInteraction.FOCUS)) {
-                // On Galaxy XR, the first pinch can arrive as focus acquisition without a click.
-                revealAction.run();
-            }
+            attention.focused = hasFocus;
+            attention.update();
         });
         pill.setOnClickListener(v -> {
             if (shouldRevealCollapsedDock(DockRevealInteraction.EXPLICIT_CLICK)) {
@@ -2421,7 +2475,130 @@ public class XrStreamPresenter {
         });
     }
 
+    private void onDockRevealViewAttentionChanged(boolean active) {
+        if (BuildConfig.DEBUG && dockRevealViewAttention != active) {
+            LimeLog.info("XR: dock pill View attention=" + active);
+        }
+        dockRevealViewAttention = active;
+        updateDockRevealAttention();
+    }
+
+    private void onDockGazeChanged(boolean active) {
+        if (BuildConfig.DEBUG && dockRevealGazeAttention != active) {
+            LimeLog.info("XR: dock pill gaze attention=" + active);
+        }
+        dockRevealGazeAttention = active;
+        updateDockRevealAttention();
+    }
+
+    private void updateDockRevealAttention() {
+        if (dockRevealViewAttention || dockRevealGazeAttention) {
+            dockVisibilityHandler.removeCallbacks(shrinkDockRevealRunnable);
+            dockRevealShrinkPending = false;
+            animateDockRevealAttention(true);
+        }
+        else if (dockCollapsed && hostActivityStarted && !presenterDestroyed
+                && dockRevealTargetScale != 1.0f
+                && !dockRevealShrinkPending) {
+            // Keep the enlarged target through brief gaze slips. Repeated loss observations must
+            // not restart this timer and postpone a deliberate look away indefinitely.
+            dockRevealShrinkPending = dockVisibilityHandler.postDelayed(shrinkDockRevealRunnable,
+                    DOCK_REVEAL_SHRINK_DELAY_MS);
+        }
+    }
+
+    private void shrinkDockRevealIfUnattended() {
+        dockRevealShrinkPending = false;
+        if (!dockRevealViewAttention && !dockRevealGazeAttention) {
+            animateDockRevealAttention(false);
+        }
+    }
+
+    private void updateDockGazeTracking() {
+        if (dockGazeTracker != null) {
+            dockGazeTracker.setActive(dockCollapsed && hostActivityStarted && !presenterDestroyed);
+        }
+    }
+
+    private void animateDockRevealAttention(boolean active) {
+        if (!dockCollapsed || !hostActivityStarted || presenterDestroyed
+                || barPanel == null || barPanel.isDisposed()) {
+            if (BuildConfig.DEBUG && active) {
+                LimeLog.info("XR: dock pill animation ignored: collapsed=" + dockCollapsed
+                        + " started=" + hostActivityStarted + " destroyed=" + presenterDestroyed);
+            }
+            return;
+        }
+        float targetScale = active ? DOCK_REVEAL_ATTENTION_SCALE : 1.0f;
+        if (dockRevealTargetScale == targetScale) {
+            return;
+        }
+        if (dockRevealAnimator != null) {
+            dockRevealAnimator.cancel();
+        }
+        dockRevealTargetScale = targetScale;
+        boolean growing = targetScale > dockRevealScale;
+        dockRevealAnimator = ValueAnimator.ofFloat(dockRevealScale, targetScale);
+        dockRevealAnimator.setDuration(growing
+                ? DOCK_REVEAL_EXPAND_DURATION_MS : DOCK_REVEAL_SHRINK_DURATION_MS);
+        // A fast lift with a small settle feels responsive to gaze. Shrink monotonically to keep
+        // the resting hit target intact, including reentry during the expansion's overshoot.
+        dockRevealAnimator.setInterpolator(growing
+                ? DOCK_REVEAL_EXPAND_INTERPOLATOR : DOCK_REVEAL_SHRINK_INTERPOLATOR);
+        dockRevealAnimator.addUpdateListener(animation ->
+                setDockRevealScale((float) animation.getAnimatedValue()));
+        if (BuildConfig.DEBUG) {
+            LimeLog.info("XR: dock pill animation target=" + targetScale);
+            dockRevealAnimator.addListener(new AnimatorListenerAdapter() {
+                private boolean cancelled;
+
+                @Override
+                public void onAnimationCancel(Animator animation) {
+                    cancelled = true;
+                }
+
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    if (!cancelled && barPanel != null && !barPanel.isDisposed()) {
+                        Vector3 scale = barPanel.getNonUniformScale(Space.PARENT);
+                        LimeLog.info("XR: dock pill animation complete: value=" + dockRevealScale
+                                + " entityScale=" + (scale != null ? scale.getX() : "unknown"));
+                    }
+                }
+            });
+        }
+        dockRevealAnimator.start();
+    }
+
+    private void setDockRevealScale(float scale) {
+        if (dockRevealScale == scale) {
+            return;
+        }
+        dockRevealScale = scale;
+        if (barPanel != null && !barPanel.isDisposed()) {
+            // Scale the cropped entity, not just its View: the physical gaze/tap target must grow
+            // with the artwork, without clipping it or reallocating its surface on every frame.
+            barPanel.setScale(scale);
+        }
+    }
+
+    private void resetDockRevealAnimation() {
+        dockVisibilityHandler.removeCallbacks(shrinkDockRevealRunnable);
+        dockRevealShrinkPending = false;
+        if (dockRevealAnimator != null) {
+            dockRevealAnimator.cancel();
+            dockRevealAnimator = null;
+        }
+        dockRevealTargetScale = 1.0f;
+        setDockRevealScale(1.0f);
+    }
+
     private void setDockCollapsed(boolean collapsed) {
+        if (!collapsed || !dockCollapsed) {
+            resetDockRevealAnimation();
+            dockRevealViewAttention = false;
+            dockRevealGazeAttention = false;
+        }
         dockCollapsed = collapsed;
         if (controlBarRow != null) {
             controlBarRow.setVisibility(collapsed ? View.GONE : View.VISIBLE);
@@ -2433,6 +2610,7 @@ public class XrStreamPresenter {
             glanceRoot.setAlpha(1.0f);
         }
         applyDockPanelBounds();
+        updateDockGazeTracking();
     }
 
     /** Keep the opaque collapsed canvas tightly fitted to its existing reveal pill. */
@@ -8885,6 +9063,10 @@ public class XrStreamPresenter {
         setDepthStatusVisible(false);
         clientPanelRefreshRatePreference.apply(activity.getWindow(), null, false);
         onHostActivityStopped();
+        if (dockGazeTracker != null) {
+            dockGazeTracker.close();
+            dockGazeTracker = null;
+        }
         // Native connection cleanup has already completed by StreamContainer teardown time. Only
         // clear local state here; the synchronous pre-stop hook owns the final transport write.
         controlTransportClosing = true;

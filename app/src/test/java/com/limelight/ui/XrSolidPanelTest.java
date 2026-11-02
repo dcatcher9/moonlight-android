@@ -1,12 +1,16 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyFloat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -20,6 +24,8 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -36,13 +42,18 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Shadows;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
+import org.robolectric.shadows.ShadowChoreographer;
 import org.robolectric.util.ReflectionHelpers;
 import org.robolectric.util.ReflectionHelpers.ClassParameter;
+
+import java.time.Duration;
 
 /** Real hosted View drawing and dock sizing, with the SceneCore panel boundary mocked. */
 @RunWith(RobolectricTestRunner.class)
@@ -169,6 +180,265 @@ public class XrSolidPanelTest {
         assertEquals(200, pixels.getValue().getHeight());
         verify(panel, never()).setSize(any());
         verify(panel, never()).setEnabled(anyBoolean());
+    }
+
+    @Test
+    public void pillAttentionAnimatesPhysicalTargetWithoutResizingOrMovingThePanel() {
+        PanelEntity panel = collapsedDock();
+        clearInvocations(panel);
+
+        setPillAttention(true);
+        idleFor(64);
+        float growingScale = lastScale(panel);
+        assertTrue(growingScale > 1f && growingScale < 2f);
+        idleFor(300);
+        assertEquals(2f, lastScale(panel), 0f);
+
+        setPillAttention(false);
+        idleFor(64);
+        float shrinkingScale = lastScale(panel);
+        assertTrue(shrinkingScale > 1f && shrinkingScale < 2f);
+        idleFor(400);
+        assertEquals(1f, lastScale(panel), 0f);
+        verify(panel, never()).setSizeInPixels(any());
+        verify(panel, never()).setSize(any());
+        verify(panel, never()).setPose(any());
+    }
+
+    @Test
+    public void pillAttentionCanReverseMidAnimationWithoutJumpingToAnEndpoint() {
+        PanelEntity panel = collapsedDock();
+        setPillAttention(true);
+        idleFor(80);
+        float growingScale = lastScale(panel);
+        assertTrue(growingScale > 1f && growingScale < 2f);
+
+        setPillAttention(false);
+        assertEquals(growingScale, lastScale(panel), 0f);
+        idleFor(64);
+        float shrinkingScale = lastScale(panel);
+        assertTrue(shrinkingScale > 1f && shrinkingScale < growingScale);
+
+        setPillAttention(true);
+        assertEquals(shrinkingScale, lastScale(panel), 0f);
+        idleFor(350);
+        assertEquals(2f, lastScale(panel), 0f);
+    }
+
+    @Test
+    public void revealCancelsPillAnimationAndRestoresFullDockAtNormalScale() {
+        PanelEntity panel = collapsedDock();
+        setPillAttention(true);
+        idleFor(64);
+        assertTrue(lastScale(panel) > 1f);
+
+        setCollapsed(false);
+        assertEquals(1f, lastScale(panel), 0f);
+        verify(panel).setSizeInPixels(new IntSize2d(2000, 200));
+        clearInvocations(panel);
+        // A late attention event from the hidden pill must not restart its animation.
+        setPillAttention(true);
+        idleFor(350);
+        verify(panel, never()).setScale(anyFloat());
+        verify(panel, never()).setSizeInPixels(any());
+    }
+
+    @Test
+    public void activityStopAndDestroyCancelPillAnimationBeforeDisposingPanel() {
+        PanelEntity panel = collapsedDock();
+        setPillAttention(true);
+        idleFor(64);
+        presenter.onHostActivityStopped();
+        assertEquals(1f, lastScale(panel), 0f);
+        clearInvocations(panel);
+        setPillAttention(true); // A queued gaze event must not restart work after stop.
+        idleFor(350);
+        verify(panel, never()).setScale(anyFloat());
+
+        presenter.onHostActivityStarted();
+        setPillAttention(true);
+        idleFor(64);
+        assertTrue(lastScale(panel) > 1f);
+        presenter.onDestroy();
+        assertEquals(1f, lastScale(panel), 0f);
+        verify(panel).dispose();
+        clearInvocations(panel);
+        idleFor(350);
+        verify(panel, never()).setScale(anyFloat());
+    }
+
+    @Test
+    public void eyeGazeDoublesThePillWithoutOpeningTheDockOrDependingOnViewHover() {
+        PanelEntity panel = collapsedDock();
+        ReflectionHelpers.callInstanceMethod(presenter, "onDockGazeChanged",
+                ClassParameter.from(boolean.class, true));
+        idleFor(350);
+        assertEquals(2f, lastScale(panel), 0f);
+        assertTrue(ReflectionHelpers.getField(presenter, "dockCollapsed"));
+
+        // An unrelated View hover exit cannot undo an active eye-gaze hit.
+        ReflectionHelpers.callInstanceMethod(presenter, "onDockRevealViewAttentionChanged",
+                ClassParameter.from(boolean.class, false));
+        idleFor(350);
+        assertEquals(2f, lastScale(panel), 0f);
+
+        ReflectionHelpers.callInstanceMethod(presenter, "onDockGazeChanged",
+                ClassParameter.from(boolean.class, false));
+        idleFor(750);
+        assertEquals(1f, lastScale(panel), 0f);
+        assertTrue(ReflectionHelpers.getField(presenter, "dockCollapsed"));
+    }
+
+    @Test
+    public void briefGazeLossKeepsThePillLargeAndReentryCancelsPendingShrink() {
+        PanelEntity panel = collapsedDock();
+        setGazeAttention(true);
+        idleFor(350);
+        assertEquals(2f, lastScale(panel), 0f);
+
+        setGazeAttention(false);
+        assertTrue(hasPendingPillShrink());
+        idleFor(200);
+        assertEquals(2f, lastScale(panel), 0f);
+
+        setGazeAttention(true);
+        assertFalse(hasPendingPillShrink());
+        idleFor(750);
+        assertEquals(2f, lastScale(panel), 0f);
+        assertTrue(ReflectionHelpers.getField(presenter, "dockCollapsed"));
+    }
+
+    @Test
+    public void sustainedGazeLossShrinksAfterTheDelayWithoutDuplicateExitsExtendingIt() {
+        PanelEntity panel = collapsedDock();
+        setGazeAttention(true);
+        idleFor(350);
+        setGazeAttention(false);
+        idleFor(180);
+        assertEquals(2f, lastScale(panel), 0f);
+
+        // A second notification must preserve the original 250 ms deadline.
+        setGazeAttention(false);
+        idleFor(140);
+        float shrinkingScale = lastScale(panel);
+        assertTrue(shrinkingScale > 1f && shrinkingScale < 2f);
+        idleFor(450);
+        assertEquals(1f, lastScale(panel), 0f);
+        assertFalse(hasPendingPillShrink());
+    }
+
+    @Test
+    public void revealStopAndDestroyEachCancelThePendingPillShrink() {
+        PanelEntity panel = collapsedDock();
+        setGazeAttention(true);
+        idleFor(350);
+        setGazeAttention(false);
+        assertTrue(hasPendingPillShrink());
+
+        setCollapsed(false);
+        assertFalse(hasPendingPillShrink());
+        assertEquals(1f, lastScale(panel), 0f);
+        clearInvocations(panel);
+        idleFor(750);
+        verify(panel, never()).setScale(anyFloat());
+
+        setCollapsed(true);
+        setGazeAttention(true);
+        idleFor(350);
+        setGazeAttention(false);
+        assertTrue(hasPendingPillShrink());
+        presenter.onHostActivityStopped();
+        assertFalse(hasPendingPillShrink());
+        assertEquals(1f, lastScale(panel), 0f);
+        clearInvocations(panel);
+        idleFor(750);
+        verify(panel, never()).setScale(anyFloat());
+
+        presenter.onHostActivityStarted();
+        setGazeAttention(true);
+        idleFor(350);
+        setGazeAttention(false);
+        assertTrue(hasPendingPillShrink());
+        presenter.onDestroy();
+        assertFalse(hasPendingPillShrink());
+        assertEquals(1f, lastScale(panel), 0f);
+        verify(panel).dispose();
+        clearInvocations(panel);
+        idleFor(750);
+        verify(panel, never()).setScale(anyFloat());
+    }
+
+    @Test
+    public void gazeSamplingFollowsVisibilityAndClosesBeforePanelDisposal() {
+        PanelEntity panel = collapsedDock();
+        XrDockGazeTracker tracker = mock(XrDockGazeTracker.class);
+        ReflectionHelpers.setField(presenter, "dockGazeTracker", tracker);
+        setCollapsed(true);
+        verify(tracker).setActive(true);
+        clearInvocations(tracker);
+
+        setCollapsed(false);
+        verify(tracker).setActive(false);
+        clearInvocations(tracker);
+        setCollapsed(true);
+        presenter.onHostActivityStopped();
+        InOrder stopped = inOrder(tracker);
+        stopped.verify(tracker).setActive(true);
+        stopped.verify(tracker).setActive(false);
+
+        clearInvocations(tracker);
+        presenter.onHostActivityStarted();
+        presenter.onDestroy();
+        InOrder destroyed = inOrder(tracker, panel);
+        destroyed.verify(tracker).setActive(true);
+        destroyed.verify(tracker).setActive(false);
+        destroyed.verify(tracker).close();
+        destroyed.verify(panel).dispose();
+    }
+
+    private PanelEntity collapsedDock() {
+        // Keep Robolectric from fast-forwarding every vsync so intermediate animation frames
+        // and direction changes can be checked against an ordinary display cadence.
+        ShadowChoreographer.setPaused(true);
+        ShadowChoreographer.setFrameDelay(Duration.ofMillis(16));
+        presenter.onHostActivityStarted();
+        PanelEntity panel = mock(PanelEntity.class);
+        when(panel.getSizeInPixels()).thenReturn(new IntSize2d(2000, 200));
+        Button pill = new Button(controller.get());
+        pill.setText("Normal · Live");
+        ReflectionHelpers.setField(presenter, "barPanel", panel);
+        ReflectionHelpers.setField(presenter, "dockRevealPill", pill);
+        setCollapsed(true);
+        return panel;
+    }
+
+    private void setPillAttention(boolean active) {
+        ReflectionHelpers.callInstanceMethod(presenter, "animateDockRevealAttention",
+                ClassParameter.from(boolean.class, active));
+    }
+
+    private void setGazeAttention(boolean active) {
+        ReflectionHelpers.callInstanceMethod(presenter, "onDockGazeChanged",
+                ClassParameter.from(boolean.class, active));
+    }
+
+    private boolean hasPendingPillShrink() {
+        Handler handler = ReflectionHelpers.getField(presenter, "dockVisibilityHandler");
+        Runnable shrink = ReflectionHelpers.getField(presenter, "shrinkDockRevealRunnable");
+        return handler.hasCallbacks(shrink);
+    }
+
+    private static float lastScale(PanelEntity panel) {
+        ArgumentCaptor<Float> scales = ArgumentCaptor.forClass(Float.class);
+        verify(panel, atLeastOnce()).setScale(scales.capture());
+        return scales.getValue();
+    }
+
+    private static void idleFor(long millis) {
+        for (long elapsed = 0; elapsed < millis; elapsed += 16) {
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(
+                    Duration.ofMillis(Math.min(16, millis - elapsed)));
+        }
     }
 
     private void setCollapsed(boolean collapsed) {

@@ -1389,8 +1389,10 @@ the original raster on reveal, so a solid root does not expose an empty full-wid
 changes guarantee solid panel content; SceneCore does not expose the hosted panel surface's
 compositor blending flag. In beta02, panel metres and raster dimensions are coupled through the
 runtime pixel density: `setSize()` converts back to `setSizeInPixels()`. Entity scale is the
-separate multiplier. The dock uses one pixel-size request, preserving scale, rather than a second
-metre-size request that would overwrite its cropped raster.
+separate multiplier. The dock uses one pixel-size request rather than a second metre-size request
+that would overwrite its cropped raster. Collapsed-pill attention animates that separate entity
+scale, keeping its physical input target aligned with the artwork without resizing the raster on
+every animation frame. Revealing the full dock restores its original scale and raster.
 
 A passive glance strip sits above the video and never intercepts input. It keeps the PC/application
 identity, active presentation mode, live stream tuple, and reconnect/status cue visible without
@@ -1546,14 +1548,44 @@ banner is visible, so a single row never creates a pointless vertical scroll ran
 After the first decoded frame, the dock may **soft-collapse** after eight seconds of true idle. This
 does not disable or move the dock `PanelEntity`: it hides only the full control row and leaves a
 centered, gazeable reveal pill showing the active mode and current status. The passive glance strip
-keeps its normal brightness. The pill has a 320 dp minimum width, the 80 dp choice-control minimum
-height, title-sized text, and a visible accent outline that brightens on hover/focus/press. Its
-actual clickable View supplies the larger target; the collapsed panel crops around that measured
-View at the existing scale and remains bounded by the full dock raster.
+keeps its normal brightness. The pill has a 480 dp minimum width and 112 dp minimum height,
+title-sized text, and a visible accent outline that brightens on hover/focus/press. Its
+actual clickable View supplies the target; the collapsed panel crops around that measured
+View and its raster remains bounded by the full dock raster. Looking at the pill smoothly enlarges
+the cropped entity to 200% with a responsive 280 ms expansion and a subtle spring settle
+(about 202.3% peak), keeping the pill centered and expanding its physical input target along with
+its contents. Looking away leaves the target expanded for a 250 ms grace period before a 380 ms
+cubic ease-out shrink with no undershoot below the resting size. Looking back during the grace
+period cancels the pending shrink; repeated loss observations do not restart the timer. Reveal,
+Activity stop, and destruction cancel any pending shrink. Reentry during an overshoot eases down
+to 200% without another bounce. Keyboard
+focus and pointer hover remain additional attention paths; reversing attention retargets from the
+current scale.
+Eye gaze is distinct from Android View focus/hover: SceneCore deliberately sends no hover events
+for [`GAZE_AND_GESTURE` input](https://developer.android.com/reference/androidx/xr/scenecore/InputEvent.Source).
+Home requests the optional `EYE_TRACKING_FINE` runtime permission once when the app opens on a
+device with eye input. Android retains a normal grant across launches; an app-level marker also
+prevents repeated automatic prompts after denial or permission revocation. Access can be changed
+later in Android's app permission settings. The streaming tracker only checks the existing grant
+and never opens a permission dialog; fine eye tracking is enabled only while collapsed and foregrounded.
+`XrDockGazeTracker` samples coherent perception snapshots at 30 Hz, transforms each open, tracked eye
+ray through the tracked head pose into the dock's local space, and tests its current scaled target.
+Eye pose orientation follows [OpenXR's eye axes](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrEyeANDROID.html):
+local +Z points into the eye, so the outward gaze ray uses `Pose.getForward()` (local -Z).
+The SDK's native eye pose is passed through without an orientation flip. Regression tests preserve
+this actual direction through the coordinate transform instead of mocking a reversed ray into a hit.
+Brief blinks or missing tracking retain a hit for at most 150 ms. A valid look away starts the
+separate 250 ms shrink grace period immediately, avoiding shrink/expand pulses during brief gaze slips.
+It stops sampling and disables eye tracking on reveal, Activity stop, or destruction. Raw eye poses
+are neither saved nor logged. Debug builds emit six bounded two-second operational summaries after
+activation (snapshot/head/eye availability and target-hit counts), plus scale-transition diagnostics,
+to distinguish missing tracking from presentation failures. Denied permission or unsupported tracking leaves ordinary activation
+available without prompting during a stream.
 Hovering, focusing, or activating a full-dock control reveals the row and restarts the timer. While
-collapsed, passive hover alone keeps the pill stable; the first focus/press generated by an explicit
-pinch reveals the row (with click activation retained for keyboard/controller input), so a newly
-exposed mode tile can never replace the target beneath the pointer or require a second pinch.
+collapsed, gaze, hover, or focus enlarges only the pill; the first press from an explicit pinch reveals the
+full row (with click activation retained for keyboard/controller input). Reveal, Activity stop, and
+destruction cancel the attention animation and restore the resting scale, so stale animation
+callbacks cannot enlarge the full dock or touch a disposed entity.
 
 Auto-collapse is allowed only while session controls are enabled, no dock child is hovered or
 focused, no Settings/Stats/mode-options pane is open, no reconnect-required change is pending,
@@ -1660,6 +1692,8 @@ These rules come from Galaxy XR observations across SceneCore alpha16 through be
   per tile do not receive the same native child-view gaze highlight.
 - A clickable hosted view's `OnClickListener` receives gaze/pinch input. Per-control
   `InteractableComponent`s are unnecessary and suppress the view's own hover highlight.
+- The system gaze highlight does not provide a View hover/focus callback: `GAZE_AND_GESTURE`
+  input withholds hover events. Custom gaze-only behavior requires consented eye tracking.
 - Use `InteractableComponent` only for genuine entity-level input. Runtime hover action objects do
   not reliably compare by identity with the SDK hover constants.
 - For icon-over-label tiles, use a vertical `LinearLayout` with an `ImageView` and `TextView` rather
@@ -1829,9 +1863,11 @@ For every mode/surface change, test:
   immediately before Dump 3D in debug builds.
 - Disconnect returns to the current PC's library without requesting host quit; Resume stays
   available during the host's grace window. End session in the library explicitly cancels it.
-- After eight idle seconds the dock leaves its reveal/status pill, then expands on the first
-  explicit press/pinch.
+- After eight idle seconds the dock leaves its reveal/status pill. After granting eye-tracking
+  permission, looking at it animates only the pill to 200%; looking away animates it back when
+  no pointer hover or keyboard focus remains. The first explicit press/pinch opens
+  the full dock at its normal size.
   It must remain expanded while a pane, pending settings transaction, depth preparation,
-  mode/decoder transition, or focused/hovered control is active.
+  mode/decoder transition, or focused/hovered full-dock control is active.
 - Repeated disconnect/resume/mode switches do not leak surfaces, entities, EGL contexts, leases, or
   fences and do not recreate LiteRT during a stable stream.

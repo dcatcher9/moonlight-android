@@ -337,14 +337,14 @@ public class XrStreamPresenterLayoutTest {
     }
 
     @Test
-    public void collapsedDockRevealPillRespondsToFirstExplicitInteraction() {
+    public void collapsedDockRevealsOnFirstPressOrClickWhileFocusAndHoverStayOnPill() {
         assertTrue(XrStreamPresenter.shouldRevealCollapsedDock(
                 XrStreamPresenter.DockRevealInteraction.EXPLICIT_CLICK));
         assertTrue(XrStreamPresenter.shouldRevealCollapsedDock(
                 XrStreamPresenter.DockRevealInteraction.PRESS_DOWN));
         assertFalse(XrStreamPresenter.shouldRevealCollapsedDock(
                 XrStreamPresenter.DockRevealInteraction.HOVER));
-        assertTrue(XrStreamPresenter.shouldRevealCollapsedDock(
+        assertFalse(XrStreamPresenter.shouldRevealCollapsedDock(
                 XrStreamPresenter.DockRevealInteraction.FOCUS));
     }
 

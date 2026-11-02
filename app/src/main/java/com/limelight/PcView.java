@@ -25,6 +25,7 @@ import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.ui.AdapterFragment;
 import com.limelight.ui.AdapterFragmentCallbacks;
 import com.limelight.ui.HomeSessionLaunchPolicy;
+import com.limelight.ui.XrEyeTrackingPermission;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.HelpLauncher;
 import com.limelight.utils.ServerHelper;
@@ -84,6 +85,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private boolean freezeUpdates, runningPolling, inForeground, completeOnCreateCalled;
     private boolean pairingInProgress;
+    private XrEyeTrackingPermission eyeTrackingPermission;
     private ComputerDetails.AddressTuple pendingPairingAddress;
     private String pendingPairingPin, pendingPairingPassphrase;
     private final ServiceConnection serviceConnection = new ServiceConnection() {
@@ -230,6 +232,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        eyeTrackingPermission = new XrEyeTrackingPermission(this);
 
         // Assume we're in the foreground when created to avoid a race
         // between binding to CMS and onResume()
@@ -382,6 +385,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
         inForeground = true;
         startComputerUpdates();
+        eyeTrackingPermission.requestOnce();
     }
 
     @Override
