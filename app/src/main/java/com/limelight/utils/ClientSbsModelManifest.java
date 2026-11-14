@@ -92,6 +92,21 @@ final class ClientSbsModelManifest {
             ZIPDEPTH_BASE_STATIC_32_9,
     };
 
+    /** The production ZipDepth aspect buckets, ordered by ascending aspect. */
+    static ClientSbsModelManifest[] productionBuckets() {
+        return ZIPDEPTH_BASE_STATIC_BUCKETS.clone();
+    }
+
+    /** Whether {@code manifest} is one of the production ZipDepth aspect buckets. */
+    static boolean isProduction(ClientSbsModelManifest manifest) {
+        for (ClientSbsModelManifest bucket : ZIPDEPTH_BASE_STATIC_BUCKETS) {
+            if (bucket == manifest) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static ClientSbsModelManifest createZipDepthBaseManifest(
             String id, String assetName, String assetSha256, int width, int height,
             float v2RawCoordinateScale) {

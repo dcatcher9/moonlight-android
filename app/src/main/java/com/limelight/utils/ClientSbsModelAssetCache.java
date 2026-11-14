@@ -262,11 +262,7 @@ final class ClientSbsModelAssetCache {
 
     /** A bounded manifest whitelist; retaining a file never substitutes for digest validation. */
     private static boolean isCurrentProductionModelFile(String name) {
-        ClientSbsModelManifest[] models = {
-                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9,
-                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9,
-                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9};
-        for (ClientSbsModelManifest model : models) {
+        for (ClientSbsModelManifest model : ClientSbsModelManifest.productionBuckets()) {
             if (name.equals(stagedFileName(model.getId(), model.getAssetSha256()))) {
                 return true;
             }
@@ -297,25 +293,34 @@ final class ClientSbsModelAssetCache {
     /** Serializes benchmark asset deletion with verification/extraction of that same namespace. */
     static boolean clearBenchmarkModelCache(Context context) {
         synchronized (CACHE_LOCK) {
-            File codeCache = context.getCodeCacheDir();
-            File child = new File(codeCache, BENCHMARK_MODEL_CACHE);
-            if (!child.exists()) {
-                return true;
-            }
-            try {
-                File canonicalRoot = codeCache.getCanonicalFile();
-                File canonicalChild = child.getCanonicalFile();
-                if (!canonicalRoot.equals(canonicalChild.getParentFile())) {
-                    LimeLog.warning("Refusing to remove Client SBS benchmark model cache outside "
-                            + "code cache: " + canonicalChild);
-                    return false;
-                }
-                return deleteCacheTree(canonicalChild);
-            } catch (IOException error) {
-                LimeLog.warning("Unable to resolve Client SBS benchmark model cache: "
-                        + error.getMessage());
+            return deleteExactCodeCacheChild(context.getCodeCacheDir(),
+                    BENCHMARK_MODEL_CACHE, "benchmark model cache");
+        }
+    }
+
+    /**
+     * Recursively deletes {@code childName} only when it resolves to a direct child of the code
+     * cache. {@code description} names the cache in the refusal and resolution warnings.
+     */
+    static boolean deleteExactCodeCacheChild(File codeCache, String childName,
+                                             String description) {
+        File child = new File(codeCache, childName);
+        if (!child.exists()) {
+            return true;
+        }
+        try {
+            File canonicalRoot = codeCache.getCanonicalFile();
+            File canonicalChild = child.getCanonicalFile();
+            if (!canonicalRoot.equals(canonicalChild.getParentFile())) {
+                LimeLog.warning("Refusing to remove Client SBS " + description
+                        + " outside code cache: " + canonicalChild);
                 return false;
             }
+            return deleteCacheTree(canonicalChild);
+        } catch (IOException error) {
+            LimeLog.warning("Unable to resolve Client SBS " + description + ": "
+                    + error.getMessage());
+            return false;
         }
     }
 

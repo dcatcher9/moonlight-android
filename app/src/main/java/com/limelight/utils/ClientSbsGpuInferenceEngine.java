@@ -233,7 +233,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
 
     /** Must be called once on the inference worker thread. */
     void initialize(Context context, ClientSbsModelManifest manifest) throws IOException {
-        if (!isZipDepthManifest(manifest)) {
+        if (!ClientSbsModelManifest.isProduction(manifest)) {
             throw new IllegalArgumentException(
                     "Production Client SBS inference supports only ZipDepth Base");
         }
@@ -352,7 +352,7 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         // Compute precision is part of the key, so a model can never reuse an artifact compiled
         // under a different policy. Both policies let LiteRT choose internal tensor storage.
         if (PRODUCTION_COMPILER_CACHE.equals(compilerCacheName)
-                && isZipDepthManifest(manifest)) {
+                && ClientSbsModelManifest.isProduction(manifest)) {
             pruneRetiredProductionCompilerCaches(codeCacheRoot, cacheRoot);
         }
         File cacheDirectory = new File(cacheRoot, compilerCacheDirectoryName(manifest));
@@ -453,43 +453,8 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     static boolean clearBenchmarkCaches(Context context) {
         File codeCache = context.getCodeCacheDir();
         return ClientSbsModelAssetCache.clearBenchmarkModelCache(context)
-                && deleteExactCodeCacheChild(codeCache, BENCHMARK_COMPILER_CACHE);
-    }
-
-    private static boolean deleteExactCodeCacheChild(File codeCache, String childName) {
-        File child = new File(codeCache, childName);
-        if (!child.exists()) {
-            return true;
-        }
-        try {
-            File canonicalRoot = codeCache.getCanonicalFile();
-            File canonicalChild = child.getCanonicalFile();
-            if (!canonicalRoot.equals(canonicalChild.getParentFile())) {
-                LimeLog.warning("Refusing to remove Client SBS benchmark cache outside code cache: "
-                        + canonicalChild);
-                return false;
-            }
-            return deleteCacheTree(canonicalChild);
-        } catch (IOException error) {
-            LimeLog.warning("Unable to resolve Client SBS benchmark cache: "
-                    + error.getMessage());
-            return false;
-        }
-    }
-
-    private static boolean deleteCacheTree(File entry) {
-        if (entry.isDirectory()) {
-            File[] children = entry.listFiles();
-            if (children == null) {
-                return false;
-            }
-            for (File child : children) {
-                if (!deleteCacheTree(child)) {
-                    return false;
-                }
-            }
-        }
-        return !entry.exists() || entry.delete();
+                && ClientSbsModelAssetCache.deleteExactCodeCacheChild(
+                        codeCache, BENCHMARK_COMPILER_CACHE, "benchmark cache");
     }
 
     boolean isInitialized() {
@@ -542,12 +507,9 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             return;
         }
         Set<String> retained = new HashSet<>();
-        retained.add(compilerCacheDirectoryName(
-                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9));
-        retained.add(compilerCacheDirectoryName(
-                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9));
-        retained.add(compilerCacheDirectoryName(
-                ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9));
+        for (ClientSbsModelManifest bucket : ClientSbsModelManifest.productionBuckets()) {
+            retained.add(compilerCacheDirectoryName(bucket));
+        }
 
         try {
             File canonicalCodeCache = codeCacheRoot.getCanonicalFile();
@@ -576,12 +538,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             LimeLog.warning("Unable to resolve Client SBS compiler cache: "
                     + error.getMessage());
         }
-    }
-
-    private static boolean isZipDepthManifest(ClientSbsModelManifest manifest) {
-        return manifest == ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_16_9
-                || manifest == ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_21_9
-                || manifest == ClientSbsModelManifest.ZIPDEPTH_BASE_STATIC_32_9;
     }
 
     /** Refuses links or traversal before recursively deleting one immediate cache child. */
