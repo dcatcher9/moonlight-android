@@ -131,7 +131,7 @@ public class Stereo3DRendererSchedulingTest {
         String source = rendererSource();
         String constructor = source.substring(
                 source.indexOf("public Stereo3DRenderer(ClientSbsRenderSurface view,"),
-                source.indexOf("/** Immutable copy of the processor's reused"));
+                source.indexOf("Immutable one-window view of the Client-SBS pipeline."));
         assertTrue(constructor.contains("new HandlerThread("));
         assertTrue(constructor.contains("Process.THREAD_PRIORITY_URGENT_DISPLAY"));
         assertTrue(constructor.contains("new Handler(frameCallbackThread.getLooper())"));
@@ -316,25 +316,25 @@ public class Stereo3DRendererSchedulingTest {
 
     @Test
     public void performanceSamplesCannotCrossAStatsEpochBoundary() {
-        assertTrue(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(true, 12L, 12L));
-        assertFalse(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(true, 11L, 12L));
-        assertFalse(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(true, 0L, 12L));
-        assertFalse(Stereo3DRenderer.isPerformanceSamplingEpochCurrent(false, 12L, 12L));
+        assertTrue(ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(true, 12L, 12L));
+        assertFalse(ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(true, 11L, 12L));
+        assertFalse(ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(true, 0L, 12L));
+        assertFalse(ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(false, 12L, 12L));
     }
 
     @Test
     public void unchangedDecodedSourceNeverExpiresMatchedPresentation() {
-        assertFalse(Stereo3DRenderer.shouldPresentCurrentFlatForStaleDepth(
+        assertFalse(StaleDepthWatchdog.shouldPresentCurrentFlat(
                 41L, 41L, TimeUnit.HOURS.toNanos(1L)));
     }
 
     @Test
     public void newerDecodedSourceUsesStrictHostPresentationAgeBoundary() {
-        long boundaryNs = Stereo3DRenderer.MAX_STALE_DEPTH_PRESENTATION_AGE_NS;
+        long boundaryNs = StaleDepthWatchdog.MAX_PRESENTATION_AGE_NS;
 
-        assertFalse(Stereo3DRenderer.shouldPresentCurrentFlatForStaleDepth(
+        assertFalse(StaleDepthWatchdog.shouldPresentCurrentFlat(
                 41L, 42L, boundaryNs));
-        assertTrue(Stereo3DRenderer.shouldPresentCurrentFlatForStaleDepth(
+        assertTrue(StaleDepthWatchdog.shouldPresentCurrentFlat(
                 41L, 42L, boundaryNs + 1L));
     }
 
@@ -348,15 +348,15 @@ public class Stereo3DRendererSchedulingTest {
 
     @Test
     public void staleDepthWatchdogSchedulesAfterInclusiveBoundary() {
-        assertEquals(251L, Stereo3DRenderer.staleDepthWatchdogDelayMillis(0L));
-        assertEquals(1L, Stereo3DRenderer.staleDepthWatchdogDelayMillis(
-                Stereo3DRenderer.MAX_STALE_DEPTH_PRESENTATION_AGE_NS));
+        assertEquals(251L, StaleDepthWatchdog.delayMillis(0L));
+        assertEquals(1L, StaleDepthWatchdog.delayMillis(
+                StaleDepthWatchdog.MAX_PRESENTATION_AGE_NS));
     }
 
     @Test
     public void hdrTransitionBlocksUntilItsExactFreshFrameCommit() {
-        Stereo3DRenderer.HdrInputTransitionState state =
-                new Stereo3DRenderer.HdrInputTransitionState();
+        HdrInputTransitionState state =
+                new HdrInputTransitionState();
 
         int hdrGeneration = state.begin(true);
         assertTrue(state.isActive());
@@ -372,8 +372,8 @@ public class Stereo3DRendererSchedulingTest {
 
     @Test
     public void newerHdrTransitionSupersedesStaleCommitAndCompletion() {
-        Stereo3DRenderer.HdrInputTransitionState state =
-                new Stereo3DRenderer.HdrInputTransitionState();
+        HdrInputTransitionState state =
+                new HdrInputTransitionState();
 
         int hdrGeneration = state.begin(true);
         int sdrGeneration = state.begin(false);
@@ -386,8 +386,8 @@ public class Stereo3DRendererSchedulingTest {
 
     @Test
     public void hdrTimeoutCancelsOnlyItsExactOwnerAndRejectsLateCompletion() {
-        Stereo3DRenderer.HdrInputTransitionState state =
-                new Stereo3DRenderer.HdrInputTransitionState();
+        HdrInputTransitionState state =
+                new HdrInputTransitionState();
         int retired = state.begin(true);
         int current = state.begin(false);
         assertFalse(state.cancel(retired));

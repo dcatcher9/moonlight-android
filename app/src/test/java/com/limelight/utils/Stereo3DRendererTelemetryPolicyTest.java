@@ -18,22 +18,22 @@ import java.nio.ByteOrder;
 public class Stereo3DRendererTelemetryPolicyTest {
     @Test
     public void healthReadbackIsGatedWithDiagnosticsAndKeepsItsEnabledStride() {
-        assertFalse(Stereo3DRenderer.shouldPollHealthTelemetry(false, 0));
-        assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(true, 0));
-        assertFalse(Stereo3DRenderer.shouldPollHealthTelemetry(true, 1));
-        assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(true, 4));
+        assertFalse(ClientSbsPerfStats.shouldPollHealthTelemetry(false, 0));
+        assertTrue(ClientSbsPerfStats.shouldPollHealthTelemetry(true, 0));
+        assertFalse(ClientSbsPerfStats.shouldPollHealthTelemetry(true, 1));
+        assertTrue(ClientSbsPerfStats.shouldPollHealthTelemetry(true, 4));
     }
 
     @Test
     public void healthTelemetryRetryBackoffIsExponentialAndBounded() {
-        assertEquals(0, Stereo3DRenderer.healthTelemetryRetryPolls(0));
-        assertEquals(15, Stereo3DRenderer.healthTelemetryRetryPolls(1));
-        assertEquals(30, Stereo3DRenderer.healthTelemetryRetryPolls(2));
-        assertEquals(60, Stereo3DRenderer.healthTelemetryRetryPolls(3));
-        assertEquals(120, Stereo3DRenderer.healthTelemetryRetryPolls(4));
-        assertEquals(240, Stereo3DRenderer.healthTelemetryRetryPolls(5));
-        assertEquals(240, Stereo3DRenderer.healthTelemetryRetryPolls(100));
-        assertEquals(240, Stereo3DRenderer.healthTelemetryRetryPolls(Integer.MAX_VALUE));
+        assertEquals(0, ClientSbsPerfStats.healthTelemetryRetryPolls(0));
+        assertEquals(15, ClientSbsPerfStats.healthTelemetryRetryPolls(1));
+        assertEquals(30, ClientSbsPerfStats.healthTelemetryRetryPolls(2));
+        assertEquals(60, ClientSbsPerfStats.healthTelemetryRetryPolls(3));
+        assertEquals(120, ClientSbsPerfStats.healthTelemetryRetryPolls(4));
+        assertEquals(240, ClientSbsPerfStats.healthTelemetryRetryPolls(5));
+        assertEquals(240, ClientSbsPerfStats.healthTelemetryRetryPolls(100));
+        assertEquals(240, ClientSbsPerfStats.healthTelemetryRetryPolls(Integer.MAX_VALUE));
     }
 
     @Test
@@ -73,7 +73,7 @@ public class Stereo3DRendererTelemetryPolicyTest {
                 ByteBuffer.class, long.class, int.class);
         update.setAccessible(true);
         Class<?> copyType = Class.forName(
-                Stereo3DRenderer.class.getName() + "$DepthHealthState");
+                ClientSbsPerfStats.class.getName() + "$DepthHealthState");
         Constructor<?> constructor = copyType.getDeclaredConstructor(health.getClass());
         constructor.setAccessible(true);
 

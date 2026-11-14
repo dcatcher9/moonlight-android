@@ -33,6 +33,7 @@ public class Stereo3DRendererHostSourceReuseTest {
     private DecodedSourceIdentityTracker tracker;
     private DecodedSourceIdentityTracker.Sample candidate;
     private ClientSbsFrameSlots.Lease originalColor;
+    private HostSourceRepeatTracker repeat;
 
     @Before
     public void setUp() {
@@ -50,8 +51,9 @@ public class Stereo3DRendererHostSourceReuseTest {
         set("surfaceLifecycleReady", true);
         set("outputSurfaceValidated", true);
         set("matchedOutputPresented", true);
-        set("sourceSettled", true);
-        set("sourceRepeatOwnerConfirmed", true);
+        repeat = ReflectionHelpers.getField(renderer, "hostSourceRepeat");
+        repeat.settled = true;
+        repeat.ownerConfirmed = true;
         set("gpuSceneCutDetector", mock(ClientSbsGpuSceneCutDetector.class));
         set("gpuDepthActive", true);
         set("activeClientSbsGeneration", 1);
@@ -67,8 +69,7 @@ public class Stereo3DRendererHostSourceReuseTest {
         set("latchedFrameSequence", 11L);
         set("lastModelInferenceFrameSequence", 8L);
         set("lastModelInferenceCapturedAtNs", 500L);
-        DecodedSourceIdentityTracker.Sample presented =
-                ReflectionHelpers.getField(renderer, "presentedSourceIdentity");
+        DecodedSourceIdentityTracker.Sample presented = repeat.presented;
         presented.epoch = tracker.getEpoch();
         presented.sourceId = 7;
         presented.frameNumber = 100;
@@ -76,7 +77,7 @@ public class Stereo3DRendererHostSourceReuseTest {
         candidate.copyFrom(presented);
         candidate.frameNumber = 101;
         float[] transform = ReflectionHelpers.getField(renderer, "videoTextureTransform");
-        float[] presentedTransform = ReflectionHelpers.getField(renderer, "presentedSourceTransform");
+        float[] presentedTransform = repeat.presentedTransform;
         System.arraycopy(transform, 0, presentedTransform, 0, 16);
     }
 
@@ -103,10 +104,10 @@ public class Stereo3DRendererHostSourceReuseTest {
 
     @Test
     public void allocatedDepthWithoutConfirmedGpuHistoryStillNeedsOrdinaryArbitration() {
-        set("sourceRepeatOwnerConfirmed", false);
+        repeat.ownerConfirmed = false;
         assertFalse(consume());
         assertEquals(10L, (long) ReflectionHelpers.getField(renderer, "lastCapturedFrameSequence"));
-        set("sourceRepeatOwnerConfirmed", true);
+        repeat.ownerConfirmed = true;
         assertTrue(consume());
     }
 
@@ -164,17 +165,17 @@ public class Stereo3DRendererHostSourceReuseTest {
 
     @Test
     public void initialSettlingKeepsDecodedColorUpdatesAndHasNoRecurringExpiry() {
-        set("sourceSettled", false);
-        set("sourceSettlingStartedNs", System.nanoTime());
+        repeat.settled = false;
+        repeat.settlingStartedNs = System.nanoTime();
         assertFalse(consume());
         assertEquals(10L, (long) ReflectionHelpers.getField(renderer, "lastCapturedFrameSequence"));
-        assertFalse(Stereo3DRenderer.hasHostSourceSettled(100L,
-                100L + Stereo3DRenderer.HOST_SOURCE_SETTLING_NS - 1L));
-        assertTrue(Stereo3DRenderer.hasHostSourceSettled(100L,
-                100L + Stereo3DRenderer.HOST_SOURCE_SETTLING_NS));
-        assertTrue(Stereo3DRenderer.hasHostSourceSettled(100L, Long.MAX_VALUE));
-        assertFalse(Stereo3DRenderer.hasHostSourceSettled(0L, Long.MAX_VALUE));
-        assertFalse(Stereo3DRenderer.hasHostSourceSettled(100L, 99L));
+        assertFalse(HostSourceRepeatTracker.hasSettled(100L,
+                100L + HostSourceRepeatTracker.SETTLING_NS - 1L));
+        assertTrue(HostSourceRepeatTracker.hasSettled(100L,
+                100L + HostSourceRepeatTracker.SETTLING_NS));
+        assertTrue(HostSourceRepeatTracker.hasSettled(100L, Long.MAX_VALUE));
+        assertFalse(HostSourceRepeatTracker.hasSettled(0L, Long.MAX_VALUE));
+        assertFalse(HostSourceRepeatTracker.hasSettled(100L, 99L));
     }
 
     private boolean consume() {

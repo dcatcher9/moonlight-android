@@ -27,10 +27,14 @@ import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuDisparityProcessor;
 import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
 import com.limelight.sbs.ClientSbsGpuTimer;
-import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
 import com.limelight.sbs.ClientSbsV2CoordinateContract;
-import com.limelight.sbs.SbsDepthTelemetryHistory;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
+import com.limelight.utils.ClientSbsGlPrograms.ContractiveWarpMapProgramBindings;
+import com.limelight.utils.ClientSbsGlPrograms.ContractiveWarpMapRefinementProgramBindings;
+import com.limelight.utils.ClientSbsGlPrograms.GpuPackProgramBindings;
+import com.limelight.utils.ClientSbsGlPrograms.QuadProgramBindings;
+import com.limelight.utils.ClientSbsGlPrograms.WarpedReprojectionProgramBindings;
+import com.limelight.utils.ClientSbsPerfStats.DepthHealthState;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -51,6 +55,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+import static com.limelight.utils.ClientSbsGlPrograms.createComputeProgram;
+import static com.limelight.utils.ClientSbsGlPrograms.createProgram;
+
 public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionRenderer {
 
     // Constants
@@ -62,8 +69,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private static final float[] TEXTURE_VERTICES = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
     private static final float[] OES_TEXTURE_VERTICES = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
     private static final long THERMAL_STATUS_POLL_INTERVAL_NS = 1_000_000_000L;
-    /** Mirrors Apollo's maximum changed-source packed-presentation hold. */
-    static final long MAX_STALE_DEPTH_PRESENTATION_AGE_NS = TimeUnit.MILLISECONDS.toNanos(250L);
     private static final long RENDERER_FINISH_ACK_TIMEOUT_MS = 1_500L;
     /** Prevents The EGL owner's initial draw from replacing the retained frame with black. */
     // Cover MediaCodec's 2.5 s fresh-IDR watchdog plus the 2 s post-IDR packed-swap proof. Those
@@ -108,25 +113,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private long lastModelInferenceFrameSequence;
     private long lastModelInferenceCapturedAtNs;
 
-    // Encoder-input proof is attributed to a decoded buffer, never the inference/comparison owner.
-    // Lossy P-frames can refine a static image. Allow initial color updates before retaining it.
-    static final long HOST_SOURCE_SETTLING_NS = TimeUnit.MILLISECONDS.toNanos(500L);
     private volatile DecodedSourceIdentityTracker decodedSourceIdentityTracker;
     private final DecodedSourceIdentityTracker.Sample latchedSourceIdentity =
             new DecodedSourceIdentityTracker.Sample();
-    private final DecodedSourceIdentityTracker.Sample presentedSourceIdentity =
-            new DecodedSourceIdentityTracker.Sample();
-    private final DecodedSourceIdentityTracker.Sample[] colorSourceIdentities = {
-            new DecodedSourceIdentityTracker.Sample(), new DecodedSourceIdentityTracker.Sample()
-    };
-    private final float[][] colorSourceTransforms = {new float[16], new float[16]};
-    private final float[] presentedSourceTransform = new float[16];
-    private long lastProvenSourceRepeatSequence;
-    private long sourceSettlingStartedNs;
-    private boolean sourceSettled;
-    // Only a successful GPU Near decision confirms valid, settled comparison history. Allocated
-    // output textures alone can also represent rejected raw depth or geometry-confirmation holds.
-    private boolean sourceRepeatOwnerConfirmed;
+    /** GL-thread retention state for negotiated exact encoder-input repeats. */
+    private final HostSourceRepeatTracker hostSourceRepeat = new HostSourceRepeatTracker(2);
 
     private volatile boolean clientSbs;
     /** True when the decoded stream is HDR (10-bit PQ). Tells the AI-input shader to tonemap the
@@ -210,12 +201,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** Reused for every adoption so the render path does not allocate a capturing lambda. */
     private final Runnable postSwapCaptureRunnable = this::captureAfterSwap;
     /** Serializes the single presentation-age deadline callback across lifecycle generations. */
-    private final Object staleDepthWatchdogLock = new Object();
-    private final Runnable staleDepthWatchdogRunnable;
-    /** Guarded by staleDepthWatchdogLock. */
-    private boolean staleDepthWatchdogQueued;
-    /** Guarded by staleDepthWatchdogLock. */
-    private int staleDepthWatchdogGeneration;
+    private final StaleDepthWatchdog staleDepthWatchdog;
     /** Prevents a callback race from counting the same latest-only buffer twice. */
     private long lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
@@ -315,34 +301,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      * SSBO. Renderer-thread access alone is insufficient now that the inference context reads it.
      */
     private boolean gpuSceneCutResetPending;
-    /** Optional, nonblocking EXT timer-query ring owned by the renderer context. */
-    private volatile ClientSbsGpuTimer gpuTimer;
-    private static final int GPU_TIMER_SAMPLE_STRIDE = 4;
-    private static final int GPU_TELEMETRY_POLL_STRIDE = 4;
-    /** Health polls skipped after a transient readback failure, measured in poll opportunities. */
-    private static final int HEALTH_TELEMETRY_RETRY_BASE_POLLS = 15;
-    /** Persistent driver failures remain diagnostic-only and retry at a bounded, quiet cadence. */
-    private static final int HEALTH_TELEMETRY_RETRY_MAX_POLLS = 240;
-    private final int[] gpuTimerSampleCounters =
-            new int[ClientSbsGpuTimer.Stage.values().length];
-    private int gpuTelemetryPollCounter;
-    /** Sampling is active only while XR Stats is visible. */
-    private volatile boolean performanceSamplingEnabled;
-    /** Rejects in-flight timings that cross a hidden/visible sampling boundary. */
-    private final AtomicLong performanceSamplingEpoch = new AtomicLong(1L);
-    /** Applies timer-query and GL-thread-only diagnostic resets at the next current-context draw. */
-    private final AtomicBoolean performanceGlStateResetRequested = new AtomicBoolean(true);
-    private int depthHealthRetryPollsRemaining;
-    private int depthHealthConsecutiveFailures;
-    /** GL-thread cache preventing redundant sampling writes to the current processor. */
-    private ClientSbsGpuDepthProcessor healthFocusProcessor;
-    private boolean appliedHealthSamplingEnabled;
-    /**
-     * Recent history begins when Stats opens, keeping hidden Stats free of GPU-to-CPU health maps.
-     */
-    private final SbsDepthTelemetryHistory depthTelemetryHistory =
-            new SbsDepthTelemetryHistory();
-    private volatile DepthHealthState depthHealthState = DepthHealthState.EMPTY;
+    /** Stats counters, sampling epoch, GPU-timer stride and depth-health polling state. */
+    private final ClientSbsPerfStats perf = new ClientSbsPerfStats();
     private final AtomicReference<GpuInferenceResult> latestGpuInferenceResult =
             new AtomicReference<>(null);
     /** Renderer-consumed fences are tracked per native tensor slot and transferred on reuse. */
@@ -361,47 +321,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     // through history commit ensures N+1 cannot compare against an owner older than N.
     private final AtomicLong inferenceClaim = new AtomicLong(0L);
     private final AtomicLong nextInferenceClaimToken = new AtomicLong(1L);
-
-    // Client-SBS performance counters are cumulative within one sampling window. Producers live
-    // on the GL, inference, and result-processing threads. Producers use atomics so opening Stats
-    // cannot serialize the GL thread and LiteRT worker. A sample boundary may split one event's
-    // count and duration by one window; that harmless diagnostic smear is preferable to adding
-    // contention to the streaming pipeline.
-    private final Object performanceSampleLock = new Object();
-    private final AtomicLong performanceWindowStartedNs = new AtomicLong(System.nanoTime());
-    private final AtomicLong perfGlLatches = new AtomicLong();
-    private final AtomicLong perfDepthAdopts = new AtomicLong();
-    private final AtomicLong perfNearIdenticalCandidates = new AtomicLong();
-    private final AtomicLong perfNearIdenticalReuses = new AtomicLong();
-    private final AtomicLong perfHostSourceRepeats = new AtomicLong();
-    private final AtomicLong perfNearIdenticalContentRejects = new AtomicLong();
-    private final AtomicLong perfNearIdenticalInvalidRejects = new AtomicLong();
-    private final AtomicLong perfGlOutputSubmits = new AtomicLong();
-    private final AtomicLong perfColorSlotBusySkips = new AtomicLong();
-    private final AtomicLong perfFlatSbsOutputs = new AtomicLong();
-    private final AtomicLong perfNativeTimingSamples = new AtomicLong();
-    private final AtomicLong perfNativeLiteRtRunWallNs = new AtomicLong();
-    private final AtomicLong perfNativeLiteRtRunWallMaxNs = new AtomicLong();
-    private final AtomicLong perfNearIdenticalDecisionTimingSamples = new AtomicLong();
-    private final AtomicLong perfNearIdenticalDecisionReadWallNs = new AtomicLong();
-    private final AtomicLong perfNearIdenticalDecisionReadWallMaxNs = new AtomicLong();
-    private final AtomicLong perfDepthResultAgeNs = new AtomicLong();
-    private final AtomicLong perfDepthResultAgeMaxNs = new AtomicLong();
-    private final AtomicLong[] performanceCounters = {
-            perfGlLatches, perfDepthAdopts,
-            perfNearIdenticalCandidates, perfNearIdenticalReuses, perfHostSourceRepeats,
-            perfNearIdenticalContentRejects,
-            perfNearIdenticalInvalidRejects,
-            perfGlOutputSubmits,
-            perfColorSlotBusySkips, perfFlatSbsOutputs,
-            perfNativeTimingSamples, perfNativeLiteRtRunWallNs,
-            perfNativeLiteRtRunWallMaxNs,
-            perfNearIdenticalDecisionTimingSamples,
-            perfNearIdenticalDecisionReadWallNs,
-            perfNearIdenticalDecisionReadWallMaxNs,
-            perfDepthResultAgeNs,
-            perfDepthResultAgeMaxNs,
-    };
 
     // Other Member Variables
     private long lastThermalStatusPollNs;
@@ -476,21 +395,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      */
     private volatile LiveStreamResize pendingLiveStreamResize;
 
-    private static final class LiveStreamResize {
-        final int width;
-        final int height;
-        final int packedWidth;
-        final int packedHeight;
-
-        LiveStreamResize(int width, int height, int packedWidth, int packedHeight) {
-            this.width = width;
-            this.height = height;
-            this.packedWidth = packedWidth;
-            this.packedHeight = packedHeight;
-        }
-    }
-
-
     public interface OnSurfaceReadyListener {
         void onStereo3DSurfaceReady(Surface surface, int surfaceGeneration);
 
@@ -507,78 +411,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         /** Fails an exact handoff/recovery generation whose EGL output size is unusable. */
         void onStereo3DOutputSurfaceValidationFailed(int surfaceGeneration, String reason);
-    }
-
-    /**
-     * Rare control-plane state for an SDR/PQ boundary. Frame callbacks only read volatile fields;
-     * begin/commit/finish serialize the two owning threads without adding a render-path lock.
-     */
-    static final class HdrInputTransitionState {
-        private int nextGeneration;
-        private volatile int generation;
-        private volatile boolean targetHdr;
-        private volatile boolean committed;
-
-        synchronized int begin(boolean targetHdr) {
-            int next = ++nextGeneration;
-            if (next <= 0) {
-                nextGeneration = next = 1;
-            }
-            this.targetHdr = targetHdr;
-            committed = false;
-            generation = next;
-            return next;
-        }
-
-        synchronized boolean commit(int expectedGeneration) {
-            if (expectedGeneration <= 0 || generation != expectedGeneration || committed) {
-                return false;
-            }
-            committed = true;
-            return true;
-        }
-
-        synchronized boolean finish(int expectedGeneration) {
-            if (expectedGeneration <= 0 || generation != expectedGeneration || !committed) {
-                return false;
-            }
-            generation = 0;
-            committed = false;
-            return true;
-        }
-
-        synchronized void cancel() {
-            generation = 0;
-            committed = false;
-        }
-
-        synchronized boolean cancel(int expectedGeneration) {
-            if (expectedGeneration <= 0 || generation != expectedGeneration) {
-                return false;
-            }
-            cancel();
-            return true;
-        }
-
-        boolean isActive() {
-            return generation != 0;
-        }
-
-        boolean isBlockingFrames() {
-            return generation != 0 && !committed;
-        }
-
-        boolean isCommitted(int expectedGeneration) {
-            return generation == expectedGeneration && committed;
-        }
-
-        int getGeneration() {
-            return generation;
-        }
-
-        boolean getTargetHdr() {
-            return targetHdr;
-        }
     }
 
     private enum ColorTargetFormat {
@@ -604,27 +436,28 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                             PreferenceConfiguration prefConfig,
                             boolean performanceSamplingEnabled) {
         this.glSurfaceView = view;
-        staleDepthWatchdogRunnable = () -> {
-            int scheduledGeneration;
-            synchronized (staleDepthWatchdogLock) {
-                if (!staleDepthWatchdogQueued) {
-                    return;
-                }
-                staleDepthWatchdogQueued = false;
-                scheduledGeneration = staleDepthWatchdogGeneration;
-                staleDepthWatchdogGeneration = 0;
+        staleDepthWatchdog = new StaleDepthWatchdog(new StaleDepthWatchdog.Poster() {
+            @Override
+            public boolean postDelayed(Runnable action, long delayMillis) {
+                return glSurfaceView.postDelayed(action, delayMillis);
             }
+
+            @Override
+            public boolean removeCallbacks(Runnable action) {
+                return glSurfaceView.removeCallbacks(action);
+            }
+        }, scheduledGeneration -> {
             if (!shuttingDown.get() && clientSbs
                     && clientSbsGeneration.get() == scheduledGeneration) {
                 requestPriorityRender();
             }
-        };
+        });
         this.onSurfaceReadyListener = listener;
         this.context = context;
         powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         this.prefConfig = prefConfig;
-        this.performanceSamplingEnabled = performanceSamplingEnabled;
-        resetPerformanceCountersLocked(System.nanoTime());
+        perf.performanceSamplingEnabled = performanceSamplingEnabled;
+        perf.resetPerformanceCountersLocked(System.nanoTime());
         sourceWidth = prefConfig.width;
         sourceHeight = prefConfig.height;
         sourceAspect = (float) sourceWidth / Math.max(sourceHeight, 1);
@@ -662,161 +495,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 "ClientSbsFrameCallbacks", Process.THREAD_PRIORITY_URGENT_DISPLAY);
         frameCallbackThread.start();
         frameCallbackHandler = new Handler(frameCallbackThread.getLooper());
-    }
-
-    /** Immutable copy of the processor's reused asynchronous health-readback view. */
-    private static final class DepthHealthState {
-        static final DepthHealthState EMPTY = new DepthHealthState(false);
-        static final DepthHealthState READBACK_FAILED = new DepthHealthState(true);
-
-        final boolean available;
-        /** True after a readback error and until a fresh GPU health sample arrives. */
-        final boolean readbackFailed;
-        final float validFraction;
-        final float effectiveRangeWidth;
-        final boolean rangeCollapsed;
-        final float popStrength;
-        /** Retired adaptive-pop diagnostic retained only by the source-neutral telemetry ABI. */
-        final float edgeFraction;
-        final float changeFraction;
-        final int sceneAge;
-        /**
-         * Accepted shot cuts since the session began. A running count is what separates "the cut
-         * detector fired once on a real cut" from "it is retriggering on ordinary motion", which a
-         * momentary sample of sceneAge cannot show.
-         */
-        final long hardCutCount;
-        /** Whether persistent raw camera state has been initialized. */
-        final boolean profileInitialized;
-        /**
-         * Whether the cut detector can fire at all. Without it a flat cut count is ambiguous --
-         * no cuts happened, or the detector has been disarmed and could not have reported them.
-         */
-        final boolean geometryCutArmed;
-        /** Current-frame appearance proposals observed by the local color detector. */
-        final long appearanceProposals;
-        final long acceptedAppearanceCuts;
-        final long acceptedGeometryCuts;
-        final long acceptedStructurelessEntryCuts;
-        /** Cumulative estimator faults; a climbing count is invisible in any instantaneous value. */
-        final long emptyRawFrames;
-        final long collapsedRawFrames;
-        final float rawZero;
-        final float currentRawMean;
-        final float rawInverseAmplitude;
-        final float targetRawInverseAmplitude;
-        final float rawPercentileLow;
-        final float rawPercentileHigh;
-        final boolean cameraClockArmed;
-        final long sampleSequence;
-        final boolean currentDepthValid;
-        final boolean historyAdvanced;
-        final boolean currentGeometryReady;
-        final float appearanceRawChangeFraction;
-        final float appearanceMeanLumaDelta;
-        final float appearanceStructuralChangeFraction;
-        final float appearanceCurrentSupportFraction;
-        final float appearanceCommonSupportFraction;
-        final int cutDecisionFlags;
-        /** Monotonic identity of the most recently latched notable cut decision. */
-        final long cutEventSequence;
-        final float latestDepthChangeFraction;
-        final float latestRangeShift;
-        final float latestInternalCutEvidence;
-        final float geometryChangeBaseline;
-
-
-        private DepthHealthState(boolean readbackFailed) {
-            available = false;
-            this.readbackFailed = readbackFailed;
-            validFraction = 0.0f;
-            effectiveRangeWidth = 0.0f;
-            rangeCollapsed = true;
-            popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
-            edgeFraction = Float.NaN;
-            changeFraction = 0.0f;
-            sceneAge = 0;
-            hardCutCount = 0L;
-            profileInitialized = false;
-            geometryCutArmed = false;
-            appearanceProposals = 0L;
-            acceptedAppearanceCuts = 0L;
-            acceptedGeometryCuts = 0L;
-            acceptedStructurelessEntryCuts = 0L;
-            emptyRawFrames = 0L;
-            collapsedRawFrames = 0L;
-            rawZero = Float.NaN;
-            currentRawMean = Float.NaN;
-            rawInverseAmplitude = Float.NaN;
-            targetRawInverseAmplitude = Float.NaN;
-            rawPercentileLow = Float.NaN;
-            rawPercentileHigh = Float.NaN;
-            cameraClockArmed = false;
-            sampleSequence = 0L;
-            currentDepthValid = false;
-            historyAdvanced = false;
-            currentGeometryReady = false;
-            appearanceRawChangeFraction = 0.0f;
-            appearanceMeanLumaDelta = 0.0f;
-            appearanceStructuralChangeFraction = 0.0f;
-            appearanceCurrentSupportFraction = 0.0f;
-            appearanceCommonSupportFraction = 0.0f;
-            cutDecisionFlags = 0;
-            cutEventSequence = 0L;
-            latestDepthChangeFraction = Float.NaN;
-            latestRangeShift = Float.NaN;
-            latestInternalCutEvidence = 0.0f;
-            geometryChangeBaseline = 0.0f;
-        }
-
-        DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
-            available = true;
-            readbackFailed = false;
-            validFraction = snapshot.getValidRawFraction();
-            effectiveRangeWidth = snapshot.getEffectiveRangeWidth();
-            rangeCollapsed = snapshot.isPercentileRangeCollapsed();
-            edgeFraction = snapshot.getEdgeFraction();
-            changeFraction = snapshot.getChangeFraction();
-            sceneAge = snapshot.getSceneAge();
-            popStrength = snapshot.getPopStrength();
-            hardCutCount = snapshot.getHardCutCount();
-            profileInitialized = snapshot.isStereoProfileInitialized();
-            geometryCutArmed = snapshot.isGeometryCutArmed();
-            appearanceProposals = snapshot.getAppearanceProposalCount();
-            acceptedAppearanceCuts = snapshot.getAcceptedAppearanceCutCount();
-            acceptedGeometryCuts = snapshot.getAcceptedGeometryCutCount();
-            acceptedStructurelessEntryCuts =
-                    snapshot.getAcceptedStructurelessEntryCutCount();
-            emptyRawFrames = snapshot.getEmptyRawFrameCount();
-            collapsedRawFrames = snapshot.getCollapsedRawFrameCount();
-            rawZero = profileInitialized ? snapshot.getRawZero() : Float.NaN;
-            currentRawMean = Float.isFinite(snapshot.getTargetRawInverseAmplitude())
-                    ? snapshot.getCurrentRawMean() : Float.NaN;
-            rawInverseAmplitude = profileInitialized
-                    ? snapshot.getRawInverseAmplitude() : Float.NaN;
-            targetRawInverseAmplitude = snapshot.getTargetRawInverseAmplitude();
-            rawPercentileLow = snapshot.getRawPercentileLow();
-            rawPercentileHigh = snapshot.getRawPercentileHigh();
-            cameraClockArmed = snapshot.isCameraClockArmed();
-            sampleSequence = snapshot.getFrameSequence();
-            currentDepthValid = snapshot.isCurrentDepthValid();
-            historyAdvanced = snapshot.didHistoryAdvance();
-            currentGeometryReady = snapshot.isCurrentGeometryReady();
-            appearanceRawChangeFraction = snapshot.getAppearanceRawChangeFraction();
-            appearanceMeanLumaDelta = snapshot.getAppearanceMeanLumaDelta();
-            appearanceStructuralChangeFraction =
-                    snapshot.getAppearanceStructuralChangeFraction();
-            appearanceCurrentSupportFraction =
-                    snapshot.getAppearanceCurrentSupportFraction();
-            appearanceCommonSupportFraction =
-                    snapshot.getAppearanceCommonSupportFraction();
-            cutDecisionFlags = snapshot.getCutDecisionFlags();
-            cutEventSequence = snapshot.getCutEventSequence();
-            latestDepthChangeFraction = snapshot.getLatestDepthChangeFraction();
-            latestRangeShift = snapshot.getLatestRangeShift();
-            latestInternalCutEvidence = snapshot.getLatestInternalCutEvidence();
-            geometryChangeBaseline = snapshot.getGeometryChangeBaseline();
-        }
     }
 
     /**
@@ -932,42 +610,42 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.modelInputHeight = owner.modelInputHeight;
             this.windowSeconds = elapsedNs / 1_000_000_000.0f;
 
-            long glLatches = owner.perfGlLatches.getAndSet(0L);
-            long inferenceCompletes = owner.perfNativeTimingSamples.getAndSet(0L);
-            long decisionReads = owner.perfNearIdenticalDecisionTimingSamples.getAndSet(0L);
-            long depthAdopts = owner.perfDepthAdopts.getAndSet(0L);
-            long reuseCandidates = owner.perfNearIdenticalCandidates.getAndSet(0L);
-            long depthReuses = owner.perfNearIdenticalReuses.getAndSet(0L);
+            long glLatches = owner.perf.perfGlLatches.getAndSet(0L);
+            long inferenceCompletes = owner.perf.perfNativeTimingSamples.getAndSet(0L);
+            long decisionReads = owner.perf.perfNearIdenticalDecisionTimingSamples.getAndSet(0L);
+            long depthAdopts = owner.perf.perfDepthAdopts.getAndSet(0L);
+            long reuseCandidates = owner.perf.perfNearIdenticalCandidates.getAndSet(0L);
+            long depthReuses = owner.perf.perfNearIdenticalReuses.getAndSet(0L);
             this.nearIdenticalContentRejects =
-                    owner.perfNearIdenticalContentRejects.getAndSet(0L);
+                    owner.perf.perfNearIdenticalContentRejects.getAndSet(0L);
             this.nearIdenticalInvalidRejects =
-                    owner.perfNearIdenticalInvalidRejects.getAndSet(0L);
-            long glOutputSubmits = owner.perfGlOutputSubmits.getAndSet(0L);
+                    owner.perf.perfNearIdenticalInvalidRejects.getAndSet(0L);
+            long glOutputSubmits = owner.perf.perfGlOutputSubmits.getAndSet(0L);
             this.thermalStatus = owner.currentThermalStatus;
-            this.colorSlotBusySkips = owner.perfColorSlotBusySkips.getAndSet(0L);
-            this.flatSbsOutputs = owner.perfFlatSbsOutputs.getAndSet(0L);
+            this.colorSlotBusySkips = owner.perf.perfColorSlotBusySkips.getAndSet(0L);
+            this.flatSbsOutputs = owner.perf.perfFlatSbsOutputs.getAndSet(0L);
 
             this.glLatchFps = rate(glLatches, elapsedNs);
             this.depthAdoptFps = rate(depthAdopts, elapsedNs);
             this.depthReuseFps = rate(depthReuses, elapsedNs);
-            this.hostSourceRepeatFps = rate(owner.perfHostSourceRepeats.getAndSet(0L), elapsedNs);
+            this.hostSourceRepeatFps = rate(owner.perf.perfHostSourceRepeats.getAndSet(0L), elapsedNs);
             this.depthReuseRatio = reuseCandidates == 0L
                     ? 0.0f : (float) depthReuses / reuseCandidates;
             this.glOutputSubmitFps = rate(glOutputSubmits, elapsedNs);
             this.averageNativeLiteRtRunWallMs = averageMs(
-                    owner.perfNativeLiteRtRunWallNs.getAndSet(0L), inferenceCompletes);
+                    owner.perf.perfNativeLiteRtRunWallNs.getAndSet(0L), inferenceCompletes);
             this.maxNativeLiteRtRunWallMs = nsToMs(
-                    owner.perfNativeLiteRtRunWallMaxNs.getAndSet(0L));
+                    owner.perf.perfNativeLiteRtRunWallMaxNs.getAndSet(0L));
             this.averageNearIdenticalDecisionReadWallMs = averageMs(
-                    owner.perfNearIdenticalDecisionReadWallNs.getAndSet(0L), decisionReads);
+                    owner.perf.perfNearIdenticalDecisionReadWallNs.getAndSet(0L), decisionReads);
             this.maxNearIdenticalDecisionReadWallMs = nsToMs(
-                    owner.perfNearIdenticalDecisionReadWallMaxNs.getAndSet(0L));
+                    owner.perf.perfNearIdenticalDecisionReadWallMaxNs.getAndSet(0L));
             this.averageDepthResultAgeMs = averageMs(
-                    owner.perfDepthResultAgeNs.getAndSet(0L), depthAdopts);
+                    owner.perf.perfDepthResultAgeNs.getAndSet(0L), depthAdopts);
             this.maxDepthResultAgeMs = nsToMs(
-                    owner.perfDepthResultAgeMaxNs.getAndSet(0L));
+                    owner.perf.perfDepthResultAgeMaxNs.getAndSet(0L));
 
-            ClientSbsGpuTimer timer = owner.gpuTimer;
+            ClientSbsGpuTimer timer = owner.perf.gpuTimer;
             ClientSbsGpuTimer.Snapshot modelInputGpu = timer == null ? null
                     : timer.drain(ClientSbsGpuTimer.Stage.MODEL_INPUT);
             ClientSbsGpuTimer.Snapshot matchedColorGpu = timer == null ? null
@@ -986,8 +664,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.averageGpuDepthProfileMs = averageGpuMs(depthProfileGpu);
             this.averageGpuSbsComposeMs = averageGpuMs(composeGpu);
 
-            DepthHealthState health = owner.depthHealthState;
-            SbsDepthTelemetrySnapshot depthTelemetry = owner.depthTelemetryHistory.attach(
+            DepthHealthState health = owner.perf.depthHealthState;
+            SbsDepthTelemetrySnapshot depthTelemetry = owner.perf.depthTelemetryHistory.attach(
                     owner.toDepthTelemetry(health));
             this.depthHealthAvailable = depthTelemetry.isAvailable();
             this.depthHealthReadbackFailed =
@@ -1062,12 +740,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      * never with formatting, sysfs reads, or view updates.
      */
     public ClientSbsPerformanceSnapshot sampleClientSbsPerformance() {
-        synchronized (performanceSampleLock) {
-            if (!performanceSamplingEnabled) {
+        synchronized (perf.performanceSampleLock) {
+            if (!perf.performanceSamplingEnabled) {
                 return null;
             }
             long nowNs = System.nanoTime();
-            long startedNs = performanceWindowStartedNs.getAndSet(nowNs);
+            long startedNs = perf.performanceWindowStartedNs.getAndSet(nowNs);
             long elapsedNs = Math.max(1L, nowNs - startedNs);
             String activeBackend = shuttingDown.get()
                     ? "Unavailable" : activeInferenceBackend;
@@ -1078,18 +756,18 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     public void setPerformanceSamplingEnabled(boolean enabled) {
         boolean changed;
-        synchronized (performanceSampleLock) {
-            changed = performanceSamplingEnabled != enabled;
+        synchronized (perf.performanceSampleLock) {
+            changed = perf.performanceSamplingEnabled != enabled;
             if (changed) {
-                performanceSamplingEpoch.incrementAndGet();
+                perf.performanceSamplingEpoch.incrementAndGet();
             }
-            performanceSamplingEnabled = enabled;
-            resetPerformanceCountersLocked(System.nanoTime());
+            perf.performanceSamplingEnabled = enabled;
+            perf.resetPerformanceCountersLocked(System.nanoTime());
         }
-        drainCompletedGpuTimerSamples();
+        perf.drainCompletedGpuTimerSamples();
         if (changed) {
-            resetDepthTelemetryEra();
-            performanceGlStateResetRequested.set(true);
+            perf.resetDepthTelemetryEra();
+            perf.performanceGlStateResetRequested.set(true);
             if (!shuttingDown.get()) {
                 requestPriorityRender();
             }
@@ -1097,149 +775,14 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     private void resetPerformanceSamplingBaseline() {
-        synchronized (performanceSampleLock) {
-            performanceSamplingEpoch.incrementAndGet();
-            resetPerformanceCountersLocked(System.nanoTime());
+        synchronized (perf.performanceSampleLock) {
+            perf.performanceSamplingEpoch.incrementAndGet();
+            perf.resetPerformanceCountersLocked(System.nanoTime());
         }
-        drainCompletedGpuTimerSamples();
-        resetDepthTelemetryEra();
-        if (performanceSamplingEnabled) {
-            performanceGlStateResetRequested.set(true);
-        }
-    }
-
-    private void resetDepthTelemetryEra() {
-        depthHealthState = DepthHealthState.EMPTY;
-        // A mode/profile, GL-context, HDR, or resize generation boundary starts a new telemetry
-        // era. Keeping the old ring bridges unrelated pipelines, while retaining a previous
-        // readback backoff can suppress every early sample from the replacement processor.
-        depthTelemetryHistory.clear();
-        depthHealthRetryPollsRemaining = 0;
-        depthHealthConsecutiveFailures = 0;
-    }
-
-    private void resetPerformanceCountersLocked(long startedNs) {
-        for (AtomicLong counter : performanceCounters) {
-            counter.set(0L);
-        }
-        performanceWindowStartedNs.set(startedNs);
-    }
-
-    private void drainCompletedGpuTimerSamples() {
-        ClientSbsGpuTimer timer = gpuTimer;
-        if (timer == null) {
-            return;
-        }
-        for (ClientSbsGpuTimer.Stage stage : ClientSbsGpuTimer.Stage.values()) {
-            timer.drain(stage);
-        }
-    }
-
-    private void recordCounter(AtomicLong counter) {
-        if (!performanceSamplingEnabled) {
-            return;
-        }
-        counter.incrementAndGet();
-    }
-
-    private long capturePerformanceSamplingEpoch() {
-        if (!performanceSamplingEnabled) {
-            return 0L;
-        }
-        long epoch = performanceSamplingEpoch.get();
-        return performanceSamplingEnabled && epoch == performanceSamplingEpoch.get()
-                ? epoch : 0L;
-    }
-
-    static boolean isPerformanceSamplingEpochCurrent(boolean enabled, long expectedEpoch,
-                                                       long currentEpoch) {
-        return enabled && expectedEpoch != 0L && expectedEpoch == currentEpoch;
-    }
-
-    private void recordDepthAdopt(long depthResultAgeNs, long expectedEpoch) {
-        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
-                performanceSamplingEpoch.get())) {
-            return;
-        }
-        perfDepthAdopts.incrementAndGet();
-        recordDuration(perfDepthResultAgeNs, perfDepthResultAgeMaxNs, depthResultAgeNs);
-    }
-
-    private void recordNativeInferenceTiming(long liteRtRunWallNs,
-                                             long expectedEpoch) {
-        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
-                performanceSamplingEpoch.get())) {
-            return;
-        }
-        perfNativeTimingSamples.incrementAndGet();
-        recordDuration(perfNativeLiteRtRunWallNs,
-                perfNativeLiteRtRunWallMaxNs, liteRtRunWallNs);
-    }
-
-    private void recordNearIdenticalDecisionReadTiming(long decisionReadWallNs,
-                                                       long expectedEpoch) {
-        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
-                performanceSamplingEpoch.get())) {
-            return;
-        }
-        perfNearIdenticalDecisionTimingSamples.incrementAndGet();
-        recordDuration(perfNearIdenticalDecisionReadWallNs,
-                perfNearIdenticalDecisionReadWallMaxNs, decisionReadWallNs);
-    }
-
-    private void recordNearIdenticalDecisionReason(int reason, long expectedEpoch) {
-        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
-                performanceSamplingEpoch.get())
-                || reason == ClientSbsNearIdenticalPolicy.REASON_REUSE) {
-            return;
-        }
-        if (ClientSbsNearIdenticalPolicy.isContentRejectionReason(reason)) {
-            perfNearIdenticalContentRejects.incrementAndGet();
-        } else {
-            perfNearIdenticalInvalidRejects.incrementAndGet();
-        }
-    }
-
-    private void recordGlOutputSubmit(boolean flat, long expectedEpoch) {
-        if (!isPerformanceSamplingEpochCurrent(performanceSamplingEnabled, expectedEpoch,
-                performanceSamplingEpoch.get())) {
-            return;
-        }
-        perfGlOutputSubmits.incrementAndGet();
-        if (flat) {
-            perfFlatSbsOutputs.incrementAndGet();
-        }
-    }
-
-    private static void recordDuration(AtomicLong total, AtomicLong maximum, long durationNs) {
-        long safeDurationNs = Math.max(0L, durationNs);
-        total.addAndGet(safeDurationNs);
-        long observed = maximum.get();
-        while (safeDurationNs > observed
-                && !maximum.compareAndSet(observed, safeDurationNs)) {
-            observed = maximum.get();
-        }
-    }
-
-    private boolean beginGpuTimer(ClientSbsGpuTimer.Stage stage) {
-        if (!performanceSamplingEnabled) {
-            return false;
-        }
-        int stageIndex = stage.ordinal();
-        if ((gpuTimerSampleCounters[stageIndex]++ % GPU_TIMER_SAMPLE_STRIDE) != 0) {
-            return false;
-        }
-        ClientSbsGpuTimer timer = gpuTimer;
-        return timer != null && timer.begin(stage);
-    }
-
-    private void endGpuTimer(boolean started) {
-        if (!started) {
-            return;
-        }
-        ClientSbsGpuTimer timer = gpuTimer;
-        if (timer != null) {
-            timer.end();
+        perf.drainCompletedGpuTimerSamples();
+        perf.resetDepthTelemetryEra();
+        if (perf.performanceSamplingEnabled) {
+            perf.performanceGlStateResetRequested.set(true);
         }
     }
 
@@ -1247,14 +790,14 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // Both timer queries and the GPU-to-CPU health/evidence ring are diagnostics. Normal
         // streaming does neither; with performance sampling enabled both are polled once every
         // GPU_TELEMETRY_POLL_STRIDE calls.
-        int pollCounter = gpuTelemetryPollCounter++;
+        int pollCounter = perf.gpuTelemetryPollCounter++;
         ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
-        applyHealthSamplingStateOnGlThread(processor);
-        if (!shouldPollHealthTelemetry(performanceSamplingEnabled, pollCounter)) {
+        perf.applyHealthSamplingStateOnGlThread(processor);
+        if (!ClientSbsPerfStats.shouldPollHealthTelemetry(perf.performanceSamplingEnabled, pollCounter)) {
             return;
         }
-        if (shouldPollHealthTelemetry(performanceSamplingEnabled, pollCounter)) {
-            ClientSbsGpuTimer timer = gpuTimer;
+        if (ClientSbsPerfStats.shouldPollHealthTelemetry(perf.performanceSamplingEnabled, pollCounter)) {
+            ClientSbsGpuTimer timer = perf.gpuTimer;
             if (timer != null) {
                 timer.poll();
             }
@@ -1262,8 +805,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (processor == null) {
             return;
         }
-        if (depthHealthRetryPollsRemaining > 0) {
-            depthHealthRetryPollsRemaining--;
+        if (perf.depthHealthRetryPollsRemaining > 0) {
+            perf.depthHealthRetryPollsRemaining--;
             return;
         }
         try {
@@ -1272,72 +815,37 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             if (health != null) {
                 // A completed, mapped sample is the recovery boundary. A nonthrowing null poll
                 // means only that no fence is ready, so it must not erase the visible failure state.
-                depthHealthConsecutiveFailures = 0;
+                perf.depthHealthConsecutiveFailures = 0;
                 DepthHealthState updated = new DepthHealthState(health);
-                depthTelemetryHistory.add(toDepthTelemetry(updated));
-                depthHealthState = updated;
+                perf.depthTelemetryHistory.add(toDepthTelemetry(updated));
+                perf.depthHealthState = updated;
             }
         } catch (Throwable error) {
             // Health data is diagnostic only. A driver that rejects asynchronous staging must not
             // disable otherwise-valid GPU depth rendering. Do not retain a live-looking old sample:
             // mark health unavailable, then retry with bounded exponential backoff so a transient
             // map/query failure can recover without turning a persistent driver fault into log spam.
-            depthHealthState = DepthHealthState.READBACK_FAILED;
-            clearDepthHealthMetricHistory();
-            if (depthHealthConsecutiveFailures < Integer.MAX_VALUE) {
-                depthHealthConsecutiveFailures++;
+            perf.depthHealthState = DepthHealthState.READBACK_FAILED;
+            perf.clearDepthHealthMetricHistory();
+            if (perf.depthHealthConsecutiveFailures < Integer.MAX_VALUE) {
+                perf.depthHealthConsecutiveFailures++;
             }
-            depthHealthRetryPollsRemaining =
-                    healthTelemetryRetryPolls(depthHealthConsecutiveFailures);
+            perf.depthHealthRetryPollsRemaining =
+                    ClientSbsPerfStats.healthTelemetryRetryPolls(perf.depthHealthConsecutiveFailures);
             LimeLog.warning("Client SBS depth health telemetry unavailable; retrying after "
-                    + depthHealthRetryPollsRemaining + " poll opportunities: "
+                    + perf.depthHealthRetryPollsRemaining + " poll opportunities: "
                     + error.getMessage());
-        }
-    }
-
-    static int healthTelemetryRetryPolls(int consecutiveFailures) {
-        if (consecutiveFailures <= 0) {
-            return 0;
-        }
-        int shift = Math.min(consecutiveFailures - 1, 30);
-        long retryPolls = (long) HEALTH_TELEMETRY_RETRY_BASE_POLLS << shift;
-        return (int) Math.min(HEALTH_TELEMETRY_RETRY_MAX_POLLS, retryPolls);
-    }
-
-    private void clearDepthHealthMetricHistory() {
-        depthTelemetryHistory.clear();
-    }
-
-    static boolean shouldPollHealthTelemetry(int pollCounter) {
-        return pollCounter % GPU_TELEMETRY_POLL_STRIDE == 0;
-    }
-
-    static boolean shouldPollHealthTelemetry(boolean diagnosticsEnabled, int pollCounter) {
-        return diagnosticsEnabled && shouldPollHealthTelemetry(pollCounter);
-    }
-
-    private void applyHealthSamplingStateOnGlThread(ClientSbsGpuDepthProcessor processor) {
-        if (processor == null) {
-            healthFocusProcessor = null;
-            appliedHealthSamplingEnabled = false;
-            return;
-        }
-        boolean enabled = performanceSamplingEnabled;
-        if (healthFocusProcessor != processor || appliedHealthSamplingEnabled != enabled) {
-            processor.setHealthSamplingEnabled(enabled);
-            healthFocusProcessor = processor;
-            appliedHealthSamplingEnabled = enabled;
         }
     }
 
     /** Runs only from a draw with this renderer's EGL context current. */
     private void applyPerformanceSamplingStateOnGlThread() {
-        if (!performanceGlStateResetRequested.getAndSet(false)) {
+        if (!perf.performanceGlStateResetRequested.getAndSet(false)) {
             return;
         }
 
-        ClientSbsGpuTimer oldTimer = gpuTimer;
-        gpuTimer = null;
+        ClientSbsGpuTimer oldTimer = perf.gpuTimer;
+        perf.gpuTimer = null;
         if (oldTimer != null) {
             try {
                 oldTimer.close();
@@ -1345,12 +853,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 LimeLog.warning("Client SBS GPU timer reset failed: " + error.getMessage());
             }
         }
-        if (performanceSamplingEnabled) {
-            gpuTimer = ClientSbsGpuTimer.createIfSupported();
+        if (perf.performanceSamplingEnabled) {
+            perf.gpuTimer = ClientSbsGpuTimer.createIfSupported();
         }
 
-        java.util.Arrays.fill(gpuTimerSampleCounters, 0);
-        gpuTelemetryPollCounter = 0;
+        java.util.Arrays.fill(perf.gpuTimerSampleCounters, 0);
+        perf.gpuTelemetryPollCounter = 0;
 
         lastThermalStatusPollNs = 0L;
         currentThermalStatus = PowerManager.THERMAL_STATUS_NONE;
@@ -1441,7 +949,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         pendingColorFrameLease = null;
         colorFrameSlots.reset();
         abandonGpuProcessorsAfterContextLoss();
-        resetDepthTelemetryEra();
+        perf.resetDepthTelemetryEra();
         invalidateDepthOutputs();
         clearGpuOutputConsumedFenceHandles(false);
         matchedOutputPresented = false;
@@ -1493,8 +1001,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             gpuSceneCutDetector = null;
         }
         gpuSceneCutResetPending = false;
-        ClientSbsGpuTimer abandonedTimer = gpuTimer;
-        gpuTimer = null;
+        ClientSbsGpuTimer abandonedTimer = perf.gpuTimer;
+        perf.gpuTimer = null;
         if (abandonedTimer != null) {
             abandonedTimer.abandonAfterContextLoss();
         }
@@ -2203,27 +1711,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         pendingFrameCallbackSequence = 0L;
     }
 
-    /**
-     * Apollo retains a matched packed image indefinitely only while its authenticated source clock
-     * is unchanged. The decoded Android stream has no equivalent content clock, so a successfully
-     * latched newer buffer is the conservative changed-source signal.
-     */
-    static boolean shouldPresentCurrentFlatForStaleDepth(long presentedFrameSequence,
-                                                         long latchedFrameSequence,
-                                                         long presentationAgeNs) {
-        return presentedFrameSequence > 0L
-                && latchedFrameSequence > presentedFrameSequence
-                && presentationAgeNs > MAX_STALE_DEPTH_PRESENTATION_AGE_NS;
-    }
-
-    /** Schedules strictly after the host's inclusive 250-ms presentation-retention boundary. */
-    static long staleDepthWatchdogDelayMillis(long presentationAgeNs) {
-        long safeAgeNs = Math.max(0L, presentationAgeNs);
-        long remainingNs = Math.max(0L,
-                MAX_STALE_DEPTH_PRESENTATION_AGE_NS - safeAgeNs);
-        return Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNs) + 1L);
-    }
-
     static int decodedSourceFrameDelta(long previousObservationSequence,
                                        long currentObservationSequence) {
         if (previousObservationSequence <= 0L
@@ -2251,28 +1738,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (generation <= 0 || shuttingDown.get() || !clientSbs) {
             return;
         }
-        synchronized (staleDepthWatchdogLock) {
-            if (staleDepthWatchdogQueued) {
-                return;
-            }
-            staleDepthWatchdogGeneration = generation;
-            staleDepthWatchdogQueued = glSurfaceView.postDelayed(
-                    staleDepthWatchdogRunnable,
-                    staleDepthWatchdogDelayMillis(presentationAgeNs));
-            if (!staleDepthWatchdogQueued) {
-                staleDepthWatchdogGeneration = 0;
-            }
-        }
+        staleDepthWatchdog.schedule(generation, presentationAgeNs);
     }
 
     private void cancelStaleDepthWatchdog() {
-        synchronized (staleDepthWatchdogLock) {
-            if (staleDepthWatchdogQueued) {
-                glSurfaceView.removeCallbacks(staleDepthWatchdogRunnable);
-            }
-            staleDepthWatchdogQueued = false;
-            staleDepthWatchdogGeneration = 0;
-        }
+        staleDepthWatchdog.cancel();
     }
 
     /**
@@ -2284,7 +1754,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (presented == null || !hasDepthProfile()
                 || presented.getGeneration() != activeClientSbsGeneration
                 || latchedFrameSequence <= Math.max(presented.getFrameSequence(),
-                        lastProvenSourceRepeatSequence)) {
+                        hostSourceRepeat.lastProvenRepeatSequence)) {
             // A fresh adoption caught up before the deadline (or invalidated its owner). Remove
             // the old timer so it cannot force a redundant swap of an already-current pair.
             cancelStaleDepthWatchdog();
@@ -2292,7 +1762,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         long capturedAtNs = presented.getCapturedAtNs();
         long ageNs = nowNs >= capturedAtNs ? nowNs - capturedAtNs : 0L;
-        if (shouldPresentCurrentFlatForStaleDepth(
+        if (StaleDepthWatchdog.shouldPresentCurrentFlat(
                 presented.getFrameSequence(), latchedFrameSequence, ageNs)) {
             return true;
         }
@@ -2436,7 +1906,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         // Thermal state remains telemetry only. Depth inference is uncapped and starts whenever a
         // newer decoded frame exists and the single-flight claim below is free.
-        if (performanceSamplingEnabled) {
+        if (perf.performanceSamplingEnabled) {
             sampleThermalStatus(System.nanoTime());
         }
 
@@ -2464,45 +1934,30 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean consumeProvenSourceRepeat() {
         DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
         if (tracker == null || !clientSbs || !matchedOutputPresented || !hasPresentableDepth()
-                || !sourceRepeatOwnerConfirmed
+                || !hostSourceRepeat.ownerConfirmed
                 || gpuSceneCutDetector == null || gpuSceneCutResetPending
                 || !surfaceLifecycleReady || !outputSurfaceValidated
                 || activeClientSbsGeneration != clientSbsGeneration.get()
                 || hdrInputTransition.isBlockingFrames() || presentationCompletion.hasPending()
                 || gpuShutdownRequested.get() || shuttingDown.get() || inferenceClaim.get() != 0L
                 || latchedFrameSequence <= lastCapturedFrameSequence
-                || !java.util.Arrays.equals(presentedSourceTransform, videoTextureTransform)
-                || !canRetainHostSource(presentedSourceIdentity, latchedSourceIdentity,
-                        tracker.getEpoch())) {
+                || !hostSourceRepeat.matchesPresented(videoTextureTransform,
+                        latchedSourceIdentity, tracker.getEpoch())) {
             return false;
         }
-        if (!sourceSettled) {
-            sourceSettled = hasHostSourceSettled(sourceSettlingStartedNs, System.nanoTime());
-            if (!sourceSettled) return false;
+        if (!hostSourceRepeat.settled) {
+            if (!hostSourceRepeat.updateSettled(System.nanoTime())) return false;
         }
         Trace.beginSection("ClientSbs.sourceRepeat");
         try {
-            presentedSourceIdentity.copyFrom(latchedSourceIdentity);
+            hostSourceRepeat.acceptRepeat(latchedSourceIdentity, latchedFrameSequence);
             lastCapturedFrameSequence = latchedFrameSequence;
-            lastProvenSourceRepeatSequence = latchedFrameSequence;
             cancelStaleDepthWatchdog();
-            recordCounter(perfHostSourceRepeats);
+            perf.recordCounter(perf.perfHostSourceRepeats);
             return true;
         } finally {
             Trace.endSection();
         }
-    }
-
-    static boolean canRetainHostSource(DecodedSourceIdentityTracker.Sample presented,
-                                       DecodedSourceIdentityTracker.Sample current,
-                                       long decoderEpoch) {
-        return current.epoch == decoderEpoch
-                && DecodedSourceIdentityTracker.isSameSource(presented, current);
-    }
-
-    static boolean hasHostSourceSettled(long startedNs, long nowNs) {
-        return startedNs > 0L && nowNs >= startedNs
-                && nowNs - startedNs >= HOST_SOURCE_SETTLING_NS;
     }
 
     /**
@@ -2624,7 +2079,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 texture.getTransformMatrix(videoTextureTransform);
                 latchedFrameSequence = frameCallbackSequence;
                 hasFrameForActiveGeneration = true;
-                recordCounter(perfGlLatches);
+                perf.recordCounter(perf.perfGlLatches);
                 return true;
             } catch (RuntimeException error) {
                 Log.w("Stereo3DRenderer", "updateTexImage failed", error);
@@ -2789,9 +2244,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         logGlCapabilities();
         // Query objects are created lazily on the first draw with visible XR Stats.
-        gpuTimer = null;
-        performanceGlStateResetRequested.set(true);
-        resetDepthTelemetryEra();
+        perf.gpuTimer = null;
+        perf.performanceGlStateResetRequested.set(true);
+        perf.resetDepthTelemetryEra();
 
         simple3dProgram = createProgram(
                 ShaderUtils.SIMPLE_VERTEX_SHADER, ClientSbsShaders.FLAT_FRAGMENT);
@@ -2849,7 +2304,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         pipelineContract.getModelContentAspect(),
                         !pipelineContract.usesDirectFullFrameResize(),
                         Math.max(prefConfig.fps, 1), aiModel.getV2RawCoordinateScale());
-                applyHealthSamplingStateOnGlThread(gpuDepthProcessor);
+                perf.applyHealthSamplingStateOnGlThread(gpuDepthProcessor);
                 gpuComputeReady = gpuDepthProcessor.getOutputWidth() == depthMapWidth
                         && gpuDepthProcessor.getOutputHeight() == depthMapHeight;
                 if (!gpuComputeReady) {
@@ -3326,11 +2781,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         long nowNs = System.nanoTime();
         if (!hasDepthProfile()
                 || shouldPresentCurrentFlatForStaleDepth(nowNs)) {
-            long performanceEpoch = capturePerformanceSamplingEpoch();
+            long performanceEpoch = perf.capturePerformanceSamplingEpoch();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             drawFlatSbs();
             matchedOutputPresented = false;
-            recordGlOutputSubmit(true, performanceEpoch);
+            perf.recordGlOutputSubmit(true, performanceEpoch);
             frameSubmittedForSwap = true;
             return;
         }
@@ -3338,8 +2793,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // Every draw must populate the current EGL back buffer because buffer preservation is not
         // guaranteed. Steady state requests a draw only for a newly adopted exact pair; decoder
         // callbacks are drained separately and SceneCore retains the last submitted buffer.
-        long performanceEpoch = capturePerformanceSamplingEpoch();
-        boolean composeGpuTimerStarted = beginGpuTimer(
+        long performanceEpoch = perf.capturePerformanceSamplingEpoch();
+        boolean composeGpuTimerStarted = perf.beginGpuTimer(
                 ClientSbsGpuTimer.Stage.SBS_COMPOSE);
         boolean stereoPresented = false;
         Trace.beginSection("ClientSbs.compose");
@@ -3354,27 +2809,15 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
         } finally {
             Trace.endSection();
-            endGpuTimer(composeGpuTimerStarted);
+            perf.endGpuTimer(composeGpuTimerStarted);
         }
         matchedOutputPresented = stereoPresented;
         if (stereoPresented && activeColorFrameLease != null) {
-            DecodedSourceIdentityTracker.Sample source =
-                    colorSourceIdentities[activeColorFrameLease.getSlot()];
-            if (source.sourceId == 0 || source.epoch != presentedSourceIdentity.epoch
-                    || source.sourceId != presentedSourceIdentity.sourceId
-                    || (source.frameNumber != presentedSourceIdentity.frameNumber
-                    && !DecodedSourceIdentityTracker.isSameSource(presentedSourceIdentity, source))) {
-                sourceSettlingStartedNs = nowNs;
-                sourceSettled = false;
-            }
-            presentedSourceIdentity.copyFrom(source);
-            System.arraycopy(colorSourceTransforms[activeColorFrameLease.getSlot()], 0,
-                    presentedSourceTransform, 0, 16);
+            hostSourceRepeat.onStereoPresented(activeColorFrameLease.getSlot(), nowNs);
         } else {
-            presentedSourceIdentity.clear();
-            sourceSettled = false;
+            hostSourceRepeat.onFlatPresented();
         }
-        recordGlOutputSubmit(!stereoPresented, performanceEpoch);
+        perf.recordGlOutputSubmit(!stereoPresented, performanceEpoch);
         frameSubmittedForSwap = true;
     }
 
@@ -3713,7 +3156,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 || captureGeneration != clientSbsGeneration.get()) {
             return false;
         }
-        long performanceEpoch = capturePerformanceSamplingEpoch();
+        long performanceEpoch = perf.capturePerformanceSamplingEpoch();
         if (!acquireMatchedColorFrame(captureGeneration)) {
             return false;
         }
@@ -3727,8 +3170,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             return false;
         }
 
-        colorSourceIdentities[bufferSlot].copyFrom(latchedSourceIdentity);
-        System.arraycopy(videoTextureTransform, 0, colorSourceTransforms[bufferSlot], 0, 16);
+        hostSourceRepeat.recordCapture(bufferSlot, latchedSourceIdentity, videoTextureTransform);
         ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
         boolean nearIdenticalCandidate = sceneCutDetector != null
                 && sceneCutDetector.hasCommittedInferenceHistory()
@@ -3747,7 +3189,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // Produce and fence the small model tensor first. The inference context can begin waiting
         // at this boundary while the renderer queue performs the independent full-resolution
         // matched-color copy below.
-        boolean modelGpuTimerStarted = beginGpuTimer(
+        boolean modelGpuTimerStarted = perf.beginGpuTimer(
                 ClientSbsGpuTimer.Stage.MODEL_INPUT);
         boolean tensorPackedWithSceneCut = false;
         boolean sceneCutFramePending = false;
@@ -3801,19 +3243,19 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     GLES30.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0);
                 }
             } finally {
-                endGpuTimer(modelGpuTimerStarted);
+                perf.endGpuTimer(modelGpuTimerStarted);
             }
 
             long inputReadyFence = GLES30.glFenceSync(
                     GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             GLES20.glFlush();
 
-            boolean captureGpuTimerStarted = beginGpuTimer(
+            boolean captureGpuTimerStarted = perf.beginGpuTimer(
                     ClientSbsGpuTimer.Stage.MATCHED_COLOR);
             try {
                 capturePendingMatchedColorFrame();
             } finally {
-                endGpuTimer(captureGpuTimerStarted);
+                perf.endGpuTimer(captureGpuTimerStarted);
             }
 
             int glError = GLES20.glGetError();
@@ -3854,7 +3296,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
 
             if (task.nearIdenticalCandidate) {
-                recordCounter(perfNearIdenticalCandidates);
+                perf.recordCounter(perf.perfNearIdenticalCandidates);
             }
 
             // The renderer keeps this transaction pending across native arbitration. Only a
@@ -4149,11 +3591,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     private void clearPublishedPresentationStateLocked(boolean glContextValid) {
         latchedSourceIdentity.clear();
-        presentedSourceIdentity.clear();
-        lastProvenSourceRepeatSequence = 0L;
-        sourceSettlingStartedNs = 0L;
-        sourceSettled = false;
-        sourceRepeatOwnerConfirmed = false;
+        hostSourceRepeat.reset();
         GpuInferenceResult unpublishedGpu = latestGpuInferenceResult.getAndSet(null);
         if (unpublishedGpu != null) {
             if (glContextValid) {
@@ -4257,7 +3695,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
         }
         resetGpuSceneCutDetectorWhenIdle();
-        resetDepthTelemetryEra();
+        perf.resetDepthTelemetryEra();
         hasFrameForActiveGeneration = false;
         lastCapturedFrameSequence = latchedFrameSequence;
     }
@@ -4328,7 +3766,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             return false;
         }
 
-        sourceRepeatOwnerConfirmed = false;
+        hostSourceRepeat.ownerConfirmed = false;
         if (result.reusedDepth) {
             return adoptNearIdenticalReuseLocked(result);
         }
@@ -4352,9 +3790,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             return false;
         }
 
-        boolean samplePerformance = performanceSamplingEnabled
+        boolean samplePerformance = perf.performanceSamplingEnabled
                 && result.performanceEpoch != 0L
-                && result.performanceEpoch == performanceSamplingEpoch.get();
+                && result.performanceEpoch == perf.performanceSamplingEpoch.get();
         boolean colorAdopted = false;
         try {
             ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
@@ -4385,11 +3823,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             ClientSbsFrameSlots.Lease oldColorLease = activeColorFrameLease;
             activeColorFrameLease = result.colorFrameLease;
             colorFrameSlots.release(oldColorLease, ClientSbsFrameSlots.State.ACTIVE);
-            lastProvenSourceRepeatSequence = 0L;
+            hostSourceRepeat.lastProvenRepeatSequence = 0L;
             invalidateDepthDerivedState();
             colorAdopted = true;
 
-            boolean depthGpuTimerStarted = beginGpuTimer(
+            boolean depthGpuTimerStarted = perf.beginGpuTimer(
                     ClientSbsGpuTimer.Stage.DEPTH_PROFILE);
             ClientSbsGpuDepthProcessor.Result processed;
             try {
@@ -4405,7 +3843,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                             sourceFrameDelta, result.colorFrameLease.getCapturedAtNs());
                 }
             } finally {
-                endGpuTimer(depthGpuTimerStarted);
+                perf.endGpuTimer(depthGpuTimerStarted);
             }
             if (!processed.isValidFrame()) {
                 throw new IllegalStateException("GPU depth processor rejected the frame");
@@ -4443,13 +3881,13 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         "Output-consumed fence collision for slot " + result.bufferSlot);
             }
 
-            if (samplePerformance && isPerformanceSamplingEpochCurrent(
-                    performanceSamplingEnabled, result.performanceEpoch,
-                    performanceSamplingEpoch.get())) {
+            if (samplePerformance && ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(
+                    perf.performanceSamplingEnabled, result.performanceEpoch,
+                    perf.performanceSamplingEpoch.get())) {
                 long adoptedAtNs = System.nanoTime();
                 long pairAgeNs = Math.max(0L, adoptedAtNs
                         - result.colorFrameLease.getCapturedAtNs());
-                recordDepthAdopt(pairAgeNs, result.performanceEpoch);
+                perf.recordDepthAdopt(pairAgeNs, result.performanceEpoch);
             }
 
             // Keep the single-flight claim until history is committed. Otherwise N+1 could pack
@@ -4505,19 +3943,19 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             ClientSbsFrameSlots.Lease oldColorLease = activeColorFrameLease;
             activeColorFrameLease = result.colorFrameLease;
             colorFrameSlots.release(oldColorLease, ClientSbsFrameSlots.State.ACTIVE);
-            lastProvenSourceRepeatSequence = 0L;
+            hostSourceRepeat.lastProvenRepeatSequence = 0L;
             colorAdopted = true;
 
             // Freeze normalization, cut, profile, conditioned disparity, and the cached warp. Only this
             // current exact color and presentation-dirty bit change on reuse.
             discardReusedInferenceHistory(result);
             matchedOutputPresented = false;
-            if (isPerformanceSamplingEpochCurrent(performanceSamplingEnabled,
-                    result.performanceEpoch, performanceSamplingEpoch.get())) {
-                perfNearIdenticalReuses.incrementAndGet();
+            if (ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(perf.performanceSamplingEnabled,
+                    result.performanceEpoch, perf.performanceSamplingEpoch.get())) {
+                perf.perfNearIdenticalReuses.incrementAndGet();
             }
 
-            sourceRepeatOwnerConfirmed = result.sceneCutDetector != null
+            hostSourceRepeat.ownerConfirmed = result.sceneCutDetector != null
                     && result.sceneCutDetector == gpuSceneCutDetector;
             releaseInferenceClaim(result.inferenceClaimToken);
             return true;
@@ -4915,7 +4353,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 captureGeneration, latchedFrameSequence,
                 System.nanoTime());
         if (lease == null) {
-            recordCounter(perfColorSlotBusySkips);
+            perf.recordCounter(perf.perfColorSlotBusySkips);
             return false;
         }
         pendingColorFrameLease = lease;
@@ -5114,173 +4552,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         return textureId;
     }
 
-    private int loadShader(int type, String shaderCode) {
-        int shader = GLES20.glCreateShader(type);
-        GLES20.glShaderSource(shader, shaderCode);
-        GLES20.glCompileShader(shader);
-        int[] compiled = new int[1];
-        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0);
-        if (compiled[0] == 0) {
-            LimeLog.severe("Could not compile shader " + type + ":");
-            LimeLog.severe(GLES20.glGetShaderInfoLog(shader));
-            GLES20.glDeleteShader(shader);
-            shader = 0;
-        }
-        return shader;
-    }
-
-    private int createProgram(String vertex, String fragment) {
-        int vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertex);
-        if (vertexShader == 0) return 0;
-        int fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragment);
-        if (fragmentShader == 0) {
-            GLES20.glDeleteShader(vertexShader);
-            return 0;
-        }
-
-        int program = GLES20.glCreateProgram();
-        if (program == 0) {
-            GLES20.glDeleteShader(vertexShader);
-            GLES20.glDeleteShader(fragmentShader);
-            return 0;
-        }
-
-        GLES20.glAttachShader(program, vertexShader);
-        GLES20.glAttachShader(program, fragmentShader);
-        GLES20.glLinkProgram(program);
-        int[] linkStatus = new int[1];
-        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
-        GLES20.glDetachShader(program, vertexShader);
-        GLES20.glDetachShader(program, fragmentShader);
-        GLES20.glDeleteShader(vertexShader);
-        GLES20.glDeleteShader(fragmentShader);
-        if (linkStatus[0] != GLES20.GL_TRUE) {
-            LimeLog.severe("Could not link program: ");
-            LimeLog.severe(GLES20.glGetProgramInfoLog(program));
-            GLES20.glDeleteProgram(program);
-            return 0;
-        }
-        return program;
-    }
-
-    private int createComputeProgram(String source) {
-        int computeShader = loadShader(GLES31.GL_COMPUTE_SHADER, source);
-        if (computeShader == 0) {
-            return 0;
-        }
-        int program = GLES20.glCreateProgram();
-        if (program == 0) {
-            GLES20.glDeleteShader(computeShader);
-            return 0;
-        }
-        GLES20.glAttachShader(program, computeShader);
-        GLES20.glLinkProgram(program);
-        GLES20.glDeleteShader(computeShader);
-        int[] linkStatus = new int[1];
-        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
-        if (linkStatus[0] != GLES20.GL_TRUE) {
-            LimeLog.severe("Could not link client SBS compute program: "
-                    + GLES20.glGetProgramInfoLog(program));
-            GLES20.glDeleteProgram(program);
-            return 0;
-        }
-        return program;
-    }
-
-    /** Program locations are context-local and immutable after link. Cache them once rather than
-     * crossing the Java/JNI/driver boundary for every eye and every decoded frame. */
-    private static final class QuadProgramBindings {
-        final int position;
-        final int texCoord;
-        final int isHdr;
-        final int textureTransform;
-        final int tonemapHdrToSdr;
-        final int sourceAspect;
-        /** Source pixels per model texel, per axis; drives the model-input box filter. */
-        final int downsampleRatio;
-        final int sourceSize;
-        final int ordinalTexture;
-
-        QuadProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            isHdr = GLES20.glGetUniformLocation(program, "u_isHdr");
-            textureTransform = GLES20.glGetUniformLocation(program, "u_TextureTransform");
-            tonemapHdrToSdr = GLES20.glGetUniformLocation(program, "u_tonemapHdrToSdr");
-            sourceAspect = GLES20.glGetUniformLocation(program, "u_sourceAspect");
-            downsampleRatio = GLES20.glGetUniformLocation(program, "u_downsampleRatio");
-            sourceSize = GLES20.glGetUniformLocation(program, "u_sourceSize");
-            ordinalTexture = GLES20.glGetUniformLocation(program, "u_OrdinalTexture");
-        }
-    }
-
-    private static final class GpuPackProgramBindings {
-        final int modelInputTexture;
-
-        GpuPackProgramBindings(int program) {
-            modelInputTexture = GLES20.glGetUniformLocation(program, "s_ModelInputTexture");
-        }
-
-        boolean isComplete() {
-            return modelInputTexture >= 0;
-        }
-    }
-
-    private static final class ContractiveWarpMapProgramBindings {
-        final int position;
-        final int texCoord;
-        final int parallaxTexture;
-
-        ContractiveWarpMapProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            parallaxTexture = GLES20.glGetUniformLocation(program, "s_ParallaxTexture");
-        }
-
-        boolean isComplete() {
-            return position >= 0 && texCoord >= 0 && parallaxTexture >= 0;
-        }
-    }
-
-    private static final class ContractiveWarpMapRefinementProgramBindings {
-        final int position;
-        final int texCoord;
-        final int coarseWarpMapTexture;
-        final int parallaxTexture;
-
-        ContractiveWarpMapRefinementProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            coarseWarpMapTexture = GLES20.glGetUniformLocation(
-                    program, "s_CoarseWarpMapTexture");
-            parallaxTexture = GLES20.glGetUniformLocation(program, "s_ParallaxTexture");
-        }
-
-        boolean isComplete() {
-            return position >= 0 && texCoord >= 0 && coarseWarpMapTexture >= 0
-                    && parallaxTexture >= 0;
-        }
-    }
-
-    private static final class WarpedReprojectionProgramBindings {
-        final int position;
-        final int texCoord;
-        final int colorTexture;
-        final int warpMapTexture;
-
-        WarpedReprojectionProgramBindings(int program) {
-            position = GLES20.glGetAttribLocation(program, "a_Position");
-            texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            colorTexture = GLES20.glGetUniformLocation(program, "s_ColorTexture");
-            warpMapTexture = GLES20.glGetUniformLocation(program, "s_WarpMapTexture");
-        }
-
-        boolean isComplete() {
-            return position >= 0 && texCoord >= 0 && colorTexture >= 0
-                    && warpMapTexture >= 0;
-        }
-    }
-
     private class AiTask implements Runnable {
         @Override
         public void run() {
@@ -5310,9 +4581,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                             break;
                         }
 
-                        boolean samplePerformance = performanceSamplingEnabled
+                        boolean samplePerformance = perf.performanceSamplingEnabled
                                 && renderResult.performanceEpoch != 0L
-                                && renderResult.performanceEpoch == performanceSamplingEpoch.get();
+                                && renderResult.performanceEpoch == perf.performanceSamplingEpoch.get();
                         ClientSbsGpuInferenceEngine gpuEngine = gpuInferenceEngine;
                         if (gpuEngine == null || !gpuEngine.isInitialized()) {
                             throw new IllegalStateException("Native GPU engine disappeared");
@@ -5335,11 +4606,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         ClientSbsGpuInferenceEngine.RunDisposition disposition =
                                 gpuEngine.getLastRunDisposition(renderResult.bufferSlot);
                         if (samplePerformance && renderResult.nearIdenticalCandidate) {
-                            recordNearIdenticalDecisionReason(
+                            perf.recordNearIdenticalDecisionReason(
                                     gpuEngine.getLastNearIdenticalDecisionReason(
                                             renderResult.bufferSlot),
                                     renderResult.performanceEpoch);
-                            recordNearIdenticalDecisionReadTiming(
+                            perf.recordNearIdenticalDecisionReadTiming(
                                     gpuEngine.getLastNearIdenticalDecisionReadWallNanos(
                                             renderResult.bufferSlot),
                                     renderResult.performanceEpoch);
@@ -5347,7 +4618,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         if (samplePerformance
                                 && disposition
                                 == ClientSbsGpuInferenceEngine.RunDisposition.INFER) {
-                            recordNativeInferenceTiming(
+                            perf.recordNativeInferenceTiming(
                                     gpuEngine.getLastLiteRtRunWallNanos(
                                             renderResult.bufferSlot),
                                     renderResult.performanceEpoch);
