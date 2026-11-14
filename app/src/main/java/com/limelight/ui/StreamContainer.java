@@ -26,92 +26,10 @@ import com.limelight.utils.Stereo3DRenderer;
 import java.util.function.BooleanSupplier;
 
 import javax.microedition.khronos.egl.EGL10;
-import javax.microedition.khronos.egl.EGLConfig;
-import javax.microedition.khronos.egl.EGLDisplay;
 
 /** Owns the single XR presentation route, guarded decoder/GL surface handoffs, and input bridge. */
 public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback {
     private static final long DECODER_SURFACE_HANDOFF_TIMEOUT_MS = 2_000L;
-
-    /**
-     * Prefer a 10-bit window for Client SBS so PQ values survive the final EGL surface. Some XR
-     * runtimes expose only the baseline 8-bit config, so selection must remain a preference rather
-     * than a hard requirement. The renderer verifies the actual default-framebuffer precision
-     * before it advertises HDR output to SceneCore.
-     */
-    private static final class ClientSbsEglConfigChooser implements GLSurfaceView.EGLConfigChooser {
-        private static final int EGL_OPENGL_ES3_BIT_KHR = 0x0040;
-
-        @Override
-        public EGLConfig chooseConfig(EGL10 egl, EGLDisplay display) {
-            int[] attributes = {
-                    EGL10.EGL_SURFACE_TYPE, EGL10.EGL_WINDOW_BIT,
-                    EGL10.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
-                    EGL10.EGL_NONE
-            };
-            int[] count = new int[1];
-            if (!egl.eglChooseConfig(display, attributes, null, 0, count)
-                    || count[0] <= 0) {
-                throw new IllegalArgumentException("No window-capable GLES EGL configs");
-            }
-
-            EGLConfig[] configs = new EGLConfig[count[0]];
-            if (!egl.eglChooseConfig(display, attributes, configs, configs.length, count)) {
-                throw new IllegalArgumentException("Unable to enumerate GLES EGL configs");
-            }
-
-            EGLConfig hdrConfig = null;
-            EGLConfig sdrConfig = null;
-            int hdrScore = Integer.MAX_VALUE;
-            int sdrScore = Integer.MAX_VALUE;
-            for (int i = 0; i < count[0]; i++) {
-                EGLConfig config = configs[i];
-                int red = getConfigAttribute(egl, display, config, EGL10.EGL_RED_SIZE);
-                int green = getConfigAttribute(egl, display, config, EGL10.EGL_GREEN_SIZE);
-                int blue = getConfigAttribute(egl, display, config, EGL10.EGL_BLUE_SIZE);
-                int alpha = getConfigAttribute(egl, display, config, EGL10.EGL_ALPHA_SIZE);
-                int depth = getConfigAttribute(egl, display, config, EGL10.EGL_DEPTH_SIZE);
-                int stencil = getConfigAttribute(egl, display, config, EGL10.EGL_STENCIL_SIZE);
-
-                if (red >= 10 && green >= 10 && blue >= 10 && alpha >= 2) {
-                    int score = colorDistance(red, green, blue, alpha, 10, 2)
-                            + depth + stencil;
-                    if (score < hdrScore) {
-                        hdrScore = score;
-                        hdrConfig = config;
-                    }
-                }
-                if (red >= 8 && green >= 8 && blue >= 8 && alpha >= 8) {
-                    int score = colorDistance(red, green, blue, alpha, 8, 8)
-                            + depth + stencil;
-                    if (score < sdrScore) {
-                        sdrScore = score;
-                        sdrConfig = config;
-                    }
-                }
-            }
-
-            EGLConfig selected = hdrConfig != null ? hdrConfig : sdrConfig;
-            if (selected == null) {
-                throw new IllegalArgumentException("No RGBA EGL config for Client SBS");
-            }
-            LimeLog.info("Client SBS EGL config preference: "
-                    + (hdrConfig != null ? "RGB10_A2" : "RGBA8 fallback"));
-            return selected;
-        }
-
-        private static int colorDistance(int red, int green, int blue, int alpha,
-                                         int rgbTarget, int alphaTarget) {
-            return Math.abs(red - rgbTarget) + Math.abs(green - rgbTarget)
-                    + Math.abs(blue - rgbTarget) + Math.abs(alpha - alphaTarget);
-        }
-
-        private static int getConfigAttribute(EGL10 egl, EGLDisplay display, EGLConfig config,
-                                              int attribute) {
-            int[] value = new int[1];
-            return egl.eglGetConfigAttrib(display, config, attribute, value) ? value[0] : 0;
-        }
-    }
 
     public interface SurfaceSwitchCallback {
         void onComplete(boolean success);
@@ -127,8 +45,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     // Streaming always uses the single XR route: XrStreamPresenter. Fresh host connections start
     // in Normal; a host-confirmed resume restores the last successful per-machine/app presentation.
-    // Modes remain switchable from the in-headset control bar (Normal / Host SBS Raw / Host SBS AI /
-    // Client SBS AI). The legacy plain-2D (SurfaceView) and standalone
+    // Modes remain switchable from the in-headset dock, which has five choices (2D / Host AI 3D /
+    // Client AI 3D / Game 3D / Movie 3D). The legacy plain-2D (SurfaceView) and standalone
     // on-device SBS (Stereo3DRenderer) render modes are gone.
 
     private Game game;
@@ -214,9 +132,9 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     /** Blocks ordinary UI binds between the synchronous GL recovery park and replacement input. */
     private volatile boolean mClientSbsContextRecoveryParked;
 
-    // Set once teardown starts so the GL EGLWindowSurfaceFactory.destroySurface() callback (which
-    // fires on the GL thread as the view detaches) doesn't try to rebind the decoder to an
-    // already-disposed XR surface.
+    // Set once teardown starts. The EGL owner runs EGLWindowSurfaceFactory.destroySurface() on its
+    // own thread for a pause or close request and posts the acknowledgement here; that posted
+    // callback checks this flag, so it cannot rebind the decoder to an already-disposed XR surface.
     private volatile boolean mDestroyed = false;
     private boolean mStereoRendererDestroyed;
     private boolean mStereoRendererDestroyStarted;
@@ -231,7 +149,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         setFocusableInTouchMode(true);
     }
 
-    /** The XR presenter for Raw/AI host SBS and Client SBS AI. Lets {@code Game} forward perf text. */
+    /** The single XR presenter used by every presentation mode. */
     public XrStreamPresenter getXrPresenter() {
         return mXrPresenter;
     }
@@ -377,7 +295,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         {
             // Single XR route: the decoder renders into the XR compositor's SurfaceEntity, not an
             // on-screen view (the presenter delivers that surface via onStereo3DSurfaceReady).
-            ClientSbsRenderSurface glSurfaceView = new ClientSbsRenderSurface(context);
+            ClientSbsRenderSurface renderSurface = new ClientSbsRenderSurface(context);
             // Prefer an HDR-capable window, but retain an RGBA8 config fallback for runtimes that
             // cannot expose one. Stereo3DRenderer verifies the selected default framebuffer and
             // keeps SceneCore metadata consistent with the end-to-end precision.
@@ -429,7 +347,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 }
             };
 
-            mStereoRenderer = new Stereo3DRenderer(glSurfaceView, new Stereo3DRenderer.OnSurfaceReadyListener() {
+            mStereoRenderer = new Stereo3DRenderer(renderSurface, new Stereo3DRenderer.OnSurfaceReadyListener() {
                 @Override
                 public void onStereo3DSurfaceReady(Surface surface, int surfaceGeneration) {
                     // This value was written by createWindowSurface() earlier on this same GL
@@ -479,7 +397,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             // unrelated to this view's on-screen size. Tell the renderer both dimensions explicitly.
             mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
                     mXrPresenter.getClientSbsSurfaceHeight());
-            glSurfaceView.initialize(mStereoRenderer, new ClientSbsEglConfigChooser(),
+            renderSurface.initialize(mStereoRenderer, new ClientSbsEglConfigChooser(),
                     windowFactory, error -> {
                         LimeLog.severe("Client SBS EGL lifecycle failed: " + error);
                         if (!mDestroyed) {
@@ -488,8 +406,8 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                     });
             
             // The owner starts paused and does not acquire EGL until an explicit Client request.
-            glSurfaceView.requestPause();
-            mSurfaceView = glSurfaceView;
+            renderSurface.requestPause();
+            mSurfaceView = renderSurface;
             setClientSbsInputLayoutEnabled(false);
         }
         addView(mSurfaceView, childParams);
@@ -1105,15 +1023,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     /**
-     * Re-pin the XR surface to the target host depth-mode frame size — the plain 2D frame
-     * ({@code W x H}) or the packed SBS frame ({@code 2W' x H'}) — and rebind the decoder to it.
-     * Mirrors {@link #switchToClientSbs}'s dummy-surface handoff so MediaCodec never sees a
-     * transient/garbage surface. The decoder's adaptive playback absorbs the host-driven
-     * resolution change that accompanies the switch, and the same envelope absorbs a live
-     * video-mode change, so this is also how Normal/Host SBS AI re-pin after one. Raw SBS changes
-     * the negotiated base width and therefore reconnects before any live surface switch.
-     */
-    /**
      * Re-pins the Client SBS source targets and packed SceneCore/EGL output to {@code 2W x H}.
      *
      * <p>SceneCore may replace its Surface when pixel dimensions change, and even a retained Java
@@ -1499,6 +1408,18 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }, stageDeadlineMs);
     }
 
+    /**
+     * Re-pins the SceneCore surface for direct decoder output at the given logical size, as a
+     * plain or ({@code sbs}) host-SBS frame, and rebinds the decoder to it.
+     *
+     * <p>The decoder is first parked on the persistent dummy surface. SceneCore is resized only
+     * after that park succeeds, and the decoder is then bound to the surface SceneCore publishes.
+     * Both binds are asynchronous and share one absolute deadline. The callback receives the
+     * result of the final bind, or false after any failed stage or the deadline.</p>
+     *
+     * @return false when the request cannot start, including while another host resize is
+     *         pending; accepted requests complete asynchronously
+     */
     public boolean resizeHostSbsSurface(boolean sbs, int logicalWidth, int logicalHeight,
                                         SurfaceSwitchCallback callback) {
         if (callback == null || mXrPresenter == null || mDestroyed || mDummySurface == null
