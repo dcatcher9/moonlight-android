@@ -122,14 +122,7 @@ final class ClientSbsGpuDepthShaders {
             "uniform int uExternalSceneCut;",
             "uniform int uSceneEvidenceAvailable;",
             "uniform uint uExternalSceneCutWordOffset;",
-            "const uint SCENE_CUT_RECORD_EVIDENCE = 0u;",
-            "const uint SCENE_CUT_RECORD_BLOCK_COUNT = 1u;",
-            "const uint SCENE_CUT_RECORD_RAW_MODERATE_COUNT = 2u;",
-            "const uint SCENE_CUT_RECORD_RAW_DELTA_SUM = 3u;",
-            "const uint SCENE_CUT_RECORD_STRUCTURAL_CHANGE_COUNT = 4u;",
-            "const uint SCENE_CUT_RECORD_CURRENT_SUPPORT_COUNT = 5u;",
-            "const uint SCENE_CUT_RECORD_COMMON_SUPPORT_COUNT = 6u;",
-            "const uint SCENE_CUT_RECORD_DIAGNOSTIC_FLAGS = 7u;",
+            ClientSbsGpuSceneCutShaders.SCENE_CUT_RECORD_FIELD_CONSTANTS,
             "const uint SCENE_EVIDENCE_APPEARANCE = "
                     + ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE + "u;",
             "const uint SCENE_EVIDENCE_EXPOSURE_LIKE = "
@@ -180,42 +173,33 @@ final class ClientSbsGpuDepthShaders {
             "}"
     );
 
-    private static final String RAW_STATS = lines(
-            "layout(std430, binding = 1) buffer RawStats {",
-            "    uint rawMinimum;",
-            "    uint rawMaximum;",
-            "    uint rawValidCount;",
-            "    uint rawPadding;",
-            "    uint rawHistogram[256];",
-            "    uint geometryMinimum;",
-            "    uint geometryMaximum;",
-            "    uint geometryValidCount;",
-            "    uint geometryPadding;",
-            "    uint geometryHistogram[256];",
-            "    uvec4 rawGroupMoments[];",
-            "};"
-    );
+    /** The raw range/histogram scratch block, declared at the binding one program uses. */
+    private static String rawStats(int binding) {
+        return lines(
+                "layout(std430, binding = " + binding + ") buffer RawStats {",
+                "    uint rawMinimum;",
+                "    uint rawMaximum;",
+                "    uint rawValidCount;",
+                "    uint rawPadding;",
+                "    uint rawHistogram[" + HISTOGRAM_BINS + "];",
+                "    uint geometryMinimum;",
+                "    uint geometryMaximum;",
+                "    uint geometryValidCount;",
+                "    uint geometryPadding;",
+                "    uint geometryHistogram[" + HISTOGRAM_BINS + "];",
+                "    uvec4 rawGroupMoments[];",
+                "};"
+        );
+    }
+
+    private static final String RAW_STATS = rawStats(1);
 
     /**
      * Scalar resolution no longer reads the model tensor, so it temporarily aliases raw scratch
      * onto binding zero while the final resolver uses binding one for the GPU scene-cut record.
      * This keeps the six-dispatch pipeline within GLES 3.1's minimum four SSBO bindings.
      */
-    private static final String RAW_STATS_FOR_RESOLVE = lines(
-            "layout(std430, binding = 0) buffer RawStats {",
-            "    uint rawMinimum;",
-            "    uint rawMaximum;",
-            "    uint rawValidCount;",
-            "    uint rawPadding;",
-            "    uint rawHistogram[256];",
-            "    uint geometryMinimum;",
-            "    uint geometryMaximum;",
-            "    uint geometryValidCount;",
-            "    uint geometryPadding;",
-            "    uint geometryHistogram[256];",
-            "    uvec4 rawGroupMoments[];",
-            "};"
-    );
+    private static final String RAW_STATS_FOR_RESOLVE = rawStats(0);
 
     private static final String RAW_INPUT_HEADER = lines(
             "layout(std430, binding = 0) readonly buffer RawDepth {",

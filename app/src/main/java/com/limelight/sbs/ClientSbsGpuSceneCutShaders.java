@@ -9,6 +9,38 @@ final class ClientSbsGpuSceneCutShaders {
         return String.join("\n", source) + "\n";
     }
 
+    /** Joins lines for use as one element of {@link #lines}; adds no trailing newline. */
+    private static String fragment(String... source) {
+        return String.join("\n", source);
+    }
+
+    /** Word indices of one scene-cut record, shared with the depth resolver's reader. */
+    static final String SCENE_CUT_RECORD_FIELD_CONSTANTS = fragment(
+            "const uint SCENE_CUT_RECORD_EVIDENCE = 0u;",
+            "const uint SCENE_CUT_RECORD_BLOCK_COUNT = 1u;",
+            "const uint SCENE_CUT_RECORD_RAW_MODERATE_COUNT = 2u;",
+            "const uint SCENE_CUT_RECORD_RAW_DELTA_SUM = 3u;",
+            "const uint SCENE_CUT_RECORD_STRUCTURAL_CHANGE_COUNT = 4u;",
+            "const uint SCENE_CUT_RECORD_CURRENT_SUPPORT_COUNT = 5u;",
+            "const uint SCENE_CUT_RECORD_COMMON_SUPPORT_COUNT = 6u;",
+            "const uint SCENE_CUT_RECORD_DIAGNOSTIC_FLAGS = 7u;"
+    );
+
+    private static final String LESS_THAN_64 = fragment(
+            "bool lessThan64(uvec2 left, uvec2 right) {",
+            "    return left.y < right.y || (left.y == right.y && left.x < right.x);",
+            "}"
+    );
+
+    /** Opening terms of the owner-eligibility test; each caller appends its own final term. */
+    private static final String NEAR_OWNER_INVALID_CONDITION = fragment(
+            "    if (nearOwnerValid == 0u",
+            "            || all(equal(nearOwnerFrameSequence, uvec2(0u)))",
+            "            || nearOwnerFrameSequence.y >= 0x80000000u",
+            "            || uCurrentFrameSequence.y >= 0x80000000u",
+            "            || !lessThan64(nearOwnerFrameSequence, uCurrentFrameSequence)"
+    );
+
     private static final String BLOCK_WORKGROUP_LAYOUT = "layout(local_size_x = "
             + ClientSbsGpuSceneCutDetector.BLOCK_SIZE + ", local_size_y = "
             + ClientSbsGpuSceneCutDetector.BLOCK_SIZE + ") in;";
@@ -69,14 +101,7 @@ final class ClientSbsGpuSceneCutShaders {
             "};",
             "const uint SCENE_CUT_RECORD_WORD_COUNT = "
                     + ClientSbsGpuSceneCutDetector.SCENE_CUT_RECORD_WORD_COUNT + "u;",
-            "const uint SCENE_CUT_RECORD_EVIDENCE = 0u;",
-            "const uint SCENE_CUT_RECORD_BLOCK_COUNT = 1u;",
-            "const uint SCENE_CUT_RECORD_RAW_MODERATE_COUNT = 2u;",
-            "const uint SCENE_CUT_RECORD_RAW_DELTA_SUM = 3u;",
-            "const uint SCENE_CUT_RECORD_STRUCTURAL_CHANGE_COUNT = 4u;",
-            "const uint SCENE_CUT_RECORD_CURRENT_SUPPORT_COUNT = 5u;",
-            "const uint SCENE_CUT_RECORD_COMMON_SUPPORT_COUNT = 6u;",
-            "const uint SCENE_CUT_RECORD_DIAGNOSTIC_FLAGS = 7u;",
+            SCENE_CUT_RECORD_FIELD_CONSTANTS,
             "const uint SCENE_EVIDENCE_APPEARANCE = "
                     + ClientSbsShotCutPolicy.SCENE_EVIDENCE_APPEARANCE + "u;",
             "const uint SCENE_EVIDENCE_EXPOSURE_LIKE = "
@@ -152,15 +177,9 @@ final class ClientSbsGpuSceneCutShaders {
             "shared uint blockOrdinalValues[256];",
             // (admitted, medium, strong, non-finite) evidence for the exact same 16x16 tile.
             "shared uvec4 nearIdenticalTotals[256];",
-            "bool lessThan64(uvec2 left, uvec2 right) {",
-            "    return left.y < right.y || (left.y == right.y && left.x < right.x);",
-            "}",
+            LESS_THAN_64,
             "bool nearOwnerEligible() {",
-            "    if (nearOwnerValid == 0u",
-            "            || all(equal(nearOwnerFrameSequence, uvec2(0u)))",
-            "            || nearOwnerFrameSequence.y >= 0x80000000u",
-            "            || uCurrentFrameSequence.y >= 0x80000000u",
-            "            || !lessThan64(nearOwnerFrameSequence, uCurrentFrameSequence)",
+            NEAR_OWNER_INVALID_CONDITION,
             "            || lessThan64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs)) return false;",
             "    return true;",
             "}",
@@ -442,15 +461,9 @@ final class ClientSbsGpuSceneCutShaders {
                 "shared uvec4 evidenceTotals[64];",
                 // Keep malformed evidence distinct from a valid local strong-change veto.
                 "shared uvec2 rejectionTotals[64];",
-                "bool lessThan64(uvec2 left, uvec2 right) {",
-                "    return left.y < right.y || (left.y == right.y && left.x < right.x);",
-                "}",
+                LESS_THAN_64,
                 "uint ownerRejectionReason() {",
-                "    if (nearOwnerValid == 0u",
-                "            || all(equal(nearOwnerFrameSequence, uvec2(0u)))",
-                "            || nearOwnerFrameSequence.y >= 0x80000000u",
-                "            || uCurrentFrameSequence.y >= 0x80000000u",
-                "            || !lessThan64(nearOwnerFrameSequence, uCurrentFrameSequence)",
+                NEAR_OWNER_INVALID_CONDITION,
                 "            || lessThan64(uCurrentCapturedAtNs, nearOwnerCapturedAtNs))",
                 "        return REASON_OWNER_INVALID;",
                 "    return REASON_REUSE;",
