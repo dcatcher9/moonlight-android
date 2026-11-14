@@ -395,15 +395,15 @@ public final class XrStreamPresenterControlTransportTeardownTest {
                 1920, 1080, 6000, 1, 40_000));
         assertEquals(0, presenter.sendHostTelemetryControl(true, false, 1, 500));
         assertFalse(presenter.sendHostDebugDumpControl());
-        assertFalse(XrStreamPresenter.isPresentationModeSupported(
+        assertFalse(XrPresentationPolicy.isPresentationModeSupported(
                 PresentationMode.HOST_SBS_AI, false));
-        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+        assertTrue(XrPresentationPolicy.isPresentationModeSupported(
                 PresentationMode.CLIENT_SBS_AI, false));
-        assertFalse(XrStreamPresenter.isPresentationModeSupported(
+        assertFalse(XrPresentationPolicy.isPresentationModeSupported(
                 PresentationMode.HOST_SBS_RAW, false));
-        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+        assertTrue(XrPresentationPolicy.isPresentationModeSupported(
                 PresentationMode.GAME_3D, false));
-        assertTrue(XrStreamPresenter.isPresentationModeSupported(
+        assertTrue(XrPresentationPolicy.isPresentationModeSupported(
                 PresentationMode.MOVIE_3D, false));
         assertEquals(MoonBridge.SBS_MODE_OFF, presenter.getInitialHostSbsWireMode());
         assertEquals(0, ShadowMoonBridge.getSetVideoModeV2CallCount());

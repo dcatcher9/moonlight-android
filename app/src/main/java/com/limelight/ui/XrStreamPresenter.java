@@ -121,21 +121,13 @@ import java.util.function.IntSupplier;
 @SuppressLint({"RestrictedApi", "UnsafeOptInUsageError"})
 public class XrStreamPresenter {
 
-    /** Nearest the user may drag the panel toward the eyes, in meters from the activity-space origin. */
-    private static final float MIN_PANEL_DISTANCE_METERS = 0.4f;
-
     // Control-bar tile geometry (meters). Shared by build + reposition so the bar stays glued
     // beneath the quad as it changes size on a mode switch or a user resize.
     private static final float BAR_HEIGHT_METERS = 0.21f;     // also the per-tile size (square tiles)
-    /** Taller independent pane fits per-mode quality controls without moving the level dock. */
-    private static final float MODE_OPTIONS_MIN_HEIGHT_METERS = 0.52f;
     private static final float MODE_OPTIONS_MAX_HEIGHT_METERS = 0.90f;
     private static final float BAR_DIVIDER_METERS = 0.05f;    // extra width for the group divider
     private static final float BAR_GAP_METERS = 0.24f;        // quad bottom -> bar center
-    private static final float BAR_Z_METERS = 0.02f;          // nudge toward viewer vs. the quad
     private static final float MODE_OPTIONS_GAP_METERS = 0.02f;
-    private static final float MODE_OPTIONS_MIN_TILT_DEGREES = 10.0f;
-    private static final float MODE_OPTIONS_MAX_TILT_DEGREES = 30.0f;
     // Keep Stats compact and place it beside the video. A single column is easier to scan in-headset
     // and cuts the Android panel raster from the former 9.1 MP two-column surface to 2.8 MP.
     private static final float STATS_WIDTH_METERS = 1.40f;
@@ -157,9 +149,6 @@ public class XrStreamPresenter {
     private static final float STATS_ENTITY_SCALE = 1.26f;
     private static final float STATS_CONTENT_SCALE = 1.0f / STATS_ENTITY_SCALE;
     private static final float STATS_GAP_METERS = 0.10f;
-    private static final float STATS_MIN_INWARD_YAW_DEGREES = 8.0f;
-    private static final float STATS_MAX_INWARD_YAW_DEGREES = 50.0f;
-    private static final float STATS_HEAD_CLEARANCE_METERS = 0.45f;
     private static final float AUXILIARY_WIDTH_METERS = STATS_WIDTH_METERS;
     private static final float AUXILIARY_HEIGHT_METERS = 1.16f;
     private static final float GLANCE_WIDTH_METERS = 1.48f;
@@ -294,7 +283,7 @@ public class XrStreamPresenter {
     /** Reused contextual View hierarchy hosted by one independently tilted panel. */
     private FrameLayout modeOptionsHost;
     private PanelEntity modeOptionsPanel;
-    private float modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
+    private float modeOptionsHeightMeters = XrPanelPlacement.MODE_OPTIONS_MIN_HEIGHT_METERS;
     /** Original 0.52 m Android raster; retained so repeated fits cannot compound rounding. */
     private int modeOptionsBaseRasterHeightPixels;
     private int modeOptionsRasterHeightPixels;
@@ -574,115 +563,6 @@ public class XrStreamPresenter {
         PRESS_DOWN,
         HOVER,
         FOCUS
-    }
-
-    /** Host SBS AI makes the host emit a packed 2W' x H' side-by-side frame. */
-    private static boolean isHostDepthPresenterMode(PresentationMode mode) {
-        return mode == PresentationMode.HOST_SBS_AI;
-    }
-
-    /** True when a direct-decoder mode switch crosses the Host SBS AI packed-size boundary. */
-    static boolean requiresHostSurfaceResize(PresentationMode previousMode, PresentationMode nextMode) {
-        return isHostDepthPresenterMode(previousMode) != isHostDepthPresenterMode(nextMode);
-    }
-
-    /**
-     * Maps the logical quality tuple used by the UI/session store onto the 0x3007 wire geometry.
-     * Every mode requests its logical dimensions; null when they are not usable on the wire.
-     */
-    static int[] liveVideoModeWireDimensions(int logicalWidth, int logicalHeight) {
-        return isUsableLiveVideoModeWireDimensions(logicalWidth, logicalHeight)
-                ? new int[] {logicalWidth, logicalHeight} : null;
-    }
-
-    /**
-     * Converts the authoritative 0x3008 wire geometry back into the logical quality tuple.
-     * Every ACK status carries the mode that actually remains on the wire, so malformed geometry
-     * must fail closed even for a refusal rather than being mistaken for a logical per-eye size.
-     */
-    static int[] liveVideoModeLogicalDimensions(int wireWidth, int wireHeight) {
-        if (!isUsableLiveVideoModeWireDimensions(wireWidth, wireHeight)) {
-            return null;
-        }
-        return new int[] {wireWidth, wireHeight};
-    }
-
-    private static boolean isUsableLiveVideoModeWireDimensions(int width, int height) {
-        int cap = PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
-        return width >= 2 && height >= 2
-                && width <= cap && height <= cap
-                && (width & 1) == 0 && (height & 1) == 0;
-    }
-
-    /** True when bitrate must be costed against a {@code 2W x H} encoded frame: Host SBS AI. */
-    static boolean usesPackedBitrateCost(PresentationMode mode) {
-        return mode == PresentationMode.HOST_SBS_AI;
-    }
-
-    /** True only when the decoder target or encoded dimensions change across the transition. */
-    static boolean requiresDecoderTransition(PresentationMode previousMode, PresentationMode nextMode) {
-        boolean crossesClientRenderer = retainsOldPictureUntilFreshTargetFrame(
-                previousMode, nextMode);
-        return crossesClientRenderer || requiresHostSurfaceResize(previousMode, nextMode);
-    }
-
-    /** Client-renderer crossings retain the old SceneCore buffer until the target presents. */
-    static boolean retainsOldPictureUntilFreshTargetFrame(
-            PresentationMode previousMode, PresentationMode nextMode) {
-        return (previousMode == PresentationMode.CLIENT_SBS_AI)
-                != (nextMode == PresentationMode.CLIENT_SBS_AI);
-    }
-
-    /** Keep the renderer's last picture alive throughout either direction of a surface crossing. */
-    static boolean clientSbsActiveDuringSurfaceSwitch(
-            boolean wasClientSbs, boolean isClientSbs) {
-        return wasClientSbs || isClientSbs;
-    }
-
-    /** An inactive Client mode with a live-applicable saved tuple is one fused ACK-first switch. */
-    static boolean shouldFuseClientModeEntryQuality(
-            PresentationMode previousMode, PresentationMode nextMode,
-            boolean atomicPresentationV2Supported,
-            boolean otherStagedChangesRequireReconnect,
-            ModeStreamQualityModel targetQuality) {
-        return previousMode != nextMode
-                && nextMode == PresentationMode.CLIENT_SBS_AI
-                && atomicPresentationV2Supported
-                && !otherStagedChangesRequireReconnect
-                && targetQuality != null
-                && targetQuality.appliesLiveIfSelected();
-    }
-
-    /** Commit reconnect-only settings and target quality before any interim mode ACK. */
-    static boolean shouldReconnectBeforeModeEntry(
-            PresentationMode previousMode, PresentationMode nextMode,
-            boolean otherStagedChangesRequireReconnect,
-            ModeStreamQualityModel targetQuality) {
-        return previousMode != nextMode
-                && (otherStagedChangesRequireReconnect
-                || (targetQuality != null && targetQuality.requiresReconnectIfSelected()));
-    }
-
-    static boolean canSynchronizeClientSbsHdrTransition(
-            PresentationMode mode,
-            boolean streamReady,
-            boolean modeSwitchInProgress,
-            boolean otherDecoderTransactionBusy,
-            boolean hdrTransitionInProgress) {
-        return mode == PresentationMode.CLIENT_SBS_AI
-                && streamReady
-                && ((!modeSwitchInProgress && !otherDecoderTransactionBusy)
-                || hdrTransitionInProgress);
-    }
-
-    static boolean resetsHostDepthStatusAtTransitionStart(
-            PresentationMode previousMode, PresentationMode nextMode) {
-        return previousMode != nextMode && nextMode == PresentationMode.HOST_SBS_AI;
-    }
-
-    static boolean resetsHostDepthStatusAtTransitionCommit(
-            PresentationMode previousMode, PresentationMode nextMode) {
-        return previousMode != nextMode && previousMode == PresentationMode.HOST_SBS_AI;
     }
 
     /**
@@ -1004,7 +884,7 @@ public class XrStreamPresenter {
             if (observedPanelHz <= 0) {
                 return requestedCeilingHz;
             }
-            return snapToOfferedFrameRate(Math.min(requestedCeilingHz, observedPanelHz));
+            return XrPresentationPolicy.snapToOfferedFrameRate(Math.min(requestedCeilingHz, observedPanelHz));
         }
 
         void automaticRequestSucceeded(int appliedHz) {
@@ -1059,7 +939,7 @@ public class XrStreamPresenter {
             if (observedPanelHz <= 0 || userCeilingHz <= 0) {
                 return -1;
             }
-            return snapToOfferedFrameRate(Math.min(userCeilingHz, observedPanelHz));
+            return XrPresentationPolicy.snapToOfferedFrameRate(Math.min(userCeilingHz, observedPanelHz));
         }
 
         int getObservedPanelHz() {
@@ -1236,7 +1116,7 @@ public class XrStreamPresenter {
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
                 item.setEnabled(streamPresentationReady && settingsControlsEnabled()
-                        && isPresentationModeSupported(
+                        && XrPresentationPolicy.isPresentationModeSupported(
                                 item.selectsMode, hostControlExtensionsSupported));
             }
         }
@@ -1360,7 +1240,7 @@ public class XrStreamPresenter {
         }
         StreamQualityTuple quality = new StreamQualityTuple(
                 prefConfig.width + "x" + prefConfig.height,
-                formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
         if (!applyLiveStreamQuality(quality, LiveQualityRequestOrigin.GAME_SOURCE, null,
                 desiredMode)) {
             if (isGameSourceWidening(desiredMode)) {
@@ -1422,12 +1302,6 @@ public class XrStreamPresenter {
             gameSourceDetailView.setText(gameSourceDetailText());
             scheduleModeOptionsPanelFit();
         }
-    }
-
-    static boolean isPresentationModeSupported(PresentationMode mode,
-                                               boolean hostControlExtensionsSupported) {
-        return mode != PresentationMode.HOST_SBS_RAW
-                && (mode != PresentationMode.HOST_SBS_AI || hostControlExtensionsSupported);
     }
 
     /** Replace the immutable applied/pending snapshot and refresh an open Settings panel. */
@@ -1534,7 +1408,7 @@ public class XrStreamPresenter {
         for (BarItem item : barItems) {
             if (item.selectsMode != null && item.tapTarget != null) {
                 item.setEnabled(enabled && streamPresentationReady
-                        && isPresentationModeSupported(
+                        && XrPresentationPolicy.isPresentationModeSupported(
                                 item.selectsMode, hostControlExtensionsSupported));
             }
         }
@@ -1703,7 +1577,7 @@ public class XrStreamPresenter {
 
         // Frame 1 must target the exact startup buffer: codec-capped packed Host AI, or ordinary
         // W x H for every other mode.
-        int[] initialPixelDimensions = initialSurfacePixelDimensions(
+        int[] initialPixelDimensions = XrPresentationPolicy.initialSurfacePixelDimensions(
                 currentPresenterMode, prefConfig.width, prefConfig.height, hostSbsVideoFormat);
         surfaceEntity.setSurfacePixelDimensions(
                 new IntSize2d(initialPixelDimensions[0], initialPixelDimensions[1]));
@@ -1753,7 +1627,7 @@ public class XrStreamPresenter {
                         if (!surfaceEntityUsable()) {
                             return;
                         }
-                        surfaceEntity.setPose(clampToMinDistance(proposedPose));
+                        surfaceEntity.setPose(XrPanelPlacement.clampToMinDistance(proposedPose));
                     }
 
                     @Override
@@ -1762,7 +1636,7 @@ public class XrStreamPresenter {
                         if (!surfaceEntityUsable()) {
                             return;
                         }
-                        surfaceEntity.setPose(clampToMinDistance(proposedPose));
+                        surfaceEntity.setPose(XrPanelPlacement.clampToMinDistance(proposedPose));
                         repositionStatsPanel();
                     }
                 });
@@ -1922,7 +1796,7 @@ public class XrStreamPresenter {
             item.root = tile;
             if (isMode) {
                 item.setEnabled(streamPresentationReady && settingsControlsEnabled()
-                        && isPresentationModeSupported(
+                        && XrPresentationPolicy.isPresentationModeSupported(
                                 item.selectsMode, hostControlExtensionsSupported));
             }
             prevWasMode = isMode;
@@ -1979,7 +1853,7 @@ public class XrStreamPresenter {
         barPanel = PanelEntity.create(
                 session, panelRoot, new FloatSize2d(layout.widthMeters, layout.heightMeters),
                 "xr-control-bar", barPose(videoHeightMeters), surfaceEntity);
-        configureSolidPanel(barPanel);
+        XrPanelViews.configureSolidPanel(barPanel);
         barFullRasterSize = barPanel.getSizeInPixels();
         if (barFullRasterSize != null) {
             barRasterWidthPixels = barFullRasterSize.getWidth();
@@ -1993,14 +1867,14 @@ public class XrStreamPresenter {
         // toward the face independently while its ordinary child Views retain native gaze taps.
         modeOptionsHost = new FrameLayout(activity);
         setSolidPanelCanvas(modeOptionsHost);
-        modeOptionsHeightMeters = MODE_OPTIONS_MIN_HEIGHT_METERS;
+        modeOptionsHeightMeters = XrPanelPlacement.MODE_OPTIONS_MIN_HEIGHT_METERS;
         modeOptionsBaseRasterHeightPixels = 0;
         modeOptionsRasterHeightPixels = 0;
         modeOptionsPanel = PanelEntity.create(
                 session, modeOptionsHost,
                 new FloatSize2d(layout.widthMeters, modeOptionsHeightMeters),
                 "xr-mode-options", modeOptionsPose(videoHeightMeters), surfaceEntity);
-        configureSolidPanel(modeOptionsPanel);
+        XrPanelViews.configureSolidPanel(modeOptionsPanel);
         modeOptionsPanel.setEnabled(false);
 
         if (statsVisible) {
@@ -2046,11 +1920,11 @@ public class XrStreamPresenter {
         statsPanel = PanelEntity.create(
                 session, root, new IntSize2d(STATS_RASTER_WIDTH, STATS_RASTER_HEIGHT),
                 "xr-stats", statsPose(videoHeightMeters), surfaceEntity);
-        configureSolidPanel(statsPanel);
+        XrPanelViews.configureSolidPanel(statsPanel);
         statsPanel.setScale(STATS_ENTITY_SCALE);
         statsPanel.setSize(new FloatSize2d(
-                statsEntityLocalMeters(STATS_WIDTH_METERS, STATS_ENTITY_SCALE),
-                statsEntityLocalMeters(STATS_HEIGHT_METERS, STATS_ENTITY_SCALE)));
+                XrPanelPlacement.statsEntityLocalMeters(STATS_WIDTH_METERS, STATS_ENTITY_SCALE),
+                XrPanelPlacement.statsEntityLocalMeters(STATS_HEIGHT_METERS, STATS_ENTITY_SCALE)));
         statsPanel.setEnabled(statsVisible);
     }
 
@@ -2062,7 +1936,7 @@ public class XrStreamPresenter {
                 session, auxiliaryContentHost,
                 new FloatSize2d(AUXILIARY_WIDTH_METERS, AUXILIARY_HEIGHT_METERS),
                 "xr-session-controls", statsPose(videoHeightMeters), surfaceEntity);
-        configureSolidPanel(auxiliaryPanel);
+        XrPanelViews.configureSolidPanel(auxiliaryPanel);
         auxiliaryPanel.setEnabled(false);
     }
 
@@ -2093,7 +1967,7 @@ public class XrStreamPresenter {
         glancePanel = PanelEntity.create(session, root,
                 new FloatSize2d(GLANCE_WIDTH_METERS, GLANCE_HEIGHT_METERS),
                 "xr-stream-glance", glancePose(videoHeightMeters), surfaceEntity);
-        configureSolidPanel(glancePanel);
+        XrPanelViews.configureSolidPanel(glancePanel);
         glancePanel.setEnabled(true);
         reconcileGlanceLoadTicker();
     }
@@ -2165,7 +2039,7 @@ public class XrStreamPresenter {
     private Pose glancePose(float videoHeightMeters) {
         float centerY = Math.max(0.0f, videoHeightMeters) / 2.0f
                 + GLANCE_GAP_METERS + GLANCE_HEIGHT_METERS / 2.0f;
-        return new Pose(new Vector3(0.0f, centerY, BAR_Z_METERS), Quaternion.Identity);
+        return new Pose(new Vector3(0.0f, centerY, XrPanelPlacement.BAR_Z_METERS), Quaternion.Identity);
     }
 
     private void updateGlancePanel() {
@@ -2187,8 +2061,8 @@ public class XrStreamPresenter {
         // retains the user's durable FPS ceiling while panel-follow is temporarily below it.
         StreamQualityTuple live = new StreamQualityTuple(
                 prefConfig.width + "x" + prefConfig.height,
-                formatFrameRate(prefConfig.fps), prefConfig.bitrate);
-        glanceStreamView.setText(formatGlanceStream(activity,
+                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        glanceStreamView.setText(XrStatsFormat.formatGlanceStream(activity,
                 live.resolution, glanceFrameRateText(live.frameRate), live.bitrateKbps,
                 prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
                         : activity.getString(R.string.xr_glance_sdr)));
@@ -2226,7 +2100,7 @@ public class XrStreamPresenter {
     }
 
     private int paletteColor(int colorRes) {
-        return ContextCompat.getColor(activity, colorRes);
+        return XrPanelViews.paletteColor(activity, colorRes);
     }
 
     /**
@@ -2608,7 +2482,7 @@ public class XrStreamPresenter {
             settingsRequestedPresentationMode = null;
             controlActionListener.onPresentationModeCommitted(currentPresenterMode);
         }
-        if (!isPresentationModeSupported(
+        if (!XrPresentationPolicy.isPresentationModeSupported(
                 item.selectsMode, hostControlExtensionsSupported)) {
             LimeLog.info("XR: ignoring Apollo-3D host mode on a standard host");
             return;
@@ -2624,13 +2498,6 @@ public class XrStreamPresenter {
         if (action == XrControlUiState.ModeTileAction.SELECT_MODE) {
             selectMode(item);
         }
-    }
-
-    static boolean requiresAtomicPresentationReconnect(
-            PresentationMode previousMode, PresentationMode nextMode,
-            boolean atomicPresentationV2Supported) {
-        return wireModeFor(previousMode) != wireModeFor(nextMode)
-                && !atomicPresentationV2Supported;
     }
 
     private void toggleSessionSettings() {
@@ -3194,7 +3061,7 @@ public class XrStreamPresenter {
 
     private String modeQualityCue(ModeStreamQualityModel model) {
         String source = modeQualitySource(model);
-        String live = formatQualityTuple(model.liveQuality);
+        String live = XrStatsFormat.formatQualityTuple(model.liveQuality);
         if (model.requiresReconnect()) {
             return activity.getString(R.string.xr_mode_quality_reconnect, source, live);
         }
@@ -3214,14 +3081,6 @@ public class XrStreamPresenter {
             }
         }
         return activity.getString(R.string.xr_setting_source_global);
-    }
-
-    private static String formatQualityTuple(StreamQualityTuple tuple) {
-        String bitrate = tuple.bitrateKbps % 1000 == 0
-                ? (tuple.bitrateKbps / 1000) + " Mbps"
-                : String.format(Locale.US, "%.1f Mbps", tuple.bitrateKbps / 1000.0f);
-        return tuple.resolution.replace("x", " \u00d7 ") + " @ " + tuple.frameRate
-                + " FPS · " + bitrate;
     }
 
     private LinearLayout createContextualOptionsHeader() {
@@ -3855,41 +3714,19 @@ public class XrStreamPresenter {
     }
 
     private LinearLayout labeledValue(String label, String value, int valueColor) {
-        LinearLayout column = new LinearLayout(activity);
-        column.setOrientation(LinearLayout.VERTICAL);
-        TextView labelView = controlText(label, R.dimen.xr_text_emphasis,
-                paletteColor(R.color.xr_text_secondary));
-        TextView valueView = controlText(value, R.dimen.xr_text_title, valueColor);
-        column.addView(labelView);
-        column.addView(valueView);
-        return column;
+        return XrPanelViews.labeledValue(activity, label, value, valueColor);
     }
 
     private TextView controlText(CharSequence text, int textSizeResource, int color) {
-        TextView view = new TextView(activity);
-        view.setText(text);
-        setTextSize(view, textSizeResource);
-        view.setTextColor(color);
-        return view;
+        return XrPanelViews.controlText(activity, text, textSizeResource, color);
     }
 
     private Button compactButton(CharSequence text) {
-        Button button = new Button(activity);
-        styleControlButton(button);
-        button.setText(text);
-        setTextSize(button, R.dimen.xr_text_title);
-        button.setAllCaps(false);
-        button.setMinHeight(activity.getResources()
-                .getDimensionPixelSize(R.dimen.xr_control_primary));
-        button.setFocusable(true);
-        return button;
+        return XrPanelViews.compactButton(activity, text);
     }
 
     private void styleControlButton(Button button) {
-        button.setBackgroundResource(R.drawable.xr_home_action_background);
-        button.setBackgroundTintList(null);
-        button.setTextColor(paletteColor(R.color.xr_text_primary));
-        button.setFocusable(true);
+        XrPanelViews.styleControlButton(activity, button);
     }
 
     private String modeLabel(PresentationMode mode) {
@@ -3916,18 +3753,11 @@ public class XrStreamPresenter {
      */
     private String glanceFrameRateText(String liveFrameRate) {
         int ceiling = panelRefreshRateState.getUserCeilingHz();
-        int live = Math.round(parseFrameRate(liveFrameRate, prefConfig.fps));
+        int live = Math.round(XrPresentationPolicy.parseFrameRate(liveFrameRate, prefConfig.fps));
         if (ceiling <= 0 || live <= 0 || live >= ceiling) {
             return liveFrameRate;
         }
         return activity.getString(R.string.xr_glance_frame_rate_capped, liveFrameRate, ceiling);
-    }
-
-    static String formatGlanceStream(Activity activity, String resolution, String frameRate,
-                                     int bitrateKbps, String dynamicRange) {
-        return activity.getString(R.string.xr_glance_stream,
-                resolution.replace("x", " \u00d7 "), frameRate, bitrateKbps / 1000,
-                dynamicRange);
     }
 
     /**
@@ -3938,12 +3768,12 @@ public class XrStreamPresenter {
         if (model == null || model.pendingQuality == null) {
             return -1;
         }
-        int[] size = parseResolutionSize(model.pendingQuality.resolution);
+        int[] size = XrPresentationPolicy.parseResolutionSize(model.pendingQuality.resolution);
         if (size == null) {
             return -1;
         }
-        int fps = Math.round(parseFrameRate(model.pendingQuality.frameRate, prefConfig.fps));
-        boolean packed = usesPackedBitrateCost(mode);
+        int fps = Math.round(XrPresentationPolicy.parseFrameRate(model.pendingQuality.frameRate, prefConfig.fps));
+        boolean packed = XrPresentationPolicy.usesPackedBitrateCost(mode);
         return XrBitrateRecommendation.recommendedKbps(
                 packed, size[0], size[1], fps, codecIdFor(prefConfig.videoFormat));
     }
@@ -3984,18 +3814,7 @@ public class XrStreamPresenter {
 
     /** Applies a row-title icon at the inline size every icon on this pane shares. */
     private void applyTitleIcon(TextView title, int iconRes) {
-        if (iconRes == 0) {
-            return;
-        }
-        android.graphics.drawable.Drawable icon =
-                ContextCompat.getDrawable(activity, iconRes);
-        if (icon == null) {
-            return;
-        }
-        int size = activity.getResources().getDimensionPixelSize(R.dimen.xr_icon_inline);
-        icon.setBounds(0, 0, size, size);
-        title.setCompoundDrawablesRelative(icon, null, null, null);
-        title.setCompoundDrawablePadding(dimen(R.dimen.xr_space_sm));
+        XrPanelViews.applyTitleIcon(activity, title, iconRes);
     }
 
     /** Icon shown beside a settings row title, or 0 where the row has no icon of its own. */
@@ -4074,7 +3893,7 @@ public class XrStreamPresenter {
         depthStatusPanel = PanelEntity.create(
                 session, root, new FloatSize2d(DEPTH_STATUS_WIDTH_METERS, DEPTH_STATUS_HEIGHT_METERS),
                 "xr-depth-status", depthStatusPose(), surfaceEntity);
-        configureSolidPanel(depthStatusPanel);
+        XrPanelViews.configureSolidPanel(depthStatusPanel);
         setDepthStatusVisible(false);
     }
 
@@ -4119,7 +3938,7 @@ public class XrStreamPresenter {
 
     /** Center the transient status on the video and nudge it toward the viewer as an overlay. */
     private Pose depthStatusPose() {
-        return new Pose(new Vector3(0.0f, 0.0f, BAR_Z_METERS), Quaternion.Identity);
+        return new Pose(new Vector3(0.0f, 0.0f, XrPanelPlacement.BAR_Z_METERS), Quaternion.Identity);
     }
 
     private void createTransientMessagePanel() {
@@ -4144,7 +3963,7 @@ public class XrStreamPresenter {
                 new FloatSize2d(TRANSIENT_MESSAGE_WIDTH_METERS,
                         TRANSIENT_MESSAGE_HEIGHT_METERS),
                 "xr-transient-message", depthStatusPose(), surfaceEntity);
-        configureSolidPanel(transientMessagePanel);
+        XrPanelViews.configureSolidPanel(transientMessagePanel);
         transientMessagePanel.setEnabled(false);
     }
 
@@ -4290,7 +4109,7 @@ public class XrStreamPresenter {
                 && (!gameProviderV1Supported || requestMode != PresentationMode.GAME_3D)) {
             return 0;
         }
-        int[] wireDimensions = liveVideoModeWireDimensions(logicalWidth, logicalHeight);
+        int[] wireDimensions = XrPresentationPolicy.liveVideoModeWireDimensions(logicalWidth, logicalHeight);
         if (wireDimensions == null) {
             LimeLog.severe("XR: refusing invalid live video-mode geometry "
                     + logicalWidth + "x" + logicalHeight + " for " + requestMode);
@@ -4513,7 +4332,7 @@ public class XrStreamPresenter {
         float streamWindowSeconds = stream != null ? stream.getElapsedMs() / 1000.0f : 0.0f;
         float clientSbsWindowSeconds = clientSbsStatsActive ? clientSbs.windowSeconds : 0.0f;
         if (statsTitle != null) {
-            setStatsText(statsTitle, formatStatsTitle(
+            setStatsText(statsTitle, XrStatsFormat.formatStatsTitle(
                     currentPresenterMode, streamWindowSeconds, clientSbsWindowSeconds));
         }
 
@@ -4527,7 +4346,7 @@ public class XrStreamPresenter {
             addStatsRow("Codec", stream.getCodecDescription(), paletteColor(R.color.xr_text_primary));
             addStatsRow("Decoder component", stream.getDecoderName(), paletteColor(R.color.xr_text_primary));
             addStatsRow("Decoder latency",
-                    formatDecoderLatencyMode(stream.isDedicatedLowLatencyDecoder(),
+                    XrStatsFormat.formatDecoderLatencyMode(stream.isDedicatedLowLatencyDecoder(),
                             stream.isDecoderLowLatencyRequested()),
                     stream.isDedicatedLowLatencyDecoder()
                                     || stream.isDecoderLowLatencyRequested()
@@ -4596,7 +4415,7 @@ public class XrStreamPresenter {
                         ? utilizationColor(device.deviceGpuUtilizationPercent)
                         : paletteColor(R.color.xr_text_disabled));
         if (clientSbsStatsActive) {
-            addStatsRow("Thermal", thermalStatusName(clientSbs.thermalStatus),
+            addStatsRow("Thermal", XrStatsFormat.thermalStatusName(clientSbs.thermalStatus),
                     thermalStatusColor(clientSbs.thermalStatus));
         }
 
@@ -4625,7 +4444,7 @@ public class XrStreamPresenter {
                                 clientSbs.hostSourceRepeatFps),
                         paletteColor(R.color.xr_text_primary));
                 addStatsRow("Reuse rejects",
-                        formatClientReuseRejects(
+                        XrStatsFormat.formatClientReuseRejects(
                                 clientSbs.nearIdenticalContentRejects,
                                 clientSbs.nearIdenticalInvalidRejects),
                         paletteColor(R.color.xr_text_primary));
@@ -4666,7 +4485,7 @@ public class XrStreamPresenter {
         if (currentPresenterMode == PresentationMode.HOST_SBS_AI) {
             addStatsSection("HOST SBS");
             addStatsRow("Depth telemetry",
-                    formatHostSbsTelemetryStatus(depthTelemetry),
+                    XrStatsFormat.formatHostSbsTelemetryStatus(depthTelemetry),
                     depthTelemetry != null && depthTelemetry.isAvailable()
                             ? paletteColor(R.color.xr_status_ok)
                             : telemetryUnavailableColor(depthTelemetry));
@@ -4709,7 +4528,7 @@ public class XrStreamPresenter {
         }
         for (int i = 0; i < CLIENT_GPU_STAGE_LABELS.length; i++) {
             addStatsRow(CLIENT_GPU_STAGE_LABELS[i],
-                    formatGpuStage(averageMs[i], samples[i], CLIENT_GPU_STAGE_DETAILS[i]),
+                    XrStatsFormat.formatGpuStage(averageMs[i], samples[i], CLIENT_GPU_STAGE_DETAILS[i]),
                     gpuStageColor(samples[i]));
         }
     }
@@ -4720,7 +4539,7 @@ public class XrStreamPresenter {
                 + clientSbs.depthInvalidRawFrames
                 + clientSbs.depthCutRangeCollapsedFrames;
         addStatsRow("Faults",
-                formatClientFaults(clientSbs.colorSlotBusySkips, clientSbs.flatSbsOutputs,
+                XrStatsFormat.formatClientFaults(clientSbs.colorSlotBusySkips, clientSbs.flatSbsOutputs,
                         clientSbs.depthHealthAvailable, clientSbs.depthInvalidRawFrames,
                         clientSbs.depthCutRangeCollapsedFrames),
                 faults > 0L ? paletteColor(R.color.xr_status_warn)
@@ -4728,7 +4547,7 @@ public class XrStreamPresenter {
 
         if (!clientSbs.depthHealthAvailable) {
             addStatsRow("Depth health",
-                    formatDepthHealthUnavailable(clientSbs.depthHealthReadbackFailed),
+                    XrStatsFormat.formatDepthHealthUnavailable(clientSbs.depthHealthReadbackFailed),
                     clientSbs.depthHealthReadbackFailed
                             ? paletteColor(R.color.xr_status_warn)
                             : paletteColor(R.color.xr_text_disabled));
@@ -4736,31 +4555,31 @@ public class XrStreamPresenter {
         }
 
         addStatsRow(activity.getString(R.string.xr_stats_sampled_geometry),
-                formatClientV2State(clientSbs.depthCurrentGeometryReady,
+                XrStatsFormat.formatClientV2State(clientSbs.depthCurrentGeometryReady,
                         clientSbs.depthCurrentValid, clientSbs.depthHistoryAdvanced,
                         clientSbs.validDepthFraction),
                 clientSbs.depthCurrentGeometryReady
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_status_warn));
         addStatsRow(activity.getString(R.string.xr_stats_adaptive_zero),
-                formatClientAdaptiveZero(clientSbs.depthRawZero, clientSbs.depthCurrentRawMean),
+                XrStatsFormat.formatClientAdaptiveZero(clientSbs.depthRawZero, clientSbs.depthCurrentRawMean),
                 clientSbs.depthCurrentGeometryReady
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_text_disabled));
         addStatsRow(activity.getString(R.string.xr_stats_depth_amplitude),
-                formatClientDepthAmplitude(clientSbs.depthRawInverseAmplitude,
+                XrStatsFormat.formatClientDepthAmplitude(clientSbs.depthRawInverseAmplitude,
                         clientSbs.depthTargetRawInverseAmplitude),
                 paletteColor(R.color.xr_text_primary));
         addStatsRow(activity.getString(R.string.xr_stats_raw_distribution),
-                formatClientRawDistribution(clientSbs.depthRawPercentileLow,
+                XrStatsFormat.formatClientRawDistribution(clientSbs.depthRawPercentileLow,
                         clientSbs.depthRawPercentileHigh, clientSbs.depthRawAmplitudeFloor),
                 paletteColor(R.color.xr_text_primary));
         addStatsRow(activity.getString(R.string.xr_stats_linear_mapping),
-                formatClientLinearMapping(clientSbs.stereoPopStrength,
+                XrStatsFormat.formatClientLinearMapping(clientSbs.stereoPopStrength,
                         clientSbs.depthCameraClockArmed, clientSbs.depthHealthSampleSequence),
                 paletteColor(R.color.xr_text_secondary));
         addStatsRow("Last cut depth evidence",
-                formatClientCutDepthEvidence(clientSbs.depthLatestChangeFraction,
+                XrStatsFormat.formatClientCutDepthEvidence(clientSbs.depthLatestChangeFraction,
                         clientSbs.depthLatestRangeShift,
                         clientSbs.depthLatestInternalCutEvidence,
                         clientSbs.depthGeometryChangeBaseline,
@@ -4768,7 +4587,7 @@ public class XrStreamPresenter {
                         clientSbs.cutRangeCollapsed),
                 paletteColor(R.color.xr_text_primary));
         addStatsRow("Last cut appearance evidence",
-                formatClientCutAppearanceEvidence(
+                XrStatsFormat.formatClientCutAppearanceEvidence(
                         clientSbs.depthAppearanceRawChangeFraction,
                         clientSbs.depthAppearanceMeanLumaDelta,
                         clientSbs.depthAppearanceStructuralChangeFraction,
@@ -4776,12 +4595,12 @@ public class XrStreamPresenter {
                         clientSbs.depthAppearanceCommonSupportFraction),
                 paletteColor(R.color.xr_text_primary));
         addStatsRow("Last cut decision",
-                formatClientCutDecision(clientSbs.depthCutDecisionFlags,
+                XrStatsFormat.formatClientCutDecision(clientSbs.depthCutDecisionFlags,
                         clientSbs.depthCutEventSequence,
                         clientSbs.depthGeometryCutArmed),
                 paletteColor(R.color.xr_text_secondary));
         addStatsRow("Cut counts",
-                formatClientCutCounts(clientSbs.depthHardCutCount,
+                XrStatsFormat.formatClientCutCounts(clientSbs.depthHardCutCount,
                         clientSbs.depthAcceptedAppearanceCutCount,
                         clientSbs.depthAcceptedGeometryCutCount,
                         clientSbs.depthAcceptedStructurelessEntryCutCount,
@@ -4793,7 +4612,7 @@ public class XrStreamPresenter {
         if (telemetry.hostPerformance != null) {
             addHostPerformanceRows(telemetry.hostPerformance);
         }
-        addStatsRow(activity.getString(R.string.xr_stats_host_depth), formatHostV2Field(telemetry),
+        addStatsRow(activity.getString(R.string.xr_stats_host_depth), XrStatsFormat.formatHostV2Field(telemetry),
                 telemetry.hasRuntime(SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY)
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_text_disabled));
@@ -4803,7 +4622,7 @@ public class XrStreamPresenter {
 
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)) {
             addTrendStatsRow("Cut depth change",
-                    formatStatsFloat(telemetry.changeFraction, 4),
+                    XrStatsFormat.formatStatsFloat(telemetry.changeFraction, 4),
                     paletteColor(R.color.xr_text_primary), telemetry.changeTrend,
                     false, 0.0f, 1.0f);
         }
@@ -4811,7 +4630,7 @@ public class XrStreamPresenter {
                 && telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_SCENE)) {
             int sceneAge = (int)Math.min(Integer.MAX_VALUE, telemetry.sceneAge);
             addTrendStatsRow("Scene cuts",
-                    formatHostSceneCutStatus(telemetry.hardCutCount, sceneAge,
+                    XrStatsFormat.formatHostSceneCutStatus(telemetry.hardCutCount, sceneAge,
                             telemetry.isGeometryArmed(), telemetry.isAppearanceArmed()),
                     paletteColor(R.color.xr_text_secondary), telemetry.cutTrend,
                     true, Float.NaN, Float.NaN);
@@ -4887,137 +4706,6 @@ public class XrStreamPresenter {
                 paletteColor(stage.valid ? R.color.xr_text_primary : R.color.xr_text_disabled));
     }
 
-    static String formatHostSbsTelemetryStatus(SbsDepthTelemetrySnapshot telemetry) {
-        if (telemetry == null) {
-            return "Inactive";
-        }
-        if (!telemetry.isAvailable()) {
-            return telemetry.availability.description;
-        }
-        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CONFIG)) {
-            return String.format(Locale.US, "Live | %dx%d | host depth telemetry",
-                    telemetry.depthWidth, telemetry.depthHeight);
-        }
-        return "Live | configuration unavailable";
-    }
-
-    static String formatClientReuseRejects(long content, long invalid) {
-        return String.format(Locale.US, "content %d | invalid %d", content, invalid);
-    }
-
-    static String formatClientV2State(boolean ready, boolean currentValid,
-                                      boolean historyAdvanced, float validFraction) {
-        return "ready " + yesNo(ready)
-                + " | current valid " + yesNo(currentValid)
-                + " | history " + (historyAdvanced ? "advance" : "hold")
-                + " | valid " + (Float.isFinite(validFraction)
-                ? String.format(Locale.US, "%.1f%%", validFraction * 100.0f) : "n/a");
-    }
-
-    static String formatClientAdaptiveZero(float rawZero, float currentRawMean) {
-        return "zero " + formatStatsFloat(rawZero, 6)
-                + " | mean target " + formatStatsFloat(currentRawMean, 6);
-    }
-
-    static String formatClientDepthAmplitude(float inverseAmplitude, float targetInverse) {
-        inverseAmplitude = Float.isFinite(inverseAmplitude) && inverseAmplitude > 0.0f
-                ? inverseAmplitude : Float.NaN;
-        targetInverse = Float.isFinite(targetInverse) && targetInverse > 0.0f
-                ? targetInverse : Float.NaN;
-        float amplitude = Float.isFinite(inverseAmplitude) && inverseAmplitude > 0.0f
-                ? 1.0f / inverseAmplitude : Float.NaN;
-        return "D " + formatStatsFloat(amplitude, 6)
-                + " | inverse " + formatStatsFloat(inverseAmplitude, 4)
-                + " | target inverse " + formatStatsFloat(targetInverse, 4);
-    }
-
-    static String formatClientRawDistribution(float p05, float p95, float amplitudeFloor) {
-        return "P05 " + formatStatsFloat(p05, 6)
-                + " | P95 " + formatStatsFloat(p95, 6)
-                + " | floor " + formatStatsFloat(amplitudeFloor, 6);
-    }
-
-    static String formatClientLinearMapping(float clientPop, boolean clockArmed,
-                                            long healthSampleSequence) {
-        return "pop " + formatStatsFloat(clientPop, 3)
-                + " | source clock " + (clockArmed ? "armed" : "disarmed")
-                + " | sample " + healthSampleSequence;
-    }
-
-    static String formatClientCutDepthEvidence(float changeFraction, float rangeShift,
-                                                float internalEvidence, float baseline,
-                                                float cutRangeWidth,
-                                                boolean cutRangeCollapsed) {
-        return "change " + formatStatsFloat(changeFraction, 3)
-                + " | range shift " + formatStatsFloat(rangeShift, 3)
-                + " | internal " + formatStatsFloat(internalEvidence, 3)
-                + " | baseline " + formatStatsFloat(baseline, 3)
-                + " | cut range " + formatStatsFloat(cutRangeWidth, 4)
-                + (cutRangeCollapsed ? " collapsed" : "");
-    }
-
-    static String formatClientCutAppearanceEvidence(float rawChange, float meanLumaDelta,
-                                                     float structuralChange,
-                                                     float currentSupport,
-                                                     float commonSupport) {
-        return "raw " + formatStatsFloat(rawChange, 3)
-                + " | luma " + formatStatsFloat(meanLumaDelta, 3)
-                + " | structure " + formatStatsFloat(structuralChange, 3)
-                + " | support " + formatStatsFloat(currentSupport, 3)
-                + "/" + formatStatsFloat(commonSupport, 3);
-    }
-
-    static String formatClientCutDecision(int flags, long eventSequence,
-                                          boolean geometryArmed) {
-        return clientCutReasonName(flags).replace('_', ' ')
-                + " | event " + eventSequence
-                + " | geometry armed " + yesNo(geometryArmed)
-                + String.format(Locale.US, " | flags 0x%05x", flags);
-    }
-
-    static String formatClientCutCounts(long total, long appearance, long geometry,
-                                        long structureless, long proposals) {
-        return String.format(Locale.US,
-                "total %d | appearance %d | geometry %d | low %d | proposals %d",
-                total, appearance, geometry, structureless, proposals);
-    }
-
-    static String formatClientFaults(long colorBusy, long flat, boolean depthHealthAvailable,
-                                     long invalidRaw, long collapsedCutRange) {
-        String result = String.format(Locale.US, "color_busy %d | flat %d",
-                colorBusy, flat);
-        if (!depthHealthAvailable) {
-            return result + " | raw n/a";
-        }
-        return result + String.format(Locale.US,
-                " | raw invalid %d | cut range collapsed %d",
-                invalidRaw, collapsedCutRange);
-    }
-
-    static String formatHostV2Field(SbsDepthTelemetrySnapshot telemetry) {
-        String ready = telemetry.hasRuntime(SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY)
-                ? "pipeline ready" : (telemetry.isInitialized() ? "state initialized" : "warming");
-        String valid = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION)
-                ? String.format(Locale.US, "%.1f%%", telemetry.validDepthFraction * 100.0f)
-                : "n/a";
-        String pop = telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_EFFECTIVE)
-                ? formatStatsFloat(telemetry.effectivePop, 3) : "n/a";
-        String result = ready + " | raw valid " + valid + " | reported pop " + pop;
-        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_RANGE)) {
-            result += " | cut range " + formatStatsFloat(telemetry.effectiveRangeWidth, 4);
-        }
-        return result;
-    }
-
-    private static String formatStatsFloat(float value, int decimalPlaces) {
-        return Float.isFinite(value)
-                ? String.format(Locale.US, "%." + decimalPlaces + "f", value) : "n/a";
-    }
-
-    private static String yesNo(boolean value) {
-        return value ? "yes" : "no";
-    }
-
     private int telemetryUnavailableColor(SbsDepthTelemetrySnapshot telemetry) {
         if (telemetry != null
                 && (telemetry.availability == SbsDepthTelemetrySnapshot.Availability.FAILED
@@ -5027,153 +4715,6 @@ public class XrStreamPresenter {
             return paletteColor(R.color.xr_status_warn);
         }
         return paletteColor(R.color.xr_text_disabled);
-    }
-
-    private static String presenterModeName(PresentationMode mode) {
-        switch (mode) {
-            case HOST_SBS_AI:
-                return "Host AI 3D";
-            case CLIENT_SBS_AI:
-                return "Client AI 3D";
-            case GAME_3D:
-                return "Game 3D";
-            case MOVIE_3D:
-                return "Movie 3D";
-            case NORMAL:
-            default:
-                return "2D";
-        }
-    }
-
-    static String formatSceneCutStatus(long totalCuts, int sceneAgeFrames,
-                                       boolean geometryArmed, long appearanceProposals) {
-        return String.format(Locale.US,
-                "%d total | scene age %d frames | geometry %s | appearance proposals %d",
-                totalCuts, sceneAgeFrames, geometryArmed ? "armed" : "disarmed",
-                appearanceProposals);
-    }
-
-    static String clientCutReasonName(int flags) {
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_APPEARANCE) != 0) {
-            return "appearance";
-        }
-        if ((flags
-                & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY) != 0) {
-            return "structureless_entry";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY) != 0) {
-            return (flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0
-                    ? "geometry_depth_only" : "geometry";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE) != 0) {
-            if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID) == 0) {
-                return "appearance_pending_depth";
-            }
-            if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_ARMED) == 0) {
-                return "appearance_unarmed";
-            }
-            if ((flags
-                    & ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_DEPTH_CORROBORATED) == 0) {
-                return "appearance_depth_rejected";
-            }
-            return "appearance_not_accepted";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_EXPOSURE_LIKE) != 0) {
-            return "exposure_veto";
-        }
-        if ((flags
-                & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED) != 0) {
-            return (flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0
-                    ? "geometry_depth_only_rejected" : "geometry_confirmation_rejected";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0) {
-            return "geometry_depth_only_pending";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER) != 0
-                && (flags
-                & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_STRUCTURE_CORROBORATED) == 0) {
-            return "geometry_structure_rejected";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE) != 0) {
-            return "geometry_pending";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_PERSISTENT_LOW_START) != 0) {
-            return "structureless_start";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_SUPPORTED_RETURN) != 0) {
-            return "structure_supported_return";
-        }
-        return "none";
-    }
-
-    static String formatHostSceneCutStatus(
-            long totalCuts, int sceneAgeFrames,
-            boolean geometryArmed, boolean appearanceArmed) {
-        return String.format(Locale.US,
-                "%d total | scene age %d frames | geometry %s | appearance %s",
-                totalCuts, sceneAgeFrames,
-                geometryArmed ? "armed" : "disarmed",
-                appearanceArmed ? "armed" : "disarmed");
-    }
-
-    static String formatDepthHealthUnavailable(boolean readbackFailed) {
-        return readbackFailed
-                ? "Telemetry unavailable | retrying"
-                : "Waiting for sample";
-    }
-
-    static String formatStatsTitle(PresentationMode mode,
-                                   float streamWindowSeconds,
-                                   float clientSbsWindowSeconds) {
-        String title = "Stats | " + presenterModeName(mode);
-        boolean hasStreamWindow = Float.isFinite(streamWindowSeconds)
-                && streamWindowSeconds > 0.0f;
-        boolean hasClientSbsWindow = Float.isFinite(clientSbsWindowSeconds)
-                && clientSbsWindowSeconds > 0.0f;
-        if (hasStreamWindow && hasClientSbsWindow) {
-            return String.format(Locale.US, "%s | stream %.1f s | SBS %.1f s",
-                    title, streamWindowSeconds, clientSbsWindowSeconds);
-        }
-        if (hasStreamWindow) {
-            return String.format(Locale.US, "%s | stream %.1f s",
-                    title, streamWindowSeconds);
-        }
-        if (hasClientSbsWindow) {
-            return String.format(Locale.US, "%s | SBS %.1f s",
-                    title, clientSbsWindowSeconds);
-        }
-        return title;
-    }
-
-    static String formatDecoderLatencyMode(boolean dedicatedComponent,
-                                           boolean lowLatencyRequested) {
-        if (dedicatedComponent && lowLatencyRequested) {
-            return "Dedicated low-latency component | LL options requested";
-        }
-        if (dedicatedComponent) {
-            return "Dedicated low-latency component | no LL option reported";
-        }
-        if (lowLatencyRequested) {
-            return "Regular component | LL options requested";
-        }
-        return "Regular component | no LL options requested";
-    }
-
-    static String formatGpuStage(float averageMs, long samples, String detail) {
-        if (samples <= 0L || !Float.isFinite(averageMs)) {
-            return "Waiting for completed timer sample";
-        }
-        return String.format(Locale.US, "%.2f ms | %s", averageMs, detail);
-    }
-
-    /** Distinguishes an absent result from a zero or sub-microsecond driver timer result. */
-    static String formatGpuStageForLog(float averageMs, long samples) {
-        if (samples <= 0L || !Float.isFinite(averageMs) || averageMs < 0.0f) {
-            return "n/a";
-        }
-        // Milliseconds with nanosecond precision avoid rounding a short compute-only query to
-        // 0.00. Per-stage counts in the same log record still identify the sampled window.
-        return String.format(Locale.US, "%.6f", averageMs);
     }
 
     private int gpuStageColor(long samples) {
@@ -5274,12 +4815,12 @@ public class XrStreamPresenter {
         if (contentHeightPx <= 0) {
             return;
         }
-        int targetHeightPixels = calculateStatsRasterHeightPixels(
+        int targetHeightPixels = XrPanelPlacement.calculateStatsRasterHeightPixels(
                 contentHeightPx, STATS_RASTER_HEIGHT, STATS_MAX_RASTER_HEIGHT);
         // Scale from the ORIGINAL raster/metre pair rather than the live size, so repeated fits
         // cannot drift the panel a little larger every refresh. Deriving metres from the capped
         // pixel height keeps the Android layout and SceneCore surface at the same aspect.
-        float targetHeightMeters = calculateModeOptionsHeightMeters(
+        float targetHeightMeters = XrPanelPlacement.calculateModeOptionsHeightMeters(
                 STATS_HEIGHT_METERS, STATS_RASTER_HEIGHT, targetHeightPixels,
                 STATS_MIN_HEIGHT_METERS, STATS_MAX_HEIGHT_METERS);
         if (targetHeightPixels == statsRasterHeightPixels
@@ -5294,26 +4835,8 @@ public class XrStreamPresenter {
         statsPanel.setSizeInPixels(new IntSize2d(
                 STATS_RASTER_WIDTH, targetHeightPixels));
         statsPanel.setSize(new FloatSize2d(
-                statsEntityLocalMeters(STATS_WIDTH_METERS, STATS_ENTITY_SCALE),
-                statsEntityLocalMeters(targetHeightMeters, STATS_ENTITY_SCALE)));
-    }
-
-    static int calculateStatsRasterHeightPixels(int contentHeightPixels,
-                                                int minHeightPixels,
-                                                int maxHeightPixels) {
-        int minHeight = Math.max(1, minHeightPixels);
-        int maxHeight = Math.max(minHeight, maxHeightPixels);
-        int contentHeight = Math.max(0, contentHeightPixels);
-        return Math.max(minHeight, Math.min(maxHeight, contentHeight));
-    }
-
-    /** SceneCore applies entity scale after local size; invert it to preserve authored metres. */
-    static float statsEntityLocalMeters(float worldMeters, float entityScale) {
-        if (!Float.isFinite(worldMeters) || worldMeters < 0.0f
-                || !Float.isFinite(entityScale) || entityScale <= 0.0f) {
-            return 0.0f;
-        }
-        return worldMeters / entityScale;
+                XrPanelPlacement.statsEntityLocalMeters(STATS_WIDTH_METERS, STATS_ENTITY_SCALE),
+                XrPanelPlacement.statsEntityLocalMeters(targetHeightMeters, STATS_ENTITY_SCALE)));
     }
 
     private static void trimStatsTable(TableLayout table, int rowsToKeep) {
@@ -5423,27 +4946,6 @@ public class XrStreamPresenter {
         }
     }
 
-    private static String thermalStatusName(int status) {
-        switch (status) {
-            case 0:
-                return "None (0)";
-            case 1:
-                return "Light (1)";
-            case 2:
-                return "Moderate (2)";
-            case 3:
-                return "Severe (3)";
-            case 4:
-                return "Critical (4)";
-            case 5:
-                return "Emergency (5)";
-            case 6:
-                return "Shutdown (6)";
-            default:
-                return "Unknown (" + status + ")";
-        }
-    }
-
     private int thermalStatusColor(int status) {
         if (status >= 5) {
             return paletteColor(R.color.xr_danger);
@@ -5545,88 +5047,6 @@ public class XrStreamPresenter {
         revealDockTemporarily();
     }
 
-    static final class ModeOptionsPanelPlacement {
-        final float centerY;
-        final float centerZ;
-        final float pitchDegrees;
-
-        ModeOptionsPanelPlacement(float centerY, float centerZ, float pitchDegrees) {
-            this.centerY = centerY;
-            this.centerZ = centerZ;
-            this.pitchDegrees = pitchDegrees;
-        }
-    }
-
-    /**
-     * Aim only the contextual subpanel toward the viewer. Its top edge remains anchored beneath
-     * the level button row, so opening it cannot move or rotate the primary controls.
-     */
-    static ModeOptionsPanelPlacement calculateModeOptionsPanelPlacement(
-            float controlRowCenterY, float controlRowHeight, float optionsRowHeight,
-            float rowGap, float anchorZ, float viewerY, float viewerZ) {
-        float safeViewerY = Float.isFinite(viewerY) ? viewerY : 0.0f;
-        float safeViewerZ = Float.isFinite(viewerZ) && viewerZ > anchorZ + 0.1f
-                ? viewerZ : 2.0f;
-        float topAnchorY = controlRowCenterY
-                - Math.max(0.0f, controlRowHeight) / 2.0f - Math.max(0.0f, rowGap);
-        float unrotatedCenterY = topAnchorY - Math.max(0.0f, optionsRowHeight) / 2.0f;
-        float verticalDistance = Math.max(0.0f, safeViewerY - unrotatedCenterY);
-        float forwardDistance = Math.max(0.1f, safeViewerZ - anchorZ);
-        float requestedTilt = (float) Math.toDegrees(Math.atan2(
-                verticalDistance, forwardDistance));
-        float pitchDegrees = -Math.max(MODE_OPTIONS_MIN_TILT_DEGREES,
-                Math.min(MODE_OPTIONS_MAX_TILT_DEGREES, requestedTilt));
-
-        // Anchor the subpanel's local top-center after rotation. Negative X pitch points its normal
-        // upward toward the viewer and brings its lower edge slightly closer to the face.
-        float offsetY = Math.max(0.0f, optionsRowHeight) / 2.0f;
-        double pitchRadians = Math.toRadians(pitchDegrees);
-        float rotatedOffsetY = offsetY * (float) Math.cos(pitchRadians);
-        float rotatedOffsetZ = offsetY * (float) Math.sin(pitchRadians);
-        return new ModeOptionsPanelPlacement(topAnchorY - rotatedOffsetY,
-                anchorZ - rotatedOffsetZ, pitchDegrees);
-    }
-
-    static float calculateModeOptionsHeightMeters(float currentHeightMeters,
-                                                 int currentHeightPixels,
-                                                 int contentHeightPixels,
-                                                 float minHeightMeters,
-                                                 float maxHeightMeters) {
-        float safeCurrentHeightMeters = Float.isFinite(currentHeightMeters)
-                ? Math.max(0.0f, currentHeightMeters) : MODE_OPTIONS_MIN_HEIGHT_METERS;
-        int safeCurrentHeightPx = Math.max(1, currentHeightPixels);
-        int safeContentHeightPx = Math.max(0, contentHeightPixels);
-        float minHeight = Math.max(0.0f, minHeightMeters);
-        float maxHeight = Math.max(minHeight, maxHeightMeters);
-        if (safeContentHeightPx <= 0) {
-            return minHeight;
-        }
-        float targetHeight = safeCurrentHeightMeters * (float) safeContentHeightPx
-                / (float) safeCurrentHeightPx;
-        if (!Float.isFinite(targetHeight)) {
-            return minHeight;
-        }
-        return Math.max(minHeight, Math.min(maxHeight, targetHeight));
-    }
-
-    static int calculateModeOptionsRasterHeightPixels(int contentHeightPixels,
-                                                      int baseHeightPixels,
-                                                      float minHeightMeters,
-                                                      float maxHeightMeters) {
-        int baseHeight = Math.max(1, baseHeightPixels);
-        if (!Float.isFinite(minHeightMeters) || minHeightMeters <= 0.0f
-                || !Float.isFinite(maxHeightMeters)) {
-            return baseHeight;
-        }
-        float boundedMaxHeight = Math.max(minHeightMeters, maxHeightMeters);
-        double scaledMaximum = Math.ceil(baseHeight * (double) boundedMaxHeight
-                / (double) minHeightMeters);
-        int maxHeightPixels = scaledMaximum >= Integer.MAX_VALUE
-                ? Integer.MAX_VALUE : Math.max(baseHeight, (int) scaledMaximum);
-        return calculateStatsRasterHeightPixels(
-                contentHeightPixels, baseHeight, maxHeightPixels);
-    }
-
     private void scheduleModeOptionsPanelFit() {
         if (modeOptionsPanel == null || modeOptionsPanel.isDisposed()
                 || modeOptionsHost == null || modeOptionsContentRoot == null) {
@@ -5667,15 +5087,15 @@ public class XrStreamPresenter {
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int contentHeightPx = modeOptionsContentRoot.getMeasuredHeight()
                 + dimen(R.dimen.xr_space_xs);
-        int targetHeightPixels = calculateModeOptionsRasterHeightPixels(
+        int targetHeightPixels = XrPanelPlacement.calculateModeOptionsRasterHeightPixels(
                 contentHeightPx, modeOptionsBaseRasterHeightPixels,
-                MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
+                XrPanelPlacement.MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
         // Derive metres from the original raster/metre pair. Using the live pair here would make
         // repeated fits compound integer rounding whenever content or modes change.
-        float targetHeightMeters = calculateModeOptionsHeightMeters(
-                MODE_OPTIONS_MIN_HEIGHT_METERS, modeOptionsBaseRasterHeightPixels,
+        float targetHeightMeters = XrPanelPlacement.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.MODE_OPTIONS_MIN_HEIGHT_METERS, modeOptionsBaseRasterHeightPixels,
                 targetHeightPixels,
-                MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
+                XrPanelPlacement.MODE_OPTIONS_MIN_HEIGHT_METERS, MODE_OPTIONS_MAX_HEIGHT_METERS);
         if (targetHeightPixels == modeOptionsRasterHeightPixels
                 && Math.abs(targetHeightMeters - modeOptionsHeightMeters) < 0.001f) {
             return;
@@ -5698,7 +5118,7 @@ public class XrStreamPresenter {
     /** Local pose of the unchanged, level mode-button panel. */
     private Pose barPose(float videoHeightMeters) {
         XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
-        return new Pose(new Vector3(0.0f, layout.primaryRowCenterY, BAR_Z_METERS),
+        return new Pose(new Vector3(0.0f, layout.primaryRowCenterY, XrPanelPlacement.BAR_Z_METERS),
                 Quaternion.Identity);
     }
 
@@ -5706,99 +5126,12 @@ public class XrStreamPresenter {
     private Pose modeOptionsPose(float videoHeightMeters) {
         XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
         Vector3 viewer = statsViewerPositionLocal();
-        ModeOptionsPanelPlacement placement = calculateModeOptionsPanelPlacement(
+        XrPanelPlacement.ModeOptionsPanelPlacement placement = XrPanelPlacement.calculateModeOptionsPanelPlacement(
                 layout.primaryRowCenterY, BAR_HEIGHT_METERS, modeOptionsHeightMeters,
-                MODE_OPTIONS_GAP_METERS, BAR_Z_METERS, viewer.getY(), viewer.getZ());
+                MODE_OPTIONS_GAP_METERS, XrPanelPlacement.BAR_Z_METERS, viewer.getY(), viewer.getZ());
         Quaternion rotation = Quaternion.fromAxisAngle(
                 new Vector3(1.0f, 0.0f, 0.0f), placement.pitchDegrees);
         return new Pose(new Vector3(0.0f, placement.centerY, placement.centerZ), rotation);
-    }
-
-    static final class StatsPanelPlacement {
-        final float innerEdgeX;
-        final float innerEdgeZ;
-        final float centerX;
-        final float centerY;
-        final float centerZ;
-        final float yawDegrees;
-
-        StatsPanelPlacement(float innerEdgeX, float innerEdgeZ, float centerX,
-                            float centerY, float centerZ, float yawDegrees) {
-            this.innerEdgeX = innerEdgeX;
-            this.innerEdgeZ = innerEdgeZ;
-            this.centerX = centerX;
-            this.centerY = centerY;
-            this.centerZ = centerZ;
-            this.yawDegrees = yawDegrees;
-        }
-    }
-
-    /**
-     * Pure right-side placement geometry. The panel's inner (local -X) edge remains anchored just
-     * outside the video while a negative Y yaw wraps its outer edge toward the viewer. The yaw is
-     * solved from the viewer position in video-local space and limited to preserve head clearance.
-     */
-    static StatsPanelPlacement calculateStatsPanelPlacement(float videoWidthMeters,
-                                                             float panelWidthMeters,
-                                                             float gapMeters,
-                                                             float viewerX,
-                                                             float viewerZ) {
-        float safeVideoWidth = Float.isFinite(videoWidthMeters)
-                ? Math.max(0.0f, videoWidthMeters) : 0.0f;
-        float safePanelWidth = Float.isFinite(panelWidthMeters)
-                ? Math.max(0.0f, panelWidthMeters) : 0.0f;
-        float safeGap = Float.isFinite(gapMeters) ? Math.max(0.0f, gapMeters) : 0.0f;
-        float safeViewerX = Float.isFinite(viewerX) ? viewerX : 0.0f;
-        float safeViewerZ = Float.isFinite(viewerZ)
-                && viewerZ > STATS_HEAD_CLEARANCE_METERS + BAR_Z_METERS
-                ? viewerZ : 2.0f;
-
-        float innerEdgeX = safeVideoWidth / 2.0f + safeGap;
-        float innerEdgeZ = BAR_Z_METERS;
-        float halfWidth = safePanelWidth / 2.0f;
-        float yawDegrees = 0.0f;
-
-        if (safePanelWidth > 0.0f) {
-            float maxForward = Math.max(0.0f,
-                    safeViewerZ - STATS_HEAD_CLEARANCE_METERS - innerEdgeZ);
-            float clearanceRatio = Math.min(1.0f, maxForward / safePanelWidth);
-            float clearanceYaw = (float) Math.toDegrees(Math.asin(clearanceRatio));
-            float maxYaw = Math.min(STATS_MAX_INWARD_YAW_DEGREES, clearanceYaw);
-            float minYaw = Math.min(STATS_MIN_INWARD_YAW_DEGREES, maxYaw);
-
-            // Center depends on yaw because the inner edge is fixed. A few fixed-point iterations
-            // are sufficient and run only on slow UI/pose events, never in the video frame loop.
-            for (int i = 0; i < 3; i++) {
-                double yawRadians = Math.toRadians(yawDegrees);
-                float centerX = innerEdgeX + halfWidth * (float) Math.cos(yawRadians);
-                float centerZ = innerEdgeZ - halfWidth * (float) Math.sin(yawRadians);
-                float desiredYaw = (float) -Math.toDegrees(Math.atan2(
-                        safeViewerX - centerX, safeViewerZ - centerZ));
-                float inwardMagnitude = Math.max(minYaw, Math.min(maxYaw, desiredYaw));
-                yawDegrees = -inwardMagnitude;
-            }
-        }
-
-        double yawRadians = Math.toRadians(yawDegrees);
-        float centerX = innerEdgeX + halfWidth * (float) Math.cos(yawRadians);
-        float centerZ = innerEdgeZ - halfWidth * (float) Math.sin(yawRadians);
-        return new StatsPanelPlacement(innerEdgeX, innerEdgeZ, centerX, 0.0f,
-                centerZ, yawDegrees);
-    }
-
-    /**
-     * Pure left-side mirror of {@link #calculateStatsPanelPlacement}. The panel's inner (local +X)
-     * edge remains anchored outside the video and positive Y yaw wraps its outer edge inward.
-     */
-    static StatsPanelPlacement calculateLeftPanelPlacement(float videoWidthMeters,
-                                                            float panelWidthMeters,
-                                                            float gapMeters,
-                                                            float viewerX,
-                                                            float viewerZ) {
-        StatsPanelPlacement right = calculateStatsPanelPlacement(
-                videoWidthMeters, panelWidthMeters, gapMeters, -viewerX, viewerZ);
-        return new StatsPanelPlacement(-right.innerEdgeX, right.innerEdgeZ,
-                -right.centerX, right.centerY, right.centerZ, -right.yawDegrees);
     }
 
     /** Current head position expressed in the video entity's local coordinate system. */
@@ -5840,7 +5173,7 @@ public class XrStreamPresenter {
     /** Local pose of the right-side stats panel, dynamically yawed toward the viewer. */
     private Pose statsPose(float videoHeightMeters) {
         Vector3 viewer = statsViewerPositionLocal();
-        StatsPanelPlacement placement = calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement placement = XrPanelPlacement.calculateStatsPanelPlacement(
                 videoHeightMeters * aspectFor(currentPresenterMode),
                 STATS_WIDTH_METERS, STATS_GAP_METERS, viewer.getX(), viewer.getZ());
         Quaternion rotation = Quaternion.fromAxisAngle(
@@ -5852,7 +5185,7 @@ public class XrStreamPresenter {
     /** App Settings sits to the video's left and tilts inward toward the viewer. */
     private Pose sessionSettingsPose(float videoHeightMeters) {
         Vector3 viewer = statsViewerPositionLocal();
-        StatsPanelPlacement placement = calculateLeftPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement placement = XrPanelPlacement.calculateLeftPanelPlacement(
                 videoHeightMeters * aspectFor(currentPresenterMode),
                 AUXILIARY_WIDTH_METERS, STATS_GAP_METERS, viewer.getX(), viewer.getZ());
         Quaternion rotation = Quaternion.fromAxisAngle(
@@ -5902,7 +5235,7 @@ public class XrStreamPresenter {
         reconcileHostSbsTelemetrySubscription();
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
-                item.setEnabled(settingsControlsEnabled() && isPresentationModeSupported(
+                item.setEnabled(settingsControlsEnabled() && XrPresentationPolicy.isPresentationModeSupported(
                         item.selectsMode, hostControlExtensionsSupported));
             }
         }
@@ -5961,7 +5294,7 @@ public class XrStreamPresenter {
      */
     private void selectMode(BarItem item) {
         if (!settingsControlsEnabled() || !controlTransportOpen() || !streamPresentationReady || item.selectsMode == null
-                || !isPresentationModeSupported(
+                || !XrPresentationPolicy.isPresentationModeSupported(
                         item.selectsMode, hostControlExtensionsSupported)
                 || surfaceEntity == null
                 || surfaceEntity.isDisposed()
@@ -5969,7 +5302,7 @@ public class XrStreamPresenter {
                 || liveQualityTransactionBusy()) {
             return;
         }
-        if (requiresAtomicPresentationReconnect(
+        if (XrPresentationPolicy.requiresAtomicPresentationReconnect(
                 currentPresenterMode, item.selectsMode,
                 atomicPresentationV2Supported)) {
             LimeLog.info("XR: reconnecting before unacknowledged host wire-mode boundary "
@@ -5978,7 +5311,7 @@ public class XrStreamPresenter {
             return;
         }
         ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(item.selectsMode);
-        if (shouldReconnectBeforeModeEntry(
+        if (XrPresentationPolicy.shouldReconnectBeforeModeEntry(
                 currentPresenterMode, item.selectsMode,
                 applyRequiresReconnect, targetQuality)) {
             // Reconnect before any host request or surface handoff. An ACK for an interim tuple
@@ -6008,7 +5341,7 @@ public class XrStreamPresenter {
         PresentationMode previousMode = currentPresenterMode;
         PresentationMode nextMode = item.selectsMode;
 
-        boolean fuseClientQuality = shouldFuseClientModeEntryQuality(
+        boolean fuseClientQuality = XrPresentationPolicy.shouldFuseClientModeEntryQuality(
                 previousMode, nextMode, atomicPresentationV2Supported,
                 applyRequiresReconnect, targetQuality);
         if (effectiveWireModeFor(previousMode) != effectiveWireModeFor(nextMode) || fuseClientQuality) {
@@ -6041,8 +5374,8 @@ public class XrStreamPresenter {
                 ? durableTarget
                 : new StreamQualityTuple(
                         prefConfig.width + "x" + prefConfig.height,
-                        formatFrameRate(prefConfig.fps), prefConfig.bitrate);
-        float requestedCeiling = parseFrameRate(requestedTarget.frameRate, prefConfig.fps);
+                        XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        float requestedCeiling = XrPresentationPolicy.parseFrameRate(requestedTarget.frameRate, prefConfig.fps);
         int effectiveFps = panelRefreshRateState.capUserTarget(
                 Math.max(1, Math.round(requestedCeiling)));
         StreamQualityTuple target = effectiveFps == Math.round(requestedCeiling)
@@ -6050,9 +5383,9 @@ public class XrStreamPresenter {
                 : new StreamQualityTuple(
                         requestedTarget.resolution, String.valueOf(effectiveFps),
                         requestedTarget.bitrateKbps);
-        int[] size = parseResolutionSize(target.resolution);
-        float fps = parseFrameRate(target.frameRate, prefConfig.fps);
-        int fpsX100 = frameRateX100(target.frameRate, prefConfig.fps);
+        int[] size = XrPresentationPolicy.parseResolutionSize(target.resolution);
+        float fps = XrPresentationPolicy.parseFrameRate(target.frameRate, prefConfig.fps);
+        int fpsX100 = XrPresentationPolicy.frameRateX100(target.frameRate, prefConfig.fps);
         if (size == null || fps <= 0 || fpsX100 <= 0) {
             abortPendingModeStart();
             reportLiveQualityStartFailure(
@@ -6080,7 +5413,7 @@ public class XrStreamPresenter {
         pendingLiveQuality = target;
         previousLiveQuality = new StreamQualityTuple(
                 prefConfig.width + "x" + prefConfig.height,
-                formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
         acknowledgedLiveQuality = null;
         pendingLiveQualityMode = nextMode;
         pendingLiveQualityOrigin = LiveQualityRequestOrigin.USER;
@@ -6092,7 +5425,7 @@ public class XrStreamPresenter {
                 true, nextMode == PresentationMode.CLIENT_SBS_AI);
 
         // Reset Host AI telemetry before its transition starts.
-        if (resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
+        if (XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
             resetHostDepthStatus();
         }
         if (sendHostVideoModeControl(
@@ -6137,7 +5470,7 @@ public class XrStreamPresenter {
         // replacement pipeline is still loading. A new phase-2 push may then arrive at any point
         // during the transition without being erased again at commit.
         if (!isAckFirstModeTransitionPending()
-                && resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
+                && XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
             resetHostDepthStatus();
         }
         boolean wasClientSbs = (previousMode == PresentationMode.CLIENT_SBS_AI);
@@ -6145,7 +5478,7 @@ public class XrStreamPresenter {
 
         com.limelight.Game game = activity instanceof com.limelight.Game
                 ? (com.limelight.Game) activity : null;
-        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode)
+        boolean decoderTransitionRequired = XrPresentationPolicy.requiresDecoderTransition(previousMode, nextMode)
                 || isAckFirstModeTransitionPending();
         if (decoderTransitionRequired) {
             boolean reuseAckFirstTransition = isAckFirstModeTransitionPending();
@@ -6175,7 +5508,7 @@ public class XrStreamPresenter {
         // SBS crossing therefore retains both the old buffer and its old interpretation through
         // decoder parking/rebinding. The target interpretation is committed only at its fresh
         // presentation proof. Direct-producer size changes retain their established eager hide.
-        boolean retainOldPictureUntilTargetFrame = retainsOldPictureUntilFreshTargetFrame(
+        boolean retainOldPictureUntilTargetFrame = XrPresentationPolicy.retainsOldPictureUntilFreshTargetFrame(
                 previousMode, nextMode);
         if (!retainOldPictureUntilTargetFrame) {
             surfaceEntity.setAlpha(0.0f);
@@ -6188,7 +5521,7 @@ public class XrStreamPresenter {
             // until MediaCodec has parked and the detach callback succeeds; disabling here queues
             // a black clear while SceneCore still presents the retained picture at alpha 1.
             streamContainer.setClientSbsActive(
-                    clientSbsActiveDuringSurfaceSwitch(wasClientSbs, isClientSbs));
+                    XrPresentationPolicy.clientSbsActiveDuringSurfaceSwitch(wasClientSbs, isClientSbs));
         }
         if (wasClientSbs != isClientSbs) {
             if (streamContainer == null) {
@@ -6197,7 +5530,7 @@ public class XrStreamPresenter {
             } else {
                 streamContainer.switchToClientSbs(isClientSbs,
                         prefConfig.isHostDoubledWidthMode()
-                                && isPackedWireMode(effectiveTargetWireMode(nextMode)),
+                                && XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(nextMode)),
                         success -> finishModeSwitch(item, previousMode, nextMode,
                                 wasClientSbs,
                                 isClientSbs, streamContainer, success));
@@ -6228,7 +5561,7 @@ public class XrStreamPresenter {
             controlActionListener.onLiveStreamQualityNeedsReconnect();
             return false;
         }
-        float requestedCeiling = parseFrameRate(target.frameRate, prefConfig.fps);
+        float requestedCeiling = XrPresentationPolicy.parseFrameRate(target.frameRate, prefConfig.fps);
         int effectiveFps = panelRefreshRateState.capUserTarget(
                 Math.max(1, Math.round(requestedCeiling)));
         StreamQualityTuple effectiveTarget = effectiveFps == Math.round(requestedCeiling)
@@ -6258,26 +5591,6 @@ public class XrStreamPresenter {
         if (atomicPresentationV2Supported) {
             reconcilePanelRefreshRate();
         }
-    }
-
-    /**
-     * Largest offered rate not above {@code effectiveHz}.
-     *
-     * <p>The panel's own modes are 60/72/90, but {@code getRefreshRate()} also reports a system
-     * frame-rate override, which is not restricted to those and can read below 60. Requesting an
-     * arbitrary rate would ask the host's virtual display for a mode outside the ladder both ends
-     * agree on, so the follow target is snapped down onto it instead.</p>
-     */
-    static int snapToOfferedFrameRate(int effectiveHz) {
-        int[] offered = {30, 60, 72, 90, 120};
-        int best = 0;
-        for (int rate : offered) {
-            if (rate <= effectiveHz && rate > best) {
-                best = rate;
-            }
-        }
-        // Never chase an override below the slowest offered rate; hold the floor instead.
-        return best == 0 ? offered[0] : best;
     }
 
     private void schedulePanelRateReconcile() {
@@ -6360,16 +5673,16 @@ public class XrStreamPresenter {
         }
 
         float currentFps = prefConfig.fps;
-        int[] size = parseResolutionSize(target.resolution);
-        float fps = parseFrameRate(target.frameRate, currentFps);
-        int fpsX100 = frameRateX100(target.frameRate, currentFps);
+        int[] size = XrPresentationPolicy.parseResolutionSize(target.resolution);
+        float fps = XrPresentationPolicy.parseFrameRate(target.frameRate, currentFps);
+        int fpsX100 = XrPresentationPolicy.frameRateX100(target.frameRate, currentFps);
         if (size == null || fps <= 0 || fpsX100 <= 0) {
             LimeLog.warning("XR: ignoring unparseable live stream quality " + target);
             return false;
         }
         StreamQualityTuple previous = new StreamQualityTuple(
                 prefConfig.width + "x" + prefConfig.height,
-                formatFrameRate(currentFps), prefConfig.bitrate);
+                XrStatsFormat.formatFrameRate(currentFps), prefConfig.bitrate);
         boolean resolutionChanged = size[0] != prefConfig.width || size[1] != prefConfig.height;
 
         int requestId = nextVideoModeRequestId();
@@ -6435,85 +5748,6 @@ public class XrStreamPresenter {
         return true;
     }
 
-    static boolean acknowledgedGeometryAdoptionSucceeded(
-            boolean geometryChanged, boolean resizeSucceeded) {
-        // The fast FPS/bitrate-only path performs no surface resize and is already adopted.
-        return !geometryChanged || resizeSucceeded;
-    }
-
-    static boolean postSendGeometryFailureRequiresMandatoryResync(int sendResult) {
-        // Once the reliable request is queued, local resize failure cannot prove host rollback.
-        return sendResult > 0;
-    }
-
-    static boolean isKnownVideoModeAckStatus(int status) {
-        return status >= MoonBridge.VIDEO_MODE_ACK_APPLIED
-                && status <= MoonBridge.VIDEO_MODE_ACK_FAILED;
-    }
-
-    static boolean isValidAtomicPresentationAckBody(
-            int flags, int appliedMode, int stateGeneration,
-            int appliedSourceWidth, int appliedSourceHeight,
-            int exactEncodedWidth, int exactEncodedHeight,
-            int appliedFramerateX100, int effectiveEncoderBitrateKbps) {
-        if (flags != 0 || stateGeneration == 0
-                || (appliedMode != MoonBridge.SBS_MODE_OFF
-                && appliedMode != MoonBridge.SBS_MODE_AI
-                && appliedMode != MoonBridge.SBS_MODE_GAME_MONO
-                && appliedMode != MoonBridge.SBS_MODE_GAME_SBS)
-                || !isUsableLiveVideoModeWireDimensions(
-                        appliedSourceWidth, appliedSourceHeight)
-                || !isUsableLiveVideoModeWireDimensions(
-                        exactEncodedWidth, exactEncodedHeight)
-                || appliedFramerateX100 <= 0 || effectiveEncoderBitrateKbps <= 0) {
-            return false;
-        }
-        if (appliedMode == MoonBridge.SBS_MODE_GAME_SBS) {
-            // Authored eyes are copied exactly. AI's codec-fit rounding is not a Game contract.
-            return (long) exactEncodedWidth == (long) appliedSourceWidth * 2
-                    && exactEncodedHeight == appliedSourceHeight;
-        }
-        int encodedViewWidth = appliedMode == MoonBridge.SBS_MODE_AI
-                ? exactEncodedWidth / 2 : exactEncodedWidth;
-        long crossProductError = Math.abs(
-                (long) encodedViewWidth * appliedSourceHeight
-                        - (long) exactEncodedHeight * appliedSourceWidth);
-        // Host fit-to-cap rounds each scaled axis down to an even encoder dimension. Permit only
-        // that bounded rounding error, not a materially different aspect ratio.
-        long evenRoundingTolerance =
-                2L * (appliedSourceWidth + appliedSourceHeight);
-        return crossProductError <= evenRoundingTolerance;
-    }
-
-    static boolean isStrictlyNewerUnsignedGeneration(
-            int previousGeneration, int candidateGeneration) {
-        if (candidateGeneration == 0) {
-            return false;
-        }
-        if (previousGeneration == 0) {
-            return true;
-        }
-        int delta = candidateGeneration - previousGeneration;
-        return delta != 0 && Integer.compareUnsigned(delta, Integer.MIN_VALUE) < 0;
-    }
-
-    static boolean canSettleAtomicQualityWithoutDecoderTransition(
-            boolean modeTransitionPending,
-            StreamQualityTuple previous, StreamQualityTuple requested,
-            int exactEncodedWidth, int exactEncodedHeight,
-            int decoderOutputWidth, int decoderOutputHeight) {
-        int[] previousSize = previous != null
-                ? parseResolutionSize(previous.resolution) : null;
-        int[] requestedSize = requested != null
-                ? parseResolutionSize(requested.resolution) : null;
-        return !modeTransitionPending
-                && previousSize != null && requestedSize != null
-                && previousSize[0] == requestedSize[0]
-                && previousSize[1] == requestedSize[1]
-                && exactEncodedWidth == decoderOutputWidth
-                && exactEncodedHeight == decoderOutputHeight;
-    }
-
     private int nextVideoModeRequestId() {
         // Opaque u32 correlation token with natural Java-int wrap. Zero and the local -1
         // "no request" sentinel are skipped.
@@ -6547,8 +5781,8 @@ public class XrStreamPresenter {
         cancelLiveQualityAckTimeout();
         pendingVideoModeRequestId = -1;
 
-        boolean validBody = isKnownVideoModeAckStatus(status)
-                && isValidAtomicPresentationAckBody(
+        boolean validBody = XrPresentationPolicy.isKnownVideoModeAckStatus(status)
+                && XrPresentationPolicy.isValidAtomicPresentationAckBody(
                         flags, appliedMode, stateGeneration,
                         appliedSourceWidth, appliedSourceHeight,
                         exactEncodedWidth, exactEncodedHeight,
@@ -6569,7 +5803,7 @@ public class XrStreamPresenter {
                 && appliedSourceWidth == pendingRequestedSourceWidth
                 && appliedSourceHeight == pendingRequestedSourceHeight
                 && (stateGeneration == lastPresentationStateGeneration
-                || isStrictlyNewerUnsignedGeneration(lastPresentationStateGeneration, stateGeneration));
+                || XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(lastPresentationStateGeneration, stateGeneration));
         if (recoveredGameWidenRefusal) {
             // The ACK explicitly proves the retained mono layout. Re-open only after its fresh
             // decoder boundary and latch this attempt across provider/encoder rebuilds.
@@ -6589,7 +5823,7 @@ public class XrStreamPresenter {
         boolean matchesRequest = appliedMode == pendingDesiredWireMode
                 && appliedSourceWidth == pendingRequestedSourceWidth
                 && appliedSourceHeight == pendingRequestedSourceHeight
-                && (recoveredGameWidenRefusal || isStrictlyNewerUnsignedGeneration(
+                && (recoveredGameWidenRefusal || XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(
                         lastPresentationStateGeneration, stateGeneration));
         if (!matchesRequest) {
             LimeLog.severe("XR: atomic presentation ack does not match the requested mode/source "
@@ -6617,7 +5851,7 @@ public class XrStreamPresenter {
         effectiveEncoderBitrateKbps = acknowledged.effectiveEncoderBitrateKbps;
         int[] decoderOutput = game.getDecoderOutputDimensions();
         if (pendingLiveQualityOrigin != LiveQualityRequestOrigin.GAME_SOURCE
-                && canSettleAtomicQualityWithoutDecoderTransition(
+                && XrPresentationPolicy.canSettleAtomicQualityWithoutDecoderTransition(
                 isAckFirstModeTransitionPending(), previousLiveQuality,
                 pendingLiveQuality, exactEncodedWidth, exactEncodedHeight,
                 decoderOutput != null ? decoderOutput[0] : 0,
@@ -6765,8 +5999,8 @@ public class XrStreamPresenter {
     /** Stages an ACKed mode tuple without resizing the still-visible old producer. */
     private boolean stageAcknowledgedModeEntryQuality(
             com.limelight.Game game, StreamQualityTuple applied) {
-        int[] size = parseResolutionSize(applied.resolution);
-        float fps = parseFrameRate(applied.frameRate, prefConfig.fps);
+        int[] size = XrPresentationPolicy.parseResolutionSize(applied.resolution);
+        float fps = XrPresentationPolicy.parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null || fps <= 0) {
             return false;
         }
@@ -6788,8 +6022,8 @@ public class XrStreamPresenter {
      */
     private boolean applyAcknowledgedQualityWithoutGeometryChange(
             com.limelight.Game game, StreamQualityTuple applied) {
-        int[] size = parseResolutionSize(applied.resolution);
-        float fps = parseFrameRate(applied.frameRate, prefConfig.fps);
+        int[] size = XrPresentationPolicy.parseResolutionSize(applied.resolution);
+        float fps = XrPresentationPolicy.parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null || size[0] != prefConfig.width || size[1] != prefConfig.height) {
             return false;
         }
@@ -6797,7 +6031,7 @@ public class XrStreamPresenter {
         prefConfig.bitrate = applied.bitrateKbps;
         updateDecoderStreamGeometry(
                 game, liveQualityRequestMode(), size[0], size[1], Math.round(fps));
-        return acknowledgedGeometryAdoptionSucceeded(false, false);
+        return XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(false, false);
     }
 
     private boolean applyAcknowledgedQuality(
@@ -6805,15 +6039,15 @@ public class XrStreamPresenter {
             StreamContainer.SurfaceSwitchCallback clientSbsResizeCallback,
             BooleanSupplier transactionCurrent,
             StreamContainer.SurfaceSwitchCallback adoptionCompletion) {
-        int[] size = parseResolutionSize(applied.resolution);
-        float fps = parseFrameRate(applied.frameRate, prefConfig.fps);
+        int[] size = XrPresentationPolicy.parseResolutionSize(applied.resolution);
+        float fps = XrPresentationPolicy.parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null || transactionCurrent == null || adoptionCompletion == null
                 || !transactionCurrent.getAsBoolean()) {
             return false;
         }
         int[] previousRaster = currentExactEncodedWidth > 0 && currentExactEncodedHeight > 0
                 ? new int[] {currentExactEncodedWidth, currentExactEncodedHeight}
-                : initialSurfacePixelDimensions(currentPresenterMode,
+                : XrPresentationPolicy.initialSurfacePixelDimensions(currentPresenterMode,
                         prefConfig.width, prefConfig.height, hostSbsVideoFormat);
         boolean encodedRasterChanged = pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0
                 && (pendingExactEncodedWidth != previousRaster[0]
@@ -6823,7 +6057,7 @@ public class XrStreamPresenter {
         if (geometryChanged) {
             LimeLog.info("XR: adopting authoritative source " + applied.resolution
                     + " and encoded raster " + pendingExactEncodedWidth + "x" + pendingExactEncodedHeight);
-            return acknowledgedGeometryAdoptionSucceeded(true,
+            return XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(true,
                     applyLiveStreamGeometry(
                             game, size[0], size[1], fps, applied.bitrateKbps,
                             clientSbsResizeCallback, transactionCurrent,
@@ -6834,24 +6068,7 @@ public class XrStreamPresenter {
         updateDecoderStreamGeometry(
                 game, liveQualityRequestMode(), size[0], size[1], Math.round(fps));
         adoptionCompletion.onComplete(true);
-        return acknowledgedGeometryAdoptionSucceeded(false, false);
-    }
-
-    /**
-     * The host's applied wire mode converted to a logical stream-quality tuple. ACKs carry each
-     * mode's logical/base dimensions. {@code bitrateKbps} is the host's post-budget encoder value
-     * rather than the requested wire budget. Fractional frame rates retain the
-     * hundredths-of-a-Hz precision carried by the ACK. Null when the host reported nothing usable.
-     */
-    static StreamQualityTuple appliedTuple(
-            int wireWidth, int wireHeight, int framerateX100, int bitrateKbps) {
-        int[] logicalDimensions = liveVideoModeLogicalDimensions(wireWidth, wireHeight);
-        if (logicalDimensions == null || framerateX100 <= 0 || bitrateKbps <= 0) {
-            return null;
-        }
-        return new StreamQualityTuple(
-                logicalDimensions[0] + "x" + logicalDimensions[1],
-                formatFrameRateX100(framerateX100), bitrateKbps);
+        return XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(false, false);
     }
 
     /**
@@ -6862,7 +6079,7 @@ public class XrStreamPresenter {
             StreamQualityTuple requestedLogicalQuality,
             int wireWidth, int wireHeight, int framerateX100,
             int effectiveEncoderBitrateKbps) {
-        StreamQualityTuple effective = appliedTuple(
+        StreamQualityTuple effective = XrPresentationPolicy.appliedTuple(
                 wireWidth, wireHeight,
                 framerateX100, effectiveEncoderBitrateKbps);
         if (requestedLogicalQuality == null || effective == null) {
@@ -6925,7 +6142,7 @@ public class XrStreamPresenter {
 
         return streamContainer.resizeHostSbsSurface(
                 prefConfig.isHostDoubledWidthMode()
-                        && isPackedWireMode(effectiveTargetWireMode(geometryMode)),
+                        && XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(geometryMode)),
                 width, height, success -> {
                     if (!transactionCurrent.getAsBoolean()
                             || currentPresenterMode != geometryMode) {
@@ -7022,9 +6239,9 @@ public class XrStreamPresenter {
             StreamContainer streamContainer = game.getStreamContainer();
             if (streamContainer != null) {
                 int[] before = previousLiveQuality != null
-                        ? parseResolutionSize(previousLiveQuality.resolution) : null;
+                        ? XrPresentationPolicy.parseResolutionSize(previousLiveQuality.resolution) : null;
                 int[] after = acknowledgedLiveQuality != null
-                        ? parseResolutionSize(acknowledgedLiveQuality.resolution) : null;
+                        ? XrPresentationPolicy.parseResolutionSize(acknowledgedLiveQuality.resolution) : null;
                 boolean geometryChanged = before == null || after == null
                         || before[0] != after[0] || before[1] != after[1];
                 if (geometryChanged) {
@@ -7062,7 +6279,7 @@ public class XrStreamPresenter {
         if (pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0) {
             return new int[] {pendingExactEncodedWidth, pendingExactEncodedHeight};
         }
-        return initialSurfacePixelDimensions(liveQualityRequestMode(),
+        return XrPresentationPolicy.initialSurfacePixelDimensions(liveQualityRequestMode(),
                 prefConfig.width, prefConfig.height, hostSbsVideoFormat);
     }
 
@@ -7141,7 +6358,7 @@ public class XrStreamPresenter {
                                              StreamQualityTuple applied) {
         LiveQualityRequestOrigin origin = pendingLiveQualityOrigin;
         StreamQualityTuple durableRequested = pendingDurableUserQuality;
-        StreamQualityTuple durableApplied = durableUserQuality(applied, durableRequested);
+        StreamQualityTuple durableApplied = XrPresentationPolicy.durableUserQuality(applied, durableRequested);
         commitGameTransport(requestMode);
 
         if (pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0) {
@@ -7151,13 +6368,13 @@ public class XrStreamPresenter {
 
         if (origin == LiveQualityRequestOrigin.PANEL_FOLLOW) {
             panelRefreshRateState.automaticRequestSucceeded(
-                    Math.round(parseFrameRate(
+                    Math.round(XrPresentationPolicy.parseFrameRate(
                             applied != null ? applied.frameRate : "0", prefConfig.fps)));
         } else if (origin == LiveQualityRequestOrigin.GAME_SOURCE) {
             panelRefreshRateState.otherTransactionSettled();
         } else if (durableApplied != null) {
             panelRefreshRateState.userRequestSucceeded(
-                    parseFrameRate(durableApplied.frameRate, prefConfig.fps));
+                    XrPresentationPolicy.parseFrameRate(durableApplied.frameRate, prefConfig.fps));
         } else {
             panelRefreshRateState.otherTransactionSettled();
         }
@@ -7202,24 +6419,6 @@ public class XrStreamPresenter {
             surfaceEntity.setStereoMode(stereoModeFor(PresentationMode.GAME_3D));
         }
         updateGameSourceViews();
-    }
-
-    /**
-     * Reconciles the host-applied tuple with the user's durable FPS ceiling.
-     *
-     * <p>The selected FPS is a maximum, so an ACK's lower current FPS is always effective-only.
-     * Host-clamped geometry and the requested wire bitrate remain authoritative and durable.</p>
-     */
-    static StreamQualityTuple durableUserQuality(
-            StreamQualityTuple applied, StreamQualityTuple durableRequested) {
-        if (applied == null) {
-            return null;
-        }
-        if (durableRequested == null) {
-            return applied;
-        }
-        return new StreamQualityTuple(
-                applied.resolution, durableRequested.frameRate, applied.bitrateKbps);
     }
 
     /**
@@ -7393,59 +6592,6 @@ public class XrStreamPresenter {
         controlActionListener.onLiveStreamQualityFailed();
     }
 
-    /**
-     * Frame rate on the wire is hundredths of a Hz, so fractional rates (2997 = 29.97) survive
-     * the round trip even though the XR picker currently only offers whole values.
-     */
-    static int frameRateX100(String frameRate, float fallbackFps) {
-        float fps;
-        try {
-            fps = Float.parseFloat(frameRate.trim());
-        } catch (RuntimeException e) {
-            fps = fallbackFps;
-        }
-        return Math.max(0, Math.min(0xFFFF, Math.round(fps * 100f)));
-    }
-
-    static float parseFrameRate(String frameRate, float fallback) {
-        try {
-            return Float.parseFloat(frameRate.trim());
-        } catch (RuntimeException e) {
-            return fallback;
-        }
-    }
-
-    private static String formatFrameRate(float frameRate) {
-        return formatFrameRateX100(Math.round(frameRate * 100f));
-    }
-
-    private static String formatFrameRateX100(int frameRateX100) {
-        int whole = frameRateX100 / 100;
-        int hundredths = frameRateX100 % 100;
-        if (hundredths == 0) {
-            return String.valueOf(whole);
-        }
-        if (hundredths % 10 == 0) {
-            return whole + "." + (hundredths / 10);
-        }
-        return whole + "." + (hundredths < 10 ? "0" : "") + hundredths;
-    }
-
-    /** Parses a {@code WxH} stream-quality resolution id; null when it is not usable. */
-    static int[] parseResolutionSize(String resolution) {
-        if (resolution == null) {
-            return null;
-        }
-        try {
-            String[] parts = resolution.split("x", 2);
-            int width = Integer.parseInt(parts[0].trim());
-            int height = Integer.parseInt(parts[1].trim());
-            return (width > 0 && height > 0) ? new int[] {width, height} : null;
-        } catch (RuntimeException e) {
-            return null;
-        }
-    }
-
     private void finishModeSwitch(BarItem item, PresentationMode previousMode, PresentationMode nextMode,
                                   boolean wasClientSbs,
                                   boolean isClientSbs, StreamContainer streamContainer,
@@ -7455,10 +6601,10 @@ public class XrStreamPresenter {
         }
         if (surfaceSwitchSucceeded && !isClientSbs && !wasClientSbs
                 && prefConfig.isHostDoubledWidthMode()
-                && (requiresHostSurfaceResize(previousMode, nextMode)
+                && (XrPresentationPolicy.requiresHostSurfaceResize(previousMode, nextMode)
                 || isAckFirstModeTransitionPending())) {
             if (streamContainer != null && streamContainer.resizeHostSbsSurface(
-                    isPackedWireMode(effectiveTargetWireMode(nextMode)),
+                    XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(nextMode)),
                     prefConfig.width, prefConfig.height,
                     success -> finishModeSwitchAfterSurfaceHandoff(
                             item, previousMode, nextMode, wasClientSbs, isClientSbs,
@@ -7518,10 +6664,10 @@ public class XrStreamPresenter {
         if (streamContainer != null && wasClientSbs != isClientSbs) {
             streamContainer.setClientSbsActive(isClientSbs);
         }
-        boolean decoderTransitionRequired = requiresDecoderTransition(previousMode, nextMode)
+        boolean decoderTransitionRequired = XrPresentationPolicy.requiresDecoderTransition(previousMode, nextMode)
                 || isAckFirstModeTransitionPending();
         boolean retainOldPictureUntilTargetFrame =
-                retainsOldPictureUntilFreshTargetFrame(previousMode, nextMode);
+                XrPresentationPolicy.retainsOldPictureUntilFreshTargetFrame(previousMode, nextMode);
         if (!retainOldPictureUntilTargetFrame) {
             applyPresenterModeInterpretation(previousMode, nextMode, item.label);
         }
@@ -7557,7 +6703,7 @@ public class XrStreamPresenter {
     private void applyPresenterModeInterpretation(PresentationMode previousMode,
                                                   PresentationMode nextMode,
                                                   String label) {
-        if (resetsHostDepthStatusAtTransitionCommit(previousMode, nextMode)) {
+        if (XrPresentationPolicy.resetsHostDepthStatusAtTransitionCommit(previousMode, nextMode)) {
             resetHostDepthStatus();
         }
         if (previousMode != nextMode && nextMode == PresentationMode.MOVIE_3D) {
@@ -7631,7 +6777,7 @@ public class XrStreamPresenter {
                                 return;
                             }
                         }
-                        if (requiresClientPackedSwapProof(currentPresenterMode, pendingMode)) {
+                        if (XrPresentationPolicy.requiresClientPackedSwapProof(currentPresenterMode, pendingMode)) {
                             LimeLog.info("XR: fresh Client SBS decoder input reached; awaiting "
                                     + "first packed swap");
                             armClientSbsModeSwapTimeout(transitionGeneration);
@@ -7672,13 +6818,6 @@ public class XrStreamPresenter {
             LimeLog.warning("XR: ignoring stale decoder completion generation "
                     + transitionGeneration);
         }
-    }
-
-    /** Client entry needs the renderer's packed output, not merely its decoded input frame. */
-    static boolean requiresClientPackedSwapProof(PresentationMode currentMode,
-                                                 PresentationMode pendingMode) {
-        return currentMode != PresentationMode.CLIENT_SBS_AI
-                && pendingMode == PresentationMode.CLIENT_SBS_AI;
     }
 
     private boolean armClientSbsModeSwap(int transitionGeneration, PresentationMode pendingMode) {
@@ -7759,7 +6898,7 @@ public class XrStreamPresenter {
         }
         PresentationMode previousMode = currentPresenterMode;
         boolean completedPackedClientEntry =
-                requiresClientPackedSwapProof(previousMode, pendingMode);
+                XrPresentationPolicy.requiresClientPackedSwapProof(previousMode, pendingMode);
         if (previousMode != pendingMode) {
             applyPresenterModeInterpretation(
                     previousMode, pendingMode, labelForPresenterMode(pendingMode));
@@ -7871,26 +7010,17 @@ public class XrStreamPresenter {
         LimeLog.info("XR: first frame-boundary-safe Client SBS HDR output is visible");
     }
 
-    private static int wireModeFor(PresentationMode mode) {
-        return mode == PresentationMode.HOST_SBS_AI
-                ? MoonBridge.SBS_MODE_AI : MoonBridge.SBS_MODE_OFF;
-    }
-
     private int effectiveWireModeFor(PresentationMode mode) {
         if (mode == PresentationMode.GAME_3D && gameProviderV1Supported) {
             return currentPresenterMode == PresentationMode.GAME_3D
                     ? gameWireMode : MoonBridge.SBS_MODE_GAME_MONO;
         }
-        return wireModeFor(mode);
+        return XrPresentationPolicy.wireModeFor(mode);
     }
 
     private int effectiveTargetWireMode(PresentationMode mode) {
         return pendingLiveQualityMode == mode && pendingDesiredWireMode >= 0
                 ? pendingDesiredWireMode : effectiveWireModeFor(mode);
-    }
-
-    static boolean isPackedWireMode(int wireMode) {
-        return wireMode == MoonBridge.SBS_MODE_AI || wireMode == MoonBridge.SBS_MODE_GAME_SBS;
     }
 
     private void reportModeSwitchFailure(String reason) {
@@ -8128,7 +7258,7 @@ public class XrStreamPresenter {
         }
         // NvConnection gates this launch intent against the freshly negotiated Game capability.
         return currentPresenterMode == PresentationMode.GAME_3D
-                ? MoonBridge.SBS_MODE_GAME_MONO : wireModeFor(currentPresenterMode);
+                ? MoonBridge.SBS_MODE_GAME_MONO : XrPresentationPolicy.wireModeFor(currentPresenterMode);
     }
 
     private String gameRetryQualityKey() {
@@ -8223,7 +7353,7 @@ public class XrStreamPresenter {
 
     public boolean canBeginClientSbsHdrTransition() {
         return controlTransportOpen() && surfaceEntity != null && !surfaceEntity.isDisposed()
-                && canSynchronizeClientSbsHdrTransition(
+                && XrPresentationPolicy.canSynchronizeClientSbsHdrTransition(
                 currentPresenterMode,
                 streamPresentationReady,
                 modeSwitchInProgress,
@@ -8423,11 +7553,11 @@ public class XrStreamPresenter {
     }
 
     private int dp(float v) {
-        return Math.round(v * activity.getResources().getDisplayMetrics().density);
+        return XrPanelViews.dp(activity, v);
     }
 
     private int dimen(int resourceId) {
-        return activity.getResources().getDimensionPixelSize(resourceId);
+        return XrPanelViews.dimen(activity, resourceId);
     }
 
     private int statsDp(float v) {
@@ -8440,36 +7570,21 @@ public class XrStreamPresenter {
     }
 
     private void setTextSize(TextView view, int textSizeResource) {
-        view.setTextSize(TypedValue.COMPLEX_UNIT_PX,
-                activity.getResources().getDimension(textSizeResource));
+        XrPanelViews.setTextSize(activity, view, textSizeResource);
     }
 
     private void setScaledTextSize(TextView view, int textSizeResource, float scale) {
-        view.setTextSize(TypedValue.COMPLEX_UNIT_PX,
-                activity.getResources().getDimension(textSizeResource) * scale);
+        XrPanelViews.setScaledTextSize(activity, view, textSizeResource, scale);
     }
 
     private android.graphics.drawable.GradientDrawable controlSurfaceBackground(
             int fillColor, int strokeColor, int strokeWidthDp) {
-        android.graphics.drawable.GradientDrawable background =
-                new android.graphics.drawable.GradientDrawable();
-        background.setColor(fillColor);
-        background.setStroke(dp(strokeWidthDp), strokeColor);
-        background.setCornerRadius(
-                activity.getResources().getDimension(R.dimen.xr_radius_card));
-        return background;
+        return XrPanelViews.controlSurfaceBackground(activity, fillColor, strokeColor, strokeWidthDp);
     }
 
     /** Fill every hosted pixel; rounded child cards can keep their existing interaction styling. */
     private void setSolidPanelCanvas(View root) {
-        root.setBackgroundColor(paletteColor(R.color.xr_surface_sunken));
-        root.setAlpha(1.0f);
-    }
-
-    /** Public panel geometry only: the SDK does not expose its hosted surface's blending flag. */
-    private static void configureSolidPanel(PanelEntity panel) {
-        panel.setCornerRadius(0f);
-        panel.setAlpha(1f);
+        XrPanelViews.setSolidPanelCanvas(activity, root);
     }
 
     /**
@@ -8528,25 +7643,6 @@ public class XrStreamPresenter {
             }
             root.invalidate();  // force the XR panel to re-render the tile's new fill/border
         }
-    }
-
-    /**
-     * Clamp a proposed panel pose so it can't be dragged closer than {@link #MIN_PANEL_DISTANCE_METERS}
-     * from the activity-space origin (≈ the initial head position), preserving direction and rotation.
-     */
-    private static Pose clampToMinDistance(Pose pose) {
-        Vector3 t = pose.getTranslation();
-        float len = t.getLength();
-        if (len >= MIN_PANEL_DISTANCE_METERS) {
-            return pose;
-        }
-        if (len < 1e-4f) {
-            // Degenerate (panel essentially at the origin) — push straight forward.
-            return new Pose(new Vector3(0f, 0f, -MIN_PANEL_DISTANCE_METERS), pose.getRotation());
-        }
-        float s = MIN_PANEL_DISTANCE_METERS / len;
-        Vector3 clamped = new Vector3(t.getX() * s, t.getY() * s, t.getZ() * s);
-        return new Pose(clamped, pose.getRotation());
     }
 
     public Surface getVideoSurface() {
@@ -8632,7 +7728,7 @@ public class XrStreamPresenter {
      * @return true when SceneCore returned a valid (possibly replacement) Surface
      */
     public boolean setClientSbsSurfaceSize(int perEyeWidth, int perEyeHeight) {
-        int[] packed = clientSbsPackedDimensions(perEyeWidth, perEyeHeight);
+        int[] packed = XrPresentationPolicy.clientSbsPackedDimensions(perEyeWidth, perEyeHeight);
         if (packed == null || surfaceEntity == null || surfaceEntity.isDisposed()) {
             return false;
         }
@@ -8643,7 +7739,7 @@ public class XrStreamPresenter {
 
     /** Final XR swapchain width for Client SBS: two negotiated-size eye views side by side. */
     public int getClientSbsSurfaceWidth() {
-        int[] packed = clientSbsPackedDimensions(prefConfig.width, prefConfig.height);
+        int[] packed = XrPresentationPolicy.clientSbsPackedDimensions(prefConfig.width, prefConfig.height);
         return packed != null ? packed[0] : 0;
     }
 
@@ -8652,59 +7748,22 @@ public class XrStreamPresenter {
         return prefConfig.height;
     }
 
-    /** Exact packed output for two full-resolution Client-SBS eyes, or null when invalid. */
+    /** Kept for {@code StreamContainer}; the arithmetic lives in {@link XrPresentationPolicy}. */
     static int[] clientSbsPackedDimensions(int perEyeWidth, int perEyeHeight) {
-        long packedWidth = (long) perEyeWidth * 2L;
-        if (perEyeWidth <= 0 || perEyeHeight <= 0 || packedWidth > Integer.MAX_VALUE) {
-            return null;
-        }
-        return new int[] {(int) packedWidth, perEyeHeight};
+        return XrPresentationPolicy.clientSbsPackedDimensions(perEyeWidth, perEyeHeight);
     }
 
     private int hostSbsVideoFormat = MoonBridge.VIDEO_FORMAT_H265;
 
-    static boolean hostSbsFormatChangeRequiresResize(
-            PresentationMode mode, int width, int height, int oldFormat, int newFormat) {
-        if (mode != PresentationMode.HOST_SBS_AI || oldFormat == newFormat) {
-            return false;
-        }
-        int[] oldDimensions = PreferenceConfiguration.hostSbsPackedDimensions(
-                width, height, oldFormat);
-        int[] newDimensions = PreferenceConfiguration.hostSbsPackedDimensions(
-                width, height, newFormat);
-        return oldDimensions[0] != newDimensions[0]
-                || oldDimensions[1] != newDimensions[1];
-    }
-
     /** Updates the host-SBS allocation from the codec actually selected by RTSP/MediaCodec. */
     public void setHostSbsVideoFormat(int videoFormat) {
-        boolean resizeRequired = hostSbsFormatChangeRequiresResize(
+        boolean resizeRequired = XrPresentationPolicy.hostSbsFormatChangeRequiresResize(
                 currentPresenterMode, prefConfig.width, prefConfig.height,
                 hostSbsVideoFormat, videoFormat);
         hostSbsVideoFormat = videoFormat;
         if (resizeRequired) {
             setHostSurfaceSize(true);
         }
-    }
-
-    static int[] initialSurfacePixelDimensions(PresentationMode mode,
-                                               int logicalWidth,
-                                               int logicalHeight,
-                                               int hostAiVideoFormat) {
-        if (isHostDepthPresenterMode(mode)) {
-            return PreferenceConfiguration.hostSbsPackedDimensions(
-                    logicalWidth, logicalHeight, hostAiVideoFormat);
-        }
-        return new int[] {logicalWidth, logicalHeight};
-    }
-
-    /** Actual encoded/presentation geometry retained by MediaCodec recovery. */
-    static int[] decoderStreamDimensions(PresentationMode mode,
-                                         int logicalWidth,
-                                         int logicalHeight,
-                                         int hostAiVideoFormat) {
-        return initialSurfacePixelDimensions(mode, logicalWidth, logicalHeight,
-                hostAiVideoFormat);
     }
 
     private void updateDecoderStreamGeometry(
@@ -8715,7 +7774,7 @@ public class XrStreamPresenter {
             encodedDimensions = new int[] {
                     pendingExactEncodedWidth, pendingExactEncodedHeight};
         } else {
-            encodedDimensions = decoderStreamDimensions(
+            encodedDimensions = XrPresentationPolicy.decoderStreamDimensions(
                     mode, logicalWidth, logicalHeight, hostSbsVideoFormat);
         }
         game.updateDecoderStreamGeometry(
@@ -8737,10 +7796,10 @@ public class XrStreamPresenter {
         int w;
         int h;
         boolean pendingExactGeometry = pendingDesiredWireMode >= 0
-                && isPackedWireMode(pendingDesiredWireMode) == sbs
+                && XrPresentationPolicy.isPackedWireMode(pendingDesiredWireMode) == sbs
                 && pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0;
         boolean committedExactGeometry = !pendingExactGeometry
-                && isPackedWireMode(effectiveWireModeFor(currentPresenterMode)) == sbs
+                && XrPresentationPolicy.isPackedWireMode(effectiveWireModeFor(currentPresenterMode)) == sbs
                 && currentExactEncodedWidth > 0 && currentExactEncodedHeight > 0;
         if (pendingExactGeometry) {
             w = pendingExactEncodedWidth;

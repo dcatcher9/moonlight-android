@@ -468,42 +468,42 @@ public final class XrStreamPresenterViewTest {
         controller.setup();
 
         assertEquals("3840 \u00d7 2160 \u00b7 90 FPS \u00b7 100 Mbps \u00b7 HDR",
-                XrStreamPresenter.formatGlanceStream(
+                XrStatsFormat.formatGlanceStream(
                         activity, "3840x2160", "90", 100000, "HDR"));
         controller.destroy();
     }
 
     @Test
     public void statsEntityScalePreservesAuthoredWorldSize() {
-        float localWidth = XrStreamPresenter.statsEntityLocalMeters(1.40f, 1.26f);
-        float localHeight = XrStreamPresenter.statsEntityLocalMeters(1.85f, 1.26f);
+        float localWidth = XrPanelPlacement.statsEntityLocalMeters(1.40f, 1.26f);
+        float localHeight = XrPanelPlacement.statsEntityLocalMeters(1.85f, 1.26f);
 
         assertEquals(1.40f, localWidth * 1.26f, 0.0001f);
         assertEquals(1.85f, localHeight * 1.26f, 0.0001f);
         assertEquals(0.0f,
-                XrStreamPresenter.statsEntityLocalMeters(1.40f, 0.0f), 0.0f);
+                XrPanelPlacement.statsEntityLocalMeters(1.40f, 0.0f), 0.0f);
     }
 
     @Test
     public void sceneCutStatusExposesArmingAndAppearanceProposalAttribution() {
         assertEquals("7 total | scene age 19 frames | geometry armed | appearance proposals 2",
-                XrStreamPresenter.formatSceneCutStatus(7L, 19, true, 2L));
+                XrStatsFormat.formatSceneCutStatus(7L, 19, true, 2L));
         assertEquals("7 total | scene age 19 frames | geometry disarmed | appearance proposals 0",
-                XrStreamPresenter.formatSceneCutStatus(7L, 19, false, 0L));
+                XrStatsFormat.formatSceneCutStatus(7L, 19, false, 0L));
     }
 
     @Test
     public void clientCutReasonNamesSeparateAcceptedAndRejectedAppearanceEvidence() {
-        assertEquals("appearance", XrStreamPresenter.clientCutReasonName(
+        assertEquals("appearance", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_APPEARANCE));
-        assertEquals("geometry", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY));
-        assertEquals("structureless_entry", XrStreamPresenter.clientCutReasonName(
+        assertEquals("structureless_entry", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY));
-        assertEquals("appearance_unarmed", XrStreamPresenter.clientCutReasonName(
+        assertEquals("appearance_unarmed", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID));
-        assertEquals("appearance_depth_rejected", XrStreamPresenter.clientCutReasonName(
+        assertEquals("appearance_depth_rejected", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_ARMED));
@@ -511,46 +511,46 @@ public final class XrStreamPresenterViewTest {
 
     @Test
     public void clientCutReasonNamesExposeLatchedGeometryDecisions() {
-        assertEquals("geometry_confirmation_rejected", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry_confirmation_rejected", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED));
-        assertEquals("geometry_depth_only_rejected", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry_depth_only_rejected", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK));
-        assertEquals("geometry_depth_only", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry_depth_only", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK));
-        assertEquals("geometry_structure_rejected", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry_structure_rejected", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER));
-        assertEquals("geometry_depth_only_pending", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry_depth_only_pending", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK));
-        assertEquals("geometry_pending", XrStreamPresenter.clientCutReasonName(
+        assertEquals("geometry_pending", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER
                         | ClientSbsGpuDepthProcessor
                         .CUT_DECISION_GEOMETRY_STRUCTURE_CORROBORATED
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE));
-        assertEquals("structureless_start", XrStreamPresenter.clientCutReasonName(
+        assertEquals("structureless_start", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_PERSISTENT_LOW_START));
-        assertEquals("structure_supported_return", XrStreamPresenter.clientCutReasonName(
+        assertEquals("structure_supported_return", XrStatsFormat.clientCutReasonName(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_SUPPORTED_RETURN));
     }
 
     @Test
     public void clientStatsSeparateAdaptiveGeometryFromPrivateCutState() {
-        String state = XrStreamPresenter.formatClientV2State(
+        String state = XrStatsFormat.formatClientV2State(
                 true, true, false, 1.0f);
-        String coordinate = XrStreamPresenter.formatClientAdaptiveZero(
+        String coordinate = XrStatsFormat.formatClientAdaptiveZero(
                 0.123456f, 0.234567f);
-        String amplitude = XrStreamPresenter.formatClientDepthAmplitude(20.0f, 10.0f);
-        String distribution = XrStreamPresenter.formatClientRawDistribution(
+        String amplitude = XrStatsFormat.formatClientDepthAmplitude(20.0f, 10.0f);
+        String distribution = XrStatsFormat.formatClientRawDistribution(
                 0.1f, 0.3f, 0.04864449f);
-        String mapping = XrStreamPresenter.formatClientLinearMapping(1.75f, true, 30L);
-        String depthEvidence = XrStreamPresenter.formatClientCutDepthEvidence(
+        String mapping = XrStatsFormat.formatClientLinearMapping(1.75f, true, 30L);
+        String depthEvidence = XrStatsFormat.formatClientCutDepthEvidence(
                 0.125f, Float.NaN, 0.75f, 0.2f, 1.25f, false);
-        String appearanceEvidence = XrStreamPresenter.formatClientCutAppearanceEvidence(
+        String appearanceEvidence = XrStatsFormat.formatClientCutAppearanceEvidence(
                 0.1f, 0.2f, 0.3f, 0.8f, 0.7f);
-        String decision = XrStreamPresenter.formatClientCutDecision(
+        String decision = XrStatsFormat.formatClientCutDecision(
                 ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY
                         | ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID,
                 12L, true);
@@ -568,11 +568,11 @@ public final class XrStreamPresenterViewTest {
                 appearanceEvidence);
         assertEquals("geometry | event 12 | geometry armed yes | flags 0x00a00", decision);
         assertEquals("total 7 | appearance 2 | geometry 3 | low 2 | proposals 9",
-                XrStreamPresenter.formatClientCutCounts(7L, 2L, 3L, 2L, 9L));
+                XrStatsFormat.formatClientCutCounts(7L, 2L, 3L, 2L, 9L));
         assertEquals("content 1 | invalid 4",
-                XrStreamPresenter.formatClientReuseRejects(1L, 4L));
+                XrStatsFormat.formatClientReuseRejects(1L, 4L));
         assertEquals("color_busy 0 | flat 0 | raw invalid 0 | cut range collapsed 0",
-                XrStreamPresenter.formatClientFaults(0L, 0L, true, 0L, 0L));
+                XrStatsFormat.formatClientFaults(0L, 0L, true, 0L, 0L));
 
         String visible = (state + coordinate + amplitude + distribution + mapping
                 + depthEvidence + appearanceEvidence + decision)
@@ -588,24 +588,24 @@ public final class XrStreamPresenterViewTest {
     @Test
     public void clientStatsDoNotTurnMissingCameraObservationsIntoZeros() {
         assertEquals("zero 0.123456 | mean target n/a",
-                XrStreamPresenter.formatClientAdaptiveZero(0.123456f, Float.NaN));
+                XrStatsFormat.formatClientAdaptiveZero(0.123456f, Float.NaN));
         assertEquals("D 0.050000 | inverse 20.0000 | target inverse n/a",
-                XrStreamPresenter.formatClientDepthAmplitude(20.0f, Float.NaN));
+                XrStatsFormat.formatClientDepthAmplitude(20.0f, Float.NaN));
         assertEquals("D n/a | inverse n/a | target inverse n/a",
-                XrStreamPresenter.formatClientDepthAmplitude(0.0f, -1.0f));
+                XrStatsFormat.formatClientDepthAmplitude(0.0f, -1.0f));
         assertEquals("P05 n/a | P95 n/a | floor 0.048644",
-                XrStreamPresenter.formatClientRawDistribution(
+                XrStatsFormat.formatClientRawDistribution(
                         Float.NaN, Float.NaN, 0.04864449f));
         assertEquals("pop 1.750 | source clock disarmed | sample 35",
-                XrStreamPresenter.formatClientLinearMapping(1.75f, false, 35L));
+                XrStatsFormat.formatClientLinearMapping(1.75f, false, 35L));
     }
 
     @Test
     public void depthHealthReadbackFailureIsVisibleInsteadOfLookingLikeWarmup() {
         assertEquals("Waiting for sample",
-                XrStreamPresenter.formatDepthHealthUnavailable(false));
+                XrStatsFormat.formatDepthHealthUnavailable(false));
         assertEquals("Telemetry unavailable | retrying",
-                XrStreamPresenter.formatDepthHealthUnavailable(true));
+                XrStatsFormat.formatDepthHealthUnavailable(true));
     }
 
     @Test

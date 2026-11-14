@@ -119,7 +119,7 @@ public class XrSolidPanelTest {
     @Test
     public void solidPanelGeometryRemovesCornerMaskWithoutChangingVisibility() {
         PanelEntity panel = mock(PanelEntity.class);
-        ReflectionHelpers.callStaticMethod(XrStreamPresenter.class, "configureSolidPanel",
+        ReflectionHelpers.callStaticMethod(XrPanelViews.class, "configureSolidPanel",
                 ClassParameter.from(PanelEntity.class, panel));
         verify(panel).setCornerRadius(0f);
         verify(panel).setAlpha(1f);

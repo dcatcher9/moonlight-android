@@ -14,51 +14,51 @@ public class XrStreamPresenterLayoutTest {
     @Test
     public void decoderLatencyDescriptionSeparatesComponentFromRequestedMode() {
         assertEquals("Dedicated low-latency component | LL options requested",
-                XrStreamPresenter.formatDecoderLatencyMode(true, true));
+                XrStatsFormat.formatDecoderLatencyMode(true, true));
         assertEquals("Regular component | LL options requested",
-                XrStreamPresenter.formatDecoderLatencyMode(false, true));
+                XrStatsFormat.formatDecoderLatencyMode(false, true));
         assertEquals("Regular component | no LL options requested",
-                XrStreamPresenter.formatDecoderLatencyMode(false, false));
+                XrStatsFormat.formatDecoderLatencyMode(false, false));
     }
 
     @Test
     public void gpuStageFormattingDoesNotPresentMissingSamplesAsZeroWork() {
         assertEquals("Waiting for completed timer sample",
-                XrStreamPresenter.formatGpuStage(Float.NaN, 0L, "warp"));
+                XrStatsFormat.formatGpuStage(Float.NaN, 0L, "warp"));
         assertEquals("1.25 ms | warp",
-                XrStreamPresenter.formatGpuStage(1.25f, 4L, "warp"));
+                XrStatsFormat.formatGpuStage(1.25f, 4L, "warp"));
     }
 
     @Test
     public void gpuLogDistinguishesMissingZeroAndShortCompletedQueries() {
-        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(0.0f, 0L));
-        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(1.25f, 0L));
-        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(Float.NaN, 4L));
-        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(Float.POSITIVE_INFINITY, 4L));
-        assertEquals("n/a", XrStreamPresenter.formatGpuStageForLog(-0.1f, 4L));
-        assertEquals("0.000000", XrStreamPresenter.formatGpuStageForLog(0.0f, 4L));
-        assertEquals("0.000125", XrStreamPresenter.formatGpuStageForLog(0.000125f, 4L));
-        assertEquals("1.250000", XrStreamPresenter.formatGpuStageForLog(1.25f, 4L));
+        assertEquals("n/a", XrStatsFormat.formatGpuStageForLog(0.0f, 0L));
+        assertEquals("n/a", XrStatsFormat.formatGpuStageForLog(1.25f, 0L));
+        assertEquals("n/a", XrStatsFormat.formatGpuStageForLog(Float.NaN, 4L));
+        assertEquals("n/a", XrStatsFormat.formatGpuStageForLog(Float.POSITIVE_INFINITY, 4L));
+        assertEquals("n/a", XrStatsFormat.formatGpuStageForLog(-0.1f, 4L));
+        assertEquals("0.000000", XrStatsFormat.formatGpuStageForLog(0.0f, 4L));
+        assertEquals("0.000125", XrStatsFormat.formatGpuStageForLog(0.000125f, 4L));
+        assertEquals("1.250000", XrStatsFormat.formatGpuStageForLog(1.25f, 4L));
     }
 
     @Test
     public void statsTitleNamesIndependentStreamAndClientSbsWindows() {
         assertEquals("Stats | Client AI 3D | stream 1.0 s | SBS 1.8 s",
-                XrStreamPresenter.formatStatsTitle(
+                XrStatsFormat.formatStatsTitle(
                         PresentationMode.CLIENT_SBS_AI, 1.0f, 1.8f));
     }
 
     @Test
     public void statsTitleDoesNotClaimAnUnavailableSamplingWindow() {
         assertEquals("Stats | 2D | stream 1.0 s",
-                XrStreamPresenter.formatStatsTitle(
+                XrStatsFormat.formatStatsTitle(
                         PresentationMode.NORMAL, 1.0f, Float.NaN));
         assertEquals("Stats | Host AI 3D",
-                XrStreamPresenter.formatStatsTitle(
+                XrStatsFormat.formatStatsTitle(
                         PresentationMode.HOST_SBS_AI, 0.0f, 0.0f));
-        assertEquals("Stats | Game 3D", XrStreamPresenter.formatStatsTitle(
+        assertEquals("Stats | Game 3D", XrStatsFormat.formatStatsTitle(
                 PresentationMode.GAME_3D, 0.0f, 0.0f));
-        assertEquals("Stats | Movie 3D", XrStreamPresenter.formatStatsTitle(
+        assertEquals("Stats | Movie 3D", XrStatsFormat.formatStatsTitle(
                 PresentationMode.MOVIE_3D, 0.0f, 0.0f));
     }
 
@@ -67,8 +67,8 @@ public class XrStreamPresenterLayoutTest {
         float videoWidth = 3.56f;
         float panelWidth = 1.40f;
         float gap = 0.10f;
-        XrStreamPresenter.StatsPanelPlacement placement =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement placement =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         videoWidth, panelWidth, gap, 0.0f, 2.0f);
 
         float halfWidth = panelWidth / 2.0f;
@@ -92,11 +92,11 @@ public class XrStreamPresenterLayoutTest {
         float videoWidth = 3.56f;
         float panelWidth = 1.40f;
         float gap = 0.10f;
-        XrStreamPresenter.StatsPanelPlacement right =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement right =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         videoWidth, panelWidth, gap, 0.0f, 2.0f);
-        XrStreamPresenter.StatsPanelPlacement left =
-                XrStreamPresenter.calculateLeftPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement left =
+                XrPanelPlacement.calculateLeftPanelPlacement(
                         videoWidth, panelWidth, gap, 0.0f, 2.0f);
 
         assertEquals(-right.innerEdgeX, left.innerEdgeX, EPSILON);
@@ -111,8 +111,8 @@ public class XrStreamPresenterLayoutTest {
         float videoWidth = 3.56f;
         float panelWidth = 1.40f;
         float gap = 0.10f;
-        XrStreamPresenter.StatsPanelPlacement placement =
-                XrStreamPresenter.calculateLeftPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement placement =
+                XrPanelPlacement.calculateLeftPanelPlacement(
                         videoWidth, panelWidth, gap, 0.0f, 2.0f);
 
         float halfWidth = panelWidth / 2.0f;
@@ -132,11 +132,11 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void widerVideoDynamicallyIncreasesInwardYaw() {
-        XrStreamPresenter.StatsPanelPlacement narrow =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement narrow =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         0.50f, 1.40f, 0.10f, 0.0f, 3.0f);
-        XrStreamPresenter.StatsPanelPlacement wide =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement wide =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         1.50f, 1.40f, 0.10f, 0.0f, 3.0f);
 
         assertTrue(Math.abs(wide.yawDegrees) > Math.abs(narrow.yawDegrees));
@@ -147,8 +147,8 @@ public class XrStreamPresenterLayoutTest {
     public void closeViewerLimitsOuterEdgeForHeadClearance() {
         float panelWidth = 1.40f;
         float viewerZ = 1.0f;
-        XrStreamPresenter.StatsPanelPlacement placement =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement placement =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         1.0f, panelWidth, 0.10f, 0.0f, viewerZ);
         double yaw = Math.toRadians(placement.yawDegrees);
         float outerZ = placement.innerEdgeZ
@@ -160,8 +160,8 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void invalidViewerPoseUsesFiniteFallback() {
-        XrStreamPresenter.StatsPanelPlacement placement =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement placement =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         3.56f, 1.40f, 0.10f, Float.NaN, Float.NaN);
 
         assertTrue(Float.isFinite(placement.centerX));
@@ -171,11 +171,11 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void rawHalfAspectAndFullAspectGetDifferentRightEdgeAnchors() {
-        XrStreamPresenter.StatsPanelPlacement raw =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement raw =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         1.78f, 1.40f, 0.10f, 0.0f, 2.0f);
-        XrStreamPresenter.StatsPanelPlacement full =
-                XrStreamPresenter.calculateStatsPanelPlacement(
+        XrPanelPlacement.StatsPanelPlacement full =
+                XrPanelPlacement.calculateStatsPanelPlacement(
                         3.56f, 1.40f, 0.10f, 0.0f, 2.0f);
 
         assertEquals((3.56f - 1.78f) / 2.0f,
@@ -185,26 +185,26 @@ public class XrStreamPresenterLayoutTest {
     @Test
     public void modeOptionsHeightExpandsAndShrinksWithinBounds() {
         assertEquals(500,
-                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                XrPanelPlacement.calculateModeOptionsRasterHeightPixels(
                         500, 300, 0.52f, 0.90f));
         assertEquals(520,
-                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                XrPanelPlacement.calculateModeOptionsRasterHeightPixels(
                         600, 300, 0.52f, 0.90f));
         assertEquals(300,
-                XrStreamPresenter.calculateModeOptionsRasterHeightPixels(
+                XrPanelPlacement.calculateModeOptionsRasterHeightPixels(
                         200, 300, 0.52f, 0.90f));
         assertEquals(0.8667f,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         0.52f, 300, 500,
                         0.52f, 0.90f),
                 0.0001f);
         assertEquals(0.52f,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         0.90f, 400, 200,
                         0.52f, 0.90f),
                 0.0001f);
         assertEquals(0.90f,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         0.52f, 200, 600,
                         0.52f, 0.90f),
                 0.0001f);
@@ -221,34 +221,34 @@ public class XrStreamPresenterLayoutTest {
 
         // A mode whose rows fit exactly keeps the authored height.
         assertEquals(raster,
-                XrStreamPresenter.calculateStatsRasterHeightPixels(
+                XrPanelPlacement.calculateStatsRasterHeightPixels(
                         raster, raster, maxRaster));
         assertEquals(authored,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         authored, raster, raster, min, max),
                 0.0001f);
         // Client SBS adds a depth section: both the Android raster and physical panel grow.
         assertEquals(2000,
-                XrStreamPresenter.calculateStatsRasterHeightPixels(
+                XrPanelPlacement.calculateStatsRasterHeightPixels(
                         2000, raster, maxRaster));
         assertEquals(1.4583f,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         authored, raster, 2000, min, max),
                 0.0001f);
         // Sparse content must not leave a sliver — the floor is the authored size.
         assertEquals(raster,
-                XrStreamPresenter.calculateStatsRasterHeightPixels(
+                XrPanelPlacement.calculateStatsRasterHeightPixels(
                         400, raster, maxRaster));
         assertEquals(min,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         authored, raster, 400, min, max),
                 0.0001f);
         // Past the deterministic pixel cap the panel stops growing and the ScrollView takes over.
-        int cappedRaster = XrStreamPresenter.calculateStatsRasterHeightPixels(
+        int cappedRaster = XrPanelPlacement.calculateStatsRasterHeightPixels(
                 4000, raster, maxRaster);
         assertEquals(maxRaster, cappedRaster);
         assertEquals(max,
-                XrStreamPresenter.calculateModeOptionsHeightMeters(
+                XrPanelPlacement.calculateModeOptionsHeightMeters(
                         authored, raster, cappedRaster, min, max),
                 0.0001f);
     }
@@ -260,8 +260,8 @@ public class XrStreamPresenterLayoutTest {
         float contextualHeight = 0.44f;
         float gap = 0.02f;
         float anchorZ = 0.02f;
-        XrStreamPresenter.ModeOptionsPanelPlacement placement =
-                XrStreamPresenter.calculateModeOptionsPanelPlacement(
+        XrPanelPlacement.ModeOptionsPanelPlacement placement =
+                XrPanelPlacement.calculateModeOptionsPanelPlacement(
                         controlY, controlHeight, contextualHeight, gap,
                         anchorZ, 0.0f, 2.0f);
 
@@ -281,8 +281,8 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void invalidModeOptionsViewerPoseUsesFiniteTiltedFallback() {
-        XrStreamPresenter.ModeOptionsPanelPlacement placement =
-                XrStreamPresenter.calculateModeOptionsPanelPlacement(
+        XrPanelPlacement.ModeOptionsPanelPlacement placement =
+                XrPanelPlacement.calculateModeOptionsPanelPlacement(
                         -1.0f, 0.21f, 0.16f, 0.02f,
                         0.02f, Float.NaN, Float.NaN);
 

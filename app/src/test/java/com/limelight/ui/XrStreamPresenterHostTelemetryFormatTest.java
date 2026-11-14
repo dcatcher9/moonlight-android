@@ -11,11 +11,11 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
     @Test
     public void formatsExplicitUnavailableStates() {
         assertEquals("Unsupported by this host",
-                XrStreamPresenter.formatHostSbsTelemetryStatus(
+                XrStatsFormat.formatHostSbsTelemetryStatus(
                         SbsDepthTelemetrySnapshot.unavailable(
                                 SbsDepthTelemetrySnapshot.Availability.UNSUPPORTED)));
         assertEquals("Host telemetry stale",
-                XrStreamPresenter.formatHostSbsTelemetryStatus(
+                XrStatsFormat.formatHostSbsTelemetryStatus(
                         SbsDepthTelemetrySnapshot.unavailable(
                                 SbsDepthTelemetrySnapshot.Availability.STALE)));
     }
@@ -30,9 +30,9 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 0.1f, 0.2f, -2.0f, 0.5f, 1.0f, 0.4f,
                 8, 1, 0, 0, 0, 10);
         assertEquals("Live | 1036x584 | host depth telemetry",
-                XrStreamPresenter.formatHostSbsTelemetryStatus(telemetry));
+                XrStatsFormat.formatHostSbsTelemetryStatus(telemetry));
         assertEquals("pipeline ready | raw valid 100.0% | reported pop 1.700 | cut range 0.4000",
-                XrStreamPresenter.formatHostV2Field(telemetry));
+                XrStatsFormat.formatHostV2Field(telemetry));
 
         SbsDepthTelemetrySnapshot initializedOnly = SbsDepthTelemetrySnapshot.available(
                 SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION,
@@ -41,8 +41,8 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 Float.NaN, Float.NaN, Float.NaN, Float.NaN, 1.0f, Float.NaN,
                 8, 1, 0, 0, 0, 10);
         assertEquals("state initialized | raw valid 100.0% | reported pop n/a",
-                XrStreamPresenter.formatHostV2Field(initializedOnly));
-        String reported = XrStreamPresenter.formatHostV2Field(telemetry);
+                XrStatsFormat.formatHostV2Field(initializedOnly));
+        String reported = XrStatsFormat.formatHostV2Field(telemetry);
         for (String unreported : new String[] {
                 "fixed", "zero", "amplitude", "adaptive", "linear", "P05", "P95"
         }) {
@@ -60,7 +60,7 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN,
                 0, 0, 0, 0, 0, 0);
         assertEquals("state initialized | raw valid n/a | reported pop 2.250",
-                XrStreamPresenter.formatHostV2Field(configured));
+                XrStatsFormat.formatHostV2Field(configured));
     }
 
     @Test
@@ -74,7 +74,7 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                 12, 4, 2, 0, 0, 0);
         assertEquals("4 total | scene age 12 frames | geometry armed | appearance armed",
-                XrStreamPresenter.formatHostSceneCutStatus(
+                XrStatsFormat.formatHostSceneCutStatus(
                         bothArmed.hardCutCount, (int)bothArmed.sceneAge,
                         bothArmed.isGeometryArmed(), bothArmed.isAppearanceArmed()));
 
@@ -86,7 +86,7 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                 3, 1, 0, 0, 0, 0);
         assertEquals("1 total | scene age 3 frames | geometry disarmed | appearance armed",
-                XrStreamPresenter.formatHostSceneCutStatus(
+                XrStatsFormat.formatHostSceneCutStatus(
                         appearanceOnly.hardCutCount, (int)appearanceOnly.sceneAge,
                         appearanceOnly.isGeometryArmed(), appearanceOnly.isAppearanceArmed()));
     }

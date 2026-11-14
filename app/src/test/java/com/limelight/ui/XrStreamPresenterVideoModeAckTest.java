@@ -23,48 +23,48 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void nonV2HostsReconnectOnlyForWireModeCrossings() {
-        assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
+        assertTrue(XrPresentationPolicy.requiresAtomicPresentationReconnect(
                 PresentationMode.NORMAL,
                 PresentationMode.HOST_SBS_AI, false));
-        assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
+        assertTrue(XrPresentationPolicy.requiresAtomicPresentationReconnect(
                 PresentationMode.HOST_SBS_AI,
                 PresentationMode.CLIENT_SBS_AI, false));
-        assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(
+        assertFalse(XrPresentationPolicy.requiresAtomicPresentationReconnect(
                 PresentationMode.NORMAL,
                 PresentationMode.HOST_SBS_AI, true));
-        assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(
+        assertFalse(XrPresentationPolicy.requiresAtomicPresentationReconnect(
                 PresentationMode.NORMAL,
                 PresentationMode.CLIENT_SBS_AI, false));
     }
 
     @Test
     public void atomicAckAcceptsExactHostAiAndCappedOffGeometry() {
-        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertTrue(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_AI, 17,
                 5120, 2160, 8192, 1728, 9000, 180000));
-        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertTrue(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_OFF, 18,
                 5120, 2160, 4096, 1728, 9000, 180000));
     }
 
     @Test
     public void gameAckAllowsOrdinaryMonoFitButRequiresExactFullSbsRaster() {
-        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertTrue(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_GAME_MONO, 19,
                 1920, 1080, 1920, 1080, 6000, 100000));
-        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertTrue(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_GAME_SBS, 20,
                 1920, 1080, 3840, 1080, 6000, 100000));
-        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertTrue(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_GAME_MONO, 21,
                 5120, 2160, 4096, 1728, 6000, 100000));
-        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertFalse(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_GAME_SBS, 20,
                 5120, 2160, 8192, 1728, 6000, 100000));
-        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertFalse(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_GAME_MONO, 19,
                 1920, 1080, 3840, 1080, 6000, 100000));
-        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertFalse(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_GAME_SBS, 20,
                 1920, 1080, 1920, 1080, 6000, 100000));
     }
@@ -72,31 +72,31 @@ public class XrStreamPresenterVideoModeAckTest {
     @Test
     public void atomicAckPermitsOnlyBoundedEvenRounding() {
         // 4096 * 2112 / 5000 rounds to the even height 1730, so exact cross products differ.
-        assertTrue(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertTrue(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_OFF, 1,
                 5000, 2112, 4096, 1730, 6000, 100000));
-        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertFalse(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_OFF, 1,
                 5000, 2112, 4096, 1600, 6000, 100000));
-        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertFalse(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 1, MoonBridge.SBS_MODE_OFF, 1,
                 1920, 1080, 1920, 1080, 6000, 100000));
-        assertFalse(XrStreamPresenter.isValidAtomicPresentationAckBody(
+        assertFalse(XrPresentationPolicy.isValidAtomicPresentationAckBody(
                 0, MoonBridge.SBS_MODE_OFF, 0,
                 1920, 1080, 1920, 1080, 6000, 100000));
     }
 
     @Test
     public void atomicGenerationUsesUnsignedHalfRangeFreshnessIncludingWrap() {
-        assertTrue(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(0, 1));
-        assertTrue(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(-1, 1));
-        assertTrue(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(
+        assertTrue(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(0, 1));
+        assertTrue(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(-1, 1));
+        assertTrue(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(
                 0x7ffffffe, 0x80000001));
-        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(9, 9));
-        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(9, 8));
-        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(
+        assertFalse(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(9, 9));
+        assertFalse(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(9, 8));
+        assertFalse(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(
                 1, 0x80000001));
-        assertFalse(XrStreamPresenter.isStrictlyNewerUnsignedGeneration(1, 0));
+        assertFalse(XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(1, 0));
     }
 
     @Test
@@ -105,13 +105,13 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple fpsOnly = new StreamQualityTuple("5120x2160", "72", 180000);
         StreamQualityTuple resized = new StreamQualityTuple("3840x2160", "72", 180000);
 
-        assertTrue(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+        assertTrue(XrPresentationPolicy.canSettleAtomicQualityWithoutDecoderTransition(
                 false, previous, fpsOnly, 8192, 1728, 8192, 1728));
-        assertFalse(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+        assertFalse(XrPresentationPolicy.canSettleAtomicQualityWithoutDecoderTransition(
                 true, previous, fpsOnly, 8192, 1728, 8192, 1728));
-        assertFalse(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+        assertFalse(XrPresentationPolicy.canSettleAtomicQualityWithoutDecoderTransition(
                 false, previous, resized, 7680, 2160, 8192, 1728));
-        assertFalse(XrStreamPresenter.canSettleAtomicQualityWithoutDecoderTransition(
+        assertFalse(XrPresentationPolicy.canSettleAtomicQualityWithoutDecoderTransition(
                 false, previous, fpsOnly, 8192, 1728, 7680, 2160));
     }
 
@@ -353,34 +353,34 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void onlyDefinedAtomicAckStatusesAreKnown() {
-        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+        assertTrue(XrPresentationPolicy.isKnownVideoModeAckStatus(
                 MoonBridge.VIDEO_MODE_ACK_APPLIED));
-        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+        assertTrue(XrPresentationPolicy.isKnownVideoModeAckStatus(
                 MoonBridge.VIDEO_MODE_ACK_REJECTED_INVALID));
-        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+        assertTrue(XrPresentationPolicy.isKnownVideoModeAckStatus(
                 MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT));
-        assertTrue(XrStreamPresenter.isKnownVideoModeAckStatus(
+        assertTrue(XrPresentationPolicy.isKnownVideoModeAckStatus(
                 MoonBridge.VIDEO_MODE_ACK_FAILED));
-        assertFalse(XrStreamPresenter.isKnownVideoModeAckStatus(99));
+        assertFalse(XrPresentationPolicy.isKnownVideoModeAckStatus(99));
     }
 
     @Test
     public void acknowledgedGeometryMustBeAdoptedBeforeTheAckCanSettle() {
         // FPS/bitrate-only ACKs need no Surface resize and retain their fast path.
-        assertTrue(XrStreamPresenter.acknowledgedGeometryAdoptionSucceeded(
+        assertTrue(XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(
                 false, false));
-        assertTrue(XrStreamPresenter.acknowledgedGeometryAdoptionSucceeded(
+        assertTrue(XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(
                 true, true));
         // A host clamp that the client Surface cannot adopt is terminal, not local success.
-        assertFalse(XrStreamPresenter.acknowledgedGeometryAdoptionSucceeded(
+        assertFalse(XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(
                 true, false));
     }
 
     @Test
     public void clientResizeFailureAfterReliableSendCannotClaimHostRollback() {
-        assertTrue(XrStreamPresenter.postSendGeometryFailureRequiresMandatoryResync(1));
-        assertFalse(XrStreamPresenter.postSendGeometryFailureRequiresMandatoryResync(0));
-        assertFalse(XrStreamPresenter.postSendGeometryFailureRequiresMandatoryResync(-1));
+        assertTrue(XrPresentationPolicy.postSendGeometryFailureRequiresMandatoryResync(1));
+        assertFalse(XrPresentationPolicy.postSendGeometryFailureRequiresMandatoryResync(0));
+        assertFalse(XrPresentationPolicy.postSendGeometryFailureRequiresMandatoryResync(-1));
     }
 
     @Test
@@ -388,7 +388,7 @@ public class XrStreamPresenterVideoModeAckTest {
         // The host clamps an oversized width to the codec ceiling and scales height to preserve
         // aspect. The authoritative applied tuple must be adopted rather than the request.
         // Requested 5120x2160; the host packs 10240 wide, clamps to 8192 and reports 4096x1728.
-        StreamQualityTuple applied = XrStreamPresenter.appliedTuple(4096, 1728, 6000, 118000);
+        StreamQualityTuple applied = XrPresentationPolicy.appliedTuple(4096, 1728, 6000, 118000);
         assertEquals("4096x1728", applied.resolution);
         assertEquals("60", applied.frameRate);
         // The raw ACK tuple carries the host's post-budget encoder value.
@@ -425,11 +425,11 @@ public class XrStreamPresenterVideoModeAckTest {
     @Test
     public void videoModeWireCarriesTheLogicalGeometry() {
         assertArrayEquals(new int[] {3840, 2160},
-                XrStreamPresenter.liveVideoModeWireDimensions(3840, 2160));
+                XrPresentationPolicy.liveVideoModeWireDimensions(3840, 2160));
         assertArrayEquals(new int[] {3840, 2160},
-                XrStreamPresenter.liveVideoModeLogicalDimensions(3840, 2160));
-        assertNull(XrStreamPresenter.liveVideoModeWireDimensions(3841, 2160));
-        assertNull(XrStreamPresenter.liveVideoModeWireDimensions(8194, 2160));
+                XrPresentationPolicy.liveVideoModeLogicalDimensions(3840, 2160));
+        assertNull(XrPresentationPolicy.liveVideoModeWireDimensions(3841, 2160));
+        assertNull(XrPresentationPolicy.liveVideoModeWireDimensions(8194, 2160));
     }
 
     @Test
@@ -459,11 +459,11 @@ public class XrStreamPresenterVideoModeAckTest {
     @Test
     public void decoderRecoveryRetainsActualEncodedGeometryForEverySbsTransport() {
         assertArrayEquals(new int[] {7680, 2160},
-                XrStreamPresenter.decoderStreamDimensions(
+                XrPresentationPolicy.decoderStreamDimensions(
                         PresentationMode.HOST_SBS_AI,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H265));
         assertArrayEquals(new int[] {3840, 2160},
-                XrStreamPresenter.decoderStreamDimensions(
+                XrPresentationPolicy.decoderStreamDimensions(
                         PresentationMode.NORMAL,
                         3840, 2160, MoonBridge.VIDEO_FORMAT_H265));
     }
@@ -473,7 +473,7 @@ public class XrStreamPresenterVideoModeAckTest {
         // 5120x2160 in Host SBS AI packs to 10240 wide, over the 8192 codec ceiling, so the host
         // clamps the packed width and scales height to preserve aspect: per-eye lands near
         // 4096x1728. The UI must show the applied clamped values rather than the request.
-        StreamQualityTuple applied = XrStreamPresenter.appliedTuple(4096, 1728, 9000, 130000);
+        StreamQualityTuple applied = XrPresentationPolicy.appliedTuple(4096, 1728, 9000, 130000);
         assertEquals("4096x1728", applied.resolution);
         assertEquals("90", applied.frameRate);
         assertEquals(130000, applied.bitrateKbps);
@@ -483,50 +483,50 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void anUnusableAppliedTupleIsNull() {
-        assertNull(XrStreamPresenter.appliedTuple(0, 1080, 6000, 20000));
-        assertNull(XrStreamPresenter.appliedTuple(1920, 0, 6000, 20000));
-        assertNull(XrStreamPresenter.appliedTuple(1920, 1080, 0, 20000));
-        assertNull(XrStreamPresenter.appliedTuple(1920, 1080, 6000, 0));
+        assertNull(XrPresentationPolicy.appliedTuple(0, 1080, 6000, 20000));
+        assertNull(XrPresentationPolicy.appliedTuple(1920, 0, 6000, 20000));
+        assertNull(XrPresentationPolicy.appliedTuple(1920, 1080, 0, 20000));
+        assertNull(XrPresentationPolicy.appliedTuple(1920, 1080, 6000, 0));
     }
 
     @Test
     public void appliedFrameRateRetainsAckHundredthsOfAHz() {
         assertEquals("29.97",
-                XrStreamPresenter.appliedTuple(1920, 1080, 2997, 20000).frameRate);
+                XrPresentationPolicy.appliedTuple(1920, 1080, 2997, 20000).frameRate);
         assertEquals("23.98",
-                XrStreamPresenter.appliedTuple(1920, 1080, 2398, 20000).frameRate);
+                XrPresentationPolicy.appliedTuple(1920, 1080, 2398, 20000).frameRate);
         assertEquals("59.94",
-                XrStreamPresenter.appliedTuple(1920, 1080, 5994, 20000).frameRate);
+                XrPresentationPolicy.appliedTuple(1920, 1080, 5994, 20000).frameRate);
         assertEquals("60",
-                XrStreamPresenter.appliedTuple(1920, 1080, 6000, 20000).frameRate);
+                XrPresentationPolicy.appliedTuple(1920, 1080, 6000, 20000).frameRate);
     }
 
     @Test
     public void frameRateSurvivesTheHundredthsOfAHzRoundTrip() {
-        assertEquals(6000, XrStreamPresenter.frameRateX100("60", 30));
-        assertEquals(2997, XrStreamPresenter.frameRateX100("29.97", 30));
-        assertEquals(2398, XrStreamPresenter.frameRateX100("23.976", 30));
+        assertEquals(6000, XrPresentationPolicy.frameRateX100("60", 30));
+        assertEquals(2997, XrPresentationPolicy.frameRateX100("29.97", 30));
+        assertEquals(2398, XrPresentationPolicy.frameRateX100("23.976", 30));
         // Unparseable values fall back to the live frame rate rather than sending zero.
-        assertEquals(9000, XrStreamPresenter.frameRateX100("bogus", 90));
+        assertEquals(9000, XrPresentationPolicy.frameRateX100("bogus", 90));
     }
 
     @Test
     public void panelFollowSnapsOntoTheOfferedFrameRateLadder() {
         // The headset's own panel modes land exactly on the ladder.
-        assertEquals(90, XrStreamPresenter.snapToOfferedFrameRate(90));
-        assertEquals(72, XrStreamPresenter.snapToOfferedFrameRate(72));
-        assertEquals(60, XrStreamPresenter.snapToOfferedFrameRate(60));
+        assertEquals(90, XrPresentationPolicy.snapToOfferedFrameRate(90));
+        assertEquals(72, XrPresentationPolicy.snapToOfferedFrameRate(72));
+        assertEquals(60, XrPresentationPolicy.snapToOfferedFrameRate(60));
 
         // A system frame-rate override is not restricted to those, so anything between rungs is
         // snapped DOWN: requesting a rate the host's virtual display has no mode for would fail.
-        assertEquals(72, XrStreamPresenter.snapToOfferedFrameRate(89));
-        assertEquals(60, XrStreamPresenter.snapToOfferedFrameRate(71));
-        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(45));
+        assertEquals(72, XrPresentationPolicy.snapToOfferedFrameRate(89));
+        assertEquals(60, XrPresentationPolicy.snapToOfferedFrameRate(71));
+        assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(45));
 
         // Below the slowest offered rate the floor holds rather than chasing the override down.
-        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(24));
-        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(1));
-        assertEquals(30, XrStreamPresenter.snapToOfferedFrameRate(0));
+        assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(24));
+        assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(1));
+        assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(0));
     }
 
     @Test
@@ -672,7 +672,7 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple applied =
                 new StreamQualityTuple("4096x1728", "72", 100000);
 
-        StreamQualityTuple persisted = XrStreamPresenter.durableUserQuality(
+        StreamQualityTuple persisted = XrPresentationPolicy.durableUserQuality(
                 applied, durable);
         assertEquals("4096x1728", persisted.resolution);
         assertEquals("90", persisted.frameRate);
@@ -686,7 +686,7 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple hostApplied =
                 new StreamQualityTuple("4096x1728", "60", 100000);
 
-        StreamQualityTuple persisted = XrStreamPresenter.durableUserQuality(
+        StreamQualityTuple persisted = XrPresentationPolicy.durableUserQuality(
                 hostApplied, durable);
         // Geometry and requested wire bitrate adopt the ACK. Its 60 FPS is effective-only because
         // both the 72 request and the host's further clamp are below the explicit 90 FPS ceiling.
@@ -714,7 +714,7 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple applied =
                 new StreamQualityTuple("3840x2160", "60", 100000);
 
-        assertEquals("90", XrStreamPresenter.durableUserQuality(
+        assertEquals("90", XrPresentationPolicy.durableUserQuality(
                 applied, durable).frameRate);
     }
 
@@ -725,7 +725,7 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple applied =
                 new StreamQualityTuple("3840x2160", "30", 100000);
 
-        assertEquals("60", XrStreamPresenter.durableUserQuality(
+        assertEquals("60", XrPresentationPolicy.durableUserQuality(
                 applied, durable).frameRate);
     }
 }

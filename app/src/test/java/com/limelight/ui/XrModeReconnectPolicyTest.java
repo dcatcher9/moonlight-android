@@ -103,14 +103,14 @@ public final class XrModeReconnectPolicyTest {
             ModeStreamQualityModel target = controller.getModeStreamQualityModel(to);
             assertEquals(target.liveQuality, target.pendingQuality);
             assertFalse(target.requiresApplyIfSelected());
-            assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+            assertFalse(XrPresentationPolicy.shouldReconnectBeforeModeEntry(
                     PresentationMode.valueOf(from.name()),
                     PresentationMode.valueOf(to.name()),
                     controller.pendingChangesRequireReconnect(), target));
 
             controller.selectSharedSetting(key, choice);
             assertTrue(controller.pendingChangesRequireReconnect());
-            assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+            assertTrue(XrPresentationPolicy.shouldReconnectBeforeModeEntry(
                     PresentationMode.valueOf(from.name()),
                     PresentationMode.valueOf(to.name()),
                     controller.pendingChangesRequireReconnect(), target));
@@ -139,7 +139,7 @@ public final class XrModeReconnectPolicyTest {
                 store, pc, app, globals, store.snapshot(pc, globals));
         stale.setLiveVideoModeSupported(true);
         stale.setLiveResolutionEnvelope(7680, 2160);
-        assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+        assertTrue(XrPresentationPolicy.shouldReconnectBeforeModeEntry(
                 PresentationMode.NORMAL,
                 PresentationMode.HOST_SBS_AI, false,
                 stale.getModeStreamQualityModel(PresentationMode.HOST_SBS_AI)));
@@ -168,7 +168,7 @@ public final class XrModeReconnectPolicyTest {
         ModeStreamQualityModel target = restored.getModeStreamQualityModel(
                 PresentationMode.CLIENT_SBS_AI);
         assertEquals(target.liveQuality, target.pendingQuality);
-        assertFalse(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+        assertFalse(XrPresentationPolicy.shouldReconnectBeforeModeEntry(
                 PresentationMode.NORMAL,
                 PresentationMode.CLIENT_SBS_AI,
                 restored.pendingChangesRequireReconnect(), target));
@@ -187,7 +187,7 @@ public final class XrModeReconnectPolicyTest {
         ModeStreamQualityModel target = controller.getModeStreamQualityModel(to);
 
         assertTrue(target.requiresReconnectIfSelected());
-        assertTrue(XrStreamPresenter.shouldReconnectBeforeModeEntry(
+        assertTrue(XrPresentationPolicy.shouldReconnectBeforeModeEntry(
                 PresentationMode.valueOf(from.name()),
                 PresentationMode.valueOf(to.name()),
                 controller.pendingChangesRequireReconnect(), target));

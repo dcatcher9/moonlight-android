@@ -54,15 +54,15 @@ public final class XrAuthoredPresentationTest {
                     String context = mode + " " + requested[0] + "x" + requested[1]
                             + " codec=" + codec;
                     assertArrayEquals(context, requested,
-                            XrStreamPresenter.initialSurfacePixelDimensions(mode,
+                            XrPresentationPolicy.initialSurfacePixelDimensions(mode,
                                     requested[0], requested[1], codec));
                     assertArrayEquals(context, requested,
-                            XrStreamPresenter.decoderStreamDimensions(mode,
+                            XrPresentationPolicy.decoderStreamDimensions(mode,
                                     requested[0], requested[1], codec));
                 }
-                assertArrayEquals(requested, XrStreamPresenter.liveVideoModeWireDimensions(
+                assertArrayEquals(requested, XrPresentationPolicy.liveVideoModeWireDimensions(
                         requested[0], requested[1]));
-                assertArrayEquals(requested, XrStreamPresenter.liveVideoModeLogicalDimensions(
+                assertArrayEquals(requested, XrPresentationPolicy.liveVideoModeLogicalDimensions(
                         requested[0], requested[1]));
             }
         }
@@ -72,13 +72,13 @@ public final class XrAuthoredPresentationTest {
     public void authoredIntentUsesOffWireWithoutRawWidthOrH264PackingCost() throws Exception {
         for (PresentationMode mode : AUTHORED) {
             assertEquals(MoonBridge.SBS_MODE_OFF, wireMode(mode));
-            assertTrue(XrStreamPresenter.isPresentationModeSupported(mode, false));
-            assertFalse(XrStreamPresenter.usesPackedBitrateCost(mode));
-            assertFalse(XrStreamPresenter.hostSbsFormatChangeRequiresResize(mode,
+            assertTrue(XrPresentationPolicy.isPresentationModeSupported(mode, false));
+            assertFalse(XrPresentationPolicy.usesPackedBitrateCost(mode));
+            assertFalse(XrPresentationPolicy.hostSbsFormatChangeRequiresResize(mode,
                     3840, 2160, MoonBridge.VIDEO_FORMAT_H265, MoonBridge.VIDEO_FORMAT_H264));
         }
         // The test's 4K H.264 input still distinguishes this from the AI width-cap path.
-        assertTrue(XrStreamPresenter.hostSbsFormatChangeRequiresResize(
+        assertTrue(XrPresentationPolicy.hostSbsFormatChangeRequiresResize(
                 PresentationMode.HOST_SBS_AI, 3840, 2160,
                 MoonBridge.VIDEO_FORMAT_H265, MoonBridge.VIDEO_FORMAT_H264));
     }
@@ -88,20 +88,20 @@ public final class XrAuthoredPresentationTest {
         for (PresentationMode from : new PresentationMode[] {
                 PresentationMode.NORMAL, PresentationMode.GAME_3D, PresentationMode.MOVIE_3D}) {
             for (PresentationMode to : AUTHORED) {
-                assertFalse(XrStreamPresenter.requiresDecoderTransition(from, to));
-                assertFalse(XrStreamPresenter.requiresHostSurfaceResize(from, to));
-                assertFalse(XrStreamPresenter.requiresAtomicPresentationReconnect(from, to, false));
-                assertFalse(XrStreamPresenter.requiresDecoderTransition(to, from));
+                assertFalse(XrPresentationPolicy.requiresDecoderTransition(from, to));
+                assertFalse(XrPresentationPolicy.requiresHostSurfaceResize(from, to));
+                assertFalse(XrPresentationPolicy.requiresAtomicPresentationReconnect(from, to, false));
+                assertFalse(XrPresentationPolicy.requiresDecoderTransition(to, from));
             }
         }
         for (PresentationMode mode : AUTHORED) {
-            assertTrue(XrStreamPresenter.requiresDecoderTransition(mode, PresentationMode.HOST_SBS_AI));
-            assertTrue(XrStreamPresenter.requiresDecoderTransition(PresentationMode.HOST_SBS_AI, mode));
-            assertTrue(XrStreamPresenter.requiresHostSurfaceResize(PresentationMode.HOST_SBS_AI, mode));
-            assertTrue(XrStreamPresenter.requiresAtomicPresentationReconnect(
+            assertTrue(XrPresentationPolicy.requiresDecoderTransition(mode, PresentationMode.HOST_SBS_AI));
+            assertTrue(XrPresentationPolicy.requiresDecoderTransition(PresentationMode.HOST_SBS_AI, mode));
+            assertTrue(XrPresentationPolicy.requiresHostSurfaceResize(PresentationMode.HOST_SBS_AI, mode));
+            assertTrue(XrPresentationPolicy.requiresAtomicPresentationReconnect(
                     PresentationMode.HOST_SBS_AI, mode, false));
-            assertTrue(XrStreamPresenter.requiresDecoderTransition(PresentationMode.CLIENT_SBS_AI, mode));
-            assertFalse(XrStreamPresenter.requiresHostSurfaceResize(PresentationMode.CLIENT_SBS_AI, mode));
+            assertTrue(XrPresentationPolicy.requiresDecoderTransition(PresentationMode.CLIENT_SBS_AI, mode));
+            assertFalse(XrPresentationPolicy.requiresHostSurfaceResize(PresentationMode.CLIENT_SBS_AI, mode));
         }
     }
 
@@ -162,7 +162,7 @@ public final class XrAuthoredPresentationTest {
     }
 
     private static int wireMode(PresentationMode mode) throws Exception {
-        return (Integer) invoke(null, "wireModeFor", new Class<?>[] {PresentationMode.class}, mode);
+        return XrPresentationPolicy.wireModeFor(mode);
     }
 
     private static Object invoke(XrStreamPresenter presenter, String name, Class<?>[] parameters,

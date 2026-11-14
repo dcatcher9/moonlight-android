@@ -43,6 +43,15 @@ import java.util.regex.Pattern;
         com.limelight.shadows.ShadowGameManager.class,
 })
 public class XrPaletteTest {
+    /** The presenter and the files its view, layout and policy code was split into. */
+    private static final String[] PRESENTER_SOURCES = {
+            "XrStreamPresenter.java",
+            "XrPanelViews.java",
+            "XrPanelPlacement.java",
+            "XrPresentationPolicy.java",
+            "XrStatsFormat.java",
+    };
+
     /**
      * The presenter must not carry colour literals. It used to declare fourteen of them as
      * {@code static final int} hex duplicated from {@code colors_xr.xml}, most with a comment
@@ -52,22 +61,25 @@ public class XrPaletteTest {
      */
     @Test
     public void presenterCarriesNoColourLiterals() throws IOException {
-        File source = new File("src/main/java/com/limelight/ui/XrStreamPresenter.java");
-        assertTrue("presenter source not found at " + source.getAbsolutePath(), source.isFile());
-        String text = new String(Files.readAllBytes(source.toPath()), StandardCharsets.UTF_8);
-        List<String> offenders = new ArrayList<>();
-        Matcher matcher = Pattern.compile(
-                "0x[0-9A-Fa-f]{8}\\b"
-                        + "|Color\\.(?:WHITE|BLACK|RED|GREEN|BLUE|YELLOW|GRAY|LTGRAY|DKGRAY)"
-                        + "|Color\\.(?:rgb|argb)\\s*\\(").matcher(text);
-        while (matcher.find()) {
-            // The alpha helper masks a colour it was already given; it names no colour itself.
-            if (!"0x00FFFFFF".equals(matcher.group())) {
-                offenders.add(matcher.group());
+        for (String name : PRESENTER_SOURCES) {
+            File source = new File("src/main/java/com/limelight/ui/" + name);
+            assertTrue("presenter source not found at " + source.getAbsolutePath(),
+                    source.isFile());
+            String text = new String(Files.readAllBytes(source.toPath()), StandardCharsets.UTF_8);
+            List<String> offenders = new ArrayList<>();
+            Matcher matcher = Pattern.compile(
+                    "0x[0-9A-Fa-f]{8}\\b"
+                            + "|Color\\.(?:WHITE|BLACK|RED|GREEN|BLUE|YELLOW|GRAY|LTGRAY|DKGRAY)"
+                            + "|Color\\.(?:rgb|argb)\\s*\\(").matcher(text);
+            while (matcher.find()) {
+                // The alpha helper masks a colour it was already given; it names no colour itself.
+                if (!"0x00FFFFFF".equals(matcher.group())) {
+                    offenders.add(matcher.group());
+                }
             }
+            assertEquals(name + " must take colours from the palette, not literals: "
+                    + offenders, 0, offenders.size());
         }
-        assertEquals("XrStreamPresenter must take colours from the palette, not literals: "
-                + offenders, 0, offenders.size());
     }
 
     @Test

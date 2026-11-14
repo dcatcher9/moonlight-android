@@ -58,14 +58,14 @@ public final class XrStreamPresenterDebugDumpTest {
         PresentationMode raw =
                 PresentationMode.HOST_SBS_RAW;
 
-        assertTrue(XrStreamPresenter.resetsHostDepthStatusAtTransitionStart(normal, host));
-        assertTrue(XrStreamPresenter.resetsHostDepthStatusAtTransitionStart(raw, host));
-        assertFalse(XrStreamPresenter.resetsHostDepthStatusAtTransitionStart(host, normal));
-        assertFalse(XrStreamPresenter.resetsHostDepthStatusAtTransitionStart(host, host));
+        assertTrue(XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(normal, host));
+        assertTrue(XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(raw, host));
+        assertFalse(XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(host, normal));
+        assertFalse(XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(host, host));
 
-        assertTrue(XrStreamPresenter.resetsHostDepthStatusAtTransitionCommit(host, normal));
-        assertTrue(XrStreamPresenter.resetsHostDepthStatusAtTransitionCommit(host, raw));
-        assertFalse(XrStreamPresenter.resetsHostDepthStatusAtTransitionCommit(normal, host));
-        assertFalse(XrStreamPresenter.resetsHostDepthStatusAtTransitionCommit(host, host));
+        assertTrue(XrPresentationPolicy.resetsHostDepthStatusAtTransitionCommit(host, normal));
+        assertTrue(XrPresentationPolicy.resetsHostDepthStatusAtTransitionCommit(host, raw));
+        assertFalse(XrPresentationPolicy.resetsHostDepthStatusAtTransitionCommit(normal, host));
+        assertFalse(XrPresentationPolicy.resetsHostDepthStatusAtTransitionCommit(host, host));
     }
 }
