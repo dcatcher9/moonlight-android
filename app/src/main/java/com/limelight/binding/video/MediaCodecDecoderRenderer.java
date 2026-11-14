@@ -1879,10 +1879,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // rather than racing setOutputSurface() against reset/release.
             long recoveryDeadlineMs = Math.min(
                     SystemClock.uptimeMillis() + 2000L, ownerDeadlineMs);
-            while (isOutputSurfaceSwitchCurrentBeforeDeadline(
-                    requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
-                    SystemClock.uptimeMillis(), ownerDeadlineMs)
-                    && isOutputSurfaceRequestPending(request, requestEpoch)
+            while (ownsOutputSurfaceSwitchBeforeDeadline(
+                    request, requestEpoch, ownerDeadlineMs)
                     && codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                 long remainingMs = recoveryDeadlineMs - SystemClock.uptimeMillis();
                 if (remainingMs <= 0) {
@@ -1901,10 +1899,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
             }
 
-            if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
-                    requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
-                    SystemClock.uptimeMillis(), ownerDeadlineMs)
-                    || !isOutputSurfaceRequestPending(request, requestEpoch)
+            if (!ownsOutputSurfaceSwitchBeforeDeadline(
+                    request, requestEpoch, ownerDeadlineMs)
                     || videoDecoder == null
                     || codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                 LimeLog.warning("Cannot switch decoder output surface while decoder is unavailable");
@@ -1914,10 +1910,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 Surface previousSurface = renderTarget;
                 resetDecodedSourceIdentity();
                 videoDecoder.setOutputSurface(surface);
-                if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
-                        requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
-                        SystemClock.uptimeMillis(), ownerDeadlineMs)
-                        || !isOutputSurfaceRequestPending(request, requestEpoch)) {
+                if (!ownsOutputSurfaceSwitchBeforeDeadline(
+                        request, requestEpoch, ownerDeadlineMs)) {
                     // The native call cannot be interrupted, but timeout/supersession must not
                     // leave its retired target installed. Surfaces remain owned until decoder
                     // cleanup serializes through this monitor, so the previous target is safe to
@@ -1930,10 +1924,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Frame-rate metadata belongs to the Surface, so restore it after every live swap.
                 applySurfaceFrameRate(
                         surface, streamFrameRateState.getSurfaceFrameRateHintFps());
-                if (!isOutputSurfaceSwitchCurrentBeforeDeadline(
-                        requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
-                        SystemClock.uptimeMillis(), ownerDeadlineMs)
-                        || !isOutputSurfaceRequestPending(request, requestEpoch)) {
+                if (!ownsOutputSurfaceSwitchBeforeDeadline(
+                        request, requestEpoch, ownerDeadlineMs)) {
                     // Cancellation can race the first post-native check because it deliberately
                     // does not take codecRecoveryMonitor. Recheck after publishing metadata and
                     // restore the retained target if ownership changed in that interval.
@@ -2222,6 +2214,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         return presentationTimeUs > 0L && presentationTimeUs <= Long.MAX_VALUE / 1000L
                 ? presentationTimeUs * 1000L : 0L;
+    }
+
+    /**
+     * Ownership test repeated at every boundary of the output-surface switch: the request epoch
+     * is still the live one, the decoder is not stopping, the owner deadline has not passed, and
+     * the request token (when there is one) is still pending. Each call reads the live values.
+     */
+    private boolean ownsOutputSurfaceSwitchBeforeDeadline(
+            OutputSurfaceSwitchRequest request, long requestEpoch, long ownerDeadlineMs) {
+        return isOutputSurfaceSwitchCurrentBeforeDeadline(
+                requestEpoch, outputSurfaceSwitchEpoch.get(), stopping,
+                SystemClock.uptimeMillis(), ownerDeadlineMs)
+                && isOutputSurfaceRequestPending(request, requestEpoch);
     }
 
     private static boolean isOutputSurfaceRequestPending(

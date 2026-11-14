@@ -127,11 +127,19 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
                 < cleanup.indexOf("synchronized (codecRecoveryMonitor)"));
 
         int nativeBind = switchSurface.indexOf("videoDecoder.setOutputSurface(surface)");
+        // Both post-native checks go through the one ownership helper, which must keep the
+        // epoch/stop/deadline test as well as the request-token test.
+        String ownership = methodBody(
+                source, "private boolean ownsOutputSurfaceSwitchBeforeDeadline(");
+        assertTrue(ownership.contains("isOutputSurfaceSwitchCurrentBeforeDeadline("));
+        assertTrue(ownership.contains("outputSurfaceSwitchEpoch.get(), stopping,"));
+        assertTrue(ownership.contains("SystemClock.uptimeMillis(), ownerDeadlineMs)"));
+        assertTrue(ownership.contains("&& isOutputSurfaceRequestPending(request, requestEpoch)"));
         int staleCheck = switchSurface.indexOf(
-                "isOutputSurfaceSwitchCurrentBeforeDeadline(", nativeBind);
+                "ownsOutputSurfaceSwitchBeforeDeadline(", nativeBind);
         int javaCommit = switchSurface.indexOf("renderTarget = surface", staleCheck);
         int finalDeadlineCheck = switchSurface.indexOf(
-                "isOutputSurfaceSwitchCurrentBeforeDeadline(", javaCommit);
+                "ownsOutputSurfaceSwitchBeforeDeadline(", javaCommit);
         assertTrue(nativeBind >= 0 && staleCheck > nativeBind);
         assertTrue(javaCommit > staleCheck);
         assertTrue(finalDeadlineCheck > javaCommit);
