@@ -65,43 +65,56 @@ class BundleClientSbsModelsTest(unittest.TestCase):
             self.assertEqual(9, TOOL.XZ_PRESET)
             self.assertEqual(64 * 1024 * 1024, TOOL.XZ_DICTIONARY_BYTES)
             self.assertEqual(first_metadata, second_metadata)
-            for archive_name, model_names in TOOL.MODEL_FAMILIES:
-                first_archive = first_output / archive_name
-                second_archive = second_output / archive_name
-                self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+            model_names = TOOL.ZIPDEPTH_MODELS
+            first_archive = first_output / TOOL.ZIPDEPTH_ARCHIVE_FILENAME
+            second_archive = second_output / TOOL.ZIPDEPTH_ARCHIVE_FILENAME
+            archive_bytes = first_archive.read_bytes()
+            self.assertEqual(archive_bytes, second_archive.read_bytes())
 
-                # A single XZ stream wraps the complete multi-entry tar stream. This is the
-                # standard solid-archive property that permits cross-model dictionary matches.
-                decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_XZ)
-                uncompressed_tar = decompressor.decompress(first_archive.read_bytes())
-                self.assertTrue(decompressor.eof)
-                self.assertEqual(b"", decompressor.unused_data)
-                self.assertGreater(len(uncompressed_tar), sum(map(len, (
-                    FIXTURES[name] for name in model_names
-                ))))
+            # The reported dictionary size is the one the preset wrote into the stream: after
+            # the 12-byte stream header, a block header with no optional sizes holds its size
+            # byte, flags, the LZMA2 filter id, a one-byte property size, and that property.
+            self.assertEqual(0x00, archive_bytes[13])
+            self.assertEqual(0x21, archive_bytes[14])
+            self.assertEqual(0x01, archive_bytes[15])
+            dictionary_bits = archive_bytes[16]
+            self.assertEqual(
+                TOOL.XZ_DICTIONARY_BYTES,
+                (2 | (dictionary_bits & 1)) << (dictionary_bits // 2 + 11),
+            )
 
-                with tarfile.open(first_archive, mode="r:xz") as archive:
-                    members = archive.getmembers()
-                    self.assertEqual(list(model_names), [member.name for member in members])
-                    for member in members:
-                        self.assertNotIn("/", member.name)
-                        self.assertTrue(member.isreg())
-                        self.assertEqual(0, member.mtime)
-                        self.assertEqual(0o644, member.mode)
-                        self.assertEqual(0, member.uid)
-                        self.assertEqual(0, member.gid)
-                        self.assertEqual("", member.uname)
-                        self.assertEqual("", member.gname)
-                        extracted = archive.extractfile(member)
-                        self.assertIsNotNone(extracted)
-                        self.assertEqual(FIXTURES[member.name], extracted.read())
+            # A single XZ stream wraps the complete multi-entry tar stream. This is the
+            # standard solid-archive property that permits cross-model dictionary matches.
+            decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_XZ)
+            uncompressed_tar = decompressor.decompress(archive_bytes)
+            self.assertTrue(decompressor.eof)
+            self.assertEqual(b"", decompressor.unused_data)
+            self.assertGreater(len(uncompressed_tar), sum(map(len, (
+                FIXTURES[name] for name in model_names
+            ))))
 
-                records = first_metadata[archive_name]
-                self.assertEqual(list(model_names), [record["filename"] for record in records])
-                for record in records:
-                    model = FIXTURES[record["filename"]]
-                    self.assertEqual(len(model), record["size"])
-                    self.assertEqual(hashlib.sha256(model).hexdigest(), record["sha256"])
+            with tarfile.open(first_archive, mode="r:xz") as archive:
+                members = archive.getmembers()
+                self.assertEqual(list(model_names), [member.name for member in members])
+                for member in members:
+                    self.assertNotIn("/", member.name)
+                    self.assertTrue(member.isreg())
+                    self.assertEqual(0, member.mtime)
+                    self.assertEqual(0o644, member.mode)
+                    self.assertEqual(0, member.uid)
+                    self.assertEqual(0, member.gid)
+                    self.assertEqual("", member.uname)
+                    self.assertEqual("", member.gname)
+                    extracted = archive.extractfile(member)
+                    self.assertIsNotNone(extracted)
+                    self.assertEqual(FIXTURES[member.name], extracted.read())
+
+            records = first_metadata
+            self.assertEqual(list(model_names), [record["filename"] for record in records])
+            for record in records:
+                model = FIXTURES[record["filename"]]
+                self.assertEqual(len(model), record["size"])
+                self.assertEqual(hashlib.sha256(model).hexdigest(), record["sha256"])
 
     def test_archive_contains_only_zipdepth_graphs(self) -> None:
         with tempfile.TemporaryDirectory(prefix="client-sbs-model-bundle-test-") as root:
