@@ -204,12 +204,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private volatile boolean atomicPresentationV2Supported;
     private volatile boolean gameProviderV1Supported;
     private XrSessionSettingsController xrSessionSettingsController;
-    private boolean xrSettingsAutoApplyQueued;
-    private boolean xrSettingsGammaChangeQueued;
-    private boolean xrSettingsLiveQualityPending;
-    private boolean xrSettingsForcedReconnect;
-    private final Runnable xrSettingsAutoApplyRunnable = this::processXrSessionSettings;
-    private Runnable xrSettingsGammaTimeoutRunnable;
     private boolean streamContainerReleasedForReconnect;
     private boolean reconnectScheduled;
     private boolean streamActivityStarted;
@@ -222,6 +216,57 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
     private final XrHostCallbackRouter xrHostCallbacks = new XrHostCallbackRouter(
             this::runOnUiThread, this::isConnectionUiActive, this::presenterOrNull);
+    // Shares reconnectHandler: cancelAutomaticReconnect() also clears the settings debounce and
+    // the gamma timeout when it removes every callback from that handler.
+    private final XrSettingsApplyCoordinator xrSettingsApply = new XrSettingsApplyCoordinator(
+            new XrSettingsApplyCoordinator.Host() {
+                @Override
+                public boolean isConnected() {
+                    return connected;
+                }
+
+                @Override
+                public boolean isConnectionUiActive() {
+                    return Game.this.isConnectionUiActive();
+                }
+
+                @Override
+                public boolean isReconnectScheduled() {
+                    return reconnectScheduled;
+                }
+
+                @Override
+                public XrSessionSettingsController settingsController() {
+                    return xrSessionSettingsController;
+                }
+
+                @Override
+                public XrStreamPresenter presenterOrNull() {
+                    return Game.this.presenterOrNull();
+                }
+
+                @Override
+                public boolean canAutoRestartPendingSettings() {
+                    return canAutoRestartSettings(getHostSessionLaunchRequest(getIntent()), readAppId(getIntent()),
+                            getIntent().getStringExtra(EXTRA_APP_UUID), xrSessionSettingsController.ownsCurrentSession(),
+                            hostSessionIdSupported, sessionHostSessionId);
+                }
+
+                @Override
+                public void showStaleSettingsMessage() {
+                    showCenteredStreamMessage(getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
+                }
+
+                @Override
+                public void scheduleSessionReconnect() {
+                    scheduleXrSessionReconnect();
+                }
+
+                @Override
+                public void refreshSettingsModels() {
+                    refreshXrSessionSettingsModels();
+                }
+            }, reconnectHandler);
     // No default network exists; a stream transport cannot survive and recovery must wait.
     private boolean streamNetworkLost;
     private ConnectivityManager.NetworkCallback streamNetworkCallback;
@@ -522,7 +567,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             public boolean onSharedSettingSelected(SessionSettingsModel.Key key,
                                                    String choiceId,
                                                    SessionSettingsModel current) {
-                if (reconnectScheduled || xrSettingsTransactionPending()) {
+                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
                     return false;
                 }
                 try {
@@ -538,18 +583,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     return false;
                 }
                 refreshXrSessionSettingsModels();
-                scheduleXrSettingsAutoApply(key == SessionSettingsModel.Key.STREAM_GAMMA);
+                xrSettingsApply.scheduleAutoApply(key == SessionSettingsModel.Key.STREAM_GAMMA);
                 return true;
             }
 
             @Override
             public void onUseGlobalDefaultsRequested(SessionSettingsModel current) {
-                if (reconnectScheduled || xrSettingsTransactionPending()) {
+                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
                     return;
                 }
                 xrSessionSettingsController.useGlobalDefaults();
                 refreshXrSessionSettingsModels();
-                scheduleXrSettingsAutoApply(true);
+                xrSettingsApply.scheduleAutoApply(true);
             }
 
             @Override
@@ -558,7 +603,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     SessionSettingsModel.Key key,
                     String choiceId,
                     ModeStreamQualityModel current) {
-                if (reconnectScheduled || xrSettingsTransactionPending()) {
+                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
                     return false;
                 }
                 try {
@@ -575,7 +620,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     return false;
                 }
                 refreshXrSessionSettingsModels();
-                scheduleXrSettingsAutoApply(false);
+                xrSettingsApply.scheduleAutoApply(false);
                 return true;
             }
 
@@ -583,13 +628,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             public void onUseSessionModeDefaultsRequested(
                     PresentationMode mode,
                     ModeStreamQualityModel current) {
-                if (reconnectScheduled || xrSettingsTransactionPending()) {
+                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
                     return;
                 }
                 xrSessionSettingsController.useSessionModeDefaults(
                         mode);
                 refreshXrSessionSettingsModels();
-                scheduleXrSettingsAutoApply(false);
+                xrSettingsApply.scheduleAutoApply(false);
             }
 
             @Override
@@ -608,16 +653,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 } else {
                     xrSessionSettingsController.markAutoPreferencesCommitted();
                 }
-                xrSettingsLiveQualityPending = false;
+                xrSettingsApply.liveQualityPending = false;
                 refreshXrSessionSettingsModels();
-                processXrSessionSettings();
+                xrSettingsApply.process();
             }
 
             @Override
             public void onLiveStreamQualityFailed() {
                 // Keep the requested tuple and last confirmed output; another gesture can retry.
-                xrSettingsLiveQualityPending = false;
-                xrSettingsAutoApplyQueued = false;
+                xrSettingsApply.liveQualityPending = false;
+                xrSettingsApply.autoApplyQueued = false;
                 refreshXrSessionSettingsModels();
             }
 
@@ -633,13 +678,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             @Override
             public void onPresentationModeCommitted(PresentationMode selected) {
-                if (xrSettingsTransactionPending()) return;
-                xrSettingsForcedReconnect = false;
+                if (xrSettingsApply.transactionPending()) return;
+                xrSettingsApply.forcedReconnect = false;
                 if (!selectXrPresentationMode(selected)) {
                     return;
                 }
                 if (xrSessionSettingsController.hasPendingChanges()) {
-                    scheduleXrSettingsAutoApply(false);
+                    xrSettingsApply.scheduleAutoApply(false);
                     return;
                 }
                 if (sessionSettingsStore != null && sessionPc != null && sessionApp != null
@@ -653,15 +698,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void onPresentationModeNeedsReconnect(
                     PresentationMode selected) {
-                if (reconnectScheduled || xrSessionSettingsController == null || xrSettingsTransactionPending()) {
+                if (reconnectScheduled || xrSessionSettingsController == null || xrSettingsApply.transactionPending()) {
                     return;
                 }
-                xrSettingsForcedReconnect = true;
+                xrSettingsApply.forcedReconnect = true;
                 if (!selectXrPresentationMode(selected)) {
-                    xrSettingsForcedReconnect = false;
+                    xrSettingsApply.forcedReconnect = false;
                     return;
                 }
-                scheduleXrSettingsAutoApply(false);
+                xrSettingsApply.scheduleAutoApply(false);
             }
 
             @Override
@@ -712,22 +757,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 qualityModels, xrSessionSettingsController.getClientSbsModel(),
                 xrSessionSettingsController.hasPendingChanges(),
                 xrSessionSettingsController.autoChangesRequireReconnect());
-        presenter.setSettingsRequestedPresentationMode(xrSettingsForcedReconnect
+        presenter.setSettingsRequestedPresentationMode(xrSettingsApply.forcedReconnect
                 ? xrSessionSettingsController.getSelectedMode() : null);
-        presenter.setSettingsTransactionPending(xrSettingsTransactionPending());
-    }
-
-    private boolean xrSettingsTransactionPending() {
-        return xrSettingsLiveQualityPending || (xrSessionSettingsController != null
-                && xrSessionSettingsController.getStreamGammaState().isPending());
-    }
-
-    /** Coalesce slider and choice gestures into one latest target before touching the transport. */
-    private void scheduleXrSettingsAutoApply(boolean gammaChanged) {
-        xrSettingsAutoApplyQueued = true;
-        xrSettingsGammaChangeQueued |= gammaChanged;
-        reconnectHandler.removeCallbacks(xrSettingsAutoApplyRunnable);
-        reconnectHandler.postDelayed(xrSettingsAutoApplyRunnable, 350);
+        presenter.setSettingsTransactionPending(xrSettingsApply.transactionPending());
     }
 
     static boolean canAutoRestartSettings(HostSessionLaunchRequest request, int appId,
@@ -741,100 +773,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 && (!tokenSupported
                     || (SessionSettingsStore.ResumeMetadata.isValidHostSessionId(request.expectedToken)
                         && request.expectedToken.equals(hostToken)));
-    }
-
-    /** Serialize user-authorized settings; a failed request needs another gesture, never a retry loop. */
-    private void processXrSessionSettings() {
-        if (!xrSettingsAutoApplyQueued || !connected || !isConnectionUiActive()
-                || reconnectScheduled || xrSessionSettingsController == null) {
-            return;
-        }
-        if (xrSettingsTransactionPending()) {
-            return;
-        }
-        XrStreamPresenter presenter = presenterOrNull();
-        if (presenter == null) return;
-        if (presenter.isStreamQualityTransactionBusy()) {
-            reconnectHandler.removeCallbacks(xrSettingsAutoApplyRunnable);
-            reconnectHandler.postDelayed(xrSettingsAutoApplyRunnable, 100);
-            return;
-        }
-        xrSettingsAutoApplyQueued = false;
-        if (!xrSettingsForcedReconnect && !xrSessionSettingsController.hasPendingChanges()) return;
-        if (!canAutoRestartSettings(getHostSessionLaunchRequest(getIntent()), readAppId(getIntent()),
-                getIntent().getStringExtra(EXTRA_APP_UUID), xrSessionSettingsController.ownsCurrentSession(),
-                hostSessionIdSupported, sessionHostSessionId)) {
-            showCenteredStreamMessage(getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
-            return;
-        }
-        if (xrSettingsForcedReconnect || xrSessionSettingsController.autoChangesRequireReconnect()) {
-            xrSettingsForcedReconnect = false;
-            if (!xrSessionSettingsController.commitPending()) {
-                showCenteredStreamMessage(getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
-                return;
-            }
-            scheduleXrSessionReconnect();
-            return;
-        }
-        if (xrSettingsGammaChangeQueued && xrSessionSettingsController.hasPendingStreamGammaChange()) {
-            xrSettingsGammaChangeQueued = false;
-            xrSettingsAutoApplyQueued = true;
-            applyLiveStreamGammaChange();
-            return;
-        }
-        xrSettingsGammaChangeQueued = false;
-        if (xrSessionSettingsController.selectedModeHasLiveApplicableChange()) {
-            applyLiveStreamQualityChange();
-            return;
-        }
-        if (xrSessionSettingsController.commitPending()) {
-            xrSessionSettingsController.markAutoPreferencesCommitted();
-            refreshXrSessionSettingsModels();
-        }
-    }
-
-    private void applyLiveStreamGammaChange() {
-        if (!connected || reconnectScheduled || xrSessionSettingsController == null) return;
-        com.limelight.ui.xrcontrols.StreamGammaState state =
-                xrSessionSettingsController.getStreamGammaState();
-        if (!state.isSupported() || state.isPending()) return;
-        if (!xrSessionSettingsController.commitStreamGammaPreference()) {
-            showCenteredStreamMessage(getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
-            return;
-        }
-        int mode = xrSessionSettingsController.getPendingStreamGamma().wireValue;
-        int requestId = state.begin(xrSessionSettingsController.getPendingStreamGamma());
-        xrSessionSettingsController.markStreamGammaPreferenceCommitted();
-        if (MoonBridge.sendStreamGamma(mode, requestId) <= 0) {
-            state.sendFailed(requestId);
-            refreshXrSessionSettingsModels();
-            processXrSessionSettings();
-            return;
-        }
-        refreshXrSessionSettingsModels();
-        final XrSessionSettingsController requestedController = xrSessionSettingsController;
-        if (xrSettingsGammaTimeoutRunnable != null) reconnectHandler.removeCallbacks(xrSettingsGammaTimeoutRunnable);
-        xrSettingsGammaTimeoutRunnable = () -> {
-            if (!connected || reconnectScheduled || xrSessionSettingsController != requestedController
-                    || !state.isPending()) return;
-            state.requestTimedOut(requestId);
-            refreshXrSessionSettingsModels();
-            processXrSessionSettings();
-        };
-        reconnectHandler.postDelayed(xrSettingsGammaTimeoutRunnable, 5000);
-    }
-
-    private void applyLiveStreamQualityChange() {
-        XrStreamPresenter presenter = presenterOrNull();
-        if (presenter == null || reconnectScheduled || xrSessionSettingsController == null) {
-            return;
-        }
-        xrSettingsLiveQualityPending = true;
-        refreshXrSessionSettingsModels();
-        if (!presenter.applyLiveStreamQuality(xrSessionSettingsController.getSelectedModePendingQuality())) {
-            xrSettingsLiveQualityPending = false;
-            refreshXrSessionSettingsModels();
-        }
     }
 
     private void scheduleXrSessionReconnect() {
@@ -4382,15 +4320,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             connecting = connected = false;
-            reconnectHandler.removeCallbacks(xrSettingsAutoApplyRunnable);
-            if (xrSettingsGammaTimeoutRunnable != null) {
-                reconnectHandler.removeCallbacks(xrSettingsGammaTimeoutRunnable);
-                xrSettingsGammaTimeoutRunnable = null;
-            }
-            xrSettingsAutoApplyQueued = false;
-            xrSettingsGammaChangeQueued = false;
-            xrSettingsLiveQualityPending = false;
-            xrSettingsForcedReconnect = false;
+            xrSettingsApply.onConnectionStopping();
             if (xrSessionSettingsController != null) {
                 xrSessionSettingsController.getStreamGammaState().connectionStopped();
             }
@@ -4833,15 +4763,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             if (!state.acceptAck(status, requestedMode, appliedMode, requestId, generation, whiteNits)) {
                 return;
             }
-            if (xrSettingsGammaTimeoutRunnable != null) {
-                reconnectHandler.removeCallbacks(xrSettingsGammaTimeoutRunnable);
-                xrSettingsGammaTimeoutRunnable = null;
-            }
+            xrSettingsApply.cancelGammaTimeout();
             LimeLog.info("XR: stream gamma ACK request=" + Integer.toUnsignedString(requestId)
                     + " requested=" + requestedMode + " applied=" + appliedMode
                     + " status=" + status + " white=" + whiteNits);
             refreshXrSessionSettingsModels();
-            processXrSessionSettings();
+            xrSettingsApply.process();
         });
     }
 

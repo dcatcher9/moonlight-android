@@ -105,7 +105,8 @@ public class GameXrSettingsAutoApplyTest {
         verify(presenter).applyLiveStreamQuality(new StreamQualityTuple("1920x1080", "90", 80000));
         assertFalse(quality(PresentationMode.NORMAL, SessionSettingsModel.Key.BITRATE, "50000"));
         actions.onLiveStreamQualityApplied(PresentationMode.NORMAL, settings.getSelectedModePendingQuality());
-        assertFalse((Boolean) ReflectionHelpers.getField(game, "xrSettingsLiveQualityPending"));
+        assertFalse((Boolean) ReflectionHelpers.getField(
+                ReflectionHelpers.getField(game, "xrSettingsApply"), "liveQualityPending"));
         assertFalse(settings.hasPendingChanges());
         assertEquals(80000, store.snapshot(pc, globals).preferencesForMode(PresentationMode.NORMAL)
                 .getInt(PreferenceConfiguration.BITRATE_PREF_STRING, 0));
