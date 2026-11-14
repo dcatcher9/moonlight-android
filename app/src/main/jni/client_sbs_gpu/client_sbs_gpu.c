@@ -138,6 +138,12 @@ static uint64_t elapsed_ns(uint64_t started_ns, uint64_t finished_ns) {
     return started_ns == 0 || finished_ns < started_ns ? 0 : finished_ns - started_ns;
 }
 
+/** Discards a bounded number of pending GL errors so the next glGetError() describes one call. */
+static void drain_gl_errors(void) {
+    for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
+    }
+}
+
 static void set_error(ClientSbsGpuEngine* engine, const char* format, ...) {
     if (engine == NULL) {
         return;
@@ -983,8 +989,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
     engine->input_height = input_height;
 
     // Discard unrelated errors before attributing allocation failures to these buffers.
-    for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
-    }
+    drain_gl_errors();
     glGenBuffers(CLIENT_SBS_GPU_BUFFER_SLOT_COUNT, engine->input_buffers);
     glGenBuffers(CLIENT_SBS_GPU_BUFFER_SLOT_COUNT, engine->output_buffers);
     for (int slot = 0; slot < CLIENT_SBS_GPU_BUFFER_SLOT_COUNT; slot++) {
@@ -1075,8 +1080,7 @@ static bool consume_fence(ClientSbsGpuEngine* engine, jlong fence_handle,
     }
     GLsync fence = (GLsync) (uintptr_t) fence_handle;
     // Attribute errors to this wait rather than to an unrelated earlier GL call.
-    for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
-    }
+    drain_gl_errors();
     glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
     GLenum wait_error = glGetError();
     if (wait_error != GL_NO_ERROR) {
@@ -1127,8 +1131,7 @@ static bool wait_and_delete_close_fence(ClientSbsGpuEngine* engine,
         return false;
     }
     GLsync fence = (GLsync) (uintptr_t) fence_handle;
-    for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
-    }
+    drain_gl_errors();
     GLenum wait_result = glClientWaitSync(
             fence, 0, deadline_ns - now_ns);
     GLenum wait_error = glGetError();
@@ -1173,10 +1176,7 @@ static bool drain_gpu_for_destroy(ClientSbsGpuEngine* engine) {
             // The renderer's acknowledged glFinish is a stronger completion proof for these
             // renderer-created dependencies. Attempt to retire the object, but never retry an
             // opaque handle after glDeleteSync() has been issued.
-            for (int error_index = 0;
-                 error_index < 16 && glGetError() != GL_NO_ERROR;
-                 error_index++) {
-            }
+            drain_gl_errors();
             glDeleteSync((GLsync) (uintptr_t) failed_fence);
             GLenum delete_error = glGetError();
             LOGW("Retiring failed nativeRun fence after renderer finish; delete=0x%x",
@@ -1294,8 +1294,7 @@ static bool validate_near_identical_record_range(ClientSbsGpuEngine* engine,
     if (engine->near_identical_decision_buffer == 0) {
         // This inference context is dedicated to the engine. Clear stale initialization errors so
         // the one-time inspection result describes only this shared decision object.
-        for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
-        }
+        drain_gl_errors();
         if (glIsBuffer(decision_buffer) != GL_TRUE) {
             return disable_near_identical_record_reads(
                     engine, "buffer name is not shared");
@@ -1356,8 +1355,7 @@ static bool near_identical_record_requests_reuse(ClientSbsGpuEngine* engine,
 
     // Attribute every checked error below to this map transaction, rather than to a preceding
     // LiteRT/interop operation in the dedicated worker context.
-    for (int index = 0; index < 16 && glGetError() != GL_NO_ERROR; index++) {
-    }
+    drain_gl_errors();
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, decision_buffer);
     void* mapped = glMapBufferRange(GL_SHADER_STORAGE_BUFFER,
                                     decision_byte_offset,
