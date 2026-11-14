@@ -96,14 +96,15 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String clientSwitch = methodBody(source, "public void switchToClientSbs(boolean enable,");
 
         int nullGuard = clientSwitch.indexOf("if (callback == null)");
-        int overlapGuard = clientSwitch.indexOf("if (mPendingClientSbsSwitch != null)");
-        int newOwner = clientSwitch.indexOf("mPendingClientSbsSwitch = callback");
+        int overlapGuard = clientSwitch.indexOf("if (mClientSbsSwitch.callback != null)");
+        int newOwner = clientSwitch.indexOf("mClientSbsSwitch.callback = callback");
         String overlap = blockBody(clientSwitch,
                 clientSwitch.indexOf('{', overlapGuard
-                        + "if (mPendingClientSbsSwitch != null)".length()));
+                        + "if (mClientSbsSwitch.callback != null)".length()));
         assertTrue(nullGuard >= 0 && overlapGuard > nullGuard && newOwner > overlapGuard);
         assertTrue(overlap.contains("callback.onComplete(false)"));
-        assertFalse(overlap.contains("mPendingClientSbsSwitch ="));
+        assertFalse(overlap.contains("mClientSbsSwitch.callback ="));
+        assertFalse(overlap.contains("mClientSbsSwitch.cancel("));
         assertFalse(overlap.contains("completeClientSbsSwitch("));
     }
 

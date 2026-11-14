@@ -315,10 +315,10 @@ public final class StreamContainerWindowSurfaceLifecycleTest {
     }
 
     private void completeSwitch(boolean enable, boolean success) throws Throwable {
-        ReflectionHelpers.setField(container, "mClientSbsSwitchGeneration", 7);
+        OwnedTransaction modeSwitch = ReflectionHelpers.getField(container, "mClientSbsSwitch");
+        modeSwitch.generation = 7;
         ReflectionHelpers.setField(container, "mPendingClientSbsEnable", enable);
-        ReflectionHelpers.setField(container, "mPendingClientSbsSwitch",
-                (StreamContainer.SurfaceSwitchCallback) result -> { });
+        modeSwitch.callback = result -> { };
         MethodHandles.privateLookupIn(StreamContainer.class, MethodHandles.lookup())
                 .findVirtual(StreamContainer.class, "completeClientSbsSwitch",
                         MethodType.methodType(void.class, int.class, boolean.class))
