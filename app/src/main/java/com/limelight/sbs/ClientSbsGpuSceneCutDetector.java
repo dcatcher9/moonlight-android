@@ -1,6 +1,8 @@
 package com.limelight.sbs;
 
-import android.opengl.EGL14;
+import static com.limelight.sbs.ClientSbsGlCompute.checkGlError;
+import static com.limelight.sbs.ClientSbsGlCompute.createComputeProgram;
+
 import android.opengl.EGLContext;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
@@ -130,17 +132,8 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         }
         inputTensorBytes = (int) requiredInputBytes;
 
-        EGLContext currentContext = EGL14.eglGetCurrentContext();
-        if (currentContext == null || currentContext == EGL14.EGL_NO_CONTEXT) {
-            throw new IllegalStateException("A current EGL context is required");
-        }
-        String version = GLES20.glGetString(GLES20.GL_VERSION);
-        if (version == null || (!version.contains("OpenGL ES 3.1")
-                && !version.contains("OpenGL ES 3.2"))) {
-            throw new IllegalStateException("Client SBS GPU scene cuts require GLES 3.1: "
-                    + version);
-        }
-        ownerContext = currentContext;
+        ownerContext = ClientSbsGlCompute.requireCurrentGles31Context(
+                "Client SBS GPU scene cuts require GLES 3.1: ");
 
         try {
             initializePrograms();
@@ -580,37 +573,9 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         checkGlError("clear near-identical decision records");
     }
 
-    private static int createComputeProgram(String label, String source) {
-        int shader = GLES20.glCreateShader(GLES31.GL_COMPUTE_SHADER);
-        GLES20.glShaderSource(shader, source);
-        GLES20.glCompileShader(shader);
-        int[] status = new int[1];
-        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0);
-        if (status[0] == 0) {
-            String log = GLES20.glGetShaderInfoLog(shader);
-            GLES20.glDeleteShader(shader);
-            throw new IllegalStateException(label + " shader compilation failed: " + log);
-        }
-        int program = GLES20.glCreateProgram();
-        GLES20.glAttachShader(program, shader);
-        GLES20.glLinkProgram(program);
-        GLES20.glDeleteShader(shader);
-        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0);
-        if (status[0] == 0) {
-            String log = GLES20.glGetProgramInfoLog(program);
-            GLES20.glDeleteProgram(program);
-            throw new IllegalStateException(label + " program link failed: " + log);
-        }
-        return program;
-    }
-
     private static int requiredUniform(int program, String name) {
-        int location = GLES20.glGetUniformLocation(program, name);
-        if (location < 0) {
-            throw new IllegalStateException("Required color-cut uniform was optimized out: "
-                    + name);
-        }
-        return location;
+        return ClientSbsGlCompute.requiredUniform(program, name,
+                "Required color-cut uniform was optimized out: ");
     }
 
     private static void bindSsbo(int binding, int buffer) {
@@ -698,22 +663,9 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     }
 
     private void assertOwnerContext() {
-        if (released) {
-            throw new IllegalStateException("Client SBS GPU color-cut detector is released");
-        }
-        EGLContext current = EGL14.eglGetCurrentContext();
-        if (current == null || current == EGL14.EGL_NO_CONTEXT || !ownerContext.equals(current)) {
-            throw new IllegalStateException(
-                    "Client SBS GPU color-cut detector used from a different EGL context");
-        }
-    }
-
-    private static void checkGlError(String stage) {
-        int error = GLES20.glGetError();
-        if (error != GLES20.GL_NO_ERROR) {
-            throw new IllegalStateException(stage + " failed with GL error 0x"
-                    + Integer.toHexString(error));
-        }
+        ClientSbsGlCompute.assertOwnerContext(released, ownerContext,
+                "Client SBS GPU color-cut detector is released",
+                "Client SBS GPU color-cut detector used from a different EGL context");
     }
 
     private void releaseGlResourcesUnchecked() {

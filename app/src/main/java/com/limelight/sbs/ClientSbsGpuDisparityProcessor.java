@@ -1,6 +1,8 @@
 package com.limelight.sbs;
 
-import android.opengl.EGL14;
+import static com.limelight.sbs.ClientSbsGlCompute.checkGlError;
+import static com.limelight.sbs.ClientSbsGlCompute.createComputeProgram;
+
 import android.opengl.EGLContext;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
@@ -54,16 +56,8 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
             throw new IllegalArgumentException(
                     "Raw coordinate scale must be finite and positive");
         }
-        EGLContext currentContext = EGL14.eglGetCurrentContext();
-        if (currentContext == null || currentContext == EGL14.EGL_NO_CONTEXT) {
-            throw new IllegalStateException("A current EGL context is required");
-        }
-        String version = GLES20.glGetString(GLES20.GL_VERSION);
-        if (version == null || (!version.contains("OpenGL ES 3.1")
-                && !version.contains("OpenGL ES 3.2"))) {
-            throw new IllegalStateException(
-                    "Contractive Client SBS disparity requires GLES 3.1: " + version);
-        }
+        EGLContext currentContext = ClientSbsGlCompute.requireCurrentGles31Context(
+                "Contractive Client SBS disparity requires GLES 3.1: ");
         String extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS);
         if (extensions == null || !extensions.contains("GL_OES_texture_float_linear")) {
             throw new IllegalStateException(
@@ -98,7 +92,7 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
         }
 
         if (validateDispatches) {
-            drainGlErrors();
+            ClientSbsGlCompute.drainGlErrors();
         }
         try {
             GLES20.glUseProgram(verticalForwardProgram);
@@ -211,44 +205,8 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
     }
 
     private int createTexture(int internalFormat, int filtering) {
-        int[] texture = new int[1];
-        GLES20.glGenTextures(1, texture, 0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture[0]);
-        GLES30.glTexStorage2D(GLES20.GL_TEXTURE_2D, 1, internalFormat, width, height);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, filtering);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, filtering);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S,
-                GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T,
-                GLES20.GL_CLAMP_TO_EDGE);
-        if (texture[0] == 0) {
-            throw new IllegalStateException("Unable to allocate contractive disparity texture");
-        }
-        return texture[0];
-    }
-
-    private int createComputeProgram(String label, String source) {
-        int shader = GLES20.glCreateShader(GLES31.GL_COMPUTE_SHADER);
-        GLES20.glShaderSource(shader, source);
-        GLES20.glCompileShader(shader);
-        int[] status = new int[1];
-        GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0);
-        if (status[0] == 0) {
-            String log = GLES20.glGetShaderInfoLog(shader);
-            GLES20.glDeleteShader(shader);
-            throw new IllegalStateException(label + " shader compilation failed: " + log);
-        }
-        int program = GLES20.glCreateProgram();
-        GLES20.glAttachShader(program, shader);
-        GLES20.glLinkProgram(program);
-        GLES20.glDeleteShader(shader);
-        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0);
-        if (status[0] == 0) {
-            String log = GLES20.glGetProgramInfoLog(program);
-            GLES20.glDeleteProgram(program);
-            throw new IllegalStateException(label + " program link failed: " + log);
-        }
-        return program;
+        return ClientSbsGlCompute.createTexture2D(width, height, internalFormat, filtering,
+                "Unable to allocate contractive disparity texture");
     }
 
     private void dispatch(int groups, String stage) {
@@ -278,43 +236,18 @@ public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
     }
 
     private static int requiredUniform(int program, String name) {
-        int location = GLES20.glGetUniformLocation(program, name);
-        if (location < 0) {
-            throw new IllegalStateException("Required disparity uniform was optimized out: "
-                    + name);
-        }
-        return location;
+        return ClientSbsGlCompute.requiredUniform(program, name,
+                "Required disparity uniform was optimized out: ");
     }
 
     private int getInteger(int name) {
-        integerScratch[0] = 0;
-        GLES20.glGetIntegerv(name, integerScratch, 0);
-        return integerScratch[0];
+        return ClientSbsGlCompute.getInteger(name, integerScratch);
     }
 
     private void assertOwnerContext() {
-        if (released) {
-            throw new IllegalStateException("Client SBS disparity processor is released");
-        }
-        EGLContext current = EGL14.eglGetCurrentContext();
-        if (current == null || current == EGL14.EGL_NO_CONTEXT || !ownerContext.equals(current)) {
-            throw new IllegalStateException(
-                    "Client SBS disparity processor used from a different EGL context");
-        }
-    }
-
-    private static void drainGlErrors() {
-        for (int i = 0; i < 16 && GLES20.glGetError() != GLES20.GL_NO_ERROR; i++) {
-            // Intentionally empty.
-        }
-    }
-
-    private static void checkGlError(String stage) {
-        int error = GLES20.glGetError();
-        if (error != GLES20.GL_NO_ERROR) {
-            throw new IllegalStateException(stage + " failed with GL error 0x"
-                    + Integer.toHexString(error));
-        }
+        ClientSbsGlCompute.assertOwnerContext(released, ownerContext,
+                "Client SBS disparity processor is released",
+                "Client SBS disparity processor used from a different EGL context");
     }
 
     private void releaseGlResourcesUnchecked() {
