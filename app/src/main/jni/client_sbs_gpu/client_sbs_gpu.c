@@ -1099,6 +1099,20 @@ static bool consume_fence(ClientSbsGpuEngine* engine, jlong fence_handle,
     return true;
 }
 
+/**
+ * Consumes one fence transferred to nativeRun. A handle whose wait failed is still owned, so it is
+ * retained for guarded teardown before the failure is reported to the caller.
+ */
+static bool consume_or_retain_fence(ClientSbsGpuEngine* engine, jlong fence_handle,
+                                    const char* role) {
+    bool ownership_consumed = false;
+    bool consumed = consume_fence(engine, fence_handle, role, &ownership_consumed);
+    if (!ownership_consumed) {
+        retain_failed_run_fence(engine, fence_handle);
+    }
+    return consumed;
+}
+
 /** CPU-waits a final cross-context dependency during teardown, then consumes its handle. */
 static bool wait_and_delete_close_fence(ClientSbsGpuEngine* engine,
                                         jlong fence_handle,
@@ -1221,29 +1235,16 @@ static bool consume_run_fences(ClientSbsGpuEngine* engine,
                                bool* output_ok) {
     if (input_ready_fence != 0
             && input_ready_fence == previous_output_consumed_fence) {
-        bool ownership_consumed = false;
-        bool consumed = consume_fence(engine, input_ready_fence, "aliased-run-fence",
-                                      &ownership_consumed);
-        if (!ownership_consumed) {
-            retain_failed_run_fence(engine, input_ready_fence);
-        }
+        bool consumed = consume_or_retain_fence(engine, input_ready_fence,
+                                                "aliased-run-fence");
         *input_ok = consumed;
         *output_ok = consumed;
         set_error(engine, "Input-ready and output-consumed fences unexpectedly alias");
         return false;
     }
-    bool input_ownership_consumed = false;
-    bool output_ownership_consumed = false;
-    *input_ok = consume_fence(engine, input_ready_fence, input_role,
-                              &input_ownership_consumed);
-    if (!input_ownership_consumed) {
-        retain_failed_run_fence(engine, input_ready_fence);
-    }
-    *output_ok = consume_fence(engine, previous_output_consumed_fence, output_role,
-                               &output_ownership_consumed);
-    if (!output_ownership_consumed) {
-        retain_failed_run_fence(engine, previous_output_consumed_fence);
-    }
+    *input_ok = consume_or_retain_fence(engine, input_ready_fence, input_role);
+    *output_ok = consume_or_retain_fence(engine, previous_output_consumed_fence,
+                                         output_role);
     return *input_ok && *output_ok;
 }
 
@@ -1731,12 +1732,8 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
     // Consume only the exact input dependency before resolving the proposal. Waiting on the
     // unrelated previous-output consumer first can make the tiny CPU map inherit renderer work
     // that has no bearing on the current input/decision transaction.
-    bool input_ownership_consumed = false;
-    bool input_fence_ok = consume_fence(
-            engine, input_ready_fence, "input", &input_ownership_consumed);
-    if (!input_ownership_consumed) {
-        retain_failed_run_fence(engine, input_ready_fence);
-    }
+    bool input_fence_ok = consume_or_retain_fence(
+            engine, input_ready_fence, "input");
 
     bool reuse = false;
     if (input_fence_ok && near_identical_candidate == JNI_TRUE) {
@@ -1751,13 +1748,8 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
 
     // The output handle also transferred at entry, so consume or retain it even when the input
     // wait failed. No reuse fence or LiteRT work may be submitted until this dependency succeeds.
-    bool output_ownership_consumed = false;
-    bool output_fence_ok = consume_fence(
-            engine, previous_output_consumed_fence, "output-consumed",
-            &output_ownership_consumed);
-    if (!output_ownership_consumed) {
-        retain_failed_run_fence(engine, previous_output_consumed_fence);
-    }
+    bool output_fence_ok = consume_or_retain_fence(
+            engine, previous_output_consumed_fence, "output-consumed");
     if (!input_fence_ok || !output_fence_ok) {
         return fail_native_run(engine);
     }

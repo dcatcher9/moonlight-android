@@ -19,13 +19,13 @@ public final class ClientSbsNativeFenceOrderingContractTest {
         int contractGuard = nativeRun.indexOf(
                 "if (input_ready_fence == 0 || fences_alias");
         int inputConsume = nativeRun.indexOf(
-                "bool input_fence_ok = consume_fence(", contractGuard);
+                "bool input_fence_ok = consume_or_retain_fence(", contractGuard);
         int inputVisibility = nativeRun.indexOf(
                 "glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT", inputConsume);
         int decisionRead = nativeRun.indexOf(
                 "reuse = near_identical_record_requests_reuse(", inputVisibility);
         int outputConsume = nativeRun.indexOf(
-                "bool output_fence_ok = consume_fence(", decisionRead);
+                "bool output_fence_ok = consume_or_retain_fence(", decisionRead);
         int bothFencesRequired = nativeRun.indexOf(
                 "if (!input_fence_ok || !output_fence_ok)", outputConsume);
         int finalVisibility = nativeRun.indexOf(
@@ -52,28 +52,58 @@ public final class ClientSbsNativeFenceOrderingContractTest {
 
     @Test
     public void everyDirectWaitRetainsAnUnconsumedHandle() throws Exception {
-        String nativeRun = functionBody(readNativeSource(),
+        String source = readNativeSource();
+        String nativeRun = functionBody(source,
                 "Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(");
 
-        int inputConsume = nativeRun.indexOf("bool input_fence_ok = consume_fence(");
-        int inputRetain = nativeRun.indexOf(
-                "retain_failed_run_fence(engine, input_ready_fence);", inputConsume);
+        // The wait and the retention of a still-owned handle are one helper. Its body must keep
+        // the wait first and retain exactly the handle whose ownership was not consumed.
+        String consumeOrRetain = functionBody(source,
+                "static bool consume_or_retain_fence(");
+        int helperConsume = consumeOrRetain.indexOf(
+                "consume_fence(engine, fence_handle, role, &ownership_consumed);");
+        int helperOwnershipCheck = consumeOrRetain.indexOf(
+                "if (!ownership_consumed) {", helperConsume);
+        int helperRetain = consumeOrRetain.indexOf(
+                "retain_failed_run_fence(engine, fence_handle);", helperOwnershipCheck);
+        int helperReturn = consumeOrRetain.indexOf("return consumed;", helperRetain);
+        assertOrdered("helper wait, ownership check", helperConsume, helperOwnershipCheck);
+        assertOrdered("helper ownership check, retention", helperOwnershipCheck, helperRetain);
+        assertOrdered("helper retention, result", helperRetain, helperReturn);
+
+        // Every wait issued directly by nativeRun or its contract-failure path must go through
+        // that helper; a bare consume_fence() would drop the retention of a failed wait.
+        assertTrue("nativeRun must not wait on a fence without retaining a failed handle",
+                !containsBareConsumeFence(nativeRun));
+        assertTrue("consume_run_fences must not wait on a fence without retaining a failed handle",
+                !containsBareConsumeFence(functionBody(source,
+                        "static bool consume_run_fences(")));
+
+        int inputConsume = nativeRun.indexOf(
+                "bool input_fence_ok = consume_or_retain_fence(");
+        int inputHandle = nativeRun.indexOf(
+                "engine, input_ready_fence, \"input\");", inputConsume);
         int decisionRead = nativeRun.indexOf(
-                "reuse = near_identical_record_requests_reuse(", inputRetain);
+                "reuse = near_identical_record_requests_reuse(", inputHandle);
         int outputConsume = nativeRun.indexOf(
-                "bool output_fence_ok = consume_fence(", decisionRead);
-        int outputRetain = nativeRun.indexOf(
-                "retain_failed_run_fence(engine, previous_output_consumed_fence);",
+                "bool output_fence_ok = consume_or_retain_fence(", decisionRead);
+        int outputHandle = nativeRun.indexOf(
+                "engine, previous_output_consumed_fence, \"output-consumed\");",
                 outputConsume);
         int failureExit = nativeRun.indexOf(
-                "if (!input_fence_ok || !output_fence_ok)", outputRetain);
+                "if (!input_fence_ok || !output_fence_ok)", outputHandle);
 
-        assertOrdered("input wait, input retention", inputConsume, inputRetain);
-        assertOrdered("input retention, decision read", inputRetain, decisionRead);
-        assertOrdered("output wait, output retention", outputConsume, outputRetain);
-        assertOrdered("output retention, failure exit", outputRetain, failureExit);
+        assertOrdered("input wait, input retention", inputConsume, inputHandle);
+        assertOrdered("input retention, decision read", inputHandle, decisionRead);
+        assertOrdered("output wait, output retention", outputConsume, outputHandle);
+        assertOrdered("output retention, failure exit", outputHandle, failureExit);
         assertTrue("Invalid contracts must consume transferred fences",
                 nativeRun.substring(0, inputConsume).contains("consume_run_fences("));
+    }
+
+    /** True when the text calls consume_fence() itself rather than consume_or_retain_fence(). */
+    private static boolean containsBareConsumeFence(String body) {
+        return body.replace("consume_or_retain_fence(", "").contains("consume_fence(");
     }
 
     private static String readNativeSource() throws IOException {
