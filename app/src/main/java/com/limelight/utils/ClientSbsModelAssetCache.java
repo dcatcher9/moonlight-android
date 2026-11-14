@@ -37,6 +37,7 @@ final class ClientSbsModelAssetCache {
     static final String BENCHMARK_MODEL_CACHE = "client-sbs-benchmark-model-assets";
 
     private static final int MODEL_IO_BUFFER_BYTES = 64 * 1024;
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
     private static final Object CACHE_LOCK = new Object();
     // UI-side request admission must never wait for archive I/O or file publication.
     private static final Object PRESTAGE_LOCK = new Object();
@@ -158,7 +159,7 @@ final class ClientSbsModelAssetCache {
                     && !modelDirectory.isDirectory()) {
                 throw new IOException("Unable to create Client SBS model staging directory");
             }
-            String safeId = modelId.replaceAll("[^A-Za-z0-9._-]", "_");
+            String safeId = sanitizeModelId(modelId);
             File verifiedFile = new File(modelDirectory, stagedFileName(modelId, expectedSha256));
             if (pruneOtherModels) {
                 pruneStagedModelDirectory(modelDirectory, verifiedFile);
@@ -256,8 +257,12 @@ final class ClientSbsModelAssetCache {
     }
 
     static String stagedFileName(String modelId, String sha256) {
-        return modelId.replaceAll("[^A-Za-z0-9._-]", "_") + '-'
+        return sanitizeModelId(modelId) + '-'
                 + sha256.substring(0, 16) + ".tflite";
+    }
+
+    private static String sanitizeModelId(String modelId) {
+        return modelId.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
     /** A bounded manifest whitelist; retaining a file never substitutes for digest validation. */
@@ -360,10 +365,12 @@ final class ClientSbsModelAssetCache {
     }
 
     private static String toHex(byte[] hash) {
-        StringBuilder result = new StringBuilder(hash.length * 2);
-        for (byte value : hash) {
-            result.append(String.format(java.util.Locale.ROOT, "%02x", value & 0xFF));
+        char[] result = new char[hash.length * 2];
+        for (int index = 0; index < hash.length; index++) {
+            int value = hash[index] & 0xFF;
+            result[index * 2] = HEX_DIGITS[value >>> 4];
+            result[index * 2 + 1] = HEX_DIGITS[value & 0x0F];
         }
-        return result.toString();
+        return new String(result);
     }
 }
