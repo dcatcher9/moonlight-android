@@ -1199,53 +1199,31 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         onExternelDisplay = currentDisplay.getDisplayId() != Display.DEFAULT_DISPLAY;
 
-        boolean shouldInvertDecoderResolution = false;
+        // The XR route is always stereoscopic (PreferenceConfiguration.isStereoMode()): it keeps
+        // the configured resolution, forces STRETCH scaling, and never inverts for portrait.
+        final boolean shouldInvertDecoderResolution = false;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                && onExternelDisplay
-                && !prefConfig.isStereoMode() // For 3D we want to maintain configured resolution
-        ) {
-            Display.Mode currentMode = currentDisplay.getMode();
-            displayWidth = currentMode.getPhysicalWidth();
-            displayHeight = currentMode.getPhysicalHeight();
-            prefConfig.width = displayWidth;
-            prefConfig.height = displayHeight;
-            prefConfig.fps = currentMode.getRefreshRate();
-            prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
-            prefConfig.enableFloatingButton = false;
-            prefConfig.showOverlayZoomToggleButton = false;
-            prefConfig.enablePip = false;
-            currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
+        prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
+
+        if (prefConfig.autoOrientation) {
+            currentOrientation = getResources().getConfiguration().orientation;
         } else {
-            if (prefConfig.isStereoMode()) {
-                prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
-            }
-
-            if (prefConfig.autoOrientation) {
-                currentOrientation = getResources().getConfiguration().orientation;
-            } else {
-                currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
-            }
-
-            boolean portraitMode = currentOrientation == Configuration.ORIENTATION_PORTRAIT;
-            shouldInvertDecoderResolution = !prefConfig.isStereoMode()
-                    && portraitMode && prefConfig.autoInvertVideoResolution;
-
-            // Host SBS AI keeps the full requested resolution for 2D. The per-eye
-            // cap only applies when SBS is actually switched on: the host then caps the packed frame
-            // to the encoder max (rendering the SBS directly at that target), and the client resizes
-            // its decoder/XR surface for the capped frame. So no launch-time clamp here.
-
-            displayWidth = shouldInvertDecoderResolution ? prefConfig.height : prefConfig.width;
-            displayHeight = shouldInvertDecoderResolution ? prefConfig.width : prefConfig.height;
-            LimeLog.info("XR transport resolution: logical "
-                    + prefConfig.width + "x" + prefConfig.height + ", encoded "
-                    + displayWidth + "x" + displayHeight);
-
-            // Enter landscape unless we're on a square screen
-            setPreferredOrientationForActivity();
+            currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
         }
+
+        // Host SBS AI keeps the full requested resolution for 2D. The per-eye
+        // cap only applies when SBS is actually switched on: the host then caps the packed frame
+        // to the encoder max (rendering the SBS directly at that target), and the client resizes
+        // its decoder/XR surface for the capped frame. So no launch-time clamp here.
+
+        displayWidth = prefConfig.width;
+        displayHeight = prefConfig.height;
+        LimeLog.info("XR transport resolution: logical "
+                + prefConfig.width + "x" + prefConfig.height + ", encoded "
+                + displayWidth + "x" + displayHeight);
+
+        // Enter landscape unless we're on a square screen
+        setPreferredOrientationForActivity();
 
 
         if (

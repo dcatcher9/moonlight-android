@@ -963,7 +963,7 @@ public final class XrSessionSettingsController {
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
         output.put(SessionSettingsModel.Key.BITRATE, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING,
-                PreferenceConfiguration.getDefaultBitrate(resolution, fps)));
+                PreferenceConfiguration.DEFAULT_BITRATE_KBPS));
     }
 
     private static void readSharedValues(SharedPreferences preferences,
@@ -980,7 +980,7 @@ public final class XrSessionSettingsController {
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
         output.put(SessionSettingsModel.Key.BITRATE, preferences.getInt(
                 PreferenceConfiguration.BITRATE_PREF_STRING,
-                PreferenceConfiguration.getDefaultBitrate(resolution, fps)));
+                PreferenceConfiguration.DEFAULT_BITRATE_KBPS));
         output.put(SessionSettingsModel.Key.HDR, preferences.getBoolean(
                 PreferenceConfiguration.ENABLE_HDR_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_ENABLE_HDR));

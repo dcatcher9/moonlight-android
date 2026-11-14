@@ -582,10 +582,7 @@ public class PreferenceConfiguration {
     }
 
     public static int getDefaultBitrate(Context context) {
-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
-        return getDefaultBitrate(
-                prefs.getString(RESOLUTION_PREF_STRING, DEFAULT_RESOLUTION),
-                prefs.getString(FPS_PREF_STRING, DEFAULT_FPS));
+        return DEFAULT_BITRATE_KBPS;
     }
 
     /** Persist the in-headset Stats choice so an activity reconnect/recreate cannot lose it. */
@@ -752,7 +749,7 @@ public class PreferenceConfiguration {
         // This must happen after the preferences migration to ensure the preferences are populated
         config.bitrate = prefs.getInt(BITRATE_PREF_STRING, 0);
         if (config.bitrate == 0) {
-            config.bitrate = getDefaultBitrate(resStr, String.valueOf(config.fps));
+            config.bitrate = DEFAULT_BITRATE_KBPS;
         }
 
         // Android XR exposes one authoritative bitrate in both Global Defaults and the current
