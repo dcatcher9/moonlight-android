@@ -44,7 +44,6 @@ import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrSessionSettingsController;
 import com.limelight.preferences.session.SessionSettingsStore;
-import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
@@ -146,7 +145,6 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
 
@@ -222,6 +220,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private static final long NETWORK_WAIT_MESSAGE_MS = 10 * 60_000L;
     private Intent scheduledReconnectIntent;
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
+    private final XrHostCallbackRouter xrHostCallbacks = new XrHostCallbackRouter(
+            this::runOnUiThread, this::isConnectionUiActive, this::presenterOrNull);
     // No default network exists; a stream transport cannot survive and recovery must wait.
     private boolean streamNetworkLost;
     private ConnectivityManager.NetworkCallback streamNetworkCallback;
@@ -4970,7 +4970,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Host SBS preparation phase changed; forward it to the XR presenter. Model-engine
         // preparation and per-stream GPU-resource setup are intentionally distinct messages.
         // Callback arrives off the UI thread.
-        postToPresenter(presenter -> presenter.onDepthStatus(phase));
+        xrHostCallbacks.depthStatus(phase);
     }
 
     private boolean refreshAtomicPresentationV2Support() {
@@ -4994,9 +4994,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void onGameSourceStatus(int state, int provider, int presentationGeneration,
                                     int sourceRevision, int sourceWidth, int sourceHeight,
                                     int packedWidth, int packedHeight) {
-        postToPresenter(presenter -> presenter.onGameSourceStatus(state, provider,
-                presentationGeneration, sourceRevision,
-                sourceWidth, sourceHeight, packedWidth, packedHeight));
+        xrHostCallbacks.onGameSourceStatus(state, provider, presentationGeneration,
+                sourceRevision, sourceWidth, sourceHeight, packedWidth, packedHeight);
     }
 
     @Override
@@ -5005,25 +5004,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                int appliedSourceHeight, int exactEncodedWidth,
                                int exactEncodedHeight, int appliedFramerateX100,
                                int effectiveEncoderBitrateKbps) {
-        postToPresenter(presenter -> presenter.onVideoModeAckV2(
-                status, appliedMode, flags, requestId, stateGeneration,
-                appliedSourceWidth, appliedSourceHeight,
-                exactEncodedWidth, exactEncodedHeight,
-                appliedFramerateX100, effectiveEncoderBitrateKbps));
+        xrHostCallbacks.videoModeAckV2(status, appliedMode, flags, requestId, stateGeneration,
+                appliedSourceWidth, appliedSourceHeight, exactEncodedWidth, exactEncodedHeight,
+                appliedFramerateX100, effectiveEncoderBitrateKbps);
     }
 
     @Override
     public void hostSbsTelemetryState(byte[] payload) {
-        final HostSbsTelemetrySnapshot telemetry;
-        try {
-            telemetry = HostSbsTelemetrySnapshot.parse(payload);
-        } catch (IllegalArgumentException error) {
-            LimeLog.warning("Dropping malformed host SBS telemetry: " + error.getMessage());
-            return;
-        }
-        final long receivedAtMs = android.os.SystemClock.uptimeMillis();
-        postToPresenter(presenter -> presenter.onHostSbsTelemetryState(
-                telemetry, receivedAtMs));
+        xrHostCallbacks.hostSbsTelemetryState(payload);
     }
 
     /** The ack said this mode is only reachable by reconnecting; commit and restart in place. */
@@ -5227,19 +5215,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private XrStreamPresenter presenterOrNull() {
         return streamContainer != null ? streamContainer.getXrPresenter() : null;
-    }
-
-    /**
-     * Re-posts a native 3D callback to the UI thread and delivers it only while this connection's
-     * UI is still active and an XR presenter exists.
-     */
-    private void postToPresenter(Consumer<XrStreamPresenter> action) {
-        runOnUiThread(() -> {
-            XrStreamPresenter presenter = isConnectionUiActive() ? presenterOrNull() : null;
-            if (presenter != null) {
-                action.accept(presenter);
-            }
-        });
     }
 
     /** Current visible decoder output size as {@code {width, height}}, or null when unavailable. */
