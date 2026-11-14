@@ -125,44 +125,114 @@ public final class SbsDepthTelemetrySnapshot {
         }
     }
 
-    private SbsDepthTelemetrySnapshot(
-            Availability availability, int validFields, int runtimeFlags,
-            int depthWidth, int depthHeight, int zeroPlaneMode,
-            float popFloor, float popCeiling, float effectivePop,
-            float classifiedEdgeFraction, float changeFraction, float zeroAnchorShiftPx,
-            float subjectDepth, float validDepthFraction, float effectiveRangeWidth,
-            long sceneAge, long hardCutCount, long externalCutRequests,
-            long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame,
-            float[] popTrend, float[] edgeTrend, float[] changeTrend,
-            float[] cutTrend, float[] anchorTrend, HostPerformance hostPerformance) {
-        this.availability = availability;
-        this.validFields = validFields;
-        this.runtimeFlags = runtimeFlags;
-        this.depthWidth = depthWidth;
-        this.depthHeight = depthHeight;
-        this.zeroPlaneMode = zeroPlaneMode;
-        this.popFloor = popFloor;
-        this.popCeiling = popCeiling;
-        this.effectivePop = effectivePop;
-        this.classifiedEdgeFraction = classifiedEdgeFraction;
-        this.changeFraction = changeFraction;
-        this.zeroAnchorShiftPx = zeroAnchorShiftPx;
-        this.subjectDepth = subjectDepth;
-        this.validDepthFraction = validDepthFraction;
-        this.effectiveRangeWidth = effectiveRangeWidth;
-        this.sceneAge = sceneAge;
-        this.hardCutCount = hardCutCount;
-        this.appearanceProposalCount = externalCutRequests;
-        this.externalCutRequests = externalCutRequests;
-        this.emptyDepthFrames = emptyDepthFrames;
-        this.collapsedDepthFrames = collapsedDepthFrames;
-        this.sampleFrame = sampleFrame;
-        this.popTrend = copy(popTrend);
-        this.edgeTrend = copy(edgeTrend);
-        this.changeTrend = copy(changeTrend);
-        this.cutTrend = copy(cutTrend);
-        this.anchorTrend = copy(anchorTrend);
-        this.hostPerformance = hostPerformance;
+    /** Shared by snapshots without chart history; a zero-length array has nothing to mutate. */
+    private static final float[] NO_TREND = new float[0];
+
+    /** Mutable construction parameters. Trend arrays held here are already owned copies. */
+    private static final class Params {
+        Availability availability;
+        int validFields;
+        int runtimeFlags;
+        int depthWidth;
+        int depthHeight;
+        int zeroPlaneMode;
+        float popFloor;
+        float popCeiling;
+        float effectivePop;
+        float classifiedEdgeFraction;
+        float changeFraction;
+        float zeroAnchorShiftPx;
+        float subjectDepth;
+        float validDepthFraction;
+        float effectiveRangeWidth;
+        long sceneAge;
+        long hardCutCount;
+        long externalCutRequests;
+        long emptyDepthFrames;
+        long collapsedDepthFrames;
+        long sampleFrame;
+        float[] popTrend = NO_TREND;
+        float[] edgeTrend = NO_TREND;
+        float[] changeTrend = NO_TREND;
+        float[] cutTrend = NO_TREND;
+        float[] anchorTrend = NO_TREND;
+        HostPerformance hostPerformance;
+
+        Params() {
+        }
+
+        /** Starts from an existing snapshot, sharing its immutable trend arrays. */
+        Params(SbsDepthTelemetrySnapshot source) {
+            availability = source.availability;
+            validFields = source.validFields;
+            runtimeFlags = source.runtimeFlags;
+            depthWidth = source.depthWidth;
+            depthHeight = source.depthHeight;
+            zeroPlaneMode = source.zeroPlaneMode;
+            popFloor = source.popFloor;
+            popCeiling = source.popCeiling;
+            effectivePop = source.effectivePop;
+            classifiedEdgeFraction = source.classifiedEdgeFraction;
+            changeFraction = source.changeFraction;
+            zeroAnchorShiftPx = source.zeroAnchorShiftPx;
+            subjectDepth = source.subjectDepth;
+            validDepthFraction = source.validDepthFraction;
+            effectiveRangeWidth = source.effectiveRangeWidth;
+            sceneAge = source.sceneAge;
+            hardCutCount = source.hardCutCount;
+            externalCutRequests = source.externalCutRequests;
+            emptyDepthFrames = source.emptyDepthFrames;
+            collapsedDepthFrames = source.collapsedDepthFrames;
+            sampleFrame = source.sampleFrame;
+            popTrend = source.popTrend;
+            edgeTrend = source.edgeTrend;
+            changeTrend = source.changeTrend;
+            cutTrend = source.cutTrend;
+            anchorTrend = source.anchorTrend;
+            hostPerformance = source.hostPerformance;
+        }
+
+        /** The single defensive copy of caller-owned trend arrays. */
+        Params copyTrends(float[] popTrend, float[] edgeTrend, float[] changeTrend,
+                          float[] cutTrend, float[] anchorTrend) {
+            this.popTrend = copy(popTrend);
+            this.edgeTrend = copy(edgeTrend);
+            this.changeTrend = copy(changeTrend);
+            this.cutTrend = copy(cutTrend);
+            this.anchorTrend = copy(anchorTrend);
+            return this;
+        }
+    }
+
+    private SbsDepthTelemetrySnapshot(Params params) {
+        this.availability = params.availability;
+        this.validFields = params.validFields;
+        this.runtimeFlags = params.runtimeFlags;
+        this.depthWidth = params.depthWidth;
+        this.depthHeight = params.depthHeight;
+        this.zeroPlaneMode = params.zeroPlaneMode;
+        this.popFloor = params.popFloor;
+        this.popCeiling = params.popCeiling;
+        this.effectivePop = params.effectivePop;
+        this.classifiedEdgeFraction = params.classifiedEdgeFraction;
+        this.changeFraction = params.changeFraction;
+        this.zeroAnchorShiftPx = params.zeroAnchorShiftPx;
+        this.subjectDepth = params.subjectDepth;
+        this.validDepthFraction = params.validDepthFraction;
+        this.effectiveRangeWidth = params.effectiveRangeWidth;
+        this.sceneAge = params.sceneAge;
+        this.hardCutCount = params.hardCutCount;
+        this.appearanceProposalCount = params.externalCutRequests;
+        this.externalCutRequests = params.externalCutRequests;
+        this.emptyDepthFrames = params.emptyDepthFrames;
+        this.collapsedDepthFrames = params.collapsedDepthFrames;
+        this.sampleFrame = params.sampleFrame;
+        this.popTrend = params.popTrend;
+        this.edgeTrend = params.edgeTrend;
+        this.changeTrend = params.changeTrend;
+        this.cutTrend = params.cutTrend;
+        this.anchorTrend = params.anchorTrend;
+        this.hostPerformance = params.hostPerformance;
     }
 
     public static SbsDepthTelemetrySnapshot available(
@@ -173,50 +243,70 @@ public final class SbsDepthTelemetrySnapshot {
             float subjectDepth, float validDepthFraction, float effectiveRangeWidth,
             long sceneAge, long hardCutCount, long externalCutRequests,
             long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame) {
-        return new SbsDepthTelemetrySnapshot(
-                Availability.AVAILABLE, validFields, runtimeFlags,
-                depthWidth, depthHeight, zeroPlaneMode,
-                popFloor, popCeiling, effectivePop, classifiedEdgeFraction,
-                changeFraction, zeroAnchorShiftPx, subjectDepth, validDepthFraction,
-                effectiveRangeWidth, sceneAge, hardCutCount, externalCutRequests,
-                emptyDepthFrames, collapsedDepthFrames, sampleFrame,
-                null, null, null, null, null, null);
+        Params params = new Params();
+        params.availability = Availability.AVAILABLE;
+        params.validFields = validFields;
+        params.runtimeFlags = runtimeFlags;
+        params.depthWidth = depthWidth;
+        params.depthHeight = depthHeight;
+        params.zeroPlaneMode = zeroPlaneMode;
+        params.popFloor = popFloor;
+        params.popCeiling = popCeiling;
+        params.effectivePop = effectivePop;
+        params.classifiedEdgeFraction = classifiedEdgeFraction;
+        params.changeFraction = changeFraction;
+        params.zeroAnchorShiftPx = zeroAnchorShiftPx;
+        params.subjectDepth = subjectDepth;
+        params.validDepthFraction = validDepthFraction;
+        params.effectiveRangeWidth = effectiveRangeWidth;
+        params.sceneAge = sceneAge;
+        params.hardCutCount = hardCutCount;
+        params.externalCutRequests = externalCutRequests;
+        params.emptyDepthFrames = emptyDepthFrames;
+        params.collapsedDepthFrames = collapsedDepthFrames;
+        params.sampleFrame = sampleFrame;
+        return new SbsDepthTelemetrySnapshot(params);
     }
 
     public static SbsDepthTelemetrySnapshot unavailable(Availability availability) {
         if (availability == Availability.AVAILABLE) {
             throw new IllegalArgumentException("Use available() for an available sample");
         }
-        return new SbsDepthTelemetrySnapshot(
-                availability, 0, 0, 0, 0, 0,
-                Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN,
-                Float.NaN, Float.NaN, Float.NaN, Float.NaN,
-                0L, 0L, 0L, 0L, 0L, 0L,
-                null, null, null, null, null, null);
+        Params params = new Params();
+        params.availability = availability;
+        params.popFloor = Float.NaN;
+        params.popCeiling = Float.NaN;
+        params.effectivePop = Float.NaN;
+        params.classifiedEdgeFraction = Float.NaN;
+        params.changeFraction = Float.NaN;
+        params.zeroAnchorShiftPx = Float.NaN;
+        params.subjectDepth = Float.NaN;
+        params.validDepthFraction = Float.NaN;
+        params.effectiveRangeWidth = Float.NaN;
+        return new SbsDepthTelemetrySnapshot(params);
     }
 
     public SbsDepthTelemetrySnapshot withTrends(
             float[] popTrend, float[] edgeTrend, float[] changeTrend,
             float[] cutTrend, float[] anchorTrend) {
-        return new SbsDepthTelemetrySnapshot(
-                availability, validFields, runtimeFlags,
-                depthWidth, depthHeight, zeroPlaneMode,
-                popFloor, popCeiling, effectivePop, classifiedEdgeFraction,
-                changeFraction, zeroAnchorShiftPx, subjectDepth, validDepthFraction,
-                effectiveRangeWidth, sceneAge, hardCutCount, externalCutRequests,
-                emptyDepthFrames, collapsedDepthFrames, sampleFrame,
-                popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend, hostPerformance);
+        return new SbsDepthTelemetrySnapshot(new Params(this)
+                .copyTrends(popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend));
     }
 
     public SbsDepthTelemetrySnapshot withHostPerformance(HostPerformance performance) {
-        return new SbsDepthTelemetrySnapshot(
-                availability, validFields, runtimeFlags,
-                depthWidth, depthHeight, zeroPlaneMode,
-                popFloor, popCeiling, effectivePop, classifiedEdgeFraction,
-                changeFraction, zeroAnchorShiftPx, subjectDepth, validDepthFraction,
-                effectiveRangeWidth, sceneAge, hardCutCount, externalCutRequests,
-                emptyDepthFrames, collapsedDepthFrames, sampleFrame,
-                popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend, performance);
+        Params params = new Params(this);
+        params.hostPerformance = performance;
+        return new SbsDepthTelemetrySnapshot(params);
+    }
+
+    /** {@link #withTrends} followed by {@link #withHostPerformance}, built once. */
+    SbsDepthTelemetrySnapshot withTrendsAndHostPerformance(
+            float[] popTrend, float[] edgeTrend, float[] changeTrend,
+            float[] cutTrend, float[] anchorTrend, HostPerformance performance) {
+        Params params = new Params(this)
+                .copyTrends(popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend);
+        params.hostPerformance = performance;
+        return new SbsDepthTelemetrySnapshot(params);
     }
 
     public boolean isAvailable() {
@@ -259,6 +349,7 @@ public final class SbsDepthTelemetrySnapshot {
     }
 
     private static float[] copy(float[] source) {
-        return source == null ? new float[0] : Arrays.copyOf(source, source.length);
+        return source == null || source.length == 0
+                ? NO_TREND : Arrays.copyOf(source, source.length);
     }
 }

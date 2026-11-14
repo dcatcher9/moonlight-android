@@ -41,6 +41,17 @@ public final class SbsDepthTelemetryHistory {
         return sample.withTrends(copy(pop), copy(edge), copy(change), copy(cuts), copy(anchor));
     }
 
+    /** {@link #attach(SbsDepthTelemetrySnapshot)} plus host performance, as one snapshot. */
+    synchronized SbsDepthTelemetrySnapshot attach(
+            SbsDepthTelemetrySnapshot sample,
+            SbsDepthTelemetrySnapshot.HostPerformance performance) {
+        if (sample == null) {
+            return null;
+        }
+        return sample.withTrendsAndHostPerformance(
+                copy(pop), copy(edge), copy(change), copy(cuts), copy(anchor), performance);
+    }
+
     public synchronized void clear() {
         pop.clear();
         edge.clear();

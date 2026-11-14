@@ -288,7 +288,7 @@ public final class HostSbsTelemetrySnapshot {
     }
 
     public SbsDepthTelemetrySnapshot toDepthTelemetry() {
-        if (version != VERSION_2 || status == STATUS_UNSUPPORTED_VERSION) {
+        if (status == STATUS_UNSUPPORTED_VERSION) {
             return SbsDepthTelemetrySnapshot.unavailable(
                     SbsDepthTelemetrySnapshot.Availability.UNSUPPORTED);
         }

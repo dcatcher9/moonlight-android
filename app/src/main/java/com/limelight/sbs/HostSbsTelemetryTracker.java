@@ -76,49 +76,46 @@ public final class HostSbsTelemetryTracker {
         long boundedReceivedAtMs = Math.max(0L, receivedAtMs);
         boolean transportWasStale = latest != null
                 && Math.max(0L, boundedReceivedAtMs - latestReceivedAtMs) > STALE_AFTER_MS;
-        if (snapshot.version == HostSbsTelemetrySnapshot.VERSION_2) {
-            if (acceptedGeneration >= 0L) {
-                if (snapshot.generation == acceptedGeneration) {
-                    if (snapshot.sequence == acceptedSequence) {
-                        // Apollo may repeat its latest publication as a heartbeat when a static
-                        // scene produces no new renderer sample. It is live evidence, not another
-                        // chart era or a reason to append/clear history.
-                        if (transportWasStale) {
-                            history.clear();
-                            invalidateRatesAfterGap();
-                        }
-                        latest = snapshot;
-                        latestReceivedAtMs = Math.max(
-                                latestReceivedAtMs, boundedReceivedAtMs);
-                        staleHistoryCleared = false;
-                        // Performance is serialized from its generation-owned collector at send
-                        // time. Its copy IDs can advance without another depth-health sample.
-                        acceptPerformance(snapshot, boundedReceivedAtMs);
-                        return true;
+        if (acceptedGeneration >= 0L) {
+            if (snapshot.generation == acceptedGeneration) {
+                if (snapshot.sequence == acceptedSequence) {
+                    // Apollo may repeat its latest publication as a heartbeat when a static
+                    // scene produces no new renderer sample. It is live evidence, not another
+                    // chart era or a reason to append/clear history.
+                    if (transportWasStale) {
+                        history.clear();
+                        invalidateRatesAfterGap();
                     }
-                    if (!isNewerUnsigned32(snapshot.sequence, acceptedSequence)) {
-                        return false;
-                    }
-                } else {
-                    if (!isNewerUnsigned32(snapshot.generation, acceptedGeneration)) {
-                        return false;
-                    }
-                    // A new host pipeline/subscription generation is a new chart era.
-                    history.clear();
-                    clearRates();
+                    latest = snapshot;
+                    latestReceivedAtMs = Math.max(
+                            latestReceivedAtMs, boundedReceivedAtMs);
+                    staleHistoryCleared = false;
+                    // Performance is serialized from its generation-owned collector at send
+                    // time. Its copy IDs can advance without another depth-health sample.
+                    acceptPerformance(snapshot, boundedReceivedAtMs);
+                    return true;
                 }
+                if (!isNewerUnsigned32(snapshot.sequence, acceptedSequence)) {
+                    return false;
+                }
+            } else {
+                if (!isNewerUnsigned32(snapshot.generation, acceptedGeneration)) {
+                    return false;
+                }
+                // A new host pipeline/subscription generation is a new chart era.
+                history.clear();
+                clearRates();
             }
-            acceptedGeneration = snapshot.generation;
-            acceptedSequence = snapshot.sequence;
         }
+        acceptedGeneration = snapshot.generation;
+        acceptedSequence = snapshot.sequence;
         // A repaint may not have occurred during the silence, so enforce the stale-era boundary
         // at delivery too. Otherwise a fresh sequence would visually bridge an unobserved gap.
         if (transportWasStale) {
             history.clear();
             invalidateRatesAfterGap();
         }
-        if (snapshot.version != HostSbsTelemetrySnapshot.VERSION_2
-                || snapshot.status != HostSbsTelemetrySnapshot.STATUS_OK) {
+        if (snapshot.status != HostSbsTelemetrySnapshot.STATUS_OK) {
             // Explicit unavailable/unsupported/failed state supersedes old live-looking charts.
             history.clear();
             clearRates();
@@ -160,7 +157,7 @@ public final class HostSbsTelemetryTracker {
         }
         boolean outcomeFresh = outcomes.isFresh(nowMs);
         boolean outputFresh = outputs.isFresh(nowMs);
-        return history.attach(sample).withHostPerformance(
+        return history.attach(sample,
                 new SbsDepthTelemetrySnapshot.HostPerformance(latest,
                         Math.max(0L, nowMs - publicationReceivedAtMs),
                         outcomes.hasBaseline ? Math.max(0L, nowMs - outcomes.receivedAtMs) : -1L,
