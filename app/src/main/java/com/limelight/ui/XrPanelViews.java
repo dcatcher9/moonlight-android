@@ -107,6 +107,17 @@ final class XrPanelViews {
         return background;
     }
 
+    /** Vertical container with uniform padding on the raised, bordered card surface. */
+    static LinearLayout card(Context context, int paddingPixels) {
+        LinearLayout card = new LinearLayout(context);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(paddingPixels, paddingPixels, paddingPixels, paddingPixels);
+        card.setBackground(controlSurfaceBackground(context,
+                paletteColor(context, R.color.xr_surface_raised),
+                paletteColor(context, R.color.xr_border_panel), 1));
+        return card;
+    }
+
     /** Fill every hosted pixel; rounded child cards can keep their existing interaction styling. */
     static void setSolidPanelCanvas(Context context, View root) {
         root.setBackgroundColor(paletteColor(context, R.color.xr_surface_sunken));

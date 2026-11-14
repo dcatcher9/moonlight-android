@@ -886,9 +886,7 @@ public class XrStreamPresenter {
         } else {
             return;
         }
-        StreamQualityTuple quality = new StreamQualityTuple(
-                prefConfig.width + "x" + prefConfig.height,
-                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        StreamQualityTuple quality = currentQualityTuple();
         if (!applyLiveStreamQuality(quality, LiveQualityRequestOrigin.GAME_SOURCE, null,
                 desiredMode)) {
             if (isGameSourceWidening(desiredMode)) {
@@ -1707,9 +1705,7 @@ public class XrStreamPresenter {
 
         // PreferenceConfiguration is the effective on-wire tuple. The settings model intentionally
         // retains the user's durable FPS ceiling while panel-follow is temporarily below it.
-        StreamQualityTuple live = new StreamQualityTuple(
-                prefConfig.width + "x" + prefConfig.height,
-                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        StreamQualityTuple live = currentQualityTuple();
         glanceStreamView.setText(XrStatsFormat.formatGlanceStream(activity,
                 live.resolution, glanceFrameRateText(live.frameRate), live.bitrateKbps,
                 prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
@@ -1749,6 +1745,24 @@ public class XrStreamPresenter {
 
     private int paletteColor(int colorRes) {
         return XrPanelViews.paletteColor(activity, colorRes);
+    }
+
+    /** The hosting stream activity, or null when the presenter runs under another Activity. */
+    private com.limelight.Game hostGame() {
+        return activity instanceof com.limelight.Game ? (com.limelight.Game) activity : null;
+    }
+
+    /** The effective on-wire quality currently held by {@code prefConfig}. */
+    private StreamQualityTuple currentQualityTuple() {
+        return new StreamQualityTuple(
+                prefConfig.width + "x" + prefConfig.height,
+                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+    }
+
+    private String settingSourceLabel(SessionSettingsModel.Source source) {
+        return source == SessionSettingsModel.Source.GLOBAL
+                ? activity.getString(R.string.xr_setting_source_global)
+                : activity.getString(R.string.xr_setting_source_session);
     }
 
     /**
@@ -2449,11 +2463,7 @@ public class XrStreamPresenter {
                 cinemaViewExpanded);
         root.addView(header);
 
-        LinearLayout environmentCard = new LinearLayout(activity);
-        environmentCard.setOrientation(LinearLayout.VERTICAL);
-        environmentCard.setPadding(padding, padding, padding, padding);
-        environmentCard.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout environmentCard = card(padding);
         LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         cardParams.topMargin = dimen(R.dimen.xr_space_md);
@@ -2549,12 +2559,8 @@ public class XrStreamPresenter {
         qualityRow.setGravity(Gravity.TOP);
         qualityRow.setBaselineAligned(false);
 
-        LinearLayout resolutionColumn = new LinearLayout(activity);
-        resolutionColumn.setOrientation(LinearLayout.VERTICAL);
         int cardPadding = dimen(R.dimen.xr_space_md);
-        resolutionColumn.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
-        resolutionColumn.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout resolutionColumn = card(cardPadding);
         TextView resolutionTitle = controlText(
                 activity.getString(R.string.title_resolution_list),
                 R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
@@ -2581,11 +2587,7 @@ public class XrStreamPresenter {
         tuningColumn.setOrientation(LinearLayout.VERTICAL);
 
         SessionSettingsModel.Value fps = model.get(SessionSettingsModel.Key.FRAME_RATE);
-        LinearLayout fpsCard = new LinearLayout(activity);
-        fpsCard.setOrientation(LinearLayout.VERTICAL);
-        fpsCard.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
-        fpsCard.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout fpsCard = card(cardPadding);
         LinearLayout fpsHeading = new LinearLayout(activity);
         fpsHeading.setOrientation(LinearLayout.HORIZONTAL);
         fpsHeading.setGravity(Gravity.CENTER_VERTICAL);
@@ -2603,11 +2605,7 @@ public class XrStreamPresenter {
         tuningColumn.addView(fpsCard);
 
         SessionSettingsModel.Value bitrate = model.get(SessionSettingsModel.Key.BITRATE);
-        LinearLayout bitrateCard = new LinearLayout(activity);
-        bitrateCard.setOrientation(LinearLayout.VERTICAL);
-        bitrateCard.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
-        bitrateCard.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout bitrateCard = card(cardPadding);
         TextView bitrateTitle = controlText(
                 activity.getString(R.string.title_bitrate_ceiling),
                 R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
@@ -2784,12 +2782,7 @@ public class XrStreamPresenter {
     }
 
     private LinearLayout createModeSourceCard(LinearLayout root, String title) {
-        LinearLayout card = new LinearLayout(activity);
-        card.setOrientation(LinearLayout.VERTICAL);
-        int padding = dimen(R.dimen.xr_space_md);
-        card.setPadding(padding, padding, padding, padding);
-        card.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout card = card(dimen(R.dimen.xr_space_md));
         TextView heading = controlText(title,
                 R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
         heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
@@ -2839,13 +2832,7 @@ public class XrStreamPresenter {
         // This is an explicit interpretation of the existing frame, never a request to resize
         // the Windows desktop, decoder buffer or transport. Half-SBS restores squeezed eyes.
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
-        float aspect = aspectFor(currentPresenterMode);
-        SurfaceEntity.Shape shape = surfaceEntity.getShape();
-        float height = shape instanceof SurfaceEntity.Shape.Quad
-                ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight() : panelHeightMeters;
-        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
-        applyResizeBounds(aspect);
-        repositionControlBar(height);
+        reshapeQuadForMode(currentPresenterMode, panelHeightMeters);
         updateGlancePanel();
         revealDockTemporarily();
         return true;
@@ -3108,12 +3095,7 @@ public class XrStreamPresenter {
         if (key == SessionSettingsModel.Key.BITRATE) {
             return buildSessionBitrateSettingRow(key, value);
         }
-        LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.VERTICAL);
-        int rowPadding = dimen(R.dimen.xr_space_lg);
-        row.setPadding(rowPadding, rowPadding, rowPadding, rowPadding);
-        row.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout row = card(dimen(R.dimen.xr_space_lg));
 
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.HORIZONTAL);
@@ -3124,9 +3106,7 @@ public class XrStreamPresenter {
         applyTitleIcon(title, sessionSettingIconRes(key));
         heading.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
-        String source = value.source == SessionSettingsModel.Source.GLOBAL
-                ? activity.getString(R.string.xr_setting_source_global)
-                : activity.getString(R.string.xr_setting_source_session);
+        String source = settingSourceLabel(value.source);
         TextView sourceView = controlText(source, SESSION_META_TEXT_DIMEN,
                 paletteColor(R.color.xr_text_secondary));
         sessionSourceViews.put(key, sourceView);
@@ -3176,12 +3156,7 @@ public class XrStreamPresenter {
 
     private View buildSessionBitrateSettingRow(SessionSettingsModel.Key key,
                                                SessionSettingsModel.Value value) {
-        LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.VERTICAL);
-        int rowPadding = dimen(R.dimen.xr_space_lg);
-        row.setPadding(rowPadding, rowPadding, rowPadding, rowPadding);
-        row.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
+        LinearLayout row = card(dimen(R.dimen.xr_space_lg));
 
         LinearLayout heading = new LinearLayout(activity);
         heading.setOrientation(LinearLayout.HORIZONTAL);
@@ -3192,9 +3167,7 @@ public class XrStreamPresenter {
         applyTitleIcon(title, sessionSettingIconRes(key));
         heading.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
-        String source = value.source == SessionSettingsModel.Source.GLOBAL
-                ? activity.getString(R.string.xr_setting_source_global)
-                : activity.getString(R.string.xr_setting_source_session);
+        String source = settingSourceLabel(value.source);
         TextView sourceView = controlText(source, SESSION_META_TEXT_DIMEN,
                 paletteColor(R.color.xr_text_secondary));
         sessionSourceViews.put(key, sourceView);
@@ -3308,9 +3281,7 @@ public class XrStreamPresenter {
             }
             TextView sourceView = sessionSourceViews.get(key);
             if (sourceView != null) {
-                sourceView.setText(value.source == SessionSettingsModel.Source.GLOBAL
-                        ? activity.getString(R.string.xr_setting_source_global)
-                        : activity.getString(R.string.xr_setting_source_session));
+                sourceView.setText(settingSourceLabel(value.source));
             }
             updateSessionPendingView(sessionPendingViews.get(key), value);
         }
@@ -5005,9 +4976,7 @@ public class XrStreamPresenter {
                 ? targetQuality.pendingQuality : null;
         StreamQualityTuple requestedTarget = durableTarget != null
                 ? durableTarget
-                : new StreamQualityTuple(
-                        prefConfig.width + "x" + prefConfig.height,
-                        XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+                : currentQualityTuple();
         float requestedCeiling = XrPresentationPolicy.parseFrameRate(requestedTarget.frameRate, prefConfig.fps);
         int effectiveFps = panelRefreshRateState.capUserTarget(
                 Math.max(1, Math.round(requestedCeiling)));
@@ -5027,8 +4996,7 @@ public class XrStreamPresenter {
             return;
         }
 
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         int transitionGeneration = game != null
                 ? game.beginDecoderPresentationModeTransition() : 0;
         if (!decoderTransitionGenerations.beginMode(transitionGeneration)) {
@@ -5044,9 +5012,7 @@ public class XrStreamPresenter {
         pendingExactEncodedWidth = 0;
         pendingExactEncodedHeight = 0;
         pendingLiveQuality = target;
-        previousLiveQuality = new StreamQualityTuple(
-                prefConfig.width + "x" + prefConfig.height,
-                XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
+        previousLiveQuality = currentQualityTuple();
         acknowledgedLiveQuality = null;
         pendingLiveQualityMode = nextMode;
         pendingLiveQualityOrigin = LiveQualityRequestOrigin.USER;
@@ -5109,8 +5075,7 @@ public class XrStreamPresenter {
         boolean wasClientSbs = (previousMode == PresentationMode.CLIENT_SBS_AI);
         boolean isClientSbs = (nextMode == PresentationMode.CLIENT_SBS_AI);
 
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         boolean decoderTransitionRequired = XrPresentationPolicy.requiresDecoderTransition(previousMode, nextMode)
                 || isAckFirstModeTransitionPending();
         if (decoderTransitionRequired) {
@@ -5299,8 +5264,7 @@ public class XrStreamPresenter {
                 || clientSbsHdrTransitionInProgress) {
             return false;
         }
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         if (game == null) {
             return false;
         }
@@ -5405,8 +5369,7 @@ public class XrStreamPresenter {
             return;
         }
 
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         if (game == null) {
             clearLiveQualityChange();
             return;
@@ -5773,16 +5736,8 @@ public class XrStreamPresenter {
         updateDecoderStreamGeometry(
                 game, geometryMode, width, height, Math.round(fps));
 
-        float aspect = aspectFor(geometryMode);
-        SurfaceEntity.Shape shape = surfaceEntity.getShape();
-        float quadHeight = (shape instanceof SurfaceEntity.Shape.Quad)
-                ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight()
-                : DEFAULT_PANEL_HEIGHT_METERS;
-        surfaceEntity.setShape(
-                new SurfaceEntity.Shape.Quad(new FloatSize2d(quadHeight * aspect, quadHeight)));
-        applyResizeBounds(aspect);
         // Also repositions the stats panel.
-        repositionControlBar(quadHeight);
+        reshapeQuadForMode(geometryMode, DEFAULT_PANEL_HEIGHT_METERS);
         updateGlancePanel();
         return true;
     }
@@ -5801,8 +5756,7 @@ public class XrStreamPresenter {
             return;
         }
         liveQualityConfirmations.onPresentationReady();
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         if (game != null) {
             finishConfirmedLiveQualityChange(game);
         }
@@ -5817,8 +5771,7 @@ public class XrStreamPresenter {
      * explicitly started after the ACK matches the host-acknowledged geometry.</p>
      */
     private void finishPendingLiveQualityChange() {
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         if (!liveQualityChangeInProgress || game == null || surfaceEntity == null
                 || surfaceEntity.isDisposed()) {
             decoderTransitionGenerations.clearMode();
@@ -6032,8 +5985,7 @@ public class XrStreamPresenter {
         if (!liveQualityTransactionBusy() && pendingLiveQuality == null) {
             return;
         }
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         if (game == null) {
             clearLiveQualityChange();
             return;
@@ -6325,15 +6277,7 @@ public class XrStreamPresenter {
         applyContentColorMetadata();
         LimeLog.info("XR: stereo mode -> " + label);
 
-        float aspect = aspectFor(currentPresenterMode);
-        SurfaceEntity.Shape shape = surfaceEntity.getShape();
-        float height = (shape instanceof SurfaceEntity.Shape.Quad)
-                ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight()
-                : DEFAULT_PANEL_HEIGHT_METERS;
-        float width = height * aspect;
-        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(width, height)));
-        applyResizeBounds(aspect);
-        repositionControlBar(height);
+        reshapeQuadForMode(currentPresenterMode, DEFAULT_PANEL_HEIGHT_METERS);
         updateModeSelection();
     }
 
@@ -6423,8 +6367,7 @@ public class XrStreamPresenter {
     }
 
     private boolean armClientSbsModeSwap(int transitionGeneration, PresentationMode pendingMode) {
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         StreamContainer streamContainer = game != null ? game.getStreamContainer() : null;
         boolean armed = streamContainer != null
                 && streamContainer.completeClientSbsModeSwitchAfterSwap(() -> {
@@ -6482,8 +6425,7 @@ public class XrStreamPresenter {
     }
 
     private void cancelClientSbsModeSwap() {
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         StreamContainer streamContainer = game != null ? game.getStreamContainer() : null;
         if (streamContainer != null) {
             streamContainer.cancelClientSbsModeSwitchCompletion();
@@ -6531,8 +6473,7 @@ public class XrStreamPresenter {
     }
 
     private void openClientSbsHdrTransition() {
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         StreamContainer streamContainer = game != null
                 ? game.getStreamContainer() : null;
         if (streamContainer == null) {
@@ -7011,8 +6952,7 @@ public class XrStreamPresenter {
         if (surfaceEntity == null) {
             return;
         }
-        com.limelight.Game game = activity instanceof com.limelight.Game
-                ? (com.limelight.Game) activity : null;
+        com.limelight.Game game = hostGame();
         boolean hdr = game != null && game.isStreamHdrActive();
         StreamContainer streamContainer = game != null ? game.getStreamContainer() : null;
         // Tell the AI-input shader to tonemap PQ->SDR for ZipDepth when the stream is HDR.
@@ -7078,6 +7018,21 @@ public class XrStreamPresenter {
         }
         resizable.setMinimumEntitySize(new FloatSize3d(0.5f * aspect, 0.5f, 0f));
         resizable.setMaximumEntitySize(new FloatSize3d(6.0f * aspect, 6.0f, 0f));
+    }
+
+    /**
+     * Re-fits the video quad to {@code mode}'s aspect at its current height (or the fallback when
+     * the entity is not a quad), then refreshes the resize bounds and the panels hung off it.
+     */
+    private void reshapeQuadForMode(PresentationMode mode, float fallbackHeightMeters) {
+        float aspect = aspectFor(mode);
+        SurfaceEntity.Shape shape = surfaceEntity.getShape();
+        float height = shape instanceof SurfaceEntity.Shape.Quad
+                ? ((SurfaceEntity.Shape.Quad) shape).getExtents().getHeight()
+                : fallbackHeightMeters;
+        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
+        applyResizeBounds(aspect);
+        repositionControlBar(height);
     }
 
     /** Build one control-bar tile. */
@@ -7182,6 +7137,10 @@ public class XrStreamPresenter {
     private android.graphics.drawable.GradientDrawable controlSurfaceBackground(
             int fillColor, int strokeColor, int strokeWidthDp) {
         return XrPanelViews.controlSurfaceBackground(activity, fillColor, strokeColor, strokeWidthDp);
+    }
+
+    private LinearLayout card(int paddingPixels) {
+        return XrPanelViews.card(activity, paddingPixels);
     }
 
     /** Fill every hosted pixel; rounded child cards can keep their existing interaction styling. */
@@ -7482,51 +7441,23 @@ public class XrStreamPresenter {
             }
             surfaceEntity = null;
         }
-        if (barPanel != null) {
-            if (!barPanel.isDisposed()) {
-                barPanel.dispose();
-            }
-            barPanel = null;
-        }
-        if (modeOptionsPanel != null) {
-            if (!modeOptionsPanel.isDisposed()) {
-                modeOptionsPanel.dispose();
-            }
-            modeOptionsPanel = null;
-        }
-        if (statsPanel != null) {
-            if (!statsPanel.isDisposed()) {
-                statsPanel.dispose();
-            }
-            statsPanel = null;
-        }
-        if (auxiliaryPanel != null) {
-            if (!auxiliaryPanel.isDisposed()) {
-                auxiliaryPanel.dispose();
-            }
-            auxiliaryPanel = null;
-        }
-        if (glancePanel != null) {
-            if (!glancePanel.isDisposed()) {
-                glancePanel.dispose();
-            }
-            glancePanel = null;
-        }
-        if (depthStatusPanel != null) {
-            if (!depthStatusPanel.isDisposed()) {
-                depthStatusPanel.dispose();
-            }
-            depthStatusPanel = null;
-        }
+        disposePanel(barPanel);
+        barPanel = null;
+        disposePanel(modeOptionsPanel);
+        modeOptionsPanel = null;
+        disposePanel(statsPanel);
+        statsPanel = null;
+        disposePanel(auxiliaryPanel);
+        auxiliaryPanel = null;
+        disposePanel(glancePanel);
+        glancePanel = null;
+        disposePanel(depthStatusPanel);
+        depthStatusPanel = null;
         depthStatusRoot = null;
         depthStatusText = null;
         transientMessageHandler.removeCallbacks(hideTransientMessageRunnable);
-        if (transientMessagePanel != null) {
-            if (!transientMessagePanel.isDisposed()) {
-                transientMessagePanel.dispose();
-            }
-            transientMessagePanel = null;
-        }
+        disposePanel(transientMessagePanel);
+        transientMessagePanel = null;
         transientMessageText = null;
         glanceRoot = null;
         glanceIdentityView = null;
@@ -7566,5 +7497,11 @@ public class XrStreamPresenter {
         barItems.clear();
         controlUiState.close();
         session = null;
+    }
+
+    private static void disposePanel(PanelEntity panel) {
+        if (panel != null && !panel.isDisposed()) {
+            panel.dispose();
+        }
     }
 }
