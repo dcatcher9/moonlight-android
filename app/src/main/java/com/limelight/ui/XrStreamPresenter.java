@@ -3857,26 +3857,7 @@ public class XrStreamPresenter {
         gameSourceReconcilePosted = false;
         invalidateGameSourceProof();
         gameSourceState.leaveGame();
-        liveQualityChangeInProgress = false;
-        liveQualityConfirmations.clear();
-        pendingVideoModeRequestId = -1;
-        pendingLiveQuality = null;
-        previousLiveQuality = null;
-        acknowledgedLiveQuality = null;
-        pendingLiveQualityMode = null;
-        pendingLiveQualityOrigin = null;
-        pendingDurableUserQuality = null;
-        pendingAckFirstModeItem = null;
-        pendingAckFirstPreviousMode = null;
-        pendingDesiredWireMode = -1;
-        pendingRequestedSourceWidth = 0;
-        pendingRequestedSourceHeight = 0;
-        pendingExactEncodedWidth = 0;
-        pendingExactEncodedHeight = 0;
-        currentExactEncodedWidth = 0;
-        currentExactEncodedHeight = 0;
-        lastPresentationStateGeneration = 0;
-        pendingClientPackedSwapProofArmed = false;
+        resetVideoModeStateForTeardown();
         pendingDecoderTransitionMode = null;
         clientSbsHdrTransitionInProgress = false;
         modeSwitchInProgress = false;
@@ -6076,6 +6057,18 @@ public class XrStreamPresenter {
             cancelClientSbsModeSwap();
         }
         cancelLiveQualityAckTimeout();
+        resetPendingVideoModeRequest();
+        abortPendingModeStart();
+        updateGlancePanel();
+        revealDockTemporarily();
+    }
+
+    /**
+     * Forgets the in-flight live video-mode request and nothing else. The ACK-first mode item,
+     * the acknowledged encoded raster and the presentation generation describe the stream that
+     * is still running, so they are left to the caller.
+     */
+    private void resetPendingVideoModeRequest() {
         liveQualityChangeInProgress = false;
         liveQualityConfirmations.clear();
         pendingVideoModeRequestId = -1;
@@ -6091,9 +6084,34 @@ public class XrStreamPresenter {
         pendingExactEncodedWidth = 0;
         pendingExactEncodedHeight = 0;
         pendingClientPackedSwapProofArmed = false;
-        abortPendingModeStart();
-        updateGlancePanel();
-        revealDockTemporarily();
+    }
+
+    /**
+     * Connection-stop and destroy reset: the request fields plus the ACK-first mode item, the
+     * acknowledged encoded raster and the presentation generation, none of which outlive the
+     * connection. It does not cancel an armed packed-swap completion.
+     */
+    private void resetVideoModeStateForTeardown() {
+        liveQualityChangeInProgress = false;
+        liveQualityConfirmations.clear();
+        pendingVideoModeRequestId = -1;
+        pendingLiveQuality = null;
+        previousLiveQuality = null;
+        acknowledgedLiveQuality = null;
+        pendingLiveQualityMode = null;
+        pendingLiveQualityOrigin = null;
+        pendingDurableUserQuality = null;
+        pendingAckFirstModeItem = null;
+        pendingAckFirstPreviousMode = null;
+        pendingDesiredWireMode = -1;
+        pendingRequestedSourceWidth = 0;
+        pendingRequestedSourceHeight = 0;
+        pendingExactEncodedWidth = 0;
+        pendingExactEncodedHeight = 0;
+        currentExactEncodedWidth = 0;
+        currentExactEncodedHeight = 0;
+        lastPresentationStateGeneration = 0;
+        pendingClientPackedSwapProofArmed = false;
     }
 
     private boolean isAckFirstModeTransitionPending() {
@@ -7414,26 +7432,7 @@ public class XrStreamPresenter {
         gameSourceReconcilePosted = false;
         invalidateGameSourceProof();
         gameSourceState.leaveGame();
-        liveQualityChangeInProgress = false;
-        liveQualityConfirmations.clear();
-        pendingVideoModeRequestId = -1;
-        pendingLiveQuality = null;
-        previousLiveQuality = null;
-        acknowledgedLiveQuality = null;
-        pendingLiveQualityMode = null;
-        pendingLiveQualityOrigin = null;
-        pendingDurableUserQuality = null;
-        pendingAckFirstModeItem = null;
-        pendingAckFirstPreviousMode = null;
-        pendingDesiredWireMode = -1;
-        pendingRequestedSourceWidth = 0;
-        pendingRequestedSourceHeight = 0;
-        pendingExactEncodedWidth = 0;
-        pendingExactEncodedHeight = 0;
-        currentExactEncodedWidth = 0;
-        currentExactEncodedHeight = 0;
-        lastPresentationStateGeneration = 0;
-        pendingClientPackedSwapProofArmed = false;
+        resetVideoModeStateForTeardown();
         viewStateStore.saveHeight(durableHeightMeters());
         if (surfaceEntity != null) {
             if (!surfaceEntity.isDisposed()) {
