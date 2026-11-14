@@ -68,10 +68,11 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     // pack/postprocess path only binds GL objects and never crosses JNI for buffer metadata.
     private final int[] inputBufferIds = new int[BUFFER_SLOT_COUNT];
     private final int[] outputBufferIds = new int[BUFFER_SLOT_COUNT];
-    private final int[] inputBufferSizes = new int[BUFFER_SLOT_COUNT];
-    private final int[] outputBufferSizes = new int[BUFFER_SLOT_COUNT];
-    private final int[] inputPixelStrides = new int[BUFFER_SLOT_COUNT];
-    private final int[] outputPixelStrides = new int[BUFFER_SLOT_COUNT];
+    // Native allocates every slot from one validated tensor layout, so these are engine-wide.
+    private int inputBufferSize;
+    private int outputBufferSize;
+    private int inputPixelStride;
+    private int outputPixelStride;
 
     private ClientSbsGpuInferenceEngine(long nativeHandle) {
         this.nativeHandle = nativeHandle;
@@ -401,11 +402,11 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         for (int slot = 0; slot < BUFFER_SLOT_COUNT; slot++) {
             inputBufferIds[slot] = nativeGetInputBufferId(nativeHandle, slot);
             outputBufferIds[slot] = nativeGetOutputBufferId(nativeHandle, slot);
-            inputBufferSizes[slot] = nativeGetInputBufferSize(nativeHandle, slot);
-            outputBufferSizes[slot] = nativeGetOutputBufferSize(nativeHandle, slot);
-            inputPixelStrides[slot] = nativeGetInputPixelStrideBytes(nativeHandle, slot);
-            outputPixelStrides[slot] = nativeGetOutputPixelStrideBytes(nativeHandle, slot);
         }
+        inputBufferSize = nativeGetInputBufferSize(nativeHandle);
+        outputBufferSize = nativeGetOutputBufferSize(nativeHandle);
+        inputPixelStride = nativeGetInputPixelStrideBytes(nativeHandle);
+        outputPixelStride = nativeGetOutputPixelStrideBytes(nativeHandle);
 
         int expectedInputBytes = manifest.getInputTensor().getByteSize();
         int expectedOutputBytes = manifest.getOutputTensor().getByteSize();
@@ -507,22 +508,22 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
 
     int getInputBufferSize(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return inputBufferSizes[slotIndex];
+        return inputBufferSize;
     }
 
     int getOutputBufferSize(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return outputBufferSizes[slotIndex];
+        return outputBufferSize;
     }
 
     int getInputPixelStrideBytes(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return inputPixelStrides[slotIndex];
+        return inputPixelStride;
     }
 
     int getOutputPixelStrideBytes(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return outputPixelStrides[slotIndex];
+        return outputPixelStride;
     }
 
     /** Instrumentation convenience: always infers from an already-packed input tensor. */
@@ -658,13 +659,18 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         return resultFence;
     }
 
+    /**
+     * The {@code getLast*} statistics describe the engine's most recent {@link #run}. Runs are
+     * single-flight, so read them right after the run on {@code slotIndex} that they describe;
+     * the slot argument is validated but does not select an older run.
+     */
     RunDisposition getLastRunDisposition(int slotIndex) {
         validateSlotIndex(slotIndex);
         if (!isInitialized()) {
             throw new IllegalStateException("Native GPU engine is not initialized");
         }
         return RunDisposition.fromNativeValue(
-                nativeGetLastRunDisposition(nativeHandle, slotIndex));
+                nativeGetLastRunDisposition(nativeHandle));
     }
 
     boolean supportsLazyInputPacking() {
@@ -672,13 +678,13 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     }
 
     /**
-     * CPU monotonic wall time inside LiteRtRunCompiledModel() for this slot. LiteRT does not expose
+     * CPU monotonic wall time inside LiteRtRunCompiledModel() for the last run. LiteRT does not expose
      * the OpenCL event behind its GL interop path, and a GLES timer query cannot safely bracket
      * OpenCL work, so this is intentionally not labelled as pure GPU execution time.
      */
     long getLastLiteRtRunWallNanos(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return nativeGetLastLiteRtRunWallNanos(nativeHandle, slotIndex);
+        return nativeGetLastLiteRtRunWallNanos(nativeHandle);
     }
 
     /**
@@ -687,13 +693,13 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
      */
     long getLastNearIdenticalDecisionReadWallNanos(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return nativeGetLastNearIdenticalDecisionReadWallNanos(nativeHandle, slotIndex);
+        return nativeGetLastNearIdenticalDecisionReadWallNanos(nativeHandle);
     }
 
     /** GPU-published reason for the most recent candidate's reuse/infer decision. */
     int getLastNearIdenticalDecisionReason(int slotIndex) {
         validateSlotIndex(slotIndex);
-        return nativeGetLastNearIdenticalDecisionReason(nativeHandle, slotIndex);
+        return nativeGetLastNearIdenticalDecisionReason(nativeHandle);
     }
 
     void startDiagnosticProfiler() {
@@ -790,11 +796,11 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         for (int slot = 0; slot < BUFFER_SLOT_COUNT; slot++) {
             inputBufferIds[slot] = 0;
             outputBufferIds[slot] = 0;
-            inputBufferSizes[slot] = 0;
-            outputBufferSizes[slot] = 0;
-            inputPixelStrides[slot] = 0;
-            outputPixelStrides[slot] = 0;
         }
+        inputBufferSize = 0;
+        outputBufferSize = 0;
+        inputPixelStride = 0;
+        outputPixelStride = 0;
 
         boolean destroyed = nativeDestroy(handle,
                 firstAttempt ? slotZeroLastConsumerFence : 0L,
@@ -865,16 +871,14 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     private static native boolean nativeSupportsLazyInputPacking(long handle);
     private static native int nativeGetInputBufferId(long handle, int slotIndex);
     private static native int nativeGetOutputBufferId(long handle, int slotIndex);
-    private static native int nativeGetInputBufferSize(long handle, int slotIndex);
-    private static native int nativeGetOutputBufferSize(long handle, int slotIndex);
-    private static native int nativeGetInputPixelStrideBytes(long handle, int slotIndex);
-    private static native int nativeGetOutputPixelStrideBytes(long handle, int slotIndex);
-    private static native long nativeGetLastLiteRtRunWallNanos(long handle, int slotIndex);
-    private static native long nativeGetLastNearIdenticalDecisionReadWallNanos(
-            long handle, int slotIndex);
-    private static native int nativeGetLastNearIdenticalDecisionReason(
-            long handle, int slotIndex);
-    private static native int nativeGetLastRunDisposition(long handle, int slotIndex);
+    private static native int nativeGetInputBufferSize(long handle);
+    private static native int nativeGetOutputBufferSize(long handle);
+    private static native int nativeGetInputPixelStrideBytes(long handle);
+    private static native int nativeGetOutputPixelStrideBytes(long handle);
+    private static native long nativeGetLastLiteRtRunWallNanos(long handle);
+    private static native long nativeGetLastNearIdenticalDecisionReadWallNanos(long handle);
+    private static native int nativeGetLastNearIdenticalDecisionReason(long handle);
+    private static native int nativeGetLastRunDisposition(long handle);
     private static native boolean nativeStartDiagnosticProfiler(long handle);
     private static native String nativeStopDiagnosticProfilerAndGetReport(long handle);
     private static native String nativeGetLastError(long handle);

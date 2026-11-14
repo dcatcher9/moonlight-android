@@ -78,12 +78,12 @@ typedef struct ClientSbsGpuEngine {
     size_t output_buffer_size;
     size_t input_pixel_stride;
     size_t output_pixel_stride;
-    uint64_t last_litert_run_wall_ns[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
-    uint64_t last_near_identical_decision_read_wall_ns[
-            CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
-    uint32_t last_near_identical_decision_reason[
-            CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
-    int last_run_disposition[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
+    // Statistics of the most recent nativeRun() that passed slot validation. Runs are
+    // single-flight and Java reads these right after the run they describe.
+    uint64_t last_litert_run_wall_ns;
+    uint64_t last_near_identical_decision_read_wall_ns;
+    uint32_t last_near_identical_decision_reason;
+    int last_run_disposition;
     bool output_requires_consumed_fence[CLIENT_SBS_GPU_BUFFER_SLOT_COUNT];
     // The detector owns one immutable, shared two-record SSBO for this engine lifetime. Validate
     // its GL object and allocation once, then cache each slot's immutable byte range so the hot
@@ -217,14 +217,10 @@ static void release_litert_resources(ClientSbsGpuEngine* engine) {
     engine->validated_model_texture = 0;
     memset(engine->input_buffers, 0, sizeof(engine->input_buffers));
     memset(engine->output_buffers, 0, sizeof(engine->output_buffers));
-    memset(engine->last_litert_run_wall_ns, 0,
-           sizeof(engine->last_litert_run_wall_ns));
-    memset(engine->last_near_identical_decision_read_wall_ns, 0,
-           sizeof(engine->last_near_identical_decision_read_wall_ns));
-    memset(engine->last_near_identical_decision_reason, 0,
-           sizeof(engine->last_near_identical_decision_reason));
-    memset(engine->last_run_disposition, 0,
-           sizeof(engine->last_run_disposition));
+    engine->last_litert_run_wall_ns = 0;
+    engine->last_near_identical_decision_read_wall_ns = 0;
+    engine->last_near_identical_decision_reason = 0;
+    engine->last_run_disposition = 0;
     memset(engine->output_requires_consumed_fence, 0,
            sizeof(engine->output_requires_consumed_fence));
     engine->near_identical_decision_buffer = 0;
@@ -1412,7 +1408,7 @@ static bool near_identical_record_requests_reuse(ClientSbsGpuEngine* engine,
         log_near_identical_auth_error_once(engine);
         return false;
     }
-    engine->last_near_identical_decision_reason[slot_index] = reason;
+    engine->last_near_identical_decision_reason = reason;
     return decision == CLIENT_SBS_NEAR_IDENTICAL_DECISION_REUSE;
 }
 
@@ -1687,14 +1683,13 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
     const bool requires_consumed_fence =
             engine->output_requires_consumed_fence[slot_index];
     const bool has_consumed_fence = previous_output_consumed_fence != 0;
-    engine->last_litert_run_wall_ns[slot_index] = 0;
-    engine->last_near_identical_decision_read_wall_ns[slot_index] = 0;
-    engine->last_near_identical_decision_reason[slot_index] =
+    engine->last_litert_run_wall_ns = 0;
+    engine->last_near_identical_decision_read_wall_ns = 0;
+    engine->last_near_identical_decision_reason =
             near_identical_candidate == JNI_TRUE
                     ? CLIENT_SBS_NEAR_IDENTICAL_REASON_RECORD_INVALID
                     : CLIENT_SBS_NEAR_IDENTICAL_REASON_NOT_CANDIDATE;
-    engine->last_run_disposition[slot_index] =
-            CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN;
+    engine->last_run_disposition = CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN;
 
     const bool fences_alias = input_ready_fence != 0
             && input_ready_fence == previous_output_consumed_fence;
@@ -1740,7 +1735,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         reuse = near_identical_record_requests_reuse(
                 engine, slot_index, (GLuint) decision_buffer_id,
                 (GLint) decision_byte_offset, (uint64_t) decision_token);
-        engine->last_near_identical_decision_read_wall_ns[slot_index] = elapsed_ns(
+        engine->last_near_identical_decision_read_wall_ns = elapsed_ns(
                 decision_read_started_ns, monotonic_time_ns());
     }
 
@@ -1769,8 +1764,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
             return fail_native_run(engine);
         }
         glFlush();
-        engine->last_run_disposition[slot_index] =
-                CLIENT_SBS_GPU_RUN_DISPOSITION_REUSE;
+        engine->last_run_disposition = CLIENT_SBS_GPU_RUN_DISPOSITION_REUSE;
         engine->output_requires_consumed_fence[slot_index] = true;
         return (jlong) (uintptr_t) reuse_ready;
     }
@@ -1785,8 +1779,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
     LiteRtStatus run_status = LiteRtRunCompiledModel(
             engine->compiled_model, 0, 1, inputs, 1, outputs);
     const uint64_t run_finished_ns = monotonic_time_ns();
-    engine->last_litert_run_wall_ns[slot_index] =
-            elapsed_ns(run_started_ns, run_finished_ns);
+    engine->last_litert_run_wall_ns = elapsed_ns(run_started_ns, run_finished_ns);
     if (!check_status(engine, run_status, "LiteRtRunCompiledModel")) {
         return fail_native_run(engine);
     }
@@ -1798,8 +1791,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeRun(
         return fail_native_run(engine);
     }
     glFlush();
-    engine->last_run_disposition[slot_index] =
-            CLIENT_SBS_GPU_RUN_DISPOSITION_INFER;
+    engine->last_run_disposition = CLIENT_SBS_GPU_RUN_DISPOSITION_INFER;
     engine->output_requires_consumed_fence[slot_index] = true;
     return (jlong) (uintptr_t) output_ready;
 }
@@ -1834,88 +1826,82 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetOutputBufferId(
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetInputBufferSize(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
-            || engine->input_buffer_size > INT32_MAX
+    return engine == NULL || engine->input_buffer_size > INT32_MAX
             ? 0 : (jint) engine->input_buffer_size;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetOutputBufferSize(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
-            || engine->output_buffer_size > INT32_MAX
+    return engine == NULL || engine->output_buffer_size > INT32_MAX
             ? 0 : (jint) engine->output_buffer_size;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetInputPixelStrideBytes(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
-            || engine->input_pixel_stride > INT32_MAX
+    return engine == NULL || engine->input_pixel_stride > INT32_MAX
             ? 0 : (jint) engine->input_pixel_stride;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetOutputPixelStrideBytes(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
-            || engine->output_pixel_stride > INT32_MAX
+    return engine == NULL || engine->output_pixel_stride > INT32_MAX
             ? 0 : (jint) engine->output_pixel_stride;
 }
 
 JNIEXPORT jlong JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastLiteRtRunWallNanos(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
-            ? 0 : (jlong) engine->last_litert_run_wall_ns[slot_index];
+    return engine == NULL ? 0 : (jlong) engine->last_litert_run_wall_ns;
 }
 
 JNIEXPORT jlong JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastNearIdenticalDecisionReadWallNanos(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
-            ? 0 : (jlong) engine->last_near_identical_decision_read_wall_ns[slot_index];
+    return engine == NULL ? 0 : (jlong) engine->last_near_identical_decision_read_wall_ns;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastNearIdenticalDecisionReason(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
+    return engine == NULL
             ? CLIENT_SBS_NEAR_IDENTICAL_REASON_RECORD_INVALID
-            : (jint) engine->last_near_identical_decision_reason[slot_index];
+            : (jint) engine->last_near_identical_decision_reason;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeGetLastRunDisposition(
-        JNIEnv* env, jclass clazz, jlong handle, jint slot_index) {
+        JNIEnv* env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     ClientSbsGpuEngine* engine = from_handle(handle);
-    return engine == NULL || !valid_slot(slot_index)
+    return engine == NULL
             ? CLIENT_SBS_GPU_RUN_DISPOSITION_UNKNOWN
-            : (jint) engine->last_run_disposition[slot_index];
+            : (jint) engine->last_run_disposition;
 }
 
 JNIEXPORT jstring JNICALL
