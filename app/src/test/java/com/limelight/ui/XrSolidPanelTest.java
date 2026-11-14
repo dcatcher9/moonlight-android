@@ -144,7 +144,8 @@ public class XrSolidPanelTest {
         ReflectionHelpers.setField(presenter, "barPanel", panel);
         ReflectionHelpers.setField(presenter, "controlBarRow", row);
         ReflectionHelpers.setField(presenter, "dockRevealPill", pill);
-        ReflectionHelpers.setField(presenter, "glanceRoot", glance);
+        ReflectionHelpers.setField(
+                ReflectionHelpers.getField(presenter, "glanceStrip"), "glanceRoot", glance);
         ReflectionHelpers.setField(presenter, "panelHeightMeters", 1.5f);
 
         setCollapsed(true);

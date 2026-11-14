@@ -131,9 +131,6 @@ public class XrStreamPresenter {
     private static final float STATS_GAP_METERS = 0.10f;
     private static final float AUXILIARY_WIDTH_METERS = XrStatsPanel.STATS_WIDTH_METERS;
     private static final float AUXILIARY_HEIGHT_METERS = 1.16f;
-    private static final float GLANCE_WIDTH_METERS = 1.48f;
-    private static final float GLANCE_HEIGHT_METERS = 0.11f;
-    private static final float GLANCE_GAP_METERS = 0.07f;
     private static final float CINEMA_PRESET_DISTANCE_METERS = 2.0f;
     private static final long DOCK_AUTO_HIDE_DELAY_MS = 8000L;
     private static final float DOCK_REVEAL_ATTENTION_SCALE = 2.0f;
@@ -420,31 +417,7 @@ public class XrStreamPresenter {
     private TextView gameSourceStatusView;
     private TextView gameSourceDetailView;
 
-    /** Passive glance strip above the video; it never intercepts input. */
-    private PanelEntity glancePanel;
-    private View glanceRoot;
-    private TextView glanceIdentityView;
-    private TextView glanceModeView;
-    private TextView glanceStreamView;
-    private TextView glanceLoadView;
-    private TextView glanceStatusView;
-    /** Equals DevicePerformanceSampler's minimum interval, so each tick reads a new sample. */
-    private static final long GLANCE_LOAD_INTERVAL_MS = 2000L;
-    private final android.os.Handler glanceLoadHandler =
-            new android.os.Handler(android.os.Looper.getMainLooper());
     private boolean hostActivityStarted;
-    private final Runnable glanceLoadRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (!hostActivityStarted || glanceLoadView == null) {
-                return;
-            }
-            updateGlanceLoad(devicePerformanceSampler.sample());
-            if (hostActivityStarted && glanceLoadView != null) {
-                glanceLoadHandler.postDelayed(this, GLANCE_LOAD_INTERVAL_MS);
-            }
-        }
-    };
 
     private final android.os.Handler dockVisibilityHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
@@ -456,6 +429,7 @@ public class XrStreamPresenter {
     private View dockFocusTarget;
 
     private final XrStatsPanel statsUi;
+    private final XrGlanceStrip glanceStrip;
     private volatile boolean statsVisible;
     private boolean controlUiStateApplied;
     private XrControlUiState.Surface appliedContextualSurface = XrControlUiState.Surface.NONE;
@@ -677,6 +651,23 @@ public class XrStreamPresenter {
         this.panelRefreshRateState = new PanelRefreshRateState(prefConfig.fps);
         this.listener = listener;
         this.statsVisibilityListener = statsVisibilityListener;
+        this.glanceStrip = new XrGlanceStrip(activity, devicePerformanceSampler,
+                new XrGlanceStrip.Host() {
+                    @Override
+                    public Session session() {
+                        return session;
+                    }
+
+                    @Override
+                    public SurfaceEntity videoEntity() {
+                        return surfaceEntity;
+                    }
+
+                    @Override
+                    public boolean hostActivityStarted() {
+                        return hostActivityStarted;
+                    }
+                });
         this.statsUi = new XrStatsPanel(activity, devicePerformanceSampler, hostSbsTelemetryTracker,
                 new XrStatsPanel.Host() {
                     @Override
@@ -1532,7 +1523,7 @@ public class XrStreamPresenter {
         applyControlUiState(false, "initial");
         createDepthStatusPanel(videoHeightMeters);
         createTransientMessagePanel();
-        createGlancePanel(videoHeightMeters);
+        glanceStrip.createGlancePanel(videoHeightMeters);
         updateGlancePanel();
         updateDockVisibilityPolicy();
     }
@@ -1549,38 +1540,6 @@ public class XrStreamPresenter {
         auxiliaryPanel.setEnabled(false);
     }
 
-    /** Create the slim, passive stream-at-a-glance strip above the video. */
-    private void createGlancePanel(float videoHeightMeters) {
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.HORIZONTAL);
-        root.setGravity(Gravity.CENTER_VERTICAL);
-        root.setPadding(dimen(R.dimen.xr_space_md), dimen(R.dimen.xr_space_xs),
-                dimen(R.dimen.xr_space_md), dimen(R.dimen.xr_space_xs));
-        setSolidPanelCanvas(root);
-        root.setClickable(false);
-        root.setFocusable(false);
-        glanceRoot = root;
-
-        glanceIdentityView = glanceText(paletteColor(R.color.xr_text_primary));
-        glanceModeView = glanceText(paletteColor(R.color.xr_accent_bright));
-        glanceStreamView = glanceText(paletteColor(R.color.xr_accent_bright));
-        glanceLoadView = glanceText(paletteColor(R.color.xr_accent_bright));
-        glanceStatusView = glanceText(paletteColor(R.color.xr_status_warn));
-        glanceStatusView.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        root.addView(glanceIdentityView, glanceLayoutParams(1.35f));
-        root.addView(glanceModeView, glanceLayoutParams(0.95f));
-        root.addView(glanceStreamView, glanceLayoutParams(1.5f));
-        root.addView(glanceLoadView, glanceLayoutParams(1.0f));
-        root.addView(glanceStatusView, glanceLayoutParams(0.72f));
-
-        glancePanel = PanelEntity.create(session, root,
-                new FloatSize2d(GLANCE_WIDTH_METERS, GLANCE_HEIGHT_METERS),
-                "xr-stream-glance", glancePose(videoHeightMeters), surfaceEntity);
-        XrPanelViews.configureSolidPanel(glancePanel);
-        glancePanel.setEnabled(true);
-        reconcileGlanceLoadTicker();
-    }
-
     /**
      * Match passive device-load sampling to the host Activity's visible lifecycle. START/STOP is
      * intentional: a translucent dialog may pause the Activity while its glance panel is visible.
@@ -1593,7 +1552,7 @@ public class XrStreamPresenter {
         updateDockGazeTracking();
         applyCinemaBackground();
         devicePerformanceSampler.resetCpuBaseline();
-        reconcileGlanceLoadTicker();
+        glanceStrip.reconcileGlanceLoadTicker();
         reconcileClientOptionsStatusTicker();
         // A hover that began before the stop is not replayed; focus is read from the pill itself.
         dockRevealViewAttentionState.focused = dockCollapsed && dockRevealPill != null
@@ -1610,7 +1569,7 @@ public class XrStreamPresenter {
         resetDockRevealAnimation();
         dockRevealViewAttentionState.clear();
         dockRevealViewAttention = false;
-        glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
+        glanceStrip.stopLoadTicker();
         modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
         devicePerformanceSampler.resetCpuBaseline();
     }
@@ -1622,38 +1581,9 @@ public class XrStreamPresenter {
         }
     }
 
-    private void reconcileGlanceLoadTicker() {
-        glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
-        if (hostActivityStarted && glanceLoadView != null) {
-            glanceLoadHandler.post(glanceLoadRunnable);
-        }
-    }
-
-    private TextView glanceText(int color) {
-        TextView view = controlText("", R.dimen.xr_text_emphasis, color);
-        view.setSingleLine(true);
-        view.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        view.setGravity(Gravity.CENTER_VERTICAL);
-        view.setClickable(false);
-        view.setFocusable(false);
-        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        return view;
-    }
-
-    private LinearLayout.LayoutParams glanceLayoutParams(float weight) {
-        return new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.MATCH_PARENT, weight);
-    }
-
-    private Pose glancePose(float videoHeightMeters) {
-        float centerY = Math.max(0.0f, videoHeightMeters) / 2.0f
-                + GLANCE_GAP_METERS + GLANCE_HEIGHT_METERS / 2.0f;
-        return new Pose(new Vector3(0.0f, centerY, XrPanelPlacement.BAR_Z_METERS), Quaternion.Identity);
-    }
-
     private void updateGlancePanel() {
         updateHostDebugDumpAvailability();
-        if (glancePanel == null || glancePanel.isDisposed() || glanceIdentityView == null) {
+        if (!glanceStrip.isShowing()) {
             return;
         }
         String pcName = activity.getIntent().getStringExtra(Game.EXTRA_PC_NAME);
@@ -1663,13 +1593,13 @@ public class XrStreamPresenter {
         if (appName != null && !appName.isEmpty()) {
             identity += " \u00b7 " + appName;
         }
-        glanceIdentityView.setText(identity);
-        glanceModeView.setText(modeLabel(currentPresenterMode));
+        glanceStrip.setIdentity(identity);
+        glanceStrip.setMode(modeLabel(currentPresenterMode));
 
         // PreferenceConfiguration is the effective on-wire tuple. The settings model intentionally
         // retains the user's durable FPS ceiling while panel-follow is temporarily below it.
         StreamQualityTuple live = currentQualityTuple();
-        glanceStreamView.setText(XrStatsFormat.formatGlanceStream(activity,
+        glanceStrip.setStream(XrStatsFormat.formatGlanceStream(activity,
                 live.resolution, glanceFrameRateText(live.frameRate), live.bitrateKbps,
                 prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
                         : activity.getString(R.string.xr_glance_sdr)));
@@ -1701,8 +1631,8 @@ public class XrStreamPresenter {
         else {
             statusText = R.string.xr_glance_live;
         }
-        glanceStatusView.setText(statusText);
-        glanceStatusView.setTextColor(liveStatus ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_status_warn));
+        glanceStrip.setStatus(statusText,
+                liveStatus ? paletteColor(R.color.xr_status_ok) : paletteColor(R.color.xr_status_warn));
         updateDockRevealPill(statusText, liveStatus);
     }
 
@@ -1726,29 +1656,6 @@ public class XrStreamPresenter {
         return source == SessionSettingsModel.Source.GLOBAL
                 ? activity.getString(R.string.xr_setting_source_global)
                 : activity.getString(R.string.xr_setting_source_session);
-    }
-
-    /**
-     * Client load on the glance strip. Driven by its own ticker rather than {@code setStats}:
-     * decoder telemetry is switched off entirely while the stats pane is closed, so a readout that
-     * rode on it would sit blank exactly when it is the only place to see the numbers. The cost is
-     * one getElapsedCpuTime() and two sysfs reads a second -- no GL call, so no GPU sync.
-     */
-    private void updateGlanceLoad(DevicePerformanceSampler.Snapshot device) {
-        if (glanceLoadView == null) {
-            return;
-        }
-        String unavailable = activity.getString(R.string.xr_glance_load_unavailable);
-        String cpu = device != null && device.appCpuAvailable
-                ? String.format(Locale.US, "%.1f", device.appCpuCoreEquivalent) : unavailable;
-        // Device-wide GPU busy, not this process's share: the KGSL counter cannot attribute.
-        String gpu = device != null && device.deviceGpuUtilizationAvailable
-                ? String.format(Locale.US, "%.0f%%", device.deviceGpuUtilizationPercent)
-                : unavailable;
-        String text = activity.getString(R.string.xr_glance_load, cpu, gpu);
-        if (!android.text.TextUtils.equals(glanceLoadView.getText(), text)) {
-            glanceLoadView.setText(text);
-        }
     }
 
     private void updateDockRevealPill(int statusText, boolean liveStatus) {
@@ -2012,9 +1919,7 @@ public class XrStreamPresenter {
         if (dockRevealPill != null) {
             dockRevealPill.setVisibility(collapsed ? View.VISIBLE : View.GONE);
         }
-        if (glanceRoot != null) {
-            glanceRoot.setAlpha(1.0f);
-        }
+        glanceStrip.resetAlpha();
         applyDockPanelBounds();
         updateDockGazeTracking();
     }
@@ -4109,9 +4014,7 @@ public class XrStreamPresenter {
         if (transientMessagePanel != null) {
             transientMessagePanel.setPose(depthStatusPose());
         }
-        if (glancePanel != null && !glancePanel.isDisposed()) {
-            glancePanel.setPose(glancePose(videoHeightMeters));
-        }
+        glanceStrip.reposition(videoHeightMeters);
         updateGlancePanel();
     }
 
@@ -6682,8 +6585,7 @@ public class XrStreamPresenter {
         statsUi.disposePanel();
         disposePanel(auxiliaryPanel);
         auxiliaryPanel = null;
-        disposePanel(glancePanel);
-        glancePanel = null;
+        glanceStrip.disposePanel();
         disposePanel(depthStatusPanel);
         depthStatusPanel = null;
         depthStatusRoot = null;
@@ -6692,12 +6594,7 @@ public class XrStreamPresenter {
         disposePanel(transientMessagePanel);
         transientMessagePanel = null;
         transientMessageText = null;
-        glanceRoot = null;
-        glanceIdentityView = null;
-        glanceModeView = null;
-        glanceStreamView = null;
-        glanceLoadView = null;
-        glanceStatusView = null;
+        glanceStrip.releaseViews();
         controlBarRow = null;
         dockRevealPill = null;
         dockHoverTarget = null;

@@ -45,13 +45,13 @@ public final class XrGlanceLoadTickerLifecycleTest {
     }
 
     private static Object field(Object target, String name) throws Exception {
-        Field field = XrStreamPresenter.class.getDeclaredField(name);
+        Field field = XrGlanceStrip.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.get(target);
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {
-        Field field = XrStreamPresenter.class.getDeclaredField(name);
+        Field field = XrGlanceStrip.class.getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
     }
@@ -67,10 +67,10 @@ public final class XrGlanceLoadTickerLifecycleTest {
                 PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
         CountingTextView loadView = new CountingTextView(activity);
         loadView.updateCount = 0;
-        setField(presenter, "glanceLoadView", loadView);
+        setField(glanceStrip(presenter), "glanceLoadView", loadView);
 
-        Handler handler = (Handler) field(presenter, "glanceLoadHandler");
-        Runnable ticker = (Runnable) field(presenter, "glanceLoadRunnable");
+        Handler handler = (Handler) field(glanceStrip(presenter), "glanceLoadHandler");
+        Runnable ticker = (Runnable) field(glanceStrip(presenter), "glanceLoadRunnable");
 
         assertFalse(handler.hasCallbacks(ticker));
         presenter.onHostActivityStarted();
@@ -90,5 +90,9 @@ public final class XrGlanceLoadTickerLifecycleTest {
         assertFalse(handler.hasCallbacks(ticker));
 
         controller.destroy();
+    }
+
+    private static Object glanceStrip(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "glanceStrip");
     }
 }
