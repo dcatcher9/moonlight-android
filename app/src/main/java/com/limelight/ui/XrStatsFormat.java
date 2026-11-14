@@ -346,4 +346,20 @@ final class XrStatsFormat {
         }
         return whole + "." + (hundredths < 10 ? "0" : "") + hundredths;
     }
+
+    static String depthBackendName(String backend) {
+        if (backend != null && backend.startsWith("LITERT_OPENCL_FP32_GL_IO")) {
+            return "LiteRT GPU | OpenCL FP32 | packed GL | complete graph";
+        }
+        if (backend != null && backend.startsWith("LITERT_OPENCL_FP16_GL_IO")) {
+            return "LiteRT GPU | OpenCL FP16 | packed GL | complete graph";
+        }
+        return backend == null || backend.isEmpty() ? "Unavailable" : backend;
+    }
+
+    static boolean isLiteRtOpenClGlBackend(String backend) {
+        return backend != null
+                && (backend.startsWith("LITERT_OPENCL_FP16_GL_IO")
+                || backend.startsWith("LITERT_OPENCL_FP32_GL_IO"));
+    }
 }

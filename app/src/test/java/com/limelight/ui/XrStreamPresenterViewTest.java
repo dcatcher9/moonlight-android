@@ -421,7 +421,7 @@ public final class XrStreamPresenterViewTest {
         activity.setTheme(R.style.AppTheme);
         controller.setup();
 
-        assertEquals(R.dimen.xr_text_display, XrStreamPresenter.STATS_TEXT_DIMEN);
+        assertEquals(R.dimen.xr_text_display, XrStatsPanel.STATS_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_title,
                 XrStreamPresenter.SESSION_SUMMARY_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_title,
@@ -619,21 +619,21 @@ public final class XrStreamPresenterViewTest {
                 activity, PreferenceConfiguration.readPreferences(activity),
                 surface -> { }, visible -> { });
         TableLayout table = new TableLayout(activity);
-        setField(presenter, "statsTable", table);
+        setField(stats(presenter), "statsTable", table);
 
-        Method begin = XrStreamPresenter.class.getDeclaredMethod("beginStatsRows");
-        Method finish = XrStreamPresenter.class.getDeclaredMethod("finishStatsRows");
-        Method addGpuStages = XrStreamPresenter.class.getDeclaredMethod(
+        Method begin = XrStatsPanel.class.getDeclaredMethod("beginStatsRows");
+        Method finish = XrStatsPanel.class.getDeclaredMethod("finishStatsRows");
+        Method addGpuStages = XrStatsPanel.class.getDeclaredMethod(
                 "addClientGpuStageRows", boolean.class, float[].class, long[].class);
         begin.setAccessible(true);
         finish.setAccessible(true);
         addGpuStages.setAccessible(true);
 
-        begin.invoke(presenter);
-        addGpuStages.invoke(presenter, true,
+        begin.invoke(stats(presenter));
+        addGpuStages.invoke(stats(presenter), true,
                 new float[] {0.11f, 0.22f, 0.33f, 0.44f},
                 new long[] {11L, 22L, 33L, 44L});
-        finish.invoke(presenter);
+        finish.invoke(stats(presenter));
 
         assertEquals(4, table.getChildCount());
         TableRow depthCut = (TableRow) table.getChildAt(2);
@@ -655,11 +655,11 @@ public final class XrStreamPresenterViewTest {
                 activity, PreferenceConfiguration.readPreferences(activity),
                 surface -> { }, visible -> { });
         TableLayout table = new TableLayout(activity);
-        setField(presenter, "statsTable", table);
+        setField(stats(presenter), "statsTable", table);
 
-        Method begin = XrStreamPresenter.class.getDeclaredMethod("beginStatsRows");
-        Method finish = XrStreamPresenter.class.getDeclaredMethod("finishStatsRows");
-        Method addTrend = XrStreamPresenter.class.getDeclaredMethod(
+        Method begin = XrStatsPanel.class.getDeclaredMethod("beginStatsRows");
+        Method finish = XrStatsPanel.class.getDeclaredMethod("finishStatsRows");
+        Method addTrend = XrStatsPanel.class.getDeclaredMethod(
                 "addTrendStatsRow", String.class, String.class, int.class,
                 float[].class, boolean.class, float.class, float.class);
         begin.setAccessible(true);
@@ -673,13 +673,13 @@ public final class XrStreamPresenterViewTest {
                 "Frame age",
                 "Network jitter"
         };
-        begin.invoke(presenter);
+        begin.invoke(stats(presenter));
         for (int i = 0; i < labels.length; i++) {
-            addTrend.invoke(presenter, labels[i], "sample " + i, 0xFFFFFFFF,
+            addTrend.invoke(stats(presenter), labels[i], "sample " + i, 0xFFFFFFFF,
                     new float[] {i, i + 0.5f, i + 1.0f},
                     "Scene cuts".equals(labels[i]), Float.NaN, Float.NaN);
         }
-        finish.invoke(presenter);
+        finish.invoke(stats(presenter));
 
         assertEquals(labels.length, table.getChildCount());
         TableRow[] firstRows = new TableRow[labels.length];
@@ -708,13 +708,13 @@ public final class XrStreamPresenterViewTest {
                     firstSparklines[i].getContentDescription().toString());
         }
 
-        begin.invoke(presenter);
+        begin.invoke(stats(presenter));
         for (int i = 0; i < labels.length; i++) {
-            addTrend.invoke(presenter, labels[i], "updated " + i, 0xFFFFFFFF,
+            addTrend.invoke(stats(presenter), labels[i], "updated " + i, 0xFFFFFFFF,
                     new float[] {i + 0.1f, i + 0.6f, i + 1.1f},
                     "Scene cuts".equals(labels[i]), Float.NaN, Float.NaN);
         }
-        finish.invoke(presenter);
+        finish.invoke(stats(presenter));
 
         assertEquals(labels.length, table.getChildCount());
         for (int i = 0; i < labels.length; i++) {
@@ -738,36 +738,36 @@ public final class XrStreamPresenterViewTest {
                 activity, PreferenceConfiguration.readPreferences(activity),
                 surface -> { }, visible -> { });
         TableLayout table = new TableLayout(activity);
-        setField(presenter, "statsTable", table);
+        setField(stats(presenter), "statsTable", table);
 
-        Method begin = XrStreamPresenter.class.getDeclaredMethod("beginStatsRows");
-        Method finish = XrStreamPresenter.class.getDeclaredMethod("finishStatsRows");
-        Method addTrend = XrStreamPresenter.class.getDeclaredMethod(
+        Method begin = XrStatsPanel.class.getDeclaredMethod("beginStatsRows");
+        Method finish = XrStatsPanel.class.getDeclaredMethod("finishStatsRows");
+        Method addTrend = XrStatsPanel.class.getDeclaredMethod(
                 "addTrendStatsRow", String.class, String.class, int.class,
                 float[].class, boolean.class, float.class, float.class);
         begin.setAccessible(true);
         finish.setAccessible(true);
         addTrend.setAccessible(true);
 
-        begin.invoke(presenter);
-        addTrend.invoke(presenter, "Cut depth change", "warming", 0xFFFFFFFF,
+        begin.invoke(stats(presenter));
+        addTrend.invoke(stats(presenter), "Cut depth change", "warming", 0xFFFFFFFF,
                 new float[] {1.0f}, false, 0.0f, 2.0f);
-        finish.invoke(presenter);
+        finish.invoke(stats(presenter));
         TableRow fallback = (TableRow) table.getChildAt(0);
         assertTrue(fallback.getChildAt(1) instanceof TextView);
 
-        begin.invoke(presenter);
-        addTrend.invoke(presenter, "Cut depth change", "live", 0xFFFFFFFF,
+        begin.invoke(stats(presenter));
+        addTrend.invoke(stats(presenter), "Cut depth change", "live", 0xFFFFFFFF,
                 new float[] {1.0f, 1.5f}, false, 0.0f, 2.0f);
-        finish.invoke(presenter);
+        finish.invoke(stats(presenter));
         TableRow trend = (TableRow) table.getChildAt(0);
         assertNotSame(fallback, trend);
         assertTrue(trend.getChildAt(1) instanceof LinearLayout);
 
-        begin.invoke(presenter);
-        addTrend.invoke(presenter, "Cut depth change", "reset", 0xFFFFFFFF,
+        begin.invoke(stats(presenter));
+        addTrend.invoke(stats(presenter), "Cut depth change", "reset", 0xFFFFFFFF,
                 new float[] {1.0f}, false, 0.0f, 2.0f);
-        finish.invoke(presenter);
+        finish.invoke(stats(presenter));
         TableRow resetFallback = (TableRow) table.getChildAt(0);
         assertNotSame(trend, resetFallback);
         assertTrue(resetFallback.getChildAt(1) instanceof TextView);
@@ -805,5 +805,9 @@ public final class XrStreamPresenterViewTest {
 
     private static int dp(Activity activity, int value) {
         return Math.round(value * activity.getResources().getDisplayMetrics().density);
+    }
+
+    private static Object stats(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "statsUi");
     }
 }

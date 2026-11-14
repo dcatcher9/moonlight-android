@@ -58,9 +58,9 @@ public class XrStreamPresenterStatsRefreshTest {
                 PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
         table = new TableLayout(activity);
         root = new QueuedStatsRoot(activity);
-        ReflectionHelpers.setField(presenter, "statsTable", table);
-        ReflectionHelpers.setField(presenter, "statsContentRoot", root);
-        ReflectionHelpers.setField(presenter, "statsPanel", mock(PanelEntity.class));
+        ReflectionHelpers.setField(stats(presenter), "statsTable", table);
+        ReflectionHelpers.setField(stats(presenter), "statsContentRoot", root);
+        ReflectionHelpers.setField(stats(presenter), "statsPanel", mock(PanelEntity.class));
         ReflectionHelpers.setField(presenter, "statsVisible", true);
         XrControlUiState state = ReflectionHelpers.getField(presenter, "controlUiState");
         if (!state.isStatsVisible()) {
@@ -111,7 +111,7 @@ public class XrStreamPresenterStatsRefreshTest {
         root.runNext();
         assertEquals(1, root.measurements);
         assertEquals(900, root.getMeasuredHeight());
-        assertFalse(ReflectionHelpers.getField(presenter, "statsPanelFitScheduled"));
+        assertFalse(ReflectionHelpers.getField(stats(presenter), "statsPanelFitScheduled"));
 
         root.contentHeight = 1100;
         root.requestLayout();
@@ -150,22 +150,22 @@ public class XrStreamPresenterStatsRefreshTest {
         assertTrue(root.pending.isEmpty());
         staleFit.run();
         assertEquals(0, root.measurements);
-        assertFalse(ReflectionHelpers.getField(presenter, "statsPanelFitScheduled"));
+        assertFalse(ReflectionHelpers.getField(stats(presenter), "statsPanelFitScheduled"));
     }
 
     private void renderRows(String value) {
-        ReflectionHelpers.callInstanceMethod(presenter, "beginStatsRows");
-        ReflectionHelpers.callInstanceMethod(presenter, "addStatsSection",
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "beginStatsRows");
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "addStatsSection",
                 ClassParameter.from(String.class, new String("STREAM")));
-        ReflectionHelpers.callInstanceMethod(presenter, "addStatsRow",
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "addStatsRow",
                 ClassParameter.from(String.class, new String("Decode")),
                 ClassParameter.from(String.class, value),
                 ClassParameter.from(int.class, 0xFFFFFFFF));
-        ReflectionHelpers.callInstanceMethod(presenter, "finishStatsRows");
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "finishStatsRows");
     }
 
     private void scheduleFit() {
-        ReflectionHelpers.callInstanceMethod(presenter, "scheduleStatsPanelFit");
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "scheduleStatsPanelFit");
     }
 
     private static ChangeCounter watch(TextView view) {
@@ -219,5 +219,9 @@ public class XrStreamPresenterStatsRefreshTest {
         void runNext() {
             pending.remove(0).run();
         }
+    }
+
+    private static Object stats(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "statsUi");
     }
 }

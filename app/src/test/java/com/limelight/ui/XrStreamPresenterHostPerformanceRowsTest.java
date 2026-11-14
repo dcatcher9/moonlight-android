@@ -50,7 +50,7 @@ public class XrStreamPresenterHostPerformanceRowsTest {
         presenter = new XrStreamPresenter(activity,
                 PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
         table = new TableLayout(activity);
-        ReflectionHelpers.setField(presenter, "statsTable", table);
+        ReflectionHelpers.setField(stats(presenter), "statsTable", table);
     }
 
     @After
@@ -93,10 +93,10 @@ public class XrStreamPresenterHostPerformanceRowsTest {
     }
 
     private Map<String, String> render(SbsDepthTelemetrySnapshot sample) {
-        ReflectionHelpers.callInstanceMethod(presenter, "beginStatsRows");
-        ReflectionHelpers.callInstanceMethod(presenter, "addHostDepthTelemetryRows",
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "beginStatsRows");
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "addHostDepthTelemetryRows",
                 ClassParameter.from(SbsDepthTelemetrySnapshot.class, sample));
-        ReflectionHelpers.callInstanceMethod(presenter, "finishStatsRows");
+        ReflectionHelpers.callInstanceMethod(stats(presenter), "finishStatsRows");
         Map<String, String> rows = new LinkedHashMap<>();
         for (int i = 0; i < table.getChildCount(); i++) {
             TableRow row = (TableRow)table.getChildAt(i);
@@ -135,5 +135,9 @@ public class XrStreamPresenterHostPerformanceRowsTest {
         }
         body.putInt(12, valid);
         return HostSbsTelemetrySnapshot.parse(body.array());
+    }
+
+    private static Object stats(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "statsUi");
     }
 }

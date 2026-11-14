@@ -69,7 +69,7 @@ public class XrStreamPresenterEntityLifecycleTest {
             appliedStatsPose.set(invocation.getArgument(0));
             return null;
         }).when(statsPanel).setPose(any(Pose.class));
-        ReflectionHelpers.setField(presenter, "statsPanel", statsPanel);
+        ReflectionHelpers.setField(stats(presenter), "statsPanel", statsPanel);
         ReflectionHelpers.setField(presenter, "statsVisible", true);
     }
 
@@ -168,5 +168,9 @@ public class XrStreamPresenterEntityLifecycleTest {
 
     private void repositionStats() {
         ReflectionHelpers.callInstanceMethod(presenter, "repositionStatsPanel");
+    }
+
+    private static Object stats(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "statsUi");
     }
 }

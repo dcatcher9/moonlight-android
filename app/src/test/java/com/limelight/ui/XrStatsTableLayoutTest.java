@@ -47,7 +47,7 @@ public final class XrStatsTableLayoutTest {
     }
 
     private static int intConstant(String name) throws Exception {
-        Field f = XrStreamPresenter.class.getDeclaredField(name);
+        Field f = XrStatsPanel.class.getDeclaredField(name);
         f.setAccessible(true);
         return f.getInt(null);
     }
@@ -62,24 +62,24 @@ public final class XrStatsTableLayoutTest {
         XrStreamPresenter presenter = new XrStreamPresenter(activity,
                 PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
 
-        Method createTable = XrStreamPresenter.class.getDeclaredMethod("createStatsTable");
+        Method createTable = XrStatsPanel.class.getDeclaredMethod("createStatsTable");
         createTable.setAccessible(true);
-        TableLayout table = (TableLayout) createTable.invoke(presenter);
+        TableLayout table = (TableLayout) createTable.invoke(stats(presenter));
 
-        Field tableField = XrStreamPresenter.class.getDeclaredField("statsTable");
+        Field tableField = XrStatsPanel.class.getDeclaredField("statsTable");
         tableField.setAccessible(true);
-        tableField.set(presenter, table);
+        tableField.set(stats(presenter), table);
 
         // Include the longest ordinary label: TableLayout shares each column's width across all
         // rows, so this is what used to push an independent chart column beyond the raster.
-        Method addRow = XrStreamPresenter.class.getDeclaredMethod(
+        Method addRow = XrStatsPanel.class.getDeclaredMethod(
                 "addStatsRow", String.class, String.class, int.class);
         addRow.setAccessible(true);
-        addRow.invoke(presenter, "Decoder output / release / surface",
+        addRow.invoke(stats(presenter), "Decoder output / release / surface",
                 "90.0 / 90.0 / 90.0", 0xFFFFFFFF);
         TableRow widestLabelRow = (TableRow) table.getChildAt(0);
 
-        Method addTrend = XrStreamPresenter.class.getDeclaredMethod("addTrendStatsRow",
+        Method addTrend = XrStatsPanel.class.getDeclaredMethod("addTrendStatsRow",
                 String.class, String.class, int.class, float[].class, boolean.class,
                 float.class, float.class);
         addTrend.setAccessible(true);
@@ -89,13 +89,13 @@ public final class XrStatsTableLayoutTest {
         }
         String trendValue =
                 "change 0.184 | range shift 0.027 | internal 0.441 | baseline 0.205";
-        addTrend.invoke(presenter, "Cut depth change", trendValue,
+        addTrend.invoke(stats(presenter), "Cut depth change", trendValue,
                 0xFFFFFFFF, samples, false, 0f, 1f);
 
         int raster = intConstant("STATS_RASTER_WIDTH");
-        Method statsDp = XrStreamPresenter.class.getDeclaredMethod("statsDp", float.class);
+        Method statsDp = XrStatsPanel.class.getDeclaredMethod("statsDp", float.class);
         statsDp.setAccessible(true);
-        int panelPadding = (int) statsDp.invoke(presenter, 18.0f);
+        int panelPadding = (int) statsDp.invoke(stats(presenter), 18.0f);
         int viewportWidth = raster - panelPadding * 2;
         // Robolectric's font metrics are intentionally simple. Give the shared label column a
         // deterministic, realistic pressure so this test does not pass only because text is
@@ -137,5 +137,9 @@ public final class XrStatsTableLayoutTest {
         assertTrue("sparkline runs past its bounded trend cell",
                 spark.getRight() <= trendContent.getWidth());
         controller.destroy();
+    }
+
+    private static Object stats(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "statsUi");
     }
 }
