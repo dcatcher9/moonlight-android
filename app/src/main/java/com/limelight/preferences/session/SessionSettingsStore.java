@@ -76,14 +76,6 @@ public final class SessionSettingsStore {
             }
         }
 
-        public String getStableUuid() {
-            return stableUuid;
-        }
-
-        public String getFallbackHost() {
-            return fallbackHost;
-        }
-
         /** A sanitized, deterministic ID suitable for a SharedPreferences key. */
         public String getStorageId() {
             return storageId;
@@ -419,20 +411,6 @@ public final class SessionSettingsStore {
             return this;
         }
 
-        /** Replaces all shared overrides, retaining only values different from globalValues. */
-        public Editor replaceSharedValues(Map<String, ?> desiredValues,
-                                          Map<String, ?> globalValues) {
-            clearShared = true;
-            sharedChanges.clear();
-            if (desiredValues != null) {
-                for (Map.Entry<String, ?> entry : desiredValues.entrySet()) {
-                    Object global = globalValues != null ? globalValues.get(entry.getKey()) : null;
-                    setSharedValue(entry.getKey(), entry.getValue(), global);
-                }
-            }
-            return this;
-        }
-
         public Editor clearSharedOverrides() {
             clearShared = true;
             sharedChanges.clear();
@@ -447,28 +425,6 @@ public final class SessionSettingsStore {
             modeChanges.computeIfAbsent(mode, ignored -> new LinkedHashMap<>())
                     .put(key, shouldInherit(desiredValue, globalValue)
                             ? REMOVE : copyPreferenceValue(desiredValue));
-            return this;
-        }
-
-        public Editor inheritModeValue(PresentationMode mode, String key) {
-            Objects.requireNonNull(mode, "mode");
-            validateSettingKey(key);
-            modeChanges.computeIfAbsent(mode, ignored -> new LinkedHashMap<>())
-                    .put(key, REMOVE);
-            return this;
-        }
-
-        public Editor replaceModeValues(PresentationMode mode, Map<String, ?> desiredValues,
-                                        Map<String, ?> globalValues) {
-            Objects.requireNonNull(mode, "mode");
-            clearModes.add(mode);
-            modeChanges.remove(mode);
-            if (desiredValues != null) {
-                for (Map.Entry<String, ?> entry : desiredValues.entrySet()) {
-                    Object global = globalValues != null ? globalValues.get(entry.getKey()) : null;
-                    setModeValue(mode, entry.getKey(), entry.getValue(), global);
-                }
-            }
             return this;
         }
 
@@ -740,19 +696,6 @@ public final class SessionSettingsStore {
                     hostConfirmedAtEpochMillis);
             SessionRecord resumed = mutable.toImmutable();
             return writeRecord(pc, resumed) ? resumed : null;
-        }
-    }
-
-    /** Clears a stale record when serverinfo reports a different running application. */
-    public boolean clearIfHostIncompatible(PcIdentity pc, AppIdentity hostApp) {
-        Objects.requireNonNull(pc, "pc");
-        Objects.requireNonNull(hostApp, "hostApp");
-        synchronized (WRITE_LOCK) {
-            SessionRecord current = readRecord(pc);
-            if (current == null || current.currentApp.isSameApplication(hostApp)) {
-                return false;
-            }
-            return removeRecord(pc);
         }
     }
 
