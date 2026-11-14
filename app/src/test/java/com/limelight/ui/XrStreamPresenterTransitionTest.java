@@ -266,8 +266,8 @@ public class XrStreamPresenterTransitionTest {
 
     @Test
     public void staleHdrCompletionCannotCommitSupersedingTransition() {
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        DecoderTransitionGenerationGate gate =
+                new DecoderTransitionGenerationGate();
         AtomicInteger commits = new AtomicInteger();
 
         assertTrue(gate.beginHdr(41));
@@ -286,8 +286,8 @@ public class XrStreamPresenterTransitionTest {
 
     @Test
     public void staleTimeoutCannotTerminateSupersedingTransition() {
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        DecoderTransitionGenerationGate gate =
+                new DecoderTransitionGenerationGate();
         AtomicInteger terminations = new AtomicInteger();
 
         assertTrue(gate.beginHdr(7));
@@ -300,8 +300,8 @@ public class XrStreamPresenterTransitionTest {
 
     @Test
     public void solePostAckModeGenerationRejectsOlderCallbacks() {
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        DecoderTransitionGenerationGate gate =
+                new DecoderTransitionGenerationGate();
         AtomicInteger completions = new AtomicInteger();
         AtomicInteger terminations = new AtomicInteger();
 
@@ -319,8 +319,8 @@ public class XrStreamPresenterTransitionTest {
 
     @Test
     public void ackFirstClientGatePrecedesGeometryAndIsReusedBySurfaceHandoff() {
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        DecoderTransitionGenerationGate gate =
+                new DecoderTransitionGenerationGate();
         AtomicInteger decoderBegins = new AtomicInteger();
         List<String> order = new ArrayList<>();
 
@@ -352,8 +352,8 @@ public class XrStreamPresenterTransitionTest {
 
     @Test
     public void failedAckFirstGeometryStillLeavesGateOwnedForReconnectCleanup() {
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                new XrStreamPresenter.DecoderTransitionGenerationGate();
+        DecoderTransitionGenerationGate gate =
+                new DecoderTransitionGenerationGate();
 
         assertEquals(0, XrStreamPresenter.beginAckFirstClientDecoderTransitionBeforeGeometry(
                 gate, () -> 77, () -> false));

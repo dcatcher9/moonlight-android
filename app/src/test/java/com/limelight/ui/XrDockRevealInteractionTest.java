@@ -88,8 +88,8 @@ public final class XrDockRevealInteractionTest {
     public void clearedAttentionStateForgetsAHoverWhoseExitWasNeverDelivered() {
         Button pill = focusablePill(themedActivity());
         AtomicBoolean attention = new AtomicBoolean();
-        XrStreamPresenter.DockRevealViewAttentionState state =
-                new XrStreamPresenter.DockRevealViewAttentionState();
+        DockRevealViewAttentionState state =
+                new DockRevealViewAttentionState();
         XrStreamPresenter.configureDockRevealInteractions(
                 pill, () -> { }, attention::set, state);
 

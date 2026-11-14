@@ -566,76 +566,6 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Binds decoder callbacks to the exact UI transaction that requested them. A newer transition
-     * supersedes the older generation before its posted main-thread callback can run.
-     */
-    static final class DecoderTransitionGenerationGate {
-        private int modeGeneration;
-        private int hdrGeneration;
-
-        boolean beginMode(int generation) {
-            if (generation <= 0) {
-                return false;
-            }
-            modeGeneration = generation;
-            hdrGeneration = 0;
-            return true;
-        }
-
-        boolean beginHdr(int generation) {
-            if (generation <= 0) {
-                return false;
-            }
-            hdrGeneration = generation;
-            modeGeneration = 0;
-            return true;
-        }
-
-        boolean dispatchModeIfCurrent(int generation, Runnable action) {
-            if (generation <= 0 || generation != modeGeneration || action == null) {
-                return false;
-            }
-            action.run();
-            return true;
-        }
-
-        boolean dispatchHdrIfCurrent(int generation, Runnable action) {
-            if (generation <= 0 || generation != hdrGeneration || action == null) {
-                return false;
-            }
-            action.run();
-            return true;
-        }
-
-        boolean dispatchAnyIfCurrent(int generation, Runnable action) {
-            if (generation <= 0
-                    || (generation != modeGeneration && generation != hdrGeneration)
-                    || action == null) {
-                return false;
-            }
-            action.run();
-            return true;
-        }
-
-        void clearMode() {
-            modeGeneration = 0;
-        }
-
-        void clearHdr() {
-            hdrGeneration = 0;
-        }
-
-        void clear() {
-            modeGeneration = 0;
-            hdrGeneration = 0;
-        }
-
-        int currentModeGeneration() {
-            return modeGeneration;
-        }
-    }
-
-    /**
      * Closes the sole ACK-first decoder gate before publishing any host-authoritative geometry.
      * Keeping this sequence in one helper makes it impossible for a concurrent codec recovery to
      * replay the replacement format onto the producer that is still presenting the old picture.
@@ -669,137 +599,6 @@ public class XrStreamPresenter {
         return generations.beginMode(generation) ? generation : 0;
     }
 
-    /**
-     * Completion gate for a live video-mode request.
-     *
-     * <p>A fast bitrate/frame-rate request needs only its correlated APPLIED ACK. A resolution
-     * request additionally needs MediaCodec to release a fresh IDR at the acknowledged geometry.
-     * A decoder event that arrives before the APPLIED ACK is retained only for diagnostics. The
-     * ACK invalidates that provisional evidence and arms exactly one post-ACK decoder transition,
-     * which supplies the only decoder output allowed to settle the request. Client SBS resolution
-     * changes additionally wait for exact validation of the replacement packed EGL output.</p>
-     */
-    static final class LiveQualityConfirmationGate {
-        private boolean decoderConfirmationRequired;
-        private boolean presentationConfirmationRequired;
-        private boolean appliedAckReceived;
-        private boolean presentationReady;
-        private boolean postAckDecoderConfirmationStarted;
-        private boolean decoderOutputReceived;
-        private boolean matchingDecoderOutputReceived;
-        private int decoderOutputWidth;
-        private int decoderOutputHeight;
-
-        void begin(boolean decoderConfirmationRequired) {
-            begin(decoderConfirmationRequired, false);
-        }
-
-        void begin(boolean decoderConfirmationRequired,
-                   boolean presentationConfirmationRequired) {
-            this.decoderConfirmationRequired = decoderConfirmationRequired;
-            this.presentationConfirmationRequired = presentationConfirmationRequired;
-            appliedAckReceived = false;
-            presentationReady = !presentationConfirmationRequired;
-            postAckDecoderConfirmationStarted = false;
-            decoderOutputReceived = false;
-            matchingDecoderOutputReceived = false;
-            decoderOutputWidth = 0;
-            decoderOutputHeight = 0;
-        }
-
-        boolean onAppliedAck() {
-            appliedAckReceived = true;
-            return canSettle();
-        }
-
-        /** Re-arms readiness when a host clamp supersedes an in-flight packed-output resize. */
-        void expectPresentationConfirmation() {
-            presentationConfirmationRequired = true;
-            presentationReady = false;
-        }
-
-        boolean onPresentationReady() {
-            presentationReady = true;
-            return canSettle();
-        }
-
-        boolean onDecoderOutput(int actualWidth, int actualHeight,
-                                int expectedWidth, int expectedHeight) {
-            decoderOutputReceived = true;
-            decoderOutputWidth = actualWidth;
-            decoderOutputHeight = actualHeight;
-            matchingDecoderOutputReceived = actualWidth > 0 && actualHeight > 0
-                    && actualWidth == expectedWidth && actualHeight == expectedHeight;
-            return canSettle();
-        }
-
-        /**
-         * Invalidates every pre-ACK decoder event and arms the request's one allowed post-ACK
-         * confirmation. Returns false for a fast request, before APPLIED, or after a rearm has
-         * already been consumed.
-         */
-        boolean beginPostAckDecoderConfirmation() {
-            if (!decoderConfirmationRequired || !appliedAckReceived
-                    || postAckDecoderConfirmationStarted) {
-                return false;
-            }
-            postAckDecoderConfirmationStarted = true;
-            decoderOutputReceived = false;
-            matchingDecoderOutputReceived = false;
-            decoderOutputWidth = 0;
-            decoderOutputHeight = 0;
-            return true;
-        }
-
-        boolean canSettle() {
-            return appliedAckReceived
-                    && (!presentationConfirmationRequired || presentationReady)
-                    && (!decoderConfirmationRequired
-                    || (postAckDecoderConfirmationStarted
-                    && matchingDecoderOutputReceived));
-        }
-
-        boolean hasAppliedAck() {
-            return appliedAckReceived;
-        }
-
-        boolean isPresentationReady() {
-            return presentationReady;
-        }
-
-        boolean hasDecoderOutput() {
-            return decoderOutputReceived;
-        }
-
-        boolean hasMatchingDecoderOutput() {
-            return matchingDecoderOutputReceived;
-        }
-
-        boolean hasPostAckDecoderConfirmationStarted() {
-            return postAckDecoderConfirmationStarted;
-        }
-
-        boolean isWaitingForPresentationAfterMatchingPostAckOutput() {
-            return appliedAckReceived
-                    && postAckDecoderConfirmationStarted
-                    && matchingDecoderOutputReceived
-                    && presentationConfirmationRequired
-                    && !presentationReady;
-        }
-
-        void clear() {
-            decoderConfirmationRequired = false;
-            presentationConfirmationRequired = false;
-            appliedAckReceived = false;
-            presentationReady = false;
-            postAckDecoderConfirmationStarted = false;
-            decoderOutputReceived = false;
-            matchingDecoderOutputReceived = false;
-            decoderOutputWidth = 0;
-            decoderOutputHeight = 0;
-        }
-    }
-
     static boolean decoderMismatchRequiresMandatoryResync(
             boolean resolutionChangeInProgress,
             LiveQualityConfirmationGate confirmations) {
@@ -824,157 +623,6 @@ public class XrStreamPresenter {
 
     static boolean shouldCommitStagedSettingsForResync(LiveQualityRequestOrigin origin) {
         return origin == LiveQualityRequestOrigin.USER;
-    }
-
-    /**
-     * Small deterministic state machine for panel-rate following.
-     *
-     * <p>The observed display rate, durable user ceiling, and effective stream rate are three
-     * different facts. Keeping them here prevents a Surface/display callback from being consumed
-     * while another live-quality transaction is busy. Repeated callbacks coalesce to the newest
-     * observation, one transient retry is allowed, and an invalid/clamped target is blocked until
-     * either the panel or the user's ceiling actually changes.</p>
-     */
-    static final class PanelRefreshRateState {
-        private int observedPanelHz = -1;
-        private int userCeilingHz;
-        private int inFlightTargetHz = -1;
-        private int blockedTargetHz = -1;
-        private int retriesRemaining = 1;
-        private boolean reconcilePending;
-
-        PanelRefreshRateState(float initialUserCeilingFps) {
-            userCeilingHz = Math.max(1, Math.round(initialUserCeilingFps));
-        }
-
-        void observe(float panelRefreshHz) {
-            int panelHz = Math.round(panelRefreshHz);
-            if (panelHz <= 0) {
-                return;
-            }
-            if (panelHz != observedPanelHz) {
-                observedPanelHz = panelHz;
-                blockedTargetHz = -1;
-                retriesRemaining = 1;
-                reconcilePending = true;
-            }
-        }
-
-        int nextTarget(int effectiveStreamHz, boolean transactionBlocked) {
-            int desired = desiredTargetHz();
-            if (desired <= 0 || desired == effectiveStreamHz) {
-                if (!transactionBlocked) {
-                    reconcilePending = false;
-                }
-                return -1;
-            }
-            if (transactionBlocked) {
-                reconcilePending = true;
-                return -1;
-            }
-            if (desired == blockedTargetHz || inFlightTargetHz > 0) {
-                return -1;
-            }
-            inFlightTargetHz = desired;
-            reconcilePending = false;
-            return desired;
-        }
-
-        int capUserTarget(int requestedCeilingHz) {
-            if (observedPanelHz <= 0) {
-                return requestedCeilingHz;
-            }
-            return XrPresentationPolicy.snapToOfferedFrameRate(Math.min(requestedCeilingHz, observedPanelHz));
-        }
-
-        void automaticRequestSucceeded(int appliedHz) {
-            int requested = inFlightTargetHz;
-            inFlightTargetHz = -1;
-            retriesRemaining = 1;
-            if (requested > 0 && appliedHz != requested) {
-                // The host accepted but clamped this target. Do not spin trying the same value.
-                blockedTargetHz = requested;
-                reconcilePending = false;
-            }
-        }
-
-        void automaticRequestFailed(boolean retryable) {
-            int failed = inFlightTargetHz;
-            inFlightTargetHz = -1;
-            if (retryable && retriesRemaining > 0) {
-                retriesRemaining--;
-                reconcilePending = true;
-            } else {
-                blockedTargetHz = failed;
-                reconcilePending = false;
-            }
-        }
-
-        void userRequestSucceeded(float durableCeilingFps) {
-            int ceiling = Math.max(1, Math.round(durableCeilingFps));
-            if (ceiling != userCeilingHz) {
-                userCeilingHz = ceiling;
-                blockedTargetHz = -1;
-                retriesRemaining = 1;
-            }
-            reconcilePending = true;
-        }
-
-        void otherTransactionSettled() {
-            reconcilePending = true;
-        }
-
-        /**
-         * Releases local ownership when an ambiguous missing ACK forces a reconnect. Do not
-         * consume the bounded transient retry or block the panel target: the authoritative stream
-         * may still need to follow the observed panel after reconnecting at the durable ceiling.
-         */
-        void requestAbandonedForReconnect() {
-            inFlightTargetHz = -1;
-            retriesRemaining = 1;
-            reconcilePending = true;
-        }
-
-        int desiredTargetHz() {
-            if (observedPanelHz <= 0 || userCeilingHz <= 0) {
-                return -1;
-            }
-            return XrPresentationPolicy.snapToOfferedFrameRate(Math.min(userCeilingHz, observedPanelHz));
-        }
-
-        int getObservedPanelHz() {
-            return observedPanelHz;
-        }
-
-        int getUserCeilingHz() {
-            return userCeilingHz;
-        }
-
-        int getInFlightTargetHz() {
-            return inFlightTargetHz;
-        }
-
-        boolean isReconcilePending() {
-            return reconcilePending;
-        }
-    }
-
-    /**
-     * Surface pacing follows the durable user ceiling, never a temporary panel-follow rate.
-     * Client SBS requests at least the supported 72 Hz panel rate. This never raises the wire
-     * ceiling or the default 30 FPS stream and inference cadence.
-     */
-    static int durableSurfaceFrameRateVoteHz(PanelRefreshRateState state, PresentationMode mode) {
-        if (state == null) {
-            return 0;
-        }
-        return Math.max(mode == PresentationMode.CLIENT_SBS_AI
-                ? ClientPanelRefreshRatePreference.CLIENT_PANEL_HZ : 1, state.getUserCeilingHz());
-    }
-
-    static boolean shouldPreferClientPanelRate(PanelRefreshRateState state, PresentationMode mode) {
-        return state != null && mode == PresentationMode.CLIENT_SBS_AI
-                && state.getUserCeilingHz() <= ClientPanelRefreshRatePreference.CLIENT_PANEL_HZ;
     }
 
     static boolean liveQualityTransactionBusy(
@@ -2210,21 +1858,6 @@ public class XrStreamPresenter {
                                                Consumer<Boolean> attentionAction) {
         configureDockRevealInteractions(pill, revealAction, attentionAction,
                 new DockRevealViewAttentionState());
-    }
-
-    /** Independent hover and focus sources of the collapsed pill's View attention. */
-    static final class DockRevealViewAttentionState {
-        boolean hovered;
-        boolean focused;
-
-        boolean active() {
-            return hovered || focused;
-        }
-
-        void clear() {
-            hovered = false;
-            focused = false;
-        }
     }
 
     static void configureDockRevealInteractions(View pill, Runnable revealAction,
@@ -5833,7 +5466,7 @@ public class XrStreamPresenter {
             return;
         }
 
-        AcknowledgedVideoMode acknowledged = acknowledgedVideoMode(
+        AcknowledgedVideoMode acknowledged = AcknowledgedVideoMode.acknowledgedVideoMode(
                 pendingLiveQuality,
                 appliedSourceWidth, appliedSourceHeight,
                 appliedFramerateX100, effectiveBitrateKbps);
@@ -6069,37 +5702,6 @@ public class XrStreamPresenter {
                 game, liveQualityRequestMode(), size[0], size[1], Math.round(fps));
         adoptionCompletion.onComplete(true);
         return XrPresentationPolicy.acknowledgedGeometryAdoptionSucceeded(false, false);
-    }
-
-    /**
-     * Reconciles an ACK without confusing its effective encoder bitrate with the total wire
-     * budget sent in the request.
-     */
-    static AcknowledgedVideoMode acknowledgedVideoMode(
-            StreamQualityTuple requestedLogicalQuality,
-            int wireWidth, int wireHeight, int framerateX100,
-            int effectiveEncoderBitrateKbps) {
-        StreamQualityTuple effective = XrPresentationPolicy.appliedTuple(
-                wireWidth, wireHeight,
-                framerateX100, effectiveEncoderBitrateKbps);
-        if (requestedLogicalQuality == null || effective == null) {
-            return null;
-        }
-        return new AcknowledgedVideoMode(new StreamQualityTuple(
-                effective.resolution, effective.frameRate,
-                requestedLogicalQuality.bitrateKbps),
-                effectiveEncoderBitrateKbps);
-    }
-
-    static final class AcknowledgedVideoMode {
-        final StreamQualityTuple logicalQuality;
-        final int effectiveEncoderBitrateKbps;
-
-        private AcknowledgedVideoMode(StreamQualityTuple logicalQuality,
-                                     int effectiveEncoderBitrateKbps) {
-            this.logicalQuality = logicalQuality;
-            this.effectiveEncoderBitrateKbps = effectiveEncoderBitrateKbps;
-        }
     }
 
     /**
@@ -7671,9 +7273,9 @@ public class XrStreamPresenter {
         // its first ACK remains capped to the current panel rate.
         clientPanelRefreshRatePreference.apply(activity.getWindow(),
                 ServerHelper.getActiveDisplay(activity, prefConfig),
-                shouldPreferClientPanelRate(panelRefreshRateState, currentPresenterMode));
+                PanelRefreshRateState.shouldPreferClientPanelRate(panelRefreshRateState, currentPresenterMode));
         Surface surface = videoSurface;
-        int ceilingHz = durableSurfaceFrameRateVoteHz(panelRefreshRateState, currentPresenterMode);
+        int ceilingHz = PanelRefreshRateState.durableSurfaceFrameRateVoteHz(panelRefreshRateState, currentPresenterMode);
         if (surface == null || !surface.isValid() || ceilingHz <= 0
                 || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return;

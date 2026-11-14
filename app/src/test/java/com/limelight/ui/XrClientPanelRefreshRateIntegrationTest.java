@@ -48,7 +48,7 @@ public final class XrClientPanelRefreshRateIntegrationTest {
     private Window window;
     private PreferenceConfiguration preferences;
     private XrStreamPresenter presenter;
-    private XrStreamPresenter.PanelRefreshRateState panel;
+    private PanelRefreshRateState panel;
     private Display display;
 
     @Before
@@ -79,7 +79,7 @@ public final class XrClientPanelRefreshRateIntegrationTest {
         preferences.fps = 30;
         presenter = new XrStreamPresenter(activity, preferences,
                 surface -> { }, visible -> { });
-        panel = (XrStreamPresenter.PanelRefreshRateState) field("panelRefreshRateState");
+        panel = (PanelRefreshRateState) field("panelRefreshRateState");
     }
 
     @After
@@ -151,9 +151,9 @@ public final class XrClientPanelRefreshRateIntegrationTest {
 
         assertEquals(90, panel.getUserCeilingHz());
         assertEquals(60.0f, preferences.fps, 0.0f);
-        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(90, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 panel, PresentationMode.CLIENT_SBS_AI));
-        assertFalse(XrStreamPresenter.shouldPreferClientPanelRate(
+        assertFalse(PanelRefreshRateState.shouldPreferClientPanelRate(
                 panel, PresentationMode.CLIENT_SBS_AI));
         assertWindowPreference(41, 90.0f);
     }

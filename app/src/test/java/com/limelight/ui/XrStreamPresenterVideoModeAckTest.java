@@ -117,8 +117,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void resolutionAckFirstWaitsForMatchingDecoderOutput() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
 
         assertFalse(gate.onAppliedAck());
@@ -134,8 +134,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void resolutionDecoderFirstIsInvalidatedAtTheAckBoundary() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
 
         assertFalse(gate.onDecoderOutput(3840, 2160, 3840, 2160));
@@ -155,8 +155,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void clientSbsWaitsForExactPackedPresentationAfterAckAndFreshIdr() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true, true);
 
         assertFalse(gate.onAppliedAck());
@@ -173,8 +173,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void clientSbsRetainsEarlyPresentationReadyAndRearmsForHostClamp() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true, true);
 
         assertFalse(gate.onPresentationReady());
@@ -190,8 +190,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void staleFourKIdrBeforeFullHdAckWaitsForPostAckFullHdIdr() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
 
         // Exact ordering from the field failure: the old 4K encoder satisfies the first decoder
@@ -210,8 +210,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void clampedAckRequiresOutputAfterFinalGeometryIsAdopted() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
 
         // The fresh IDR already carries the host's clamp, while the client still expects its
@@ -230,8 +230,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void fastAppliedAckNeedsNoDecoderConfirmation() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(false);
 
         assertTrue(gate.onAppliedAck());
@@ -242,8 +242,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void postAckConfirmationIsUnavailableBeforeAckAndResetsPerRequest() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
 
         assertFalse(gate.beginPostAckDecoderConfirmation());
@@ -259,8 +259,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void decoderCallbackWithoutUsableDimensionsCannotSettleResolution() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
 
         assertFalse(gate.onAppliedAck());
@@ -273,8 +273,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void authoritativeAckWithMismatchedFreshIdrRequiresHiddenResync() {
-        XrStreamPresenter.LiveQualityConfirmationGate gate =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate gate =
+                new LiveQualityConfirmationGate();
         gate.begin(true);
         gate.onAppliedAck();
         gate.beginPostAckDecoderConfirmation();
@@ -286,8 +286,8 @@ public class XrStreamPresenterVideoModeAckTest {
                 XrStreamPresenter.LiveQualityAckTimeoutDisposition.RECONNECT_RESOLUTION,
                 gate.hasMatchingDecoderOutput(), false));
 
-        XrStreamPresenter.LiveQualityConfirmationGate matching =
-                new XrStreamPresenter.LiveQualityConfirmationGate();
+        LiveQualityConfirmationGate matching =
+                new LiveQualityConfirmationGate();
         matching.begin(true);
         matching.onAppliedAck();
         matching.beginPostAckDecoderConfirmation();
@@ -338,8 +338,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void missingPanelAckDoesNotConsumeRetryOrBlockPostReconnectFollow() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
         state.observe(72);
 
         assertEquals(72, state.nextTarget(90, false));
@@ -400,8 +400,8 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple firstRequest =
                 new StreamQualityTuple("1920x1080", "29.97", 130000);
 
-        XrStreamPresenter.AcknowledgedVideoMode firstAck =
-                XrStreamPresenter.acknowledgedVideoMode(
+        AcknowledgedVideoMode firstAck =
+                AcknowledgedVideoMode.acknowledgedVideoMode(
                         firstRequest, 1920, 1080, 2997, 118000);
 
         assertEquals(new StreamQualityTuple("1920x1080", "29.97", 130000),
@@ -412,8 +412,8 @@ public class XrStreamPresenterVideoModeAckTest {
         // deduct audio/FEC again, but that effective value must never become the next wire budget.
         StreamQualityTuple secondRequest = new StreamQualityTuple(
                 "3840x2160", "23.976", firstAck.logicalQuality.bitrateKbps);
-        XrStreamPresenter.AcknowledgedVideoMode secondAck =
-                XrStreamPresenter.acknowledgedVideoMode(
+        AcknowledgedVideoMode secondAck =
+                AcknowledgedVideoMode.acknowledgedVideoMode(
                         secondRequest, 3840, 2160, 2398, 105000);
 
         assertEquals("3840x2160", secondAck.logicalQuality.resolution);
@@ -437,11 +437,11 @@ public class XrStreamPresenterVideoModeAckTest {
         StreamQualityTuple request =
                 new StreamQualityTuple("3840x2160", "72", 200000);
 
-        assertNull(XrStreamPresenter.acknowledgedVideoMode(
+        assertNull(AcknowledgedVideoMode.acknowledgedVideoMode(
                 request, 7679, 2160, 7200, 180000));
-        assertNull(XrStreamPresenter.acknowledgedVideoMode(
+        assertNull(AcknowledgedVideoMode.acknowledgedVideoMode(
                 request, 7680, 0, 7200, 180000));
-        assertNull(XrStreamPresenter.acknowledgedVideoMode(
+        assertNull(AcknowledgedVideoMode.acknowledgedVideoMode(
                 request, 8194, 2160, 7200, 180000));
     }
 
@@ -531,8 +531,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void panelFollowCoalescesTheNewestObservationWhileBusy() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         state.observe(72);
         assertEquals(-1, state.nextTarget(90, true));
@@ -546,8 +546,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void panelFollowReturnsUpwardToTheDurableNinetyFpsCeiling() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         state.observe(72);
         assertEquals(72, state.nextTarget(90, false));
@@ -560,68 +560,68 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void sceneCoreSurfaceVoteSurvivesTemporaryPanelThrottling() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         state.observe(72);
         assertEquals(72, state.nextTarget(90, false));
         state.automaticRequestSucceeded(72);
 
         // A recreated SceneCore surface still votes the durable ceiling, not effective 72.
-        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(90, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 state, PresentationMode.HOST_SBS_AI));
     }
 
     @Test
     public void explicitUserCeilingImmediatelyChangesTheSceneCoreSurfaceVote() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         state.userRequestSucceeded(60);
 
-        assertEquals(60, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(60, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 state, PresentationMode.HOST_SBS_AI));
     }
 
     @Test
     public void clientDefaultRequestsSeventyTwoHzPanelWithoutRaisingThirtyFpsStream() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(30);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(30);
 
-        assertEquals(72, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(72, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 state, PresentationMode.CLIENT_SBS_AI));
-        assertTrue(XrStreamPresenter.shouldPreferClientPanelRate(
+        assertTrue(PanelRefreshRateState.shouldPreferClientPanelRate(
                 state, PresentationMode.CLIENT_SBS_AI));
         state.observe(72.00001f);
         assertEquals(-1, state.nextTarget(30, false));
         assertEquals(30, state.getUserCeilingHz());
-        assertEquals(30, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(30, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 state, PresentationMode.NORMAL));
     }
 
     @Test
     public void clientPanelPreferenceTracksDurableCeilingAcrossTemporaryThrottling() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(72);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(72);
         state.observe(60);
 
-        assertEquals(72, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(72, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 state, PresentationMode.CLIENT_SBS_AI));
-        assertTrue(XrStreamPresenter.shouldPreferClientPanelRate(
+        assertTrue(PanelRefreshRateState.shouldPreferClientPanelRate(
                 state, PresentationMode.CLIENT_SBS_AI));
 
         state.userRequestSucceeded(90);
 
-        assertEquals(90, XrStreamPresenter.durableSurfaceFrameRateVoteHz(
+        assertEquals(90, PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
                 state, PresentationMode.CLIENT_SBS_AI));
-        assertFalse(XrStreamPresenter.shouldPreferClientPanelRate(
+        assertFalse(PanelRefreshRateState.shouldPreferClientPanelRate(
                 state, PresentationMode.CLIENT_SBS_AI));
     }
 
     @Test
     public void surfaceFrameRateFeedbackDoesNotRelockTheFollower() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         state.observe(72);
         assertEquals(72, state.nextTarget(90, false));
@@ -636,8 +636,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void automaticFailureRetriesOnceThenWaitsForNewEvidence() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         state.observe(72);
         assertEquals(72, state.nextTarget(90, false));
@@ -653,8 +653,8 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void userCeilingChangesOnlyAfterSuccessfulSettlement() {
-        XrStreamPresenter.PanelRefreshRateState state =
-                new XrStreamPresenter.PanelRefreshRateState(90);
+        PanelRefreshRateState state =
+                new PanelRefreshRateState(90);
 
         // Merely considering/queuing a 60 FPS user request has no state-machine mutation.
         assertEquals(90, state.getUserCeilingHz());

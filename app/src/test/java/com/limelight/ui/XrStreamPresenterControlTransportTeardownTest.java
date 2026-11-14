@@ -127,8 +127,8 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
         setField(presenter, "pendingDecoderTransitionMode", PresentationMode.NORMAL);
         setField(presenter, "modeSwitchInProgress", true);
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+        DecoderTransitionGenerationGate gate =
+                (DecoderTransitionGenerationGate) getField(
                         presenter, "decoderTransitionGenerations");
         assertTrue(gate.beginMode(77));
         new Handler(Looper.getMainLooper()).post(
@@ -150,8 +150,8 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
         setField(presenter, "pendingDecoderTransitionMode", PresentationMode.CLIENT_SBS_AI);
         setField(presenter, "modeSwitchInProgress", true);
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+        DecoderTransitionGenerationGate gate =
+                (DecoderTransitionGenerationGate) getField(
                         presenter, "decoderTransitionGenerations");
         assertTrue(gate.beginMode(77));
         Runnable[] packedSwap = {null};
@@ -187,8 +187,8 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         setField(presenter, "currentPresenterMode", PresentationMode.HOST_SBS_AI);
         setField(presenter, "pendingDecoderTransitionMode", PresentationMode.HOST_SBS_AI);
         setField(presenter, "modeSwitchInProgress", true);
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+        DecoderTransitionGenerationGate gate =
+                (DecoderTransitionGenerationGate) getField(
                         presenter, "decoderTransitionGenerations");
         assertTrue(gate.beginMode(77));
         int[] commits = {0};
@@ -215,8 +215,8 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         setField(presenter, "liveQualityChangeInProgress", true);
         StreamQualityTuple target = new StreamQualityTuple("3840x2160", "72", 200_000);
         setField(presenter, "pendingLiveQuality", target);
-        XrStreamPresenter.LiveQualityConfirmationGate confirmations =
-                (XrStreamPresenter.LiveQualityConfirmationGate) getField(
+        LiveQualityConfirmationGate confirmations =
+                (LiveQualityConfirmationGate) getField(
                         presenter, "liveQualityConfirmations");
         confirmations.begin(true);
         confirmations.onAppliedAck();
@@ -251,8 +251,8 @@ public final class XrStreamPresenterControlTransportTeardownTest {
             throws Exception {
         XrStreamPresenter presenter = createReadyGamePresenter();
         Game game = (Game) getField(presenter, "activity");
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+        DecoderTransitionGenerationGate gate =
+                (DecoderTransitionGenerationGate) getField(
                         presenter, "decoderTransitionGenerations");
         assertTrue(gate.beginMode(77));
         setField(presenter, "liveQualityChangeInProgress", true);
@@ -356,8 +356,8 @@ public final class XrStreamPresenterControlTransportTeardownTest {
             throws Exception {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyPresenter(controller.get());
-        XrStreamPresenter.DecoderTransitionGenerationGate gate =
-                (XrStreamPresenter.DecoderTransitionGenerationGate) getField(
+        DecoderTransitionGenerationGate gate =
+                (DecoderTransitionGenerationGate) getField(
                         presenter, "decoderTransitionGenerations");
         assertTrue(gate.beginMode(73));
         setField(presenter, "pendingDecoderTransitionMode",
@@ -480,7 +480,7 @@ public final class XrStreamPresenterControlTransportTeardownTest {
         assertEquals("90", store.snapshot(pc, PreferenceManager.getDefaultSharedPreferences(game))
                 .preferencesForMode(PresentationMode.HOST_SBS_AI)
                 .getString(PreferenceConfiguration.FPS_PREF_STRING, null));
-        assertEquals(90, ((XrStreamPresenter.PanelRefreshRateState)
+        assertEquals(90, ((PanelRefreshRateState)
                 getField(presenter, "panelRefreshRateState")).getUserCeilingHz());
     }
 
