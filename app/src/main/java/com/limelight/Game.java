@@ -146,6 +146,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
 
@@ -506,8 +507,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void configureXrSessionControls() {
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (presenter == null || xrSessionSettingsController == null) {
             return;
         }
@@ -691,8 +691,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void refreshXrSessionSettingsModels() {
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (presenter == null || xrSessionSettingsController == null) {
             return;
         }
@@ -753,7 +752,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (xrSettingsTransactionPending()) {
             return;
         }
-        XrStreamPresenter presenter = streamContainer != null ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (presenter == null) return;
         if (presenter.isStreamQualityTransactionBusy()) {
             reconnectHandler.removeCallbacks(xrSettingsAutoApplyRunnable);
@@ -826,8 +825,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void applyLiveStreamQualityChange() {
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (presenter == null || reconnectScheduled || xrSessionSettingsController == null) {
             return;
         }
@@ -849,8 +847,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         reconnectScheduled = true;
         automaticReconnectScheduled = automaticAttempt > 0;
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         Intent reconnectIntent = createXrReconnectIntent(this, getIntent());
         if (automaticReconnectScheduled) {
             reconnectIntent.putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, automaticAttempt);
@@ -1841,8 +1838,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (display == null || display.getDisplayId() != displayId) {
                     return;
                 }
-                XrStreamPresenter presenter = streamContainer != null
-                        ? streamContainer.getXrPresenter() : null;
+                XrStreamPresenter presenter = presenterOrNull();
                 if (presenter != null) {
                     presenter.onClientRefreshRateChanged(display.getRefreshRate());
                 }
@@ -1854,8 +1850,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // session that starts while the panel is thermally capped follows that rate after its
         // first decoded frame instead of waiting for an unrelated display event.
         Display display = getActiveDisplay(this, prefConfig);
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (display != null && presenter != null) {
             presenter.onClientRefreshRateChanged(display.getRefreshRate());
         }
@@ -4360,8 +4355,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             getIntent().putExtra(EXTRA_LAUNCH_REQUEST, HostSessionLaunchRequest.resume(
                     readAppId(getIntent()), getIntent().getStringExtra(EXTRA_APP_UUID),
                     hostSessionIdSupported, hostSessionId));
-            XrStreamPresenter presenter = streamContainer != null
-                    ? streamContainer.getXrPresenter() : null;
+            XrStreamPresenter presenter = presenterOrNull();
             if (presenter != null) {
                 presenter.setHostControlExtensionsSupported(hostSessionIdSupported);
             }
@@ -4404,8 +4398,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // Unsubscribe while moonlight-common's control transport is still alive. Its mutexes
             // are destroyed by conn.stop(), so deferred StreamContainer.onDestroy() cleanup must
             // remain local-only.
-            XrStreamPresenter presenter = streamContainer != null
-                    ? streamContainer.getXrPresenter() : null;
+            XrStreamPresenter presenter = presenterOrNull();
             if (presenter != null) {
                 presenter.onConnectionStopping();
             }
@@ -4778,8 +4771,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 connected = true;
                 connecting = false;
-                XrStreamPresenter presenter = streamContainer != null
-                        ? streamContainer.getXrPresenter() : null;
+                XrStreamPresenter presenter = presenterOrNull();
                 if (presenter != null) {
                     presenter.setAtomicPresentationV2Supported(
                             negotiatedAtomicPresentationV2);
@@ -4906,8 +4898,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void showCenteredStreamMessage(CharSequence message, long durationMs) {
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (presenter != null && presenter.showTransientMessage(message, durationMs)) {
             return;
         }
@@ -4947,8 +4938,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         streamHdrActive = enabled;
         streamHdrMaxContentLightLevel = enabled ? parseMaxContentLightLevel(hdrMetadata) : 0;
 
-        XrStreamPresenter presenter = streamContainer != null
-                ? streamContainer.getXrPresenter() : null;
+        XrStreamPresenter presenter = presenterOrNull();
         if (transferChanged && presenter != null
                 && presenter.canBeginClientSbsHdrTransition()) {
             int transitionGeneration = decoderRenderer.beginPresentationModeTransition();
@@ -5002,12 +4992,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Host SBS preparation phase changed; forward it to the XR presenter. Model-engine
         // preparation and per-stream GPU-resource setup are intentionally distinct messages.
         // Callback arrives off the UI thread.
-        runOnUiThread(() -> {
-            if (isConnectionUiActive() && streamContainer != null
-                    && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onDepthStatus(phase);
-            }
-        });
+        postToPresenter(presenter -> presenter.onDepthStatus(phase));
     }
 
     private boolean refreshAtomicPresentationV2Support() {
@@ -5031,14 +5016,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void onGameSourceStatus(int state, int provider, int presentationGeneration,
                                     int sourceRevision, int sourceWidth, int sourceHeight,
                                     int packedWidth, int packedHeight) {
-        runOnUiThread(() -> {
-            if (isConnectionUiActive() && streamContainer != null
-                    && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onGameSourceStatus(state, provider,
-                        presentationGeneration, sourceRevision,
-                        sourceWidth, sourceHeight, packedWidth, packedHeight);
-            }
-        });
+        postToPresenter(presenter -> presenter.onGameSourceStatus(state, provider,
+                presentationGeneration, sourceRevision,
+                sourceWidth, sourceHeight, packedWidth, packedHeight));
     }
 
     @Override
@@ -5047,16 +5027,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                int appliedSourceHeight, int exactEncodedWidth,
                                int exactEncodedHeight, int appliedFramerateX100,
                                int effectiveEncoderBitrateKbps) {
-        runOnUiThread(() -> {
-            if (isConnectionUiActive() && streamContainer != null
-                    && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onVideoModeAckV2(
-                        status, appliedMode, flags, requestId, stateGeneration,
-                        appliedSourceWidth, appliedSourceHeight,
-                        exactEncodedWidth, exactEncodedHeight,
-                        appliedFramerateX100, effectiveEncoderBitrateKbps);
-            }
-        });
+        postToPresenter(presenter -> presenter.onVideoModeAckV2(
+                status, appliedMode, flags, requestId, stateGeneration,
+                appliedSourceWidth, appliedSourceHeight,
+                exactEncodedWidth, exactEncodedHeight,
+                appliedFramerateX100, effectiveEncoderBitrateKbps));
     }
 
     @Override
@@ -5069,13 +5044,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return;
         }
         final long receivedAtMs = android.os.SystemClock.uptimeMillis();
-        runOnUiThread(() -> {
-            if (isConnectionUiActive() && streamContainer != null
-                    && streamContainer.getXrPresenter() != null) {
-                streamContainer.getXrPresenter().onHostSbsTelemetryState(
-                        telemetry, receivedAtMs);
-            }
-        });
+        postToPresenter(presenter -> presenter.onHostSbsTelemetryState(
+                telemetry, receivedAtMs));
     }
 
     /** The ack said this mode is only reachable by reconnecting; commit and restart in place. */
@@ -5275,6 +5245,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private boolean isXrPresentationActive() {
         return streamContainer != null && streamContainer.getXrPresenter() != null;
+    }
+
+    private XrStreamPresenter presenterOrNull() {
+        return streamContainer != null ? streamContainer.getXrPresenter() : null;
+    }
+
+    /**
+     * Re-posts a native 3D callback to the UI thread and delivers it only while this connection's
+     * UI is still active and an XR presenter exists.
+     */
+    private void postToPresenter(Consumer<XrStreamPresenter> action) {
+        runOnUiThread(() -> {
+            XrStreamPresenter presenter = isConnectionUiActive() ? presenterOrNull() : null;
+            if (presenter != null) {
+                action.accept(presenter);
+            }
+        });
     }
 
     /** Current visible decoder output size as {@code {width, height}}, or null when unavailable. */
