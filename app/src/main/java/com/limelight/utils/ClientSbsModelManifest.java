@@ -131,7 +131,6 @@ final class ClientSbsModelManifest {
                 assetSha256,
                 new TensorSpec("image", new int[] {1, height, width, 3}),
                 new TensorSpec("depth", new int[] {1, height, width, 1}),
-                true,
                 GpuExecutionPolicy.AUTOMATIC_FP16,
                 v2RawCoordinateScale);
     }
@@ -152,7 +151,6 @@ final class ClientSbsModelManifest {
                 assetSha256,
                 new TensorSpec("rgb_nhwc", inputShape),
                 new TensorSpec("checkpoint_nhwc", outputShape),
-                true,
                 gpuExecutionPolicy,
                 Float.NaN);
         manifest.validateFloatGpuCheckpointContract();
@@ -194,14 +192,12 @@ final class ClientSbsModelManifest {
     private final String assetSha256;
     private final TensorSpec inputTensor;
     private final TensorSpec outputTensor;
-    private final boolean directFullFrameResize;
     private final GpuExecutionPolicy gpuExecutionPolicy;
     private final float v2RawCoordinateScale;
 
     private ClientSbsModelManifest(String id, String modelArchiveAssetName, String assetName,
                                    String assetSha256,
                                    TensorSpec inputTensor, TensorSpec outputTensor,
-                                   boolean directFullFrameResize,
                                    GpuExecutionPolicy gpuExecutionPolicy,
                                    float v2RawCoordinateScale) {
         if (id == null || id.isEmpty()) {
@@ -225,7 +221,6 @@ final class ClientSbsModelManifest {
         this.assetSha256 = assetSha256;
         this.inputTensor = inputTensor;
         this.outputTensor = outputTensor;
-        this.directFullFrameResize = directFullFrameResize;
         this.gpuExecutionPolicy = gpuExecutionPolicy;
         this.v2RawCoordinateScale = v2RawCoordinateScale;
     }
@@ -278,10 +273,6 @@ final class ClientSbsModelManifest {
         return outputTensor.getByteSize();
     }
 
-    boolean usesDirectFullFrameResize() {
-        return directFullFrameResize;
-    }
-
     GpuExecutionPolicy getGpuExecutionPolicy() {
         return gpuExecutionPolicy;
     }
@@ -306,7 +297,7 @@ final class ClientSbsModelManifest {
     }
 
     void validateFloatGpuCheckpointContract() {
-        if (inputTensor.getBatch() != 1 || outputTensor.getBatch() != 1
+        if (inputTensor.shape[0] != 1 || outputTensor.shape[0] != 1
                 || inputTensor.getChannels() != 3) {
             throw new IllegalStateException("Client SBS checkpoint " + id
                     + " GPU tensor contract mismatch: expected batch-1 FLOAT32 RGB input and "
@@ -359,10 +350,6 @@ final class ClientSbsModelManifest {
 
         int getHeight() {
             return shape[1];
-        }
-
-        int getBatch() {
-            return shape[0];
         }
 
         int getWidth() {

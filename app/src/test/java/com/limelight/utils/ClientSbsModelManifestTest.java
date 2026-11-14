@@ -139,7 +139,9 @@ public class ClientSbsModelManifestTest {
         assertEquals("depth", manifest.getOutputTensor().getName());
         assertEquals(width * height * 3 * Float.BYTES, manifest.getInputByteSize());
         assertEquals(width * height * Float.BYTES, manifest.getOutputByteSize());
-        assertTrue(manifest.usesDirectFullFrameResize());
+        assertTrue(ClientSbsPipelineContract.forStream(
+                ClientSbsModelManifest.ZIPDEPTH_BASE_FP16_ID, (double) width / height)
+                .usesDirectFullFrameResize());
         assertSame(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
                 manifest.getGpuExecutionPolicy());
         assertFalse(manifest.getGpuExecutionPolicy().forcesFp32Compute());

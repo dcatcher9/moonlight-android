@@ -562,8 +562,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
         assertEquals(height, manifest.getInputHeight());
         assertTrue("ZipDepth dimensions must be divisible by 32",
                 width % 32 == 0 && height % 32 == 0);
-        assertTrue("ZipDepth must use direct full-frame resize",
-                manifest.usesDirectFullFrameResize());
         assertEquals(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
                 manifest.getGpuExecutionPolicy());
         runPackedGlModelSmokeTest(manifest);

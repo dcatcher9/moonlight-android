@@ -408,8 +408,8 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         inputPixelStride = nativeGetInputPixelStrideBytes(nativeHandle);
         outputPixelStride = nativeGetOutputPixelStrideBytes(nativeHandle);
 
-        int expectedInputBytes = manifest.getInputTensor().getByteSize();
-        int expectedOutputBytes = manifest.getOutputTensor().getByteSize();
+        int expectedInputBytes = manifest.getInputByteSize();
+        int expectedOutputBytes = manifest.getOutputByteSize();
         int expectedInputStride = Math.multiplyExact(
                 manifest.getInputTensor().getChannels(), Float.BYTES);
         int expectedOutputStride = Math.multiplyExact(

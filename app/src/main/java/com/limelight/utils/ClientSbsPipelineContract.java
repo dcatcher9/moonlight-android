@@ -26,8 +26,8 @@ public final class ClientSbsPipelineContract {
         modelInputHeight = modelManifest.getInputHeight();
         float modelAspect = modelInputWidth / (float) modelInputHeight;
         boolean portraitAspectFit = sourceAspect < 1.0f && modelAspect > 1.0f;
-        directFullFrameResize =
-                modelManifest.usesDirectFullFrameResize() && !portraitAspectFit;
+        // Every graph takes the full frame directly; only a portrait stream is aspect-fitted.
+        directFullFrameResize = !portraitAspectFit;
         // Portrait streams are real W x H streams. Preserve that aspect inside the available
         // landscape model by reflecting side padding rather than stretching the image across it.
         // The model-relative ratio must drive both input rendering and output cropping.
