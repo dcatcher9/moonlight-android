@@ -23,6 +23,8 @@ import com.limelight.binding.video.DecodedSourceIdentityTracker;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 
+import java.util.function.BooleanSupplier;
+
 import javax.microedition.khronos.egl.EGL10;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.egl.EGLDisplay;
@@ -581,15 +583,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
         if (enable) {
             // Size the XR surface before requestResume() so EGL creates its window at the target size.
-            boolean surfaceReady;
-            try {
-                surfaceReady = mXrPresenter.setClientSbsSurfaceSize(true);
-            } catch (RuntimeException error) {
-                LimeLog.severe("Unable to size the Client SBS SceneCore surface: " + error);
-                surfaceReady = false;
-            }
-            Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
-            if (target == null || !target.isValid()) {
+            Surface target = sizeSceneCoreSurface(
+                    () -> mXrPresenter.setClientSbsSurfaceSize(true),
+                    "Unable to size the Client SBS SceneCore surface: ");
+            if (target == null) {
                 completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
@@ -850,15 +847,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             completeClientSbsSwitch(switchGeneration, false);
             return;
         }
-        boolean surfaceReady;
-        try {
-            surfaceReady = mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget);
-        } catch (RuntimeException error) {
-            LimeLog.severe("Unable to size the Host SceneCore surface after Client SBS: " + error);
-            surfaceReady = false;
-        }
-        Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
-        if (target == null || !target.isValid()) {
+        Surface target = sizeSceneCoreSurface(
+                () -> mXrPresenter.setHostSurfaceSize(mPendingHostSbsTarget),
+                "Unable to size the Host SceneCore surface after Client SBS: ");
+        if (target == null) {
             completeClientSbsSwitch(switchGeneration, false);
             return;
         }
@@ -906,6 +898,23 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
             }
             callback.onComplete(success);
         });
+    }
+
+    /**
+     * Runs one SceneCore surface sizing call and returns the video surface it published. Returns
+     * null when sizing threw (logged with {@code failureLogPrefix}) or reported failure, or when
+     * the published surface is missing or invalid.
+     */
+    private Surface sizeSceneCoreSurface(BooleanSupplier sizing, String failureLogPrefix) {
+        boolean surfaceReady;
+        try {
+            surfaceReady = sizing.getAsBoolean();
+        } catch (RuntimeException error) {
+            LimeLog.severe(failureLogPrefix + error);
+            surfaceReady = false;
+        }
+        Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
+        return target != null && target.isValid() ? target : null;
     }
 
     private int nextClientSbsEglOperationGeneration() {
@@ -1181,16 +1190,12 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         boolean prepared = packed != null
                 && mStereoRenderer.prepareLiveStreamResize(
                         width, height, packed[0], packed[1]);
-        boolean surfaceReady = false;
-        if (prepared) {
-            try {
-                surfaceReady = mXrPresenter.setClientSbsSurfaceSize(width, height);
-            } catch (RuntimeException error) {
-                LimeLog.severe("Unable to resize the Client SBS SceneCore surface: " + error);
-            }
-        }
-        Surface replacement = surfaceReady ? mXrPresenter.getVideoSurface() : null;
-        if (!prepared || replacement == null || !replacement.isValid()) {
+        Surface replacement = prepared
+                ? sizeSceneCoreSurface(
+                        () -> mXrPresenter.setClientSbsSurfaceSize(width, height),
+                        "Unable to resize the Client SBS SceneCore surface: ")
+                : null;
+        if (replacement == null) {
             completeClientSbsResize(resizeGeneration, false);
             return;
         }
@@ -1531,16 +1536,10 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 completeHostSurfaceResize(resizeGeneration, false);
                 return;
             }
-            boolean surfaceReady;
-            try {
-                surfaceReady = mXrPresenter.setHostSurfaceSize(
-                        sbs, logicalWidth, logicalHeight);
-            } catch (RuntimeException error) {
-                LimeLog.severe("Unable to resize the Host SceneCore surface: " + error);
-                surfaceReady = false;
-            }
-            Surface target = surfaceReady ? mXrPresenter.getVideoSurface() : null;
-            if (target == null || !target.isValid()) {
+            Surface target = sizeSceneCoreSurface(
+                    () -> mXrPresenter.setHostSurfaceSize(sbs, logicalWidth, logicalHeight),
+                    "Unable to resize the Host SceneCore surface: ");
+            if (target == null) {
                 completeHostSurfaceResize(resizeGeneration, false);
                 return;
             }

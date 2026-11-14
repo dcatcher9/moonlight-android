@@ -116,14 +116,16 @@ public final class StreamContainerSurfaceHandoffContractTest {
         int deadline = resize.indexOf("mDeadlineHandler.postAtTime(");
         int park = resize.indexOf(
                 "bindDecoderSurfaceAsync(mDummySurface, resizeDeadlineMs");
+        int validatedSizing = resize.indexOf("sizeSceneCoreSurface(", park);
         int resizeSceneCore = resize.indexOf("mXrPresenter.setHostSurfaceSize(", park);
         int finalBind = resize.indexOf(
                 "bindDecoderSurfaceAsync(target, resizeDeadlineMs", resizeSceneCore);
         assertTrue(deadline >= 0 && park > deadline);
         assertTrue(resizeSceneCore > park && finalBind > resizeSceneCore);
         assertTrue(resize.contains("SystemClock.uptimeMillis() >= resizeDeadlineMs"));
-        assertTrue(resize.contains("catch (RuntimeException error)"));
-        assertTrue(resize.contains("surfaceReady ? mXrPresenter.getVideoSurface() : null"));
+        // The SceneCore call runs inside the shared guarded sizing helper.
+        assertTrue(validatedSizing > park && resizeSceneCore > validatedSizing);
+        assertSceneCoreSizingIsGuarded(source);
     }
 
     @Test
@@ -149,8 +151,10 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String continuation = methodBody(source,
                 "private void continueClientSbsSwitchAfterDecoderPark(");
 
-        assertTrue(continuation.contains("catch (RuntimeException error)"));
-        assertTrue(continuation.contains("surfaceReady ? mXrPresenter.getVideoSurface() : null"));
+        int validatedSizing = continuation.indexOf("sizeSceneCoreSurface(");
+        assertTrue(validatedSizing >= 0 && continuation.indexOf(
+                "mXrPresenter.setClientSbsSurfaceSize(true)") > validatedSizing);
+        assertSceneCoreSizingIsGuarded(source);
         assertTrue(continuation.contains("completeClientSbsSwitch(switchGeneration, false)"));
     }
 
@@ -210,6 +214,17 @@ public final class StreamContainerSurfaceHandoffContractTest {
         assertFalse(modeStart.contains("completeDecoderPresentationModeTransition()"));
         assertTrue(modeCompletion.contains("completeDecoderPresentationModeTransition()"));
         assertFalse(modeCompletion.contains("cancelDecoderPresentationModeTransition()"));
+    }
+
+    private static void assertSceneCoreSizingIsGuarded(String source) {
+        String sizing = methodBody(source,
+                "private Surface sizeSceneCoreSurface(BooleanSupplier sizing,");
+        int attempt = sizing.indexOf("surfaceReady = sizing.getAsBoolean()");
+        int guard = sizing.indexOf("catch (RuntimeException error)");
+        int publication = sizing.indexOf(
+                "surfaceReady ? mXrPresenter.getVideoSurface() : null");
+        assertTrue(attempt >= 0 && guard > attempt && publication > guard);
+        assertTrue(sizing.contains("target != null && target.isValid() ? target : null"));
     }
 
     private static String readSource(String name) throws IOException {
