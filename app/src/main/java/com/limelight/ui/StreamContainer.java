@@ -645,14 +645,22 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
     }
 
-    private void onClientSbsRendererSurfaceReady(Surface surface, int surfaceGeneration,
-                                                  int eglAttachGeneration) {
-        if (mDestroyed || surface == null || !surface.isValid()
-                || surfaceGeneration <= 0 || eglAttachGeneration <= 0
+    /** The main-thread owner, if any, that a renderer callback for a generation pair belongs to. */
+    private enum RendererCallbackOwner { NONE, ENABLE, RESIZE, RECOVERY }
+
+    /**
+     * Shared ownership test for the three renderer callbacks. The EGL attachment must be the
+     * exact one currently requested for the expected SceneCore surface; the callback then belongs
+     * to the pending Client SBS entry, to the active resize, or to a context recovery that runs
+     * with neither transaction pending. Each caller checks its own arguments first.
+     */
+    private RendererCallbackOwner classifyRendererCallback(int surfaceGeneration,
+                                                           int eglAttachGeneration) {
+        if (mDestroyed || eglAttachGeneration <= 0
                 || eglAttachGeneration != mRequestedEglAttachGeneration
                 || mXrPresenter == null
                 || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
-            return;
+            return RendererCallbackOwner.NONE;
         }
 
         boolean pendingEnable = mPendingClientSbsSwitch != null
@@ -667,9 +675,28 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
                 && mPendingClientSbsResize == null
                 && surfaceGeneration == mActiveClientSbsDecoderGeneration
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs();
-        if (!pendingEnable && !pendingResize && !contextRecovery) {
+        // Entry is tested before resize, as every caller did; recovery excludes both.
+        if (pendingEnable) {
+            return RendererCallbackOwner.ENABLE;
+        }
+        if (pendingResize) {
+            return RendererCallbackOwner.RESIZE;
+        }
+        return contextRecovery ? RendererCallbackOwner.RECOVERY : RendererCallbackOwner.NONE;
+    }
+
+    private void onClientSbsRendererSurfaceReady(Surface surface, int surfaceGeneration,
+                                                  int eglAttachGeneration) {
+        if (surface == null || !surface.isValid() || surfaceGeneration <= 0) {
             return;
         }
+        RendererCallbackOwner owner =
+                classifyRendererCallback(surfaceGeneration, eglAttachGeneration);
+        if (owner == RendererCallbackOwner.NONE) {
+            return;
+        }
+        boolean pendingEnable = owner == RendererCallbackOwner.ENABLE;
+        boolean pendingResize = owner == RendererCallbackOwner.RESIZE;
 
         mXrPresenter.onClientSbsOutputCapabilityChanged();
         // An accepted onSurfaceReady proves GL has released the retired decoder input and created
@@ -689,28 +716,17 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private void finishClientSbsRendererSurfaceBind(
             Surface surface, int surfaceGeneration, int eglAttachGeneration, boolean success) {
-        if (mDestroyed || surface == null || eglAttachGeneration <= 0
-                || eglAttachGeneration != mRequestedEglAttachGeneration
-                || mXrPresenter == null
-                || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
+        // Only the reference is checked here; the bind result carries the target's validity.
+        if (surface == null) {
             return;
         }
-
-        boolean pendingEnable = mPendingClientSbsSwitch != null
-                && mPendingClientSbsEnable
-                && surfaceGeneration == mClientSbsSwitchGeneration
-                && eglAttachGeneration == mPendingClientSbsSwitchEglGeneration;
-        boolean pendingResize = mPendingClientSbsResize != null
-                && ClientSbsResizePolicy.acceptsRendererReady(mClientSbsResizeStage)
-                && surfaceGeneration == mActiveClientSbsDecoderGeneration
-                && eglAttachGeneration == mPendingClientSbsResizeGeneration;
-        boolean contextRecovery = mPendingClientSbsSwitch == null
-                && mPendingClientSbsResize == null
-                && surfaceGeneration == mActiveClientSbsDecoderGeneration
-                && mStereoRenderer != null && mStereoRenderer.isClientSbs();
-        if (!pendingEnable && !pendingResize && !contextRecovery) {
+        RendererCallbackOwner owner =
+                classifyRendererCallback(surfaceGeneration, eglAttachGeneration);
+        if (owner == RendererCallbackOwner.NONE) {
             return;
         }
+        boolean pendingEnable = owner == RendererCallbackOwner.ENABLE;
+        boolean pendingResize = owner == RendererCallbackOwner.RESIZE;
 
         if (success) {
             mClientSbsSurface = surface;
@@ -744,36 +760,21 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
 
     private void onClientSbsRendererSurfaceValidationFailed(
             int surfaceGeneration, int eglAttachGeneration, String reason) {
-        if (mDestroyed || surfaceGeneration <= 0
-                || eglAttachGeneration <= 0
-                || eglAttachGeneration != mRequestedEglAttachGeneration
-                || mXrPresenter == null
-                || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
+        if (surfaceGeneration <= 0) {
             return;
         }
-
-        boolean pendingEnable = mPendingClientSbsSwitch != null
-                && mPendingClientSbsEnable
-                && surfaceGeneration == mClientSbsSwitchGeneration
-                && eglAttachGeneration == mPendingClientSbsSwitchEglGeneration;
-        boolean pendingResize = mPendingClientSbsResize != null
-                && ClientSbsResizePolicy.acceptsRendererReady(mClientSbsResizeStage)
-                && surfaceGeneration == mActiveClientSbsDecoderGeneration
-                && eglAttachGeneration == mPendingClientSbsResizeGeneration;
-        boolean contextRecovery = mPendingClientSbsSwitch == null
-                && mPendingClientSbsResize == null
-                && surfaceGeneration == mActiveClientSbsDecoderGeneration
-                && mStereoRenderer != null && mStereoRenderer.isClientSbs();
-        if (!pendingEnable && !pendingResize && !contextRecovery) {
+        RendererCallbackOwner owner =
+                classifyRendererCallback(surfaceGeneration, eglAttachGeneration);
+        if (owner == RendererCallbackOwner.NONE) {
             return;
         }
         LimeLog.severe("Client SBS EGL output validation failed for generation "
                 + surfaceGeneration + ": " + reason);
-        if (pendingEnable) {
+        if (owner == RendererCallbackOwner.ENABLE) {
             completeClientSbsSwitch(surfaceGeneration, false);
-        } else if (pendingResize) {
+        } else if (owner == RendererCallbackOwner.RESIZE) {
             completeClientSbsResize(eglAttachGeneration, false);
-        } else if (contextRecovery && game != null) {
+        } else if (game != null) {
             game.handleDecoderSurfaceSwitchFailure();
         }
     }
