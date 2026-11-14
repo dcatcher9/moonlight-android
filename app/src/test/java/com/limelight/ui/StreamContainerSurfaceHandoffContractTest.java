@@ -1,5 +1,6 @@
 package com.limelight.ui;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -13,34 +14,33 @@ import java.nio.file.Files;
 public final class StreamContainerSurfaceHandoffContractTest {
     @Test
     public void completionRequiresExactLiveGenerationAndTarget() {
-        assertTrue(StreamContainer.isDecoderSurfaceHandoffCurrent(
+        assertTrue(DecoderSurfaceHandoff.isCurrent(
                 4, 4, true, false, true));
-        assertFalse(StreamContainer.isDecoderSurfaceHandoffCurrent(
+        assertFalse(DecoderSurfaceHandoff.isCurrent(
                 3, 4, true, false, true));
-        assertFalse(StreamContainer.isDecoderSurfaceHandoffCurrent(
+        assertFalse(DecoderSurfaceHandoff.isCurrent(
                 4, 4, false, false, true));
-        assertFalse(StreamContainer.isDecoderSurfaceHandoffCurrent(
+        assertFalse(DecoderSurfaceHandoff.isCurrent(
                 4, 4, true, true, true));
-        assertFalse(StreamContainer.isDecoderSurfaceHandoffCurrent(
+        assertFalse(DecoderSurfaceHandoff.isCurrent(
                 4, 4, true, false, false));
     }
 
     @Test
     public void ordinaryHandoffsAreAsyncBoundedAndTimeoutInvalidatesDecoder() throws Exception {
-        String source = readSource("StreamContainer.java");
-        String bind = methodBody(
-                source, "private void bindDecoderSurfaceAsync(Surface surface, long ownerDeadlineMs,");
-        String complete = methodBody(
-                source, "private void completeDecoderSurfaceHandoff(int handoffGeneration,");
+        String bind = methodBody(readSource("DecoderSurfaceHandoff.java"),
+                "void bindAsync(Surface surface, long ownerDeadlineMs,");
+        String complete = methodBody(readSource("DecoderSurfaceHandoff.java"),
+                "private void complete(int handoffGeneration,");
 
         assertTrue(bind.contains("game.setDecoderOutputSurfaceAsync("));
         assertTrue(bind.contains("surface, ownerDeadlineMs"));
-        assertTrue(bind.contains("mDeadlineHandler.postAtTime("));
+        assertTrue(bind.contains("deadlineHandler.postAtTime("));
         assertTrue(bind.contains("ownerDeadlineMs"));
-        assertTrue(bind.contains("mDecoderSurfaceHandoffRequest = queuedRequest"));
+        assertTrue(bind.contains(" request = queuedRequest"));
         assertFalse(bind.contains("setDecoderOutputSurfaceForGlRecovery"));
-        assertTrue(complete.contains("isDecoderSurfaceHandoffCurrent("));
-        assertTrue(complete.contains("cancelDecoderSurfaceHandoffAfterFailure()"));
+        assertTrue(complete.contains("isCurrent("));
+        assertTrue(complete.contains("cancelAfterFailure()"));
     }
 
     @Test
@@ -49,45 +49,55 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String recovery = methodBody(source,
                 "private boolean parkDecoderForClientSbsContextRecovery(Surface oldSurface,");
 
-        int invalidation = recovery.indexOf("invalidateDecoderSurfaceHandoff(true)");
+        int invalidation = recovery.indexOf("mDecoderHandoff.invalidate(true)");
         int synchronousPark = recovery.indexOf(
                 "game.setDecoderOutputSurfaceForGlRecovery(mDummySurface)");
         assertTrue(invalidation >= 0 && synchronousPark > invalidation);
-        assertTrue(recovery.contains("mClientSbsContextRecoveryParked = true"));
+        assertTrue(recovery.contains("mDecoderHandoff.contextRecoveryParked = true"));
     }
 
     @Test
     public void asyncQueuePublicationIsLinearizedWithGlRecoveryPark() throws Exception {
         String source = readSource("StreamContainer.java");
-        String bind = methodBody(
-                source, "private void bindDecoderSurfaceAsync(Surface surface, long ownerDeadlineMs,");
+        String bind = methodBody(readSource("DecoderSurfaceHandoff.java"),
+                "void bindAsync(Surface surface, long ownerDeadlineMs,");
         String recovery = methodBody(source,
                 "private boolean parkDecoderForClientSbsContextRecovery(Surface oldSurface,");
 
+        // The handoff synchronizes on its own lock field and the container's recovery park on
+        // that same field of the container's only handoff instance.
+        String handoffSource = readSource("DecoderSurfaceHandoff.java");
+        assertEquals(1, occurrences(handoffSource, "final Object lock = new Object();"));
+        assertEquals(1, occurrences(handoffSource, " Object lock"));
+        assertEquals(1, occurrences(source, "new DecoderSurfaceHandoff("));
+        assertTrue(source.contains(
+                "private final DecoderSurfaceHandoff mDecoderHandoff = new DecoderSurfaceHandoff("));
+
         int queue = bind.indexOf("game.setDecoderOutputSurfaceAsync(");
-        int bindLock = bind.lastIndexOf("synchronized (mDecoderSurfaceHandoffLock)", queue);
+        int bindLock = bind.lastIndexOf("synchronized (lock)", queue);
         assertTrue(queue >= 0 && bindLock >= 0);
         String bindTransition = blockBody(bind,
-                bind.indexOf('{', bindLock + "synchronized (mDecoderSurfaceHandoffLock)".length()));
-        int parkedCheck = bindTransition.indexOf("!mClientSbsContextRecoveryParked");
+                bind.indexOf('{', bindLock + "synchronized (lock)".length()));
+        int parkedCheck = bindTransition.indexOf("!contextRecoveryParked");
         int lockedQueue = bindTransition.indexOf("game.setDecoderOutputSurfaceAsync(");
         int requestPublication = bindTransition.indexOf(
-                "mDecoderSurfaceHandoffRequest = queuedRequest");
+                " request = queuedRequest");
         assertTrue(parkedCheck >= 0 && lockedQueue > parkedCheck
                 && requestPublication > lockedQueue);
 
-        int recoveryPublication = recovery.indexOf("mClientSbsContextRecoveryParked = true");
+        int recoveryPublication = recovery.indexOf(
+                "mDecoderHandoff.contextRecoveryParked = true");
         int recoveryLock = recovery.lastIndexOf(
-                "synchronized (mDecoderSurfaceHandoffLock)", recoveryPublication);
+                "synchronized (mDecoderHandoff.lock)", recoveryPublication);
         assertTrue(recoveryPublication >= 0 && recoveryLock >= 0);
         String recoveryTransition = blockBody(recovery,
                 recovery.indexOf('{', recoveryLock
-                        + "synchronized (mDecoderSurfaceHandoffLock)".length()));
-        assertTrue(recoveryTransition.contains("mClientSbsContextRecoveryParked = true"));
-        assertTrue(recovery.indexOf("invalidateDecoderSurfaceHandoff(true)")
+                        + "synchronized (mDecoderHandoff.lock)".length()));
+        assertTrue(recoveryTransition.contains("mDecoderHandoff.contextRecoveryParked = true"));
+        assertTrue(recovery.indexOf("mDecoderHandoff.invalidate(true)")
                 > recoveryPublication);
         assertTrue(recovery.indexOf("game.setDecoderOutputSurfaceForGlRecovery(mDummySurface)")
-                > recovery.indexOf("invalidateDecoderSurfaceHandoff(true)"));
+                > recovery.indexOf("mDecoderHandoff.invalidate(true)"));
     }
 
     @Test
@@ -116,11 +126,11 @@ public final class StreamContainerSurfaceHandoffContractTest {
 
         int deadline = resize.indexOf("mDeadlineHandler.postAtTime(");
         int park = resize.indexOf(
-                "bindDecoderSurfaceAsync(mDummySurface, resizeDeadlineMs");
+                "mDecoderHandoff.bindAsync(mDummySurface, resizeDeadlineMs");
         int validatedSizing = resize.indexOf("sizeSceneCoreSurface(", park);
         int resizeSceneCore = resize.indexOf("mXrPresenter.setHostSurfaceSize(", park);
         int finalBind = resize.indexOf(
-                "bindDecoderSurfaceAsync(target, resizeDeadlineMs", resizeSceneCore);
+                "mDecoderHandoff.bindAsync(target, resizeDeadlineMs", resizeSceneCore);
         assertTrue(deadline >= 0 && park > deadline);
         assertTrue(resizeSceneCore > park && finalBind > resizeSceneCore);
         assertTrue(resize.contains("SystemClock.uptimeMillis() >= resizeDeadlineMs"));
@@ -133,8 +143,8 @@ public final class StreamContainerSurfaceHandoffContractTest {
     public void ownerAndPerBindWatchdogsUseExactAbsoluteDeadlines() throws Exception {
         String source = readSource("StreamContainer.java");
         String clientSwitch = methodBody(source, "public void switchToClientSbs(boolean enable,");
-        String bind = methodBody(
-                source, "private void bindDecoderSurfaceAsync(Surface surface, long ownerDeadlineMs,");
+        String bind = methodBody(readSource("DecoderSurfaceHandoff.java"),
+                "void bindAsync(Surface surface, long ownerDeadlineMs,");
         String hostResize = methodBody(source,
                 "public boolean resizeHostSbsSurface(boolean sbs, int logicalWidth,");
 
@@ -191,7 +201,7 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String finish = methodBody(source, "private void finishContainerCleanup()");
 
         assertTrue(destroy.contains("mDestroyed = true"));
-        assertTrue(destroy.indexOf("invalidateDecoderSurfaceHandoff(false)")
+        assertTrue(destroy.indexOf("mDecoderHandoff.invalidate(false)")
                 > destroy.indexOf("mDestroyed = true"));
         assertTrue(finish.contains("mDummySurface.release()"));
     }
@@ -226,6 +236,15 @@ public final class StreamContainerSurfaceHandoffContractTest {
                 "surfaceReady ? mXrPresenter.getVideoSurface() : null");
         assertTrue(attempt >= 0 && guard > attempt && publication > guard);
         assertTrue(sizing.contains("target != null && target.isValid() ? target : null"));
+    }
+
+    private static int occurrences(String source, String token) {
+        int count = 0;
+        for (int index = source.indexOf(token); index >= 0;
+                index = source.indexOf(token, index + token.length())) {
+            count++;
+        }
+        return count;
     }
 
     private static String readSource(String name) throws IOException {
