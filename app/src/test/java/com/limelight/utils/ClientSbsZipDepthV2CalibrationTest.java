@@ -22,7 +22,13 @@ public class ClientSbsZipDepthV2CalibrationTest {
     }
 
     @Test(expected = IllegalStateException.class)
-    public void retiredUncalibratedGraphsCannotEnterRawV2Geometry() {
-        ClientSbsModelManifest.MIDAS_V2_STATIC_16_9.getV2RawCoordinateScale();
+    public void uncalibratedGraphsCannotEnterRawV2Geometry() {
+        ClientSbsModelManifest.createCheckpointBenchmarkManifest(
+                "external-checkpoint-t1504",
+                "d707ea7be998540979ac4b5d630770810b531aa0944ae3a52853d9af85ffb6dc",
+                new int[] {1, 196, 350, 3},
+                new int[] {1, 196, 350, 32},
+                ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16)
+                .getV2RawCoordinateScale();
     }
 }

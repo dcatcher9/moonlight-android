@@ -22,18 +22,6 @@ public class Stereo3DRendererTelemetryPolicyTest {
         assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(true, 0));
         assertFalse(Stereo3DRenderer.shouldPollHealthTelemetry(true, 1));
         assertTrue(Stereo3DRenderer.shouldPollHealthTelemetry(true, 4));
-
-        assertFalse(Stereo3DRenderer.shouldPollPerformanceTelemetry(false, 0));
-        assertTrue(Stereo3DRenderer.shouldPollPerformanceTelemetry(true, 0));
-        assertFalse(Stereo3DRenderer.shouldPollPerformanceTelemetry(true, 1));
-    }
-
-    @Test
-    public void unclassifiedEdgeSentinelNeverEntersTheTrend() {
-        assertFalse(Stereo3DRenderer.shouldAppendEdgeHistory(false, -1.0f));
-        assertFalse(Stereo3DRenderer.shouldAppendEdgeHistory(true, -1.0f));
-        assertFalse(Stereo3DRenderer.shouldAppendEdgeHistory(true, Float.NaN));
-        assertTrue(Stereo3DRenderer.shouldAppendEdgeHistory(true, 0.04f));
     }
 
     @Test
@@ -50,18 +38,14 @@ public class Stereo3DRendererTelemetryPolicyTest {
 
     @Test
     public void localV2DepthValidityDoesNotClaimRetiredAdaptiveOrAnchorFields() {
-        int waiting = Stereo3DRenderer.depthTelemetryValidFields(false, false);
+        int waiting = Stereo3DRenderer.depthTelemetryValidFields(false);
         assertTrue((waiting & SbsDepthTelemetrySnapshot.VALID_EFFECTIVE) != 0);
         assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
         assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
         assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SUBJECT) != 0);
         assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
 
-        int classified = Stereo3DRenderer.depthTelemetryValidFields(false, true);
-        assertFalse((classified & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
-        assertFalse((classified & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
-
-        int ready = Stereo3DRenderer.depthTelemetryValidFields(true, true);
+        int ready = Stereo3DRenderer.depthTelemetryValidFields(true);
         assertTrue((ready & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
         assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
         assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);

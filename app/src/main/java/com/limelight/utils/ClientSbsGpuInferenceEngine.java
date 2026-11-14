@@ -367,6 +367,9 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                 // initialization retains the slot until nativeDestroy() succeeds, preventing a
                 // second model from overlapping quarantined driver/LiteRT allocations.
                 claimProcessModelSlot();
+                // Time native compile/init only; the claim can wait on a previous engine's
+                // deferred teardown.
+                nativeInitializationStartedNs = System.nanoTime();
                 boolean success = nativeInitialize(
                         nativeHandle,
                         descriptor.getFd(),
@@ -375,7 +378,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                         runtimeContext.getApplicationInfo().nativeLibraryDir,
                         cacheDirectory.getAbsolutePath(),
                         manifest.getGpuExecutionPolicy().forcesFp32Compute(),
-                        manifest.hasDynamicSpatialShape(),
                         manifest.getInputWidth(), manifest.getInputHeight(),
                         manifest.getInputTensor().getChannels(),
                         manifest.getOutputWidth(), manifest.getOutputHeight(),
@@ -523,20 +525,10 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         return outputPixelStrides[slotIndex];
     }
 
-    /**
-     * Waits for renderer input and prior output-consumer fences on the GPU, invokes LiteRT, and
-     * returns a fence that the renderer can poll before consuming the output SSBO.
-     *
-     * <p>After all Java validation succeeds, ownership of both nonzero input fences transfers to
-     * native code even if invocation fails. Native normally queues each wait and deletes its
-     * handle; a fence whose wait itself fails remains retained for guarded teardown. The caller
-     * owns the nonzero output-ready fence returned on success. A consumed result must replace it
-     * with a new fence submitted after the renderer's output-buffer reads. Only an unread,
-     * discarded result may reuse its output-ready fence as the slot's no-op consumption fence.</p>
-     */
+    /** Instrumentation convenience: always infers from an already-packed input tensor. */
     long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence) {
         return run(slotIndex, inputReadyFence, previousOutputConsumedFence,
-                false, 0, 0, 0L);
+                false, 0, 0, 0L, 0);
     }
 
     /**
@@ -617,18 +609,21 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
     }
 
     /**
-     * Runs one authenticated production transaction. A valid near-identical proposal may skip
-     * LiteRT, but native still consumes both transferred fences and returns a new completion fence
-     * that participates in the same per-slot ownership contract as an inferred output.
+     * Waits for renderer input and prior output-consumer fences on the GPU, invokes LiteRT, and
+     * returns a fence that the renderer can poll before consuming the output SSBO.
+     *
+     * <p>After all Java validation succeeds, ownership of both nonzero input fences transfers to
+     * native code even if invocation fails. Native normally queues each wait and deletes its
+     * handle; a fence whose wait itself fails remains retained for guarded teardown. The caller
+     * owns the nonzero output-ready fence returned on success. A consumed result must replace it
+     * with a new fence submitted after the renderer's output-buffer reads. Only an unread,
+     * discarded result may reuse its output-ready fence as the slot's no-op consumption fence.</p>
+     *
+     * <p>This is the authenticated production transaction. A valid near-identical proposal may
+     * skip LiteRT, but native still consumes both transferred fences and returns a new completion
+     * fence that participates in the same per-slot ownership contract as an inferred output. A
+     * nonzero model texture defers exact RGB tensor packing to native on INFER only.</p>
      */
-    long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence,
-             boolean nearIdenticalCandidate, int decisionBufferId,
-             int decisionByteOffset, long decisionToken) {
-        return run(slotIndex, inputReadyFence, previousOutputConsumedFence,
-                nearIdenticalCandidate, decisionBufferId, decisionByteOffset, decisionToken, 0);
-    }
-
-    /** A nonzero model texture defers exact RGB tensor packing to native on INFER only. */
     long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence,
              boolean nearIdenticalCandidate, int decisionBufferId,
              int decisionByteOffset, long decisionToken, int modelInputTextureId) {
@@ -729,11 +724,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
 
     long getLastNativeInitializationNanos() {
         return lastNativeInitializationNanos;
-    }
-
-    /** Fixed native scheduling preference, shown in the Stats panel. */
-    String getGpuPriorityHintLabel() {
-        return "Low";
     }
 
     private static void validateSlotIndex(int slotIndex) {
@@ -861,7 +851,6 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
                                                     long modelOffset, long modelLength,
                                                     String nativeLibraryDir, String cacheDir,
                                                     boolean forceGpuFp32Compute,
-                                                    boolean dynamicShape,
                                                     int inputWidth, int inputHeight,
                                                     int inputChannels,
                                                     int outputWidth, int outputHeight,

@@ -27,10 +27,8 @@ import java.nio.ByteOrder;
  * {@link #processRendererOwned}.</p>
  */
 public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
-    public static final int DEFAULT_TENSOR_WIDTH = 256;
-    public static final int DEFAULT_TENSOR_HEIGHT = 256;
-    public static final int DEFAULT_OUTPUT_WIDTH = 256;
-    public static final int DEFAULT_OUTPUT_HEIGHT = 144;
+    /** Retired adaptive-pop edge sentinel still published in the profile and health telemetry. */
+    static final float LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE = -1.0f;
 
     /**
      * Renderer profile texture layout. Each entry is one RGBA32F texel:
@@ -41,17 +39,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
      *     <li>valid count, hard-cut pulse, current-valid bit, history-advance bit</li>
      * </ol>
      */
-    // Retained solely by offline legacy shader utilities. Production V2 uses fixed pop 1.75.
-    static final float LEGACY_ADAPTIVE_POP_FLOOR = 1.20f;
-    static final float LEGACY_ADAPTIVE_POP_CEILING = 2.00f;
-    static final float LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE = -1.0f;
-    @Deprecated public static final float ADAPTIVE_POP_FLOOR = LEGACY_ADAPTIVE_POP_FLOOR;
-    @Deprecated public static final float ADAPTIVE_POP_CEILING = LEGACY_ADAPTIVE_POP_CEILING;
-    @Deprecated public static final float ADAPTIVE_POP_UNCLASSIFIED_EDGE =
-            LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE;
-    /** Retained by the offline legacy profile shader only. */
-    static final int PROFILE_SETTLE_REFERENCE_FRAMES = 8;
-
     public static final int PROFILE_TEXEL_COUNT = 4;
 
     /** Last notable cut-event diagnostic bits copied with the existing health snapshot. */
@@ -200,12 +187,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     /** First frame after construction/reset keeps per-dispatch diagnostics; steady state batches. */
     private boolean validateDispatchesIndividually = true;
     private boolean released;
-
-    /** Creates the legacy default-size processor used only by isolated tests and tooling. */
-    public static ClientSbsGpuDepthProcessor createDefault() {
-        return new ClientSbsGpuDepthProcessor(DEFAULT_TENSOR_WIDTH, DEFAULT_TENSOR_HEIGHT,
-                16.0f / 9.0f);
-    }
 
     /** Creates a processor whose output removes legacy reflected aspect-ratio padding. */
     public ClientSbsGpuDepthProcessor(int tensorWidth, int tensorHeight, float sourceAspect) {
@@ -1254,15 +1235,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private float effectiveRangeHigh;
         private float effectiveRangeWidth;
         private boolean stereoProfileInitialized;
-        private float stretchLow;
-        private float stretchHigh;
-        private float stretchInverseRange;
         private float subjectDepth;
-        private float recenterDelta;
-        private float zeroAnchorShift;
         private float edgeFraction;
         private float popStrength;
-        private float popRatio;
         private float changeFraction;
         private float hardCutEvidence;
         private float shotRawMean;
@@ -1306,15 +1281,9 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             effectiveRangeHigh = 0.0f;
             effectiveRangeWidth = 0.0f;
             stereoProfileInitialized = false;
-            stretchLow = 0.0f;
-            stretchHigh = 1.0f;
-            stretchInverseRange = 1.0f;
             subjectDepth = 0.5f;
-            recenterDelta = 0.0f;
-            zeroAnchorShift = 0.0f;
             edgeFraction = LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE;
             popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
-            popRatio = 1.0f;
             changeFraction = 0.0f;
             hardCutEvidence = 0.0f;
             shotRawMean = 0.0f;
@@ -1390,17 +1359,11 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             currentDepthValid = (frameState & requiredCurrentFlags) == requiredCurrentFlags;
             historyAdvanced = (frameState
                     & ClientSbsShotCutPolicy.FRAME_STATE_HISTORY_ADVANCES) != 0;
-            // Keep the source-neutral telemetry ABI truthful: V2 has no normalized stretch,
-            // recenter, Bestv2 anchor, edge classifier, or adaptive-pop controller.
-            stretchLow = 0.0f;
-            stretchHigh = 0.0f;
-            stretchInverseRange = 0.0f;
+            // Keep the source-neutral telemetry ABI truthful: V2 has no edge classifier or
+            // adaptive-pop controller.
             subjectDepth = shotRawMean;
-            recenterDelta = 0.0f;
-            zeroAnchorShift = 0.0f;
             edgeFraction = LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE;
             popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
-            popRatio = 1.0f;
             // Match publishProfile() exactly: both the persistent depth state and the
             // adaptive raw camera must exist. Current-field validity is reported separately
             // because a valid frame may deliberately hold history while remaining renderable.
@@ -1490,27 +1453,14 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         public float getEffectiveRangeWidth() { return effectiveRangeWidth; }
         public boolean isPercentileRangeCollapsed() { return percentileRangeCollapsed; }
         public boolean isStereoProfileInitialized() { return stereoProfileInitialized; }
-        public float getStretchLow() { return stretchLow; }
-        public float getStretchHigh() { return stretchHigh; }
-        public float getStretchInverseRange() { return stretchInverseRange; }
         public float getSubjectDepth() { return subjectDepth; }
-        public float getRecenterDelta() { return recenterDelta; }
-        /** Retired Bestv2 diagnostic, always zero for the raw-coordinate renderer. */
-        public float getZeroAnchorShift() { return zeroAnchorShift; }
         public float getEdgeFraction() { return edgeFraction; }
-        /** V2 has fixed pop, so the retired adaptive classifier is never present. */
-        public boolean hasAdaptivePopClassification() {
-            return false;
-        }
         public float getPopStrength() { return popStrength; }
-        public float getPopRatio() { return popRatio; }
         public float getChangeFraction() { return changeFraction; }
         /** 0..1 internal evidence, or 2 when an appearance proposal was selected. */
         public float getHardCutEvidence() { return hardCutEvidence; }
-        /** Continuously observed raw zero plane; the historical accessor remains for tooling. */
+        /** Continuously observed raw zero plane. */
         public float getRawZero() { return shotRawMean; }
-        @Deprecated
-        public float getShotRawMean() { return getRawZero(); }
         public float getCurrentRawMean() { return currentRawMean; }
         public float getRawInverseAmplitude() { return rawInverseAmplitude; }
         public float getTargetRawInverseAmplitude() { return targetRawInverseAmplitude; }
@@ -1526,9 +1476,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         public boolean wasAppearanceProposalSelected() {
             return (cutDecisionFlags & CUT_DECISION_SELECTED_APPEARANCE) != 0;
         }
-        /** @deprecated This was always an appearance proposal, not an accepted cut request. */
-        @Deprecated
-        public boolean wasExternalCutRequested() { return wasAppearanceProposalSelected(); }
         public boolean wasHardCut() { return hardCut; }
         public boolean isGeometryCutArmed() { return geometryCutArmed; }
         public int getSceneAge() { return sceneAge; }
@@ -1536,9 +1483,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         /** Cumulative since the last temporal reset, so sparse polling cannot miss cuts. */
         public long getHardCutCount() { return hardCutCount; }
         public long getAppearanceProposalCount() { return appearanceProposalCount; }
-        /** @deprecated Use {@link #getAppearanceProposalCount()}. */
-        @Deprecated
-        public long getExternalCutRequestCount() { return appearanceProposalCount; }
         public long getAcceptedAppearanceCutCount() { return acceptedAppearanceCutCount; }
         public long getAcceptedGeometryCutCount() { return acceptedGeometryCutCount; }
         public long getAcceptedStructurelessEntryCutCount() {

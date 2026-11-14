@@ -372,9 +372,6 @@
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
 
     <!-- Array strings -->
-    <string name="resolution_360p">360p</string>
-    <string name="resolution_480p">480p</string>
-    <string name="resolution_720p">720p</string>
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="resolution_4k">4K</string>
@@ -412,29 +409,14 @@
     <string name="xr_resolution_tablet_1668p_high">Tablet 1668p+</string>
     <string name="xr_resolution_tablet_1668p_high_portrait">Tablet 1668p+ Portrait</string>
 
-    <string name="fps_30">30 FPS</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="fps_72">72 FPS</string>
-    <string name="fps_90">90 FPS</string>
-    <string name="fps_120">120 FPS</string>
 
     <string name="audioconf_stereo">Stereo</string>
     <string name="audioconf_51surround">5.1 Surround Sound</string>
     <string name="audioconf_71surround">7.1 Surround Sound</string>
 
-    <string name="videoformat_auto">Automatic (Recommended)</string>
-    <string name="videoformat_av1always">Prefer AV1 (Experimental)</string>
-    <string name="videoformat_hevcalways">Prefer HEVC</string>
-    <string name="videoformat_h264always">Prefer H.264</string>
 
     <string name="title_frame_pacing">Frame pacing</string>
     <string name="summary_frame_pacing">Specify how to balance video latency and smoothness</string>
-    <string name="pacing_warp">Warp Drive (Experimental)</string>
-    <string name="pacing_warp2">Warp 2 (Experimental)</string>
-    <string name="pacing_latency">Prefer lowest latency</string>
-    <string name="pacing_balanced">Balanced</string>
-    <string name="pacing_balanced_alt">Balanced with FPS limit</string>
-    <string name="pacing_smoothness">Prefer smoothest video (may significantly increase latency)</string>
 
 
     <string name="keyboard_service_label">Moonlight 3D Physical keyboard</string>
@@ -625,8 +607,6 @@
     <string name="summary_checkbox_use_virtual_display">Use Virtual Display by default.\nVirtual Display can automatically match your client side resolution and frame rate settings, giving you a seamless streaming experience.\nRequires Sunshine 3D as host streaming software.</string>
     <string name="title_checkbox_resume_without_confirm">Quick Resume</string>
     <string name="summary_checkbox_resume_without_confirm">Do not show resume menu when clicking resume button, resume the app immediately.</string>
-    <string name="title_raw_sbs_per_eye_resolution">Raw SBS per-eye resolution</string>
-    <string name="summary_raw_sbs_per_eye_resolution">Full sends two complete eye views at double width. Half keeps the selected stream width and gives each eye half its horizontal pixels.</string>
     <string name="title_checkbox_enable_sticky_modifier_key_virtual_keyboard">Sticky modifier keys</string>
     <string name="summary_checkbox_enable_sticky_modifier_key_virtual_keyboard">Use sticky modifier keys on virtual full keyboard and custom onscreen keyboard.</string>
     <string name="virtual_keyboard_hide">Hide\nKBD</string>
@@ -658,9 +638,6 @@
     <string name="xr_movie_format_half_sbs">Half SBS</string>
     <string name="xr_movie_format_full_sbs">Full SBS</string>
     <string name="xr_bar_client_sbs_ai">Client 3D</string>
-    <string name="xr_bar_host_sbs_raw">Raw SBS</string>
-    <string name="xr_raw_requires_virtual_display">Raw SBS needs Sunshine 3D’s Virtual Display. Open Virtual Display from the Library, then select Raw SBS.</string>
-    <string name="xr_raw_resolution_adjusted">That resolution does not fit the selected Raw SBS packing. This session was adjusted to 4K.</string>
     <string name="xr_bar_host_sbs_ai">Host 3D</string>
     <string name="xr_bar_machines">Machines</string>
     <string name="xr_home_subtitle">Choose a PC to open its XR application library.</string>
@@ -880,11 +857,6 @@
     <string name="xr_pacing_fps_cap">FPS cap</string>
     <string name="xr_pacing_smooth">Smooth</string>
     <string name="xr_depth_model_zipdepth_base">ZipDepth Base FP16 · short 384</string>
-    <string name="xr_raw_per_eye_resolution">Per-Eye Resolution</string>
-    <string name="xr_raw_per_eye_full">Full</string>
-    <string name="xr_raw_per_eye_half">Half</string>
-    <string name="xr_raw_geometry">%1$d × %2$d encoded per eye · %3$d × %4$d stream</string>
-    <string name="xr_raw_geometry_unsupported">This custom resolution cannot use the selected packing.</string>
     <string name="xr_audio_stereo">Stereo</string>
     <string name="xr_audio_51" translatable="false">5.1</string>
     <string name="xr_audio_71" translatable="false">7.1</string>
@@ -914,8 +886,6 @@
     <string name="xr_mode_options_title">Mode options</string>
     <string name="xr_mode_normal_source">Mono presentation</string>
     <string name="xr_mode_normal_detail">Direct decoder presentation</string>
-    <string name="xr_mode_host_raw_source">Packed SBS source</string>
-    <string name="xr_mode_host_raw_detail">Stereo layout is produced by the game</string>
     <string name="xr_mode_host_ai_source">Host depth engine</string>
     <string name="xr_mode_host_loading">Loading on PC</string>
     <string name="xr_mode_host_ready">Ready on PC</string>

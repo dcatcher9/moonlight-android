@@ -21,10 +21,9 @@ import com.limelight.LimeLog;
  * publishing high-recall structural evidence for the depth processor.</p>
  *
  * <p>No frame-sized texture or buffer is read by the CPU.
- * {@link #processRendererOwnedAndPack(int, int)} packs the model tensor while reducing the same
+ * {@code processRendererOwnedAndPack} packs the model tensor while reducing the same
  * texels for scene-cut detection and near-identical reuse, then publishes one compact scene-cut
- * evidence record plus a tiny authenticated reuse record. The two-argument overload uses the SSBO returned
- * by {@link #getSceneCutBufferId()} and forces inference; the renderer overload writes a stable
+ * evidence record plus a tiny authenticated reuse record. It writes a stable
  * caller-owned scene-cut record for the matching tensor slot. The native worker reads only the
  * matching 32-byte reuse record after the input fence. The renderer must finish the transaction
  * with exactly one call
@@ -77,7 +76,6 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private final int blockGridHeight;
     private final int inputTensorBytes;
     private final int[] lumaTextures = new int[2];
-    private final Result result = new Result();
     private final FrameTransaction frameTransaction = new FrameTransaction();
 
     private int resetProgram;
@@ -171,40 +169,22 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
      * be finished with
      * exactly one call to
      * {@link #commitAcceptedFrame(int)} or {@link #discardPendingFrame()} before another frame is
-     * processed. The returned object is reused and must not be retained as a per-frame
-     * snapshot.</p>
+     * processed.</p>
+     *
+     * <p>The cut record is published into caller-owned per-frame storage. Keeping one record per
+     * tensor slot lets a later capture advance detector history without overwriting the cut
+     * evidence paired with a completed inference result. The fused near-identical pass compares
+     * a candidate only with the last frame committed after a real inference.</p>
      */
-    public Result processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo) {
-        return processRendererOwnedAndPack(modelInputTexture, packedFloatSsbo,
-                outputBuffer, SCENE_CUT_BYTE_OFFSET, false, 0L, 0, 0L, 0L);
-    }
-
-    /**
-     * Enqueues detection while publishing the cut record into caller-owned per-frame storage.
-     * Keeping one record per tensor slot lets a later capture advance detector history without
-     * overwriting the cut evidence paired with a completed inference result.
-     */
-    public Result processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo,
-                                               int sceneCutOutputSsbo,
-                                               int sceneCutOutputByteOffset) {
-        return processRendererOwnedAndPack(modelInputTexture, packedFloatSsbo,
-                sceneCutOutputSsbo, sceneCutOutputByteOffset,
-                false, 0L, 0, 0L, 0L);
-    }
-
-    /**
-     * Enqueues the fused scene-cut and near-identical passes for one renderer tensor slot.
-     * A candidate is compared only with the last frame committed after a real inference.
-     */
-    public Result processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo,
-                                               int sceneCutOutputSsbo,
-                                               int sceneCutOutputByteOffset,
-                                               boolean nearIdenticalCandidate,
-                                               long decisionToken,
-                                               int decisionSlot,
-                                               long sourceFrameSequence,
-                                               long capturedAtNs) {
-        return processRendererOwnedAndPack(modelInputTexture, packedFloatSsbo,
+    public void processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo,
+                                             int sceneCutOutputSsbo,
+                                             int sceneCutOutputByteOffset,
+                                             boolean nearIdenticalCandidate,
+                                             long decisionToken,
+                                             int decisionSlot,
+                                             long sourceFrameSequence,
+                                             long capturedAtNs) {
+        processRendererOwnedAndPack(modelInputTexture, packedFloatSsbo,
                 sceneCutOutputSsbo, sceneCutOutputByteOffset, nearIdenticalCandidate,
                 decisionToken, decisionSlot, sourceFrameSequence, capturedAtNs, false);
     }
@@ -215,15 +195,15 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
      * including a failed or malformed decision read. The texture must remain unchanged until
      * this transaction is committed or discarded.
      */
-    public Result processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo,
-                                               int sceneCutOutputSsbo,
-                                               int sceneCutOutputByteOffset,
-                                               boolean nearIdenticalCandidate,
-                                               long decisionToken,
-                                               int decisionSlot,
-                                               long sourceFrameSequence,
-                                               long capturedAtNs,
-                                               boolean lazyInputPacking) {
+    public void processRendererOwnedAndPack(int modelInputTexture, int packedFloatSsbo,
+                                             int sceneCutOutputSsbo,
+                                             int sceneCutOutputByteOffset,
+                                             boolean nearIdenticalCandidate,
+                                             long decisionToken,
+                                             int decisionSlot,
+                                             long sourceFrameSequence,
+                                             long capturedAtNs,
+                                             boolean lazyInputPacking) {
         assertOwnerContext();
         if (modelInputTexture == 0) {
             throw new IllegalArgumentException("modelInputTexture must be a valid GL texture");
@@ -342,8 +322,6 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
                 pendingCapturedAtNs = 0L;
             }
         }
-
-        return result;
     }
 
     /**
@@ -390,7 +368,6 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
         frameTransaction.commitAcceptedFrame();
-        result.frameSequence = frameTransaction.getFrameSequence();
     }
 
     /** Discards a resolved frame that was not transferred to the inference queue. */
@@ -400,7 +377,6 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         pendingModelInputTexture = 0;
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
-        result.frameSequence = frameTransaction.getFrameSequence();
     }
 
     /**
@@ -414,7 +390,6 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         pendingModelInputTexture = 0;
         pendingFrameSequence = 0L;
         pendingCapturedAtNs = 0L;
-        result.frameSequence = 0L;
         try {
             bindSsbo(STATS_SSBO_BINDING, statsBuffer);
             bindSsbo(OUTPUT_SSBO_BINDING, outputBuffer);
@@ -787,27 +762,6 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
         lumaTextures[0] = 0;
         lumaTextures[1] = 0;
         frameTransaction.reset();
-        result.frameSequence = 0L;
-    }
-
-    /** Reused view of the most recently accepted detection. */
-    public final class Result {
-        private long frameSequence;
-
-        private Result() {
-        }
-
-        public int getSceneCutBufferId() {
-            return ClientSbsGpuSceneCutDetector.this.getSceneCutBufferId();
-        }
-
-        public int getSceneCutByteOffset() {
-            return SCENE_CUT_BYTE_OFFSET;
-        }
-
-        public long getFrameSequence() {
-            return frameSequence;
-        }
     }
 
     /** CPU-side transaction state, kept independent from GLES so its invariants are unit-testable. */

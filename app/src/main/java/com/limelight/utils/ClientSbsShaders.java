@@ -314,8 +314,8 @@ final class ClientSbsShaders {
             "  return sourceXs;",
             "}",
             "void main() {",
-            // As with the compatibility map, store signed displacements rather than absolute U
-            // so RG16F retains useful sub-pixel precision across the complete eye.
+            // Store signed displacements rather than absolute U so RG16F retains useful
+            // sub-pixel precision across the complete eye.
             "  vec2 sourceXs = clamp(reprojectBothEyes(), 0.0, 1.0);",
             "  gl_FragColor = vec4(sourceXs - v_TexCoord.xx, 0.0, 1.0);",
             "}");

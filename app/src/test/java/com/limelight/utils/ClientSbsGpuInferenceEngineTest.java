@@ -133,15 +133,22 @@ public class ClientSbsGpuInferenceEngineTest {
     }
 
     @Test
-    public void productionInitializeRejectsRetiredManifestBeforeContextOrNativeWork()
+    public void productionInitializeRejectsNonZipDepthManifestBeforeContextOrNativeWork()
             throws Exception {
         Constructor<ClientSbsGpuInferenceEngine> constructor =
                 ClientSbsGpuInferenceEngine.class.getDeclaredConstructor(long.class);
         constructor.setAccessible(true);
         ClientSbsGpuInferenceEngine engine = constructor.newInstance(1L);
+        ClientSbsModelManifest nonZipDepth =
+                ClientSbsModelManifest.createCheckpointBenchmarkManifest(
+                        "external-checkpoint-t1504",
+                        "d707ea7be998540979ac4b5d630770810b531aa0944ae3a52853d9af85ffb6dc",
+                        new int[] {1, 196, 350, 3},
+                        new int[] {1, 196, 350, 32},
+                        ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16);
 
         assertThrows(IllegalArgumentException.class,
-                () -> engine.initialize(null, ClientSbsModelManifest.MIDAS_V2_STATIC_16_9));
+                () -> engine.initialize(null, nonZipDepth));
     }
 
     @Test

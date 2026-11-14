@@ -85,6 +85,27 @@ public final class XrDockRevealInteractionTest {
     }
 
     @Test
+    public void clearedAttentionStateForgetsAHoverWhoseExitWasNeverDelivered() {
+        Button pill = focusablePill(themedActivity());
+        AtomicBoolean attention = new AtomicBoolean();
+        XrStreamPresenter.DockRevealViewAttentionState state =
+                new XrStreamPresenter.DockRevealViewAttentionState();
+        XrStreamPresenter.configureDockRevealInteractions(
+                pill, () -> { }, attention::set, state);
+
+        hover(pill, MotionEvent.ACTION_HOVER_ENTER);
+        assertTrue(state.active());
+        state.clear();
+        assertFalse(state.active());
+
+        // Without the clear, the latched hover would keep attention true after focus leaves.
+        assertTrue(pill.requestFocus());
+        assertTrue(attention.get());
+        pill.clearFocus();
+        assertFalse(attention.get());
+    }
+
+    @Test
     public void firstPressAndOrdinaryClickBothHaveDirectRevealPaths() {
         Activity activity = themedActivity();
         AtomicInteger pressReveals = new AtomicInteger();

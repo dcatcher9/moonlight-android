@@ -86,6 +86,8 @@ public final class XrStreamPresenterViewTest {
         // Keep real hosted Android Views and their click handlers; only SceneCore entities are mocked.
         try (MockedStatic<PanelEntity> panels = mockStatic(PanelEntity.class,
                 invocation -> mock(PanelEntity.class))) {
+            // buildControlBar creates the dock gaze tracker, which requires a Session.
+            setField(presenter, "session", mock(androidx.xr.runtime.Session.class));
             Method build = XrStreamPresenter.class.getDeclaredMethod("buildControlBar", float.class);
             build.setAccessible(true);
             build.invoke(presenter, 2.0f);
@@ -118,7 +120,7 @@ public final class XrStreamPresenterViewTest {
             assertSame(PresentationMode.MOVIE_3D, getField(items.get(4), "selectsMode"));
             assertFalse(labels.contains(activity.getString(R.string.xr_bar_host_sbs_ai)));
             assertFalse(labels.contains(activity.getString(R.string.xr_bar_client_sbs_ai)));
-            assertFalse(labels.contains(activity.getString(R.string.xr_bar_host_sbs_raw)));
+            assertFalse(labels.contains("Raw SBS"));
             assertEquals(activity.getString(R.string.game_menu_disconnect), labels.get(8));
             if (BuildConfig.DEBUG) {
                 assertEquals(activity.getString(R.string.xr_bar_dump), labels.get(9));
@@ -395,6 +397,8 @@ public final class XrStreamPresenterViewTest {
         presenter.setSettingsRequestedPresentationMode(PresentationMode.HOST_SBS_AI);
         try (MockedStatic<PanelEntity> panels = mockStatic(PanelEntity.class,
                 invocation -> mock(PanelEntity.class))) {
+            // buildControlBar creates the dock gaze tracker, which requires a Session.
+            setField(presenter, "session", mock(androidx.xr.runtime.Session.class));
             Method build = XrStreamPresenter.class.getDeclaredMethod("buildControlBar", float.class);
             build.setAccessible(true);
             build.invoke(presenter, 2.0f);

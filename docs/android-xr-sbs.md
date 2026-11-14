@@ -147,19 +147,22 @@ its manual format choices are independent of this Game protocol.
 
 ### Historical Raw transport compatibility
 
-`HOST_SBS_RAW` and its arithmetic helpers remain only for old data and compatibility tests. Raw is
-absent from the dock and Global Settings, and an old last-mode selection restores **2D**. Valid
-legacy resolution/FPS/bitrate overrides are copied once into Movie when it has no explicit tuple;
-the original Raw data, shared settings and session identity remain preserved. Raw's Full/Half
-field is not copied into Movie or used as readiness evidence.
+`HOST_SBS_RAW` remains only as a `PresentationMode` enum constant so stored records that name it
+still parse. The client has no Raw transport arithmetic, packing choice, controls or strings. Raw is
+absent from the dock and Global Settings, and `PresentationMode.safeStartupMode` restores **2D** for
+an old last-mode selection. `SessionSettingsStore` copies valid legacy resolution/FPS/bitrate
+overrides once into Movie when Movie has no explicit tuple; the original Raw data, shared settings
+and session identity remain preserved. `XrSessionSettingsController` commits and global resets
+cover every mode except Raw, so the stored Raw overrides are not rewritten. Raw's Full/Half field
+is not read, not copied into Movie, and not used as readiness evidence.
 
 Historically, Raw **Full** treated the selected `W x H` as per-eye dimensions and negotiated a
 `2W x H` virtual desktop/stream; **Half** kept a `W x H` packed desktop with `W/2 x H` eyes and a
 matching `W/(2H)` physical quad. Full's exact packed width was limited to 8192 pixels; entering or
 leaving Full, or changing Full/Half while Raw was live, required reconnecting. That workflow required
 a virtual-display-backed launch because physical capture only aspect-fitted the desktop. These
-retained legacy semantics do not describe the current Movie format buttons and must not be applied
-to Game or Movie merely because a mode is selected.
+historical semantics are no longer implemented. They do not describe the current Movie format
+buttons and must not be applied to Game or Movie merely because a mode is selected.
 
 ### Shared stream behavior
 

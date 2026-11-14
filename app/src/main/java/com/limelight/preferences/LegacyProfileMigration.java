@@ -38,7 +38,12 @@ public final class LegacyProfileMigration {
     private static final String PROFILES_DIR = "profiles";
     private static final String PROFILES_FILE = "profiles.json";
 
-    /** Only settings still visible in the XR Global Defaults UI may leave a legacy profile. */
+    /**
+     * Keys copied from the active legacy profile into the global preferences.
+     * {@code list_raw_sbs_per_eye_resolution} is not shown in the Global Defaults UI and no
+     * application code reads it; it stays listed so the keys written on users' devices are
+     * unchanged.
+     */
     private static final Set<String> RETAINED_XR_KEYS = new HashSet<>(Arrays.asList(
             "list_resolution", "list_fps", "seekbar_bitrate_kbps",
             "checkbox_enable_hdr", "checkbox_full_range", "video_format", "frame_pacing",

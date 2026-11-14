@@ -11,7 +11,6 @@ import android.content.Intent;
 
 import androidx.test.core.app.ApplicationProvider;
 
-import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.nvstream.HostSessionLaunchRequest;
 
@@ -102,49 +101,5 @@ public final class GameReconnectLifecycleTest {
                 PresentationMode.CLIENT_SBS_AI));
         assertFalse(Game.hostCapabilityRequiresNormalReconnect(true,
                 PresentationMode.HOST_SBS_AI));
-    }
-
-    @Test
-    public void rawSbsNegotiatesDoubleWidthFromLogicalPerEyeQuality() {
-        assertArrayEquals(new int[] {7680, 2160},
-                Game.xrTransportDimensions(3840, 2160,
-                        PresentationMode.HOST_SBS_RAW));
-        assertArrayEquals(new int[] {7680, 2160},
-                Game.xrTransportDimensions(3840, 2160,
-                        PresentationMode.HOST_SBS_RAW,
-                        PreferenceConfiguration.RawSbsPerEyeResolution.FULL));
-    }
-
-    @Test
-    public void rawSbsHalfKeepsLogicalTransportWidth() {
-        assertArrayEquals(new int[] {3840, 2160},
-                Game.xrTransportDimensions(3840, 2160,
-                        PresentationMode.HOST_SBS_RAW,
-                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
-    }
-
-    @Test
-    public void nonRawModesKeepTheirLogicalTransportDimensions() {
-        assertArrayEquals(new int[] {3840, 2160},
-                Game.xrTransportDimensions(3840, 2160,
-                        PresentationMode.NORMAL));
-        assertArrayEquals(new int[] {3840, 2160},
-                Game.xrTransportDimensions(3840, 2160,
-                        PresentationMode.HOST_SBS_AI,
-                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF));
-    }
-
-    @Test
-    public void rawRequiresRequestedOrApolloSyntheticVirtualDisplay() {
-        assertTrue(Game.rawSbsHasVirtualDisplayBacking(true, "Desktop", null));
-        assertTrue(Game.rawSbsHasVirtualDisplayBacking(
-                false, "Virtual Display", null));
-        assertTrue(Game.rawSbsHasVirtualDisplayBacking(
-                false,
-                "app",
-                "8902cb19-674a-403d-a587-41b092e900ba"));
-        assertFalse(Game.rawSbsHasVirtualDisplayBacking(
-                false, "Desktop", "not-the-virtual-display"));
-        assertFalse(Game.rawSbsHasVirtualDisplayBacking(false, null, null));
     }
 }

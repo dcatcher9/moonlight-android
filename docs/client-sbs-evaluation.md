@@ -1474,7 +1474,6 @@ coordinate-calibration and strict-failure guardrails in addition to the family-a
     --tests "com.limelight.sbs.ClientSbsGpuTimerTest" `
     --tests "com.limelight.sbs.ClientSbsTemporalTuningTest" `
     --tests "com.limelight.binding.video.DecoderModeTransitionGateTest" `
-    --tests "com.limelight.utils.ClientSbsDepthInputShapeTest" `
     --tests "com.limelight.utils.ClientSbsGpuInferenceEngineTest" `
     --tests "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
     --tests "com.limelight.utils.ClientSbsModelManifestTest" `
@@ -1518,8 +1517,9 @@ The tests cover:
   different client and negotiated host cadences.
 - `DecoderModeTransitionGateTest`: IDR/serial and presentation-timestamp gating around decoder
   output-surface transitions.
-- `ClientSbsDepthInputShapeTest`: deterministic nearest-multiplicative-aspect selection across the
-  three ZipDepth buckets.
+- `ClientSbsDepthInputShapeTest` and its `ClientSbsDepthInputShape` helper were removed with the
+  retired DA-V2 static-bucket models. `ClientSbsModelManifestTest` covers nearest-aspect selection
+  across the three ZipDepth buckets.
 - `ClientSbsGpuInferenceEngineTest`: compiler-cache identity, fixed Low GPU priority, infer/reuse
   disposition validation, and the process-wide single-model ownership slot.
 - `ClientSbsOutputSurfaceValidationTest`: exact `2W x H` EGL realization and per-eye GL limit
@@ -1527,7 +1527,7 @@ The tests cover:
 - `ClientSbsModelManifestTest`: exact ZipDepth graph identities, hashes, fixed tensor contracts,
   dimensions, buffer sizes, nearest-aspect routing, and legacy-ID migration.
 - `ClientSbsZipDepthV2CalibrationTest`: every production graph carries its independently fitted raw
-  scale and retired uncalibrated graphs cannot enter V2 geometry.
+  scale and an uncalibrated non-ZipDepth graph cannot enter V2 geometry.
 - `ClientSbsModelArchiveTest`: flavor-neutral solid TAR/XZ entry extraction and missing-entry
   rejection.
 - `ClientSbsPackagedModelArchiveTest`: every packaged ZipDepth entry matches its manifest SHA-256,

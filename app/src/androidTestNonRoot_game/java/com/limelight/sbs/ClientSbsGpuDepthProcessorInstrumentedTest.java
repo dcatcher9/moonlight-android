@@ -453,7 +453,7 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                         processor.pollHealthSnapshot();
                 assertNotNull(recovered);
                 assertTrue(recovered.isCurrentGeometryReady());
-                assertEquals(expectedMean(0.0f), recovered.getShotRawMean(), 2.0e-5f);
+                assertEquals(expectedMean(0.0f), recovered.getRawZero(), 2.0e-5f);
                 assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
             } finally {
                 GLES30.glDeleteBuffers(1, new int[] {rawBuffer}, 0);

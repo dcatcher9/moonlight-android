@@ -88,11 +88,12 @@ final class ClientSbsModelAssetCache {
                             + " bytes=" + stagedFile.length() + " elapsed="
                             + String.format(java.util.Locale.ROOT, "%.1f ms",
                             Math.max(0L, System.nanoTime() - startedNs) / 1_000_000.0));
-                } catch (IOException | RuntimeException error) {
+                } catch (IOException | RuntimeException | OutOfMemoryError error) {
                     // Normal and Host SBS remain independent. Authoritative Client SBS initialization
                     // reports its own failure if the user later requests the unavailable path.
-                    LimeLog.info("Client SBS model asset pre-stage deferred: "
-                            + error.getMessage());
+                    // XZ decoding allocates its dictionary in one array; a failed allocation on
+                    // this speculative thread must not take down the stream.
+                    LimeLog.info("Client SBS model asset pre-stage deferred: " + error);
                 }
             });
         } catch (RuntimeException error) {

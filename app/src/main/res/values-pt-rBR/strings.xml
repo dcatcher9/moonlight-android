@@ -1,15 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="title_frame_pacing">Ritmo de quadros</string>
-    <string name="pacing_balanced">Balanceado</string>
-    <string name="pacing_latency">Preferir baixa latência</string>
     <string name="summary_enable_hdr">Transmita HDR quando o jogo e a GPU do PC suportarem. O HDR requer uma GPU da série GTX 1000 ou posterior.</string>
     <string name="summary_enable_post_stream_toast">Exibe uma mensagem com informações de latência após o término da transmissão</string>
     <string name="summary_unlock_fps">Transmitir a 90 ou 120 FPS pode reduzir a latência em dispositivos de última geração, mas pode causar atraso ou instabilidade em dispositivos que não suportam</string>
     <string name="summary_checkbox_vibrate_osc">Vibra seu dispositivo para emular rumble nos controles de tela</string>
     <string name="pcview_menu_header_offline">Indisponível</string>
     <string name="pcview_menu_header_unknown">Atualizando</string>
-    <string name="pacing_smoothness">Preferir vídeo mais suave (pode aumentar significativamente a latência)</string>
     <string name="summary_frame_pacing">Especifique o equilíbrio entre latência e suavidade do vídeo</string>
     <string name="title_checkbox_disable_warnings">Desabilitar mensagens de alerta</string>
     <string name="title_checkbox_enable_pip">Habilitar modo Picture-in-Picture</string>
@@ -41,21 +38,12 @@
     <string name="early_termination_error">Algo deu errado no seu PC ao iniciar a transmissão.\n\nCertifique-se de não ter nenhum conteúdo protegido por DRM aberto em seu PC. Você também pode tentar reiniciar ele.</string>
     <string name="conn_establishing_msg">Iniciando a conexão</string>
     <string name="conn_establishing_title">Estabelecendo Conexão</string>
-    <string name="resolution_360p">360p</string>
-    <string name="resolution_480p">480p</string>
-    <string name="resolution_720p">720p</string>
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="resolution_4k">4K</string>
-    <string name="fps_30">30 FPS</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="videoformat_hevcalways">Prefira HEVC</string>
-    <string name="videoformat_auto">Automático (recomendado)</string>
-    <string name="fps_120">120 FPS</string>
     <string name="audioconf_stereo">Stereo</string>
     <string name="audioconf_51surround">5.1 Surround</string>
     <string name="audioconf_71surround">7.1 Surround</string>
-    <string name="fps_90">90 FPS</string>
     <string name="scut_deleted_pc">PC deletado</string>
     <string name="scut_not_paired">PC não pareado</string>
     <string name="help_loading_title">Ver Ajuda</string>
@@ -228,7 +216,6 @@
     <string name="title_privacy_policy">Política de privacidade</string>
     <string name="summary_checkbox_absolute_mouse_mode">Isso pode alterar a aceleração do mouse para se comportar mais naturalmente para uso em desktop remoto, mas é incompatível com muitos jogos.</string>
     <string name="summary_privacy_policy">Veja a política de privacidade do Moonlight 3D</string>
-    <string name="pacing_balanced_alt">Equilibrado com limite de FPS</string>
     <string name="summary_seekbar_deadzone">Nota: Alguns jogos podem impor uma zona morta maior do que o Moonlight 3D está configurado para usar.</string>
     <string name="title_checkbox_absolute_mouse_mode">Modo de mouse para área de trabalho remota</string>
     <string name="resolution_prefix_native_landscape">(Paisagem)</string>

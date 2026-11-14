@@ -564,8 +564,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                 width % 32 == 0 && height % 32 == 0);
         assertTrue("ZipDepth must use direct full-frame resize",
                 manifest.usesDirectFullFrameResize());
-        assertTrue("Static bucket must skip dynamic tensor resize",
-                !manifest.hasDynamicSpatialShape());
         assertEquals(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
                 manifest.getGpuExecutionPolicy());
         runPackedGlModelSmokeTest(manifest);
@@ -1106,7 +1104,6 @@ public final class ClientSbsGpuInferenceEngineInstrumentedTest {
                 Log.i(TAG, "initialized model=" + manifest.getId()
                         + " shape=" + manifest.getInputWidth() + "x"
                         + manifest.getInputHeight()
-                        + " dynamicResize=" + manifest.hasDynamicSpatialShape()
                         + " completeOpenClDelegation=required"
                         + " verify=" + engine.getLastAssetVerificationNanos() / 1_000_000.0
                         + "ms compileInit="

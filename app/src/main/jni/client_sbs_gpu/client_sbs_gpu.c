@@ -368,8 +368,7 @@ static bool add_gpu_options(ClientSbsGpuEngine* engine, bool force_fp32_compute)
     }
     LOGI("GPU options: OpenCL %s compute, low priority hint, automatic internal storage, "
          "packed Float32 GL tensors",
-         precision == kLiteRtDelegatePrecisionFp32 ? "FP32"
-                  : (precision == kLiteRtDelegatePrecisionFp16 ? "FP16" : "DEFAULT"));
+         precision == kLiteRtDelegatePrecisionFp32 ? "FP32" : "FP16");
     return true;
 }
 
@@ -453,17 +452,20 @@ static bool requirement_supports_gl_buffer(
 static bool get_model_tensor_type(ClientSbsGpuEngine* engine,
                                   LiteRtTensor tensor, const char* role,
                                   int width, int height, int channels,
-                                  bool dynamic_spatial,
                                   LiteRtRankedTensorType* type) {
     LiteRtTensorTypeId type_id = kLiteRtUnrankedTensorType;
+    // Keep a failed type query's own status: type_id is still unranked in that case, so a combined
+    // check would replace the LiteRT error with "not ranked".
     if (!check_status(engine, LiteRtGetTensorTypeId(tensor, &type_id),
-                      "LiteRtGetTensorTypeId") ||
-        type_id != kLiteRtRankedTensorType ||
-        !check_status(engine, LiteRtGetRankedTensorType(tensor, type),
+                      "LiteRtGetTensorTypeId")) {
+        return false;
+    }
+    if (type_id != kLiteRtRankedTensorType) {
+        set_error(engine, "%s tensor is not ranked", role);
+        return false;
+    }
+    if (!check_status(engine, LiteRtGetRankedTensorType(tensor, type),
                       "LiteRtGetRankedTensorType")) {
-        if (type_id != kLiteRtRankedTensorType) {
-            set_error(engine, "%s tensor is not ranked", role);
-        }
         return false;
     }
 
@@ -474,10 +476,7 @@ static bool get_model_tensor_type(ClientSbsGpuEngine* engine,
         return false;
     }
     for (unsigned int index = 0; index < type->layout.rank; index++) {
-        // A dynamic TFLite graph may expose either -1 spatial signature dimensions or its
-        // default concrete shape here. The compiled-model layout is authoritative after resize.
-        bool dynamic_dimension = dynamic_spatial && (index == 1 || index == 2);
-        if (!dynamic_dimension && type->layout.dimensions[index] != expected[index]) {
+        if (type->layout.dimensions[index] != expected[index]) {
             set_error(engine,
                       "%s tensor shape mismatch at %u: model=%d expected=%d",
                       role, index, type->layout.dimensions[index], expected[index]);
@@ -495,7 +494,6 @@ static bool get_model_tensor_type(ClientSbsGpuEngine* engine,
 static bool get_model_io_types(ClientSbsGpuEngine* engine,
                                int input_width, int input_height, int input_channels,
                                int output_width, int output_height, int output_channels,
-                               bool dynamic_spatial,
                                LiteRtRankedTensorType* input_type,
                                LiteRtRankedTensorType* output_type) {
     LiteRtSignature signature = NULL;
@@ -526,10 +524,10 @@ static bool get_model_io_types(ClientSbsGpuEngine* engine,
     }
     return get_model_tensor_type(engine, input_tensor, "input",
                                  input_width, input_height, input_channels,
-                                 dynamic_spatial, input_type) &&
+                                 input_type) &&
            get_model_tensor_type(engine, output_tensor, "output",
                                   output_width, output_height, output_channels,
-                                  dynamic_spatial, output_type);
+                                  output_type);
 }
 
 /**
@@ -620,24 +618,13 @@ static bool validate_compiled_layout(ClientSbsGpuEngine* engine,
     return true;
 }
 
-/** Selects one stream shape, propagates output allocation, and publishes concrete layouts. */
+/** Validates the static stream shape and publishes the compiled model's concrete layouts. */
 static bool configure_compiled_model_shape(
-        ClientSbsGpuEngine* engine, bool dynamic_spatial,
+        ClientSbsGpuEngine* engine,
         int input_width, int input_height, int input_channels,
         int output_width, int output_height, int output_channels,
         LiteRtRankedTensorType* input_type,
         LiteRtRankedTensorType* output_type) {
-    if (dynamic_spatial) {
-        const int dimensions[] = {1, input_height, input_width, input_channels};
-        if (!check_status(engine,
-                          LiteRtCompiledModelResizeInputTensor(
-                                  engine->compiled_model, 0, 0,
-                                  dimensions, sizeof(dimensions) / sizeof(dimensions[0])),
-                          "LiteRtCompiledModelResizeInputTensor")) {
-            return false;
-        }
-    }
-
     LiteRtLayout input_layout;
     LiteRtLayout output_layout;
     memset(&input_layout, 0, sizeof(input_layout));
@@ -649,7 +636,7 @@ static bool configure_compiled_model_shape(
         !check_status(engine,
                       LiteRtGetCompiledModelOutputTensorLayouts(
                               engine->compiled_model, 0, 1, &output_layout,
-                              dynamic_spatial),
+                              false),
                       "LiteRtGetCompiledModelOutputTensorLayouts") ||
         !validate_compiled_layout(engine, &input_layout, "input",
                                   input_width, input_height, input_channels) ||
@@ -660,10 +647,9 @@ static bool configure_compiled_model_shape(
 
     input_type->layout = input_layout;
     output_type->layout = output_layout;
-    LOGI("Compiled tensor shape selected once: input=%dx%dx%d output=%dx%dx%d dynamic=%s",
+    LOGI("Compiled tensor shape selected once: input=%dx%dx%d output=%dx%dx%d",
          input_width, input_height, input_channels,
-         output_width, output_height, output_channels,
-         dynamic_spatial ? "yes" : "no");
+         output_width, output_height, output_channels);
     return true;
 }
 
@@ -789,7 +775,6 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
         jlong model_offset, jlong model_length, jstring native_library_dir,
         jstring cache_dir,
         jboolean force_gpu_fp32_compute,
-        jboolean dynamic_shape,
         jint input_width, jint input_height, jint input_channels,
         jint output_width, jint output_height, jint output_channels,
         jboolean diagnostic_profiling) {
@@ -810,12 +795,6 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
             input_width <= 0 || input_height <= 0 || input_channels <= 0 ||
             output_width <= 0 || output_height <= 0 || output_channels <= 0) {
         set_error(engine, "Invalid model or tensor initialization arguments");
-        return JNI_FALSE;
-    }
-    const bool dynamic_spatial = dynamic_shape == JNI_TRUE;
-    if (dynamic_spatial && ((input_width % 14) != 0 || (input_height % 14) != 0)) {
-        set_error(engine, "Dynamic DA-V2 shape must be divisible by 14: %dx%d",
-                  input_width, input_height);
         return JNI_FALSE;
     }
     if (!make_engine_context_current(engine)) {
@@ -916,8 +895,8 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
     if (!get_model_io_types(engine,
                             input_width, input_height, input_channels,
                             output_width, output_height, output_channels,
-                            dynamic_spatial, &input_type, &output_type) ||
-        !configure_compiled_model_shape(engine, dynamic_spatial,
+                            &input_type, &output_type) ||
+        !configure_compiled_model_shape(engine,
                                         input_width, input_height, input_channels,
                                         output_width, output_height, output_channels,
                                         &input_type, &output_type)) {
@@ -925,8 +904,7 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
         return JNI_FALSE;
     }
 
-    // Query after resize/output reallocation. A successful dynamic resize that causes any CPU
-    // partition is rejected exactly like a partially delegated static graph.
+    // A graph with any CPU partition is rejected.
     bool fully_accelerated = false;
     if (!check_status(engine,
                       LiteRtCompiledModelIsFullyAccelerated(
@@ -1988,6 +1966,12 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeDestroy(
             && !engine->renderer_finish_confirmed) {
         set_error(engine,
                   "Renderer GL finish acknowledgement is required after nativeRun failure");
+        // The failed run left this context current on the caller. Unbind it like every other
+        // refusal below, so a deferred retry from another thread can make it current.
+        if (engine->display != EGL_NO_DISPLAY && engine->context != EGL_NO_CONTEXT
+                && eglGetCurrentContext() == engine->context) {
+            eglMakeCurrent(engine->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        }
         return JNI_FALSE;
     }
 
@@ -2033,8 +2017,6 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeDestroy(
         }
         engine->context = EGL_NO_CONTEXT;
     }
-    free(engine->native_library_dir);
-    free(engine->cache_dir);
     free(engine);
     return JNI_TRUE;
 }

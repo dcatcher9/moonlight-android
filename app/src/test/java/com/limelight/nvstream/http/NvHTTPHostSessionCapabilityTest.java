@@ -187,7 +187,7 @@ public class NvHTTPHostSessionCapabilityTest {
     public void missingTagIsLegacyTokenlessHost() throws Exception {
         ComputerDetails details = new ComputerDetails();
 
-        NvHTTP.populateHostSessionDetails(details, response("<currentgame>0</currentgame>"));
+        NvHTTP.populateHostSessionDetails(details, response("<currentgame>0</currentgame>"), true);
 
         assertFalse(details.hostSessionIdSupported);
         assertNull(details.hostSessionId);
@@ -198,9 +198,20 @@ public class NvHTTPHostSessionCapabilityTest {
         ComputerDetails details = new ComputerDetails();
 
         NvHTTP.populateHostSessionDetails(details,
-                response("<hostsessionid>0</hostsessionid>"));
+                response("<hostsessionid>0</hostsessionid>"), true);
 
         assertTrue(details.hostSessionIdSupported);
+        assertNull(details.hostSessionId);
+    }
+
+    @Test
+    public void unauthenticatedResponseCannotAdvertiseSessionTokenCapability() throws Exception {
+        ComputerDetails details = new ComputerDetails();
+
+        NvHTTP.populateHostSessionDetails(details,
+                response("<hostsessionid>token-123</hostsessionid>"), false);
+
+        assertFalse(details.hostSessionIdSupported);
         assertNull(details.hostSessionId);
     }
 
@@ -213,7 +224,7 @@ public class NvHTTPHostSessionCapabilityTest {
     public void activeTokenIsTrimmedAndCopied() throws Exception {
         ComputerDetails parsed = new ComputerDetails();
         NvHTTP.populateHostSessionDetails(parsed,
-                response("<hostsessionid> token-123 </hostsessionid>"));
+                response("<hostsessionid> token-123 </hostsessionid>"), true);
 
         ComputerDetails copied = new ComputerDetails(parsed);
 

@@ -445,7 +445,13 @@ void BridgeClSetHdrMode(bool enabled) {
     // Check if HDR metadata was provided
     if (enabled && LiGetHdrMetadata(&hdrMetadata)) {
         hdrMetadataByteArray = (*env)->NewByteArray(env, sizeof(SS_HDR_METADATA));
-        (*env)->SetByteArrayRegion(env, hdrMetadataByteArray, 0, sizeof(SS_HDR_METADATA), (jbyte*)&hdrMetadata);
+        if (hdrMetadataByteArray != NULL) {
+            (*env)->SetByteArrayRegion(env, hdrMetadataByteArray, 0, sizeof(SS_HDR_METADATA), (jbyte*)&hdrMetadata);
+        } else {
+            // Report the mode change without metadata rather than calling Java with an
+            // allocation failure pending on this thread.
+            (*env)->ExceptionClear(env);
+        }
     }
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSetHdrModeMethod, enabled, hdrMetadataByteArray);
@@ -517,6 +523,9 @@ void BridgeClHostSbsTelemetryState(
     JNIEnv* env = GetThreadEnv();
     jbyteArray payloadArray = (*env)->NewByteArray(env, HOST_SBS_TELEMETRY_STATE_SIZE);
     if (payloadArray == NULL) {
+        // This thread stays attached; do not leave the allocation failure pending for its next
+        // JNI call.
+        (*env)->ExceptionClear(env);
         return;
     }
 

@@ -8,7 +8,6 @@ import android.opengl.EGLSurface;
 import android.opengl.GLES20;
 import android.opengl.GLES30;
 import android.opengl.GLES31;
-import android.opengl.GLSurfaceView;
 import com.limelight.ui.ClientSbsRenderSurface;
 import android.os.Build;
 import android.os.Handler;
@@ -265,9 +264,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private int refinedWarpMapTextureId;
     private boolean warpMapValid;
     private boolean warpMapAvailable;
-    /** The first optional RG16F render is checked once; steady-state avoids glGetError. */
-    private boolean warpMapDrawValidated;
-    /** The conditioned fixed-point map is optional and validates independently from legacy. */
+    /** The first conditioned fixed-point RG16F render is checked once. */
     private boolean contractiveWarpMapDrawValidated;
     /** The first seeded one-step refinement draw is checked once; steady state avoids glGetError. */
     private boolean contractiveWarpMapRefinementDrawValidated;
@@ -356,8 +353,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean contractiveDisparityValid;
     private boolean gpuDepthActive;
     private volatile String activeInferenceBackend = "Initializing";
-    /** Configured LiteRT hint; the driver does not expose the effective Adreno scheduler priority. */
-    private volatile String activeInferenceGpuPriorityHint = "Initializing";
     /** Observable compose implementation: cheap precomputed warp or full-resolution fallback. */
     private volatile String activeReprojectionPath = "Initializing";
     // Non-zero from matched capture through native infer/reuse arbitration and renderer adoption.
@@ -428,8 +423,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private volatile int outputHeightOverride;
     private final Object liveStreamResizeLock = new Object();
 
-    static int depthTelemetryValidFields(
-            boolean profileInitialized, boolean popClassified) {
+    static int depthTelemetryValidFields(boolean profileInitialized) {
         int validFields = SbsDepthTelemetrySnapshot.VALID_CONFIG
                 | SbsDepthTelemetrySnapshot.VALID_EFFECTIVE
                 | SbsDepthTelemetrySnapshot.VALID_CHANGE
@@ -462,8 +456,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_RANGE_COLLAPSED;
         }
         return SbsDepthTelemetrySnapshot.available(
-                depthTelemetryValidFields(
-                        health.profileInitialized, health.popClassified),
+                depthTelemetryValidFields(health.profileInitialized),
                 runtimeFlags,
                 depthMapWidth, depthMapHeight, 0,
                 ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
@@ -650,7 +643,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         ClientSbsModelAssetCache.prestageProductionModelAsync(context, aiModel);
         LimeLog.info("Client SBS ZipDepth graph fixed for stream: " + aiModel.getId()
                 + " input=" + modelInputWidth + "x" + modelInputHeight
-                + " dynamic=" + aiModel.hasDynamicSpatialShape()
                 + " directFullFrame=" + pipelineContract.usesDirectFullFrameResize()
                 + " sourceAspect=" + sourceAspect);
 
@@ -685,7 +677,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         final float popStrength;
         /** Retired adaptive-pop diagnostic retained only by the source-neutral telemetry ABI. */
         final float edgeFraction;
-        final boolean popClassified;
         final float changeFraction;
         final int sceneAge;
         /**
@@ -694,10 +685,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
          * momentary sample of sceneAge cannot show.
          */
         final long hardCutCount;
-        /** Retired Bestv2 source-pixel anchor, unavailable for the raw-coordinate renderer. */
-        final float zeroAnchorShift;
-        /** Retired subject diagnostic retained only for source compatibility. */
-        final float subjectDepth;
         /** Whether persistent raw camera state has been initialized. */
         final boolean profileInitialized;
         /**
@@ -729,7 +716,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         final float appearanceStructuralChangeFraction;
         final float appearanceCurrentSupportFraction;
         final float appearanceCommonSupportFraction;
-        final int appearanceDetectorFlags;
         final int cutDecisionFlags;
         /** Monotonic identity of the most recently latched notable cut decision. */
         final long cutEventSequence;
@@ -747,12 +733,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             rangeCollapsed = true;
             popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
             edgeFraction = Float.NaN;
-            popClassified = false;
             changeFraction = 0.0f;
             sceneAge = 0;
             hardCutCount = 0L;
-            zeroAnchorShift = Float.NaN;
-            subjectDepth = Float.NaN;
             profileInitialized = false;
             geometryCutArmed = false;
             appearanceProposals = 0L;
@@ -777,7 +760,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             appearanceStructuralChangeFraction = 0.0f;
             appearanceCurrentSupportFraction = 0.0f;
             appearanceCommonSupportFraction = 0.0f;
-            appearanceDetectorFlags = 0;
             cutDecisionFlags = 0;
             cutEventSequence = 0L;
             latestDepthChangeFraction = Float.NaN;
@@ -793,13 +775,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             effectiveRangeWidth = snapshot.getEffectiveRangeWidth();
             rangeCollapsed = snapshot.isPercentileRangeCollapsed();
             edgeFraction = snapshot.getEdgeFraction();
-            popClassified = snapshot.hasAdaptivePopClassification();
             changeFraction = snapshot.getChangeFraction();
             sceneAge = snapshot.getSceneAge();
             popStrength = snapshot.getPopStrength();
             hardCutCount = snapshot.getHardCutCount();
-            zeroAnchorShift = snapshot.getZeroAnchorShift();
-            subjectDepth = snapshot.getSubjectDepth();
             profileInitialized = snapshot.isStereoProfileInitialized();
             geometryCutArmed = snapshot.isGeometryCutArmed();
             appearanceProposals = snapshot.getAppearanceProposalCount();
@@ -830,7 +809,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     snapshot.getAppearanceCurrentSupportFraction();
             appearanceCommonSupportFraction =
                     snapshot.getAppearanceCommonSupportFraction();
-            appearanceDetectorFlags = snapshot.getAppearanceDetectorFlags();
             cutDecisionFlags = snapshot.getCutDecisionFlags();
             cutEventSequence = snapshot.getCutEventSequence();
             latestDepthChangeFraction = snapshot.getLatestDepthChangeFraction();
@@ -852,7 +830,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     public static final class ClientSbsPerformanceSnapshot {
         public final boolean active;
         public final String backend;
-        public final String gpuPriorityHint;
         public final String modelId;
         public final int modelInputWidth;
         public final int modelInputHeight;
@@ -908,7 +885,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         /** Whether the current diagnostic P2/P98 cut range is collapsed. */
         public final boolean cutRangeCollapsed;
         public final float stereoPopStrength;
-        public final int depthSceneAge;
         public final long depthHardCutCount;
         public final boolean depthGeometryCutArmed;
         public final long depthAppearanceProposalCount;
@@ -938,7 +914,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         public final float depthAppearanceStructuralChangeFraction;
         public final float depthAppearanceCurrentSupportFraction;
         public final float depthAppearanceCommonSupportFraction;
-        public final int depthAppearanceDetectorFlags;
         public final int depthCutDecisionFlags;
         /** Monotonic identity of the latched cut event represented by the diagnostic fields. */
         public final long depthCutEventSequence;
@@ -951,7 +926,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                              String backend, long elapsedNs) {
             this.active = active;
             this.backend = backend;
-            this.gpuPriorityHint = owner.activeInferenceGpuPriorityHint;
             this.modelId = owner.aiModel.getId();
             this.modelInputWidth = owner.modelInputWidth;
             this.modelInputHeight = owner.modelInputHeight;
@@ -1022,7 +996,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.effectiveDepthRangeWidth = depthTelemetry.effectiveRangeWidth;
             this.cutRangeCollapsed = depthTelemetry.isRangeCollapsed();
             this.stereoPopStrength = depthTelemetry.effectivePop;
-            this.depthSceneAge = (int)Math.min(Integer.MAX_VALUE, depthTelemetry.sceneAge);
             this.depthHardCutCount = depthTelemetry.hardCutCount;
             this.depthGeometryCutArmed = health.geometryCutArmed;
             this.depthAppearanceProposalCount = health.appearanceProposals;
@@ -1052,7 +1025,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     health.appearanceCurrentSupportFraction;
             this.depthAppearanceCommonSupportFraction =
                     health.appearanceCommonSupportFraction;
-            this.depthAppearanceDetectorFlags = health.appearanceDetectorFlags;
             this.depthCutDecisionFlags = health.cutDecisionFlags;
             this.depthCutEventSequence = health.cutEventSequence;
             this.depthLatestChangeFraction = health.latestDepthChangeFraction;
@@ -1272,15 +1244,15 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     private void pollGpuTelemetry() {
         // Both timer queries and the GPU-to-CPU health/evidence ring are diagnostics. Normal
-        // streaming does neither; explicit logging uses the 30-frame cadence and visible Stats
-        // sharpens it to 5 frames.
+        // streaming does neither; with performance sampling enabled both are polled once every
+        // GPU_TELEMETRY_POLL_STRIDE calls.
         int pollCounter = gpuTelemetryPollCounter++;
         ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
         applyHealthSamplingStateOnGlThread(processor);
         if (!shouldPollHealthTelemetry(performanceSamplingEnabled, pollCounter)) {
             return;
         }
-        if (shouldPollPerformanceTelemetry(performanceSamplingEnabled, pollCounter)) {
+        if (shouldPollHealthTelemetry(performanceSamplingEnabled, pollCounter)) {
             ClientSbsGpuTimer timer = gpuTimer;
             if (timer != null) {
                 timer.poll();
@@ -1341,15 +1313,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     static boolean shouldPollHealthTelemetry(boolean diagnosticsEnabled, int pollCounter) {
         return diagnosticsEnabled && shouldPollHealthTelemetry(pollCounter);
-    }
-
-    static boolean shouldPollPerformanceTelemetry(
-            boolean performanceSamplingEnabled, int pollCounter) {
-        return performanceSamplingEnabled && shouldPollHealthTelemetry(pollCounter);
-    }
-
-    static boolean shouldAppendEdgeHistory(boolean classified, float edgeFraction) {
-        return classified && Float.isFinite(edgeFraction) && edgeFraction >= 0.0f;
     }
 
     private void applyHealthSamplingStateOnGlThread(ClientSbsGpuDepthProcessor processor) {
@@ -1508,7 +1471,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         refinedWarpMapTextureId = 0;
         warpMapValid = false;
         warpMapAvailable = false;
-        warpMapDrawValidated = false;
         contractiveWarpMapDrawValidated = false;
         contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
@@ -2031,6 +1993,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         shuttingDown.set(true);
         outputSurfaceValidated = false;
         presentationCompletion.cancel();
+        // Frame callbacks are rejected from here on, so nothing else would wake a first-frame
+        // hold; release the EGL owner now instead of at its timeout.
+        cancelFirstModeEntryFrameWait();
     }
 
     /**
@@ -2084,6 +2049,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     // it must not be presented under the new transfer without a successful boundary.
                     Log.w("Stereo3DRenderer",
                             "Unable to discard decoder frame at HDR boundary", error);
+                    // Drain admission was closed above and reopens only at a draw.
+                    requestPriorityRender();
                     return;
                 }
 
@@ -2091,6 +2058,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 pendingFrameGeneration = -1;
                 pendingFrameCallbackSequence = 0L;
                 if (!hdrInputTransition.commit(transitionGeneration)) {
+                    requestPriorityRender();
                     return;
                 }
                 hdrInput = hdrInputTransition.getTargetHdr();
@@ -2100,6 +2068,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 if (hdrInputTransition.finish(transitionGeneration)) completionAfterSwap.run();
             })) {
                 LimeLog.warning("Unable to arm Client SBS HDR presentation proof");
+                requestPriorityRender();
             }
         }
     }
@@ -2588,13 +2557,13 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     /** Polls Android's coarse thermal state at most once per second on the renderer thread. */
-    private int sampleThermalStatus(long nowNs) {
+    private void sampleThermalStatus(long nowNs) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || powerManager == null) {
-            return currentThermalStatus;
+            return;
         }
         if (lastThermalStatusPollNs != 0L
                 && nowNs - lastThermalStatusPollNs < THERMAL_STATUS_POLL_INTERVAL_NS) {
-            return currentThermalStatus;
+            return;
         }
         lastThermalStatusPollNs = nowNs;
         try {
@@ -2603,7 +2572,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // Keep thermal telemetry stable if a vendor implementation fails.
             currentThermalStatus = PowerManager.THERMAL_STATUS_NONE;
         }
-        return currentThermalStatus;
     }
 
     /** Latches one coalesced decoder frame. Must run with this renderer's EGL context current. */
@@ -2795,7 +2763,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         refinedWarpMapTextureId = 0;
         warpMapValid = false;
         warpMapAvailable = false;
-        warpMapDrawValidated = false;
         contractiveWarpMapDrawValidated = false;
         contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
@@ -2818,7 +2785,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         pendingGpuInferenceEngine = null;
         gpuInferenceEngine = null;
         activeInferenceBackend = "Initializing";
-        activeInferenceGpuPriorityHint = "Initializing";
         activeReprojectionPath = "Flat (strict V2 initializing)";
         hasFrameForActiveGeneration = false;
         if (videoSurface != null) {
@@ -3205,9 +3171,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         int viewHeight = getOutputHeight();
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
         GLES20.glViewport(0, 0, viewWidth / 2, viewHeight);
-        drawQuad(simple3dProgram, 1.0f, 0.0f);
+        drawQuad(simple3dProgram);
         GLES20.glViewport(viewWidth / 2, 0, viewWidth / 2, viewHeight);
-        drawQuad(simple3dProgram, 1.0f, 0.0f);
+        drawQuad(simple3dProgram);
     }
 
     @Override
@@ -3506,6 +3472,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         LimeLog.warning("Client SBS contractive disparity disabled; presenting flat output: "
                 + (reason != null ? reason : "unknown failure"));
+        // The strict route cannot return until the context is recreated. Stop capture and
+        // inference instead of producing depth that can only be presented flat.
+        requestGpuShutdown("strict V2 geometry unavailable");
     }
 
     private boolean hasPresentableDepth() {
@@ -3525,7 +3494,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    private void drawQuad(int program, float scale, float offset) {
+    private void drawQuad(int program) {
         QuadProgramBindings bindings = program == modelInputProgram
                 ? modelInputProgramBindings : simpleProgramBindings;
         if (bindings == null) {
@@ -3542,8 +3511,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GL_TEXTURE_EXTERNAL_OES, videoTextureId);
 
-        if (bindings.xScale != -1) GLES20.glUniform1f(bindings.xScale, scale);
-        if (bindings.xOffset != -1) GLES20.glUniform1f(bindings.xOffset, offset);
         if (bindings.isHdr != -1) GLES20.glUniform1i(bindings.isHdr, hdrInput ? 1 : 0);
         if (bindings.textureTransform != -1) {
             GLES20.glUniformMatrix4fv(bindings.textureTransform, 1, false,
@@ -3794,7 +3761,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 int inputBufferId = engine.getInputBufferId(bufferSlot);
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboHandle);
                 GLES20.glViewport(0, 0, modelInputWidth, modelInputHeight);
-                drawQuad(modelInputProgram, 1.0f, 0.0f);
+                drawQuad(modelInputProgram);
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
                 GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT
                         | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
@@ -3862,11 +3829,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             if (inputReadyFence == 0L || glError != GLES20.GL_NO_ERROR
                     || !clientSbs || shuttingDown.get() || gpuShutdownRequested.get()
                     || captureGeneration != clientSbsGeneration.get()
-                    || colorFrameLease == null
                     || !colorFrameSlots.markInference(colorFrameLease)) {
-                if (inputReadyFence != 0L) {
-                    GLES30.glDeleteSync(inputReadyFence);
-                }
+                // The model-input and classifier writes were already issued, so this fence is the
+                // slot's newest dependency; keep it for slot reuse and bounded teardown.
+                replaceGpuFinalFence(bufferSlot, inputReadyFence);
                 colorFrameSlots.release(colorFrameLease);
                 markLastCaptureForRetry();
                 LimeLog.warning("Client SBS GPU input submission failed: GL=0x"
@@ -3883,8 +3849,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     tensorPackedWithSceneCut ? nearIdenticalDecisionByteOffset : 0,
                     performanceEpoch, tensorPackedWithSceneCut && lazyInputPacking ? fboTextureId : 0);
             if (!inferenceInputQueue.offer(task)) {
-                GLES30.glDeleteSync(inputReadyFence);
-                restoreGpuOutputConsumedFence(bufferSlot, previousOutputFence);
+                // inputReadyFence was submitted after previousOutputFence on this context, so it
+                // alone covers the slot.
+                replaceGpuFinalFence(bufferSlot, inputReadyFence);
+                if (previousOutputFence != 0L) {
+                    GLES30.glDeleteSync(previousOutputFence);
+                }
                 colorFrameSlots.release(colorFrameLease,
                         ClientSbsFrameSlots.State.INFERENCE);
                 markLastCaptureForRetry();
@@ -4065,9 +4035,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         try {
             gpuCandidate.initialize(context, aiModel);
             gpuInferenceEngine = gpuCandidate;
-            activeInferenceGpuPriorityHint = gpuCandidate.getGpuPriorityHintLabel();
-            // Publish the volatile backend last so a stats reader that observes LITERT also sees
-            // the immutable priority metadata selected for this compiled engine.
+            // Publish the volatile backend after the engine it describes.
             activeInferenceBackend = aiModel.getGpuExecutionPolicy().getBackendId()
                     + " | " + aiModel.getId()
                     + " " + modelInputWidth + "x" + modelInputHeight;
@@ -4083,10 +4051,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             requestReadyRender();
             return false;
         }
-    }
-
-    private static float clamp(float value, float low, float high) {
-        return Math.max(low, Math.min(high, value));
     }
 
     private long tryClaimInference() {
@@ -4108,18 +4072,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     private void clearInferenceClaim() {
         inferenceClaim.set(0L);
-    }
-
-    private void restoreGpuOutputConsumedFence(int slot, long fence) {
-        if (fence == 0L) {
-            return;
-        }
-        if (!gpuOutputConsumedFences.compareAndSet(slot, 0L, fence)) {
-            // No task consumed this fence, so deleting it is safe; the occupied slot is the one
-            // that remains authoritative. This should only be reachable after a contract bug.
-            GLES30.glDeleteSync(fence);
-            requestGpuShutdown("duplicate output-consumed fence for slot " + slot);
-        }
     }
 
     /**
@@ -5022,7 +4974,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         int slot = lease.getSlot();
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, colorFrameFbos[slot]);
         GLES20.glViewport(0, 0, colorFrameWidth, colorFrameHeight);
-        drawQuad(simple3dProgram, 1.0f, 0.0f);
+        drawQuad(simple3dProgram);
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
 
@@ -5033,7 +4985,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean initializeWarpMapPipeline() {
         warpMapValid = false;
         warpMapAvailable = false;
-        warpMapDrawValidated = false;
         contractiveWarpMapDrawValidated = false;
         contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
@@ -5160,6 +5111,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         releaseWarpMapTarget();
         warpMapAvailable = false;
         activeReprojectionPath = "Flat (strict V2 unavailable)";
+        requestGpuShutdown("strict V2 warp-map pipeline unavailable");
     }
 
     private String warpMapReprojectionPath() {
@@ -5184,7 +5136,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         refinedWarpMapTextureId = 0;
         warpMapValid = false;
         warpMapAvailable = false;
-        warpMapDrawValidated = false;
         contractiveWarpMapDrawValidated = false;
         contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
@@ -5294,8 +5245,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private static final class QuadProgramBindings {
         final int position;
         final int texCoord;
-        final int xOffset;
-        final int xScale;
         final int isHdr;
         final int textureTransform;
         final int tonemapHdrToSdr;
@@ -5308,8 +5257,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         QuadProgramBindings(int program) {
             position = GLES20.glGetAttribLocation(program, "a_Position");
             texCoord = GLES20.glGetAttribLocation(program, "a_TexCoord");
-            xOffset = GLES20.glGetUniformLocation(program, "u_xOffset");
-            xScale = GLES20.glGetUniformLocation(program, "u_xScale");
             isHdr = GLES20.glGetUniformLocation(program, "u_isHdr");
             textureTransform = GLES20.glGetUniformLocation(program, "u_TextureTransform");
             tonemapHdrToSdr = GLES20.glGetUniformLocation(program, "u_tonemapHdrToSdr");

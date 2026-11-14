@@ -178,7 +178,7 @@ public final class XrPreferenceWidgetsTest {
         BitrateLadderPreference bitrate = fragment.findPreference(
                 PreferenceConfiguration.BITRATE_PREF_STRING);
         InlineListPreference rawPerEyeResolution = fragment.findPreference(
-                PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING);
+                "list_raw_sbs_per_eye_resolution");
         assertTrue(fragment.findPreference(PreferenceConfiguration.ENABLE_HDR_PREF_STRING)
                 instanceof SwitchPreferenceCompat);
         assertNull(fragment.findPreference(

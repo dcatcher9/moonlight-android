@@ -7,6 +7,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import com.limelight.preferences.PreferenceConfiguration;
+
 import org.junit.Test;
 
 public class ClientSbsModelManifestTest {
@@ -60,9 +62,9 @@ public class ClientSbsModelManifestTest {
     @Test
     public void retiredAndUnknownFamiliesCannotReachTheProductionRuntime() {
         String[] unsupportedIds = {
-                ClientSbsModelManifest.DEPTH_ANYTHING_V2_SMALL_STATIC_ID,
-                ClientSbsModelManifest.MIDAS_V2_STATIC_ID,
-                ClientSbsModelManifest.DEPTHART_S448_FP16_ID,
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
                 "depth-anything-v2-small-static-buckets",
                 "depth-anything-v2-small-dynamic",
                 "depth-anything-v2-small-static-350",
@@ -138,7 +140,6 @@ public class ClientSbsModelManifestTest {
         assertEquals(width * height * 3 * Float.BYTES, manifest.getInputByteSize());
         assertEquals(width * height * Float.BYTES, manifest.getOutputByteSize());
         assertTrue(manifest.usesDirectFullFrameResize());
-        assertFalse(manifest.hasDynamicSpatialShape());
         assertSame(ClientSbsModelManifest.GpuExecutionPolicy.AUTOMATIC_FP16,
                 manifest.getGpuExecutionPolicy());
         assertFalse(manifest.getGpuExecutionPolicy().forcesFp32Compute());

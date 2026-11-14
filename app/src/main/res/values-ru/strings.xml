@@ -236,19 +236,10 @@
     <string name="audioconf_stereo">Стерео</string>
     <string name="audioconf_51surround">5.1 Объёмный звук</string>
     <string name="audioconf_71surround">7.1 Объёмный звук</string>
-    <string name="videoformat_auto">Автоматически (Рекомендовано)</string>
-    <string name="videoformat_hevcalways">Предпочитать HEVC</string>
-    <string name="pacing_warp2">Warp 2 (экспериментально)</string>
-    <string name="pacing_latency">Предпочтительна наименьшая задержка</string>
-    <string name="pacing_balanced">Сбалансированно</string>
-    <string name="pacing_smoothness">Предпочтительно наиболее плавное видео (может значительно увеличить задержку)</string>
     <string name="title_checkbox_enable_audiofx">Включить поддержку системного эквалайзера</string>
     <string name="summary_checkbox_absolute_mouse_mode">Может сделать движения мыши естественней для удаленного рабочего стола, но несовместимо с большинством игр.</string>
     <string name="summary_checkbox_reduce_refresh_rate">Сниженная частота обновления может экономить батарею за счет дополнительной задержки видео</string>
     <string name="resolution_prefix_native_landscape">(Горизонтальный)</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="fps_90">90 FPS</string>
-    <string name="fps_120">120 FPS</string>
     <string name="frame_conversion_error">Хост-ПК сообщил о критической ошибке кодирования видео.
 \n
 \nПопробуйте выключить HDR, изменить разрешение стрима или разрешение экрана на хост-ПК.</string>
@@ -259,21 +250,16 @@
     <string name="summary_frame_pacing">Укажите, как сбалансировать задержку и плавность видеосигнала</string>
     <string name="summary_privacy_policy">Посмотреть политику конфиденциальности Moonlight 3D</string>
     <string name="title_privacy_policy">Политика конфиденциальности</string>
-    <string name="resolution_360p">360p</string>
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="summary_troubleshooting">Посмотрите советы по обнаружению и устранению проблем</string>
     <string name="category_help">Помощь</string>
-    <string name="resolution_720p">720p</string>
     <string name="resolution_prefix_native_portrait">(Портретный)</string>
     <string name="summary_seekbar_deadzone">Некоторые игры могут принудительно увеличить мёртвую зону вместо указанной в Moonlight 3D.</string>
     <string name="title_checkbox_absolute_mouse_mode">Режим удалённого рабочего стола для мыши</string>
     <string name="title_checkbox_reduce_refresh_rate">Разрешить снижение частоты обновления</string>
     <string name="resolution_4k">4K</string>
-    <string name="fps_30">30 FPS</string>
     <string name="title_frame_pacing">Скорость вывода/отрисовки кадра</string>
-    <string name="pacing_balanced_alt">Сбалансированно с лимитом FPS</string>
-    <string name="resolution_480p">480p</string>
     <string name="resolution_prefix_custom">Пользовательский</string>
     <string name="fps_suffix_fps">FPS</string>
     <string name="title_native_fps_dialog">Встроенное предупреждение о FPS</string>
@@ -284,7 +270,6 @@
     <string name="summary_full_range">Это приведет к потере детализации в светлых и темных областях, если ваше устройство не отображает видеоконтент в полном диапазоне должным образом.</string>
     <string name="title_performance_link">Панель производительности</string>
     <string name="toast_controller_type_changed">Тип геймпада может быть изменен из-за эмуляции датчика движения</string>
-    <string name="videoformat_av1always">Предпочитать AV1 (Экспериментальный)</string>
     <string name="pan_zoom_mode_disabled">Режим прокрутки/масш. выключен</string>
     <string name="title_analog_scrolling">Использовать аналоговый джойстик для прокрутки</string>
     <string name="analogscroll_right">Правый аналоговый джойстик</string>
@@ -299,7 +284,6 @@
     <string name="summary_checkbox_gamepad_motion_sensors">Позволяет поддерживаемым хостам запрашивать данные датчиков движения при эмуляции геймпада с датчиками движения. Отключение может немного снизить энергопотребление и использование сети, если датчики движения не используются в игре.</string>
     <string name="summary_checkbox_gamepad_motion_fallback">Использует встроенные датчики движения вашего устройства, если датчики геймпада не поддерживаются подключенным геймпадом или версией Android.
 \nПримечание. Включение этой опции может привести к тому, что ваш геймпад будет отображаться на хосте как контроллер PlayStation.</string>
-    <string name="videoformat_h264always">Предпочитать H.264</string>
     <string name="summary_analog_scrolling">Выбрать аналоговый джойстик для прокрутки в режиме эмуляции мыши</string>
     <string name="analogscroll_none">Нет (оба джойстика перемещают мышь)</string>
     <string name="analogscroll_left">Левый аналоговый джойстик</string>
@@ -339,7 +323,6 @@
     <string name="title_special_key_help">Помощь по пользовательским клавишам</string>
     <string name="summary_special_key_help">Инструкция по настройке пользовательских спец-клавиш</string>
     <string name="summary_performance_link">Просмотреть производительность других устройств.\nОбратите внимание, эти данные поддерживаются сообществом, они не поддерживаются Moonlight 3D и не представляют Moonlight 3D официально.</string>
-    <string name="pacing_warp">Warp Drive (экспериментально)</string>
     <string name="keyboard_service_label">Физическая клавиатура Moonlight 3D</string>
     <string name="accessibility_description_text">Используется, если системные сочетания физической клавиатуры перехватываются Android. В таких случаях некоторые сочетания не проходят на хост-ПК. Moonlight 3D не просматривает ваш ввод и не собирает пароли, номера карт или другую личную информацию.</string>
     <string name="game_menu_toggle_keyboard">Показать экранную клавиатуру</string>

@@ -672,11 +672,11 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         }
 
         mXrPresenter.onClientSbsOutputCapabilityChanged();
-        if (contextRecovery) {
-            // onSurfaceReady proves GL has released the retired decoder input and created its
-            // replacement. Ordinary asynchronous handoffs may safely resume now.
-            mClientSbsContextRecoveryParked = false;
-        }
+        // An accepted onSurfaceReady proves GL has released the retired decoder input and created
+        // its replacement, whichever owner receives it. Context loss can land during a pending
+        // enable or live resize; leaving the recovery park set there would refuse that owner's
+        // own decoder bind and fail the transaction.
+        mClientSbsContextRecoveryParked = false;
         long ownerDeadlineMs = pendingEnable
                 ? mPendingClientSbsSwitchDeadlineMs
                 : pendingResize
@@ -1564,14 +1564,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         SurfaceSwitchCallback callback = mPendingHostSurfaceResize;
         mPendingHostSurfaceResize = null;
         callback.onComplete(success);
-    }
-
-    @Override
-    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        // Single XR route: the video is presented in the XR compositor, so there is no on-screen
-        // aspect-ratio fitting to do -- measure normally. (The legacy 2D SurfaceView path did the
-        // aspect-ratio math here.)
-        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
     }
 
     public void setInputCallbacks(InputCallbacks callbacks) {

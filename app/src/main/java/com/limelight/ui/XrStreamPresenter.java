@@ -63,7 +63,6 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrChoiceGroup;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
-import com.limelight.ui.xrcontrols.RawSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.AuthoredStereoModeState;
 import com.limelight.ui.xrcontrols.GameStereoSourceState;
 import com.limelight.ui.xrcontrols.AuthoredStereoModeState.MoviePictureFormat;
@@ -97,8 +96,8 @@ import java.util.function.IntSupplier;
 /**
  * Presentation owner for the single XR route ({@code MODE_XR}). Fresh host connections start in
  * Normal; only a host-confirmed resume of the same app restores its last successful per-machine/app
- * presentation preference. The user can switch Host SBS Raw/AI and Client SBS AI from the
- * in-headset control bar.
+ * presentation preference. The user switches presentation modes from the in-headset control
+ * bar.
  *
  * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
  * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR
@@ -111,9 +110,6 @@ import java.util.function.IntSupplier;
  * {@code StreamContainer} can supply the initial target through
  * {@code decoderRenderer.setRenderTarget(...)} and guarded live replacements through
  * {@code decoderRenderer.setOutputSurface(...)}.
- *
- * <p>This class is the <i>only</i> one that imports the Jetpack XR SDK, and it is constructed
- * exclusively behind {@code XrUtils.isXrDevice(...)}.
  *
  * <p>The quad is placed ~2 m in front, sized to one eye's aspect, and the user can move/resize it
  * (with a minimum distance clamp). A floating control panel beneath it offers four single-select
@@ -213,11 +209,6 @@ public class XrStreamPresenter {
                                                         ModeStreamQualityModel current) {
         }
 
-        default boolean onRawSbsPerEyeResolutionSelected(
-                String resolutionId, RawSbsModeSettingsModel current) {
-            return false;
-        }
-
         default void onPresentationModeCommitted(PresentationMode mode) {
         }
 
@@ -291,13 +282,15 @@ public class XrStreamPresenter {
     private TextView dockRevealPill;
     private XrDockGazeTracker dockGazeTracker;
     private boolean dockRevealViewAttention;
+    /** Hover/focus sources written by the pill's listeners and cleared when the pill hides. */
+    private final DockRevealViewAttentionState dockRevealViewAttentionState =
+            new DockRevealViewAttentionState();
     private boolean dockRevealGazeAttention;
     private ValueAnimator dockRevealAnimator;
     private float dockRevealScale = 1.0f;
     private float dockRevealTargetScale = 1.0f;
     /** The control-bar items (one clickable tile each, all hosted in {@link #barPanel}). */
     private final List<BarItem> barItems = new ArrayList<>();
-    /** Secondary session actions revealed inline by the compact + / - dock affordance. */
     /** Reused contextual View hierarchy hosted by one independently tilted panel. */
     private FrameLayout modeOptionsHost;
     private PanelEntity modeOptionsPanel;
@@ -307,6 +300,10 @@ public class XrStreamPresenter {
     private int modeOptionsRasterHeightPixels;
     private View modeOptionsContentRoot;
     private boolean modeOptionsFitScheduled;
+    /** Consecutive fit attempts that found the host without a layout; zeroed by a laid-out fit. */
+    private int modeOptionsFitUnlaidRetries;
+    static final int MODE_OPTIONS_FIT_MAX_UNLAID_RETRIES = 60;
+    private static final long MODE_OPTIONS_FIT_UNLAID_RETRY_DELAY_MS = 16L;
     private final Runnable modeOptionsFitRunnable = new Runnable() {
         @Override
         public void run() {
@@ -320,7 +317,7 @@ public class XrStreamPresenter {
     private final Runnable refreshClientOptionsStatus = new Runnable() {
         @Override
         public void run() {
-            if (!isClientOptionsOpen()) {
+            if (!hostActivityStarted || !isClientOptionsOpen()) {
                 return;
             }
             updateClientSbsRuntimeStatusView();
@@ -347,7 +344,6 @@ public class XrStreamPresenter {
     private final EnumMap<PresentationMode, ModeStreamQualityModel> modeStreamQualityModels =
             new EnumMap<>(PresentationMode.class);
     private ClientSbsModeSettingsModel clientSbsModeSettingsModel;
-    private RawSbsModeSettingsModel rawSbsModeSettingsModel;
     /** A requested setting still differs from the live connection. */
     private boolean reconnectPending;
     /** Whether applying that staged state must reconnect rather than change the stream live. */
@@ -409,6 +405,10 @@ public class XrStreamPresenter {
     private int gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
     private int confirmedGamePresentationGeneration;
     private boolean gameSourceReconcilePosted;
+    /** Consecutive same-mode reconfirmation requests that failed to start locally. */
+    private int gameSourceReconfirmStartRetries;
+    static final int GAME_SOURCE_RECONFIRM_MAX_START_RETRIES = 3;
+    static final long GAME_SOURCE_RECONFIRM_RETRY_DELAY_MS = 500L;
     private final Runnable gameSourceReconcileRunnable = () -> {
         gameSourceReconcilePosted = false;
         reconcileGameSource();
@@ -446,10 +446,6 @@ public class XrStreamPresenter {
     private TextView clientModelNameView;
     private TextView clientAspectBucketView;
     private TextView clientRuntimeStatusView;
-    private XrChoiceGroup rawSbsPerEyeResolutionChoiceGroup;
-    private TextView rawSbsPerEyeResolutionSourceView;
-    private TextView rawSbsPerEyeResolutionPendingView;
-    private TextView rawSbsGeometryView;
     private final AuthoredStereoModeState authoredStereoModeState = new AuthoredStereoModeState();
     private XrChoiceGroup moviePictureFormatChoiceGroup;
     private TextView gameSourceStatusView;
@@ -463,7 +459,8 @@ public class XrStreamPresenter {
     private TextView glanceStreamView;
     private TextView glanceLoadView;
     private TextView glanceStatusView;
-    private static final long GLANCE_LOAD_INTERVAL_MS = 1000L;
+    /** Equals DevicePerformanceSampler's minimum interval, so each tick reads a new sample. */
+    private static final long GLANCE_LOAD_INTERVAL_MS = 2000L;
     private final android.os.Handler glanceLoadHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
     private boolean hostActivityStarted;
@@ -590,40 +587,10 @@ public class XrStreamPresenter {
     }
 
     /**
-     * True only for Raw Full, whose {@code 2W x H} frame is a transport no other mode uses.
-     *
-     * <p>Raw Half packs at {@code W x H} ({@code rawSbsPackedDimensions} multiplies the per-eye
-     * width by 1 for Half, 2 for Full), which is byte-for-byte the same stream Normal negotiates,
-     * sent with {@code sbs_mode 0} — {@link #wireModeFor} already maps Raw to
-     * {@code SBS_MODE_OFF}. The host cannot distinguish the two.</p>
-     */
-    static boolean usesRawPackedTransport(
-            PresentationMode mode,
-            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
-        return mode == PresentationMode.HOST_SBS_RAW
-                && perEyeResolution == PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
-    }
-
-    /**
      * Maps the logical quality tuple used by the UI/session store onto the 0x3007 wire geometry.
-     * Raw Full is the only mode whose requested desktop is already packed before Apollo sees it.
+     * Every mode requests its logical dimensions; null when they are not usable on the wire.
      */
-    static int[] liveVideoModeWireDimensions(
-            PresentationMode mode, int logicalWidth, int logicalHeight,
-            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution) {
-        if (mode == PresentationMode.HOST_SBS_RAW) {
-            if (rawPerEyeResolution == null) {
-                return null;
-            }
-            try {
-                int[] packed = PreferenceConfiguration.rawSbsPackedDimensions(
-                        logicalWidth, logicalHeight, rawPerEyeResolution);
-                return isUsableLiveVideoModeWireDimensions(packed[0], packed[1])
-                        ? packed : null;
-            } catch (IllegalArgumentException invalidGeometry) {
-                return null;
-            }
-        }
+    static int[] liveVideoModeWireDimensions(int logicalWidth, int logicalHeight) {
         return isUsableLiveVideoModeWireDimensions(logicalWidth, logicalHeight)
                 ? new int[] {logicalWidth, logicalHeight} : null;
     }
@@ -633,22 +600,9 @@ public class XrStreamPresenter {
      * Every ACK status carries the mode that actually remains on the wire, so malformed geometry
      * must fail closed even for a refusal rather than being mistaken for a logical per-eye size.
      */
-    static int[] liveVideoModeLogicalDimensions(
-            PresentationMode mode, int wireWidth, int wireHeight,
-            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution) {
+    static int[] liveVideoModeLogicalDimensions(int wireWidth, int wireHeight) {
         if (!isUsableLiveVideoModeWireDimensions(wireWidth, wireHeight)) {
             return null;
-        }
-        if (mode == PresentationMode.HOST_SBS_RAW) {
-            if (rawPerEyeResolution == null) {
-                return null;
-            }
-            if (rawPerEyeResolution == PreferenceConfiguration.RawSbsPerEyeResolution.FULL) {
-                // wireWidth is even by validation, so the SBS split is exact.
-                int logicalWidth = wireWidth / 2;
-                return logicalWidth >= 2
-                        ? new int[] {logicalWidth, wireHeight} : null;
-            }
         }
         return new int[] {wireWidth, wireHeight};
     }
@@ -660,55 +614,9 @@ public class XrStreamPresenter {
                 && (width & 1) == 0 && (height & 1) == 0;
     }
 
-    /**
-     * True when bitrate must be costed against a {@code 2W x H} encoded frame.
-     *
-     * <p>Host SBS AI is always double-width. Raw is double-width only at Full per-eye resolution;
-     * Raw Half packs two half-width eyes into the ordinary {@code W x H} transport.</p>
-     */
-    static boolean usesPackedBitrateCost(
-            PresentationMode mode,
-            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
-        // Unknown Raw packing must not silently under-recommend. Full is the shipped default and
-        // the conservative 2W x H cost; other modes are unaffected by this fallback.
-        PreferenceConfiguration.RawSbsPerEyeResolution costResolution =
-                perEyeResolution != null
-                        ? perEyeResolution
-                        : PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
-        return mode == PresentationMode.HOST_SBS_AI
-                || usesRawPackedTransport(mode, costResolution);
-    }
-
-    /** Uses the staged Raw choice so its bitrate hint changes before the user applies the edit. */
-    static boolean usesPackedBitrateCost(
-            PresentationMode mode,
-            RawSbsModeSettingsModel rawModel,
-            PreferenceConfiguration.RawSbsPerEyeResolution appliedFallback) {
-        PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution =
-                rawModel != null ? rawModel.pendingResolution : appliedFallback;
-        return usesPackedBitrateCost(mode, perEyeResolution);
-    }
-
-    /** Conservative default for callers that do not know the session's Raw packing. */
-    static boolean requiresReconnectBeforeModeSwitch(
-            PresentationMode previousMode, PresentationMode nextMode) {
-        return requiresReconnectBeforeModeSwitch(previousMode, nextMode,
-                PreferenceConfiguration.RawSbsPerEyeResolution.FULL);
-    }
-
-    /**
-     * Whether a mode switch crosses a negotiated transport boundary and must therefore reconnect.
-     *
-     * <p>Only Raw Full renegotiates. Entering or leaving Raw <em>Half</em> changes nothing on the
-     * wire, so it is a pure client-side presentation change: flip the SceneCore stereo mode and
-     * re-apply the quad aspect. The packing itself cannot change without a reconnect, so one
-     * value applies to both sides of the comparison.</p>
-     */
-    static boolean requiresReconnectBeforeModeSwitch(
-            PresentationMode previousMode, PresentationMode nextMode,
-            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
-        return usesRawPackedTransport(previousMode, perEyeResolution)
-                != usesRawPackedTransport(nextMode, perEyeResolution);
+    /** True when bitrate must be costed against a {@code 2W x H} encoded frame: Host SBS AI. */
+    static boolean usesPackedBitrateCost(PresentationMode mode) {
+        return mode == PresentationMode.HOST_SBS_AI;
     }
 
     /** True only when the decoder target or encoded dimensions change across the transition. */
@@ -759,10 +667,12 @@ public class XrStreamPresenter {
             PresentationMode mode,
             boolean streamReady,
             boolean modeSwitchInProgress,
+            boolean otherDecoderTransactionBusy,
             boolean hdrTransitionInProgress) {
         return mode == PresentationMode.CLIENT_SBS_AI
                 && streamReady
-                && (!modeSwitchInProgress || hdrTransitionInProgress);
+                && ((!modeSwitchInProgress && !otherDecoderTransactionBusy)
+                || hdrTransitionInProgress);
     }
 
     static boolean resetsHostDepthStatusAtTransitionStart(
@@ -1253,8 +1163,7 @@ public class XrStreamPresenter {
      *  decoder confirms that the initial stream frame has reached the XR surface. */
     private boolean streamPresentationReady;
 
-    // The selected resolution defines the Full eye/view aspect. Raw Half uses half that physical
-    // width so SceneCore does not stretch each W/2 x H encoded eye back to W/H.
+    // The selected resolution defines the eye/view aspect.
     private float fullAspect;
     /** Kept so the resize affordance's bounds can be re-derived for the active mode's aspect. */
     private ResizableComponent resizable;
@@ -1280,7 +1189,6 @@ public class XrStreamPresenter {
         this.sessionSettingsModel = initialSessionSettingsModel(prefConfig);
         initializeModeQualityModels(prefConfig, sessionSettingsModel);
         this.clientSbsModeSettingsModel = initialClientSbsModeSettingsModel(prefConfig);
-        this.rawSbsModeSettingsModel = initialRawSbsModeSettingsModel(prefConfig);
         this.viewStateStore = new XrViewStateStore(activity, activity.getIntent());
         restoreViewState(activity instanceof com.limelight.Game
                 ? ((com.limelight.Game) activity).getXrStartupPresenterMode()
@@ -1292,7 +1200,7 @@ public class XrStreamPresenter {
                     + panelHeightMeters + " m"
                     + (reconnectViewState.realWorldPose != null ? " with pose" : ""));
         }
-        // On a host-confirmed resume, restore direct Host/Raw presentation immediately. Client SBS
+        // On a host-confirmed resume, restore direct Host AI/Game/Movie intent immediately. Client SBS
         // is deferred until after frame 1 because it requires a live decoder-to-GL handoff. A
         // fresh connection's state store returns Normal regardless of any older saved mode.
     }
@@ -1304,7 +1212,7 @@ public class XrStreamPresenter {
 
     /**
      * Enables Apollo-3D-only Host SBS AI, telemetry, debug-dump, and session controls. A regular
-     * Sunshine or Apollo host still supports Normal, Raw SBS capture, and on-device Client SBS;
+     * Sunshine or Apollo host still supports Normal, Game, Movie, and on-device Client SBS;
      * stream-quality changes use the standard reconnect path instead. If an authoritative
      * connection-time downgrade finds Host SBS AI already prepared from stale discovery state,
      * {@link com.limelight.Game} persists Normal and replaces the connection before frame 1.
@@ -1411,10 +1319,18 @@ public class XrStreamPresenter {
     }
 
     private void scheduleGameSourceReconcile() {
+        scheduleGameSourceReconcile(0L);
+    }
+
+    private void scheduleGameSourceReconcile(long delayMs) {
         if (!gameSourceReconcilePosted && controlTransportOpen()
                 && gameProviderV1Supported && currentPresenterMode == PresentationMode.GAME_3D) {
             gameSourceReconcilePosted = true;
-            liveQualityHandler.post(gameSourceReconcileRunnable);
+            if (delayMs > 0L) {
+                liveQualityHandler.postDelayed(gameSourceReconcileRunnable, delayMs);
+            } else {
+                liveQualityHandler.post(gameSourceReconcileRunnable);
+            }
         }
     }
 
@@ -1431,10 +1347,12 @@ public class XrStreamPresenter {
             return;
         }
         int desiredMode;
+        boolean sameModeReconfirmation = false;
         if (confirmedGamePresentationGeneration == 0) {
             // Launch/resume carries no ACK, and an independent host rebuild may retire the last
             // proof. Reconfirm the current wire mode without changing desktop or packed layout.
             desiredMode = gameWireMode;
+            sameModeReconfirmation = true;
         } else if (gameSourceState.shouldAutoWiden(true, gameWireMode)) {
             desiredMode = MoonBridge.SBS_MODE_GAME_SBS;
         } else {
@@ -1447,8 +1365,16 @@ public class XrStreamPresenter {
                 desiredMode)) {
             if (isGameSourceWidening(desiredMode)) {
                 gameSourceState.recordWidenFailure();
+            } else if (sameModeReconfirmation
+                    && gameSourceReconfirmStartRetries < GAME_SOURCE_RECONFIRM_MAX_START_RETRIES) {
+                // Source heartbeats are ignored until a generation is confirmed, so no other
+                // event re-runs a reconfirmation whose request never left the client.
+                gameSourceReconfirmStartRetries++;
+                scheduleGameSourceReconcile(GAME_SOURCE_RECONFIRM_RETRY_DELAY_MS);
             }
             updateGameSourceViews();
+        } else {
+            gameSourceReconfirmStartRetries = 0;
         }
     }
 
@@ -1513,24 +1439,12 @@ public class XrStreamPresenter {
         }
     }
 
-    /** Replace Client SBS bucket/status data and refresh its open reusable subpane. */
-    public void setClientSbsModeSettingsModel(ClientSbsModeSettingsModel model) {
-        clientSbsModeSettingsModel = java.util.Objects.requireNonNull(model, "model");
-        if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.MODE_OPTIONS
-                && PresentationMode.CLIENT_SBS_AI.name().equals(controlUiState.getModeOptionsId())) {
-            updateModeOptionsView();
-        } else if (controlUiState.getVisibleSurface()
-                == XrControlUiState.Surface.SESSION_SETTINGS && auxiliaryContentHost != null) {
-        }
-    }
-
     /** Atomically replace all settings snapshots and update each open control tree only once. */
     public void setSettingsModels(SessionSettingsModel sessionModel,
                                   Map<PresentationMode, ModeStreamQualityModel> qualityModels,
                                   ClientSbsModeSettingsModel clientModel,
-                                  RawSbsModeSettingsModel rawModel,
                                   boolean applyPending) {
-        setSettingsModels(sessionModel, qualityModels, clientModel, rawModel, applyPending, true);
+        setSettingsModels(sessionModel, qualityModels, clientModel, applyPending, true);
     }
 
     /**
@@ -1540,10 +1454,8 @@ public class XrStreamPresenter {
     public void setSettingsModels(SessionSettingsModel sessionModel,
                                   Map<PresentationMode, ModeStreamQualityModel> qualityModels,
                                   ClientSbsModeSettingsModel clientModel,
-                                  RawSbsModeSettingsModel rawModel,
                                   boolean applyPending,
                                   boolean applyRequiresReconnect) {
-        boolean reconnectPending = applyPending;
         this.applyRequiresReconnect = applyRequiresReconnect;
         sessionSettingsModel = java.util.Objects.requireNonNull(sessionModel, "sessionModel");
         java.util.Objects.requireNonNull(qualityModels, "qualityModels");
@@ -1553,8 +1465,7 @@ public class XrStreamPresenter {
                     qualityModels.get(mode), "quality model for " + mode));
         }
         clientSbsModeSettingsModel = java.util.Objects.requireNonNull(clientModel, "clientModel");
-        rawSbsModeSettingsModel = java.util.Objects.requireNonNull(rawModel, "rawModel");
-        this.reconnectPending = reconnectPending;
+        this.reconnectPending = applyPending;
         if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.SESSION_SETTINGS
                 && auxiliaryContentHost != null) {
             updateSessionSettingsView();
@@ -1600,9 +1511,6 @@ public class XrStreamPresenter {
         if (sessionDefaultsButton != null) {
             sessionDefaultsButton.setEnabled(enabled);
         }
-        if (rawSbsPerEyeResolutionChoiceGroup != null) {
-            rawSbsPerEyeResolutionChoiceGroup.setEnabled(enabled);
-        }
         if (moviePictureFormatChoiceGroup != null) {
             moviePictureFormatChoiceGroup.setEnabled(enabled && streamPresentationReady
                     && !modeSwitchInProgress && !liveQualityTransactionBusy());
@@ -1632,18 +1540,6 @@ public class XrStreamPresenter {
         }
         updateGlancePanel();
         revealDockTemporarily();
-    }
-
-    public SessionSettingsModel getSessionSettingsModel() {
-        return sessionSettingsModel;
-    }
-
-    public ClientSbsModeSettingsModel getClientSbsModeSettingsModel() {
-        return clientSbsModeSettingsModel;
-    }
-
-    public RawSbsModeSettingsModel getRawSbsModeSettingsModel() {
-        return rawSbsModeSettingsModel;
     }
 
     private static SessionSettingsModel initialSessionSettingsModel(
@@ -1735,16 +1631,6 @@ public class XrStreamPresenter {
                 "GPU-only · initializes on first use");
     }
 
-    private static RawSbsModeSettingsModel initialRawSbsModeSettingsModel(
-            PreferenceConfiguration prefConfig) {
-        PreferenceConfiguration.RawSbsPerEyeResolution resolution =
-                prefConfig.rawSbsPerEyeResolution != null
-                        ? prefConfig.rawSbsPerEyeResolution
-                        : PreferenceConfiguration.RawSbsPerEyeResolution.FULL;
-        return new RawSbsModeSettingsModel(
-                resolution, resolution, SessionSettingsModel.Source.GLOBAL);
-    }
-
     /**
      * Create the XR session and SBS surface entity, then notify the listener with the surface.
      * Must be called on the main thread (SceneCore session creation is Activity-bound).
@@ -1790,16 +1676,14 @@ public class XrStreamPresenter {
             return false;
         }
 
-        // A saved direct Host/Raw preference can be correct from frame 1. Switching to a stereo
+        // A saved Host AI preference can be correct from frame 1. Switching to a stereo
         // mode changes BOTH the compositor split AND the
         // frame the host sends — Host SBS AI -> a packed 2W' x H' side-by-side frame (capped to
         // the encoder max), Client SBS -> on-device depth packed at the negotiated stream size.
         // selectMode
         // re-pins the surface to the target frame size (see setHostSurfaceSize/setClientSbsSurfaceSize).
         //
-        // Every mode's selected W x H defines the Full eye/view aspect. Raw SBS negotiates either
-        // an exact 2W x H Full buffer or a W x H Half buffer; Half uses a W/(2H) physical quad so
-        // SceneCore preserves the encoded eye aspect instead of stretching it.
+        // Every mode's selected W x H defines the eye/view aspect.
         fullAspect = (float) prefConfig.width / prefConfig.height;
         float panelWidthMeters = panelHeightMeters * aspectFor(currentPresenterMode);
         SurfaceEntity.Shape quad =
@@ -1817,11 +1701,10 @@ public class XrStreamPresenter {
                 SurfaceEntity.SuperSampling.NONE);
         requestOpaqueVideoBlending(surfaceEntity);
 
-        // Frame 1 must target the exact startup buffer: codec-capped packed Host AI, the selected
-        // Full/Half Raw packing, or ordinary W x H for Normal/Client.
+        // Frame 1 must target the exact startup buffer: codec-capped packed Host AI, or ordinary
+        // W x H for every other mode.
         int[] initialPixelDimensions = initialSurfacePixelDimensions(
-                currentPresenterMode, prefConfig.width, prefConfig.height, hostSbsVideoFormat,
-                prefConfig.rawSbsPerEyeResolution);
+                currentPresenterMode, prefConfig.width, prefConfig.height, hostSbsVideoFormat);
         surfaceEntity.setSurfacePixelDimensions(
                 new IntSize2d(initialPixelDimensions[0], initialPixelDimensions[1]));
         // Parent to the activity space (the rendered scene root) and make visibility explicit.
@@ -1867,12 +1750,18 @@ public class XrStreamPresenter {
                     @Override
                     public void onMoveUpdate(Entity entity, Ray currentRay, Pose proposedPose,
                                              float scale) {
+                        if (!surfaceEntityUsable()) {
+                            return;
+                        }
                         surfaceEntity.setPose(clampToMinDistance(proposedPose));
                     }
 
                     @Override
                     public void onMoveEnd(Entity entity, Ray currentRay, Pose proposedPose,
                                           float scale, Entity updatedParent) {
+                        if (!surfaceEntityUsable()) {
+                            return;
+                        }
                         surfaceEntity.setPose(clampToMinDistance(proposedPose));
                         repositionStatsPanel();
                     }
@@ -1883,6 +1772,9 @@ public class XrStreamPresenter {
         // fixed so the SBS halves stay aligned, and apply the new size to the quad when resize ends.
 
         resizable = ResizableComponent.create(session, (ResizeEvent event) -> {
+            if (!surfaceEntityUsable()) {
+                return;
+            }
             if (event.getResizeState() == ResizeEvent.ResizeState.END) {
                 FloatSize3d ns = event.getNewSize();
                 panelHeightMeters = XrViewStateStore.clampHeight(ns.getHeight());
@@ -1892,7 +1784,7 @@ public class XrStreamPresenter {
                                 panelHeightMeters)));
                 // Keep the control bar glued beneath the (now resized) quad.
                 repositionControlBar(panelHeightMeters);
-                viewStateStore.saveHeight(panelHeightMeters);
+                viewStateStore.saveHeight(durableHeightMeters());
             }
         });
         resizable.setFixedAspectRatioEnabled(true);
@@ -2068,7 +1960,7 @@ public class XrStreamPresenter {
         // Gaze/focus enlarges only the pill. Keep the first press path for XR input that focuses
         // on the first pinch without delivering a click, plus ordinary keyboard/controller clicks.
         configureDockRevealInteractions(dockRevealPill, this::revealDockTemporarily,
-                this::onDockRevealViewAttentionChanged);
+                this::onDockRevealViewAttentionChanged, dockRevealViewAttentionState);
         FrameLayout.LayoutParams pillParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER);
@@ -2077,7 +1969,6 @@ public class XrStreamPresenter {
         // Bake the initial highlights into the views before the panel is created.
         statsVisible = prefConfig.enablePerfOverlay;
         if (statsVisible) {
-            devicePerformanceSampler.resetCpuBaseline();
             controlUiState.showStats();
         }
         updateModeSelection();
@@ -2220,6 +2111,12 @@ public class XrStreamPresenter {
         applyCinemaBackground();
         devicePerformanceSampler.resetCpuBaseline();
         reconcileGlanceLoadTicker();
+        reconcileClientOptionsStatusTicker();
+        // A hover that began before the stop is not replayed; focus is read from the pill itself.
+        dockRevealViewAttentionState.focused = dockCollapsed && dockRevealPill != null
+                && dockRevealPill.getVisibility() == View.VISIBLE && dockRevealPill.isFocused();
+        dockRevealViewAttention = dockRevealViewAttentionState.active();
+        updateDockRevealAttention();
     }
 
     /** Stop all passive load sampling while the streaming Activity is backgrounded. */
@@ -2228,8 +2125,18 @@ public class XrStreamPresenter {
         hostActivityStarted = false;
         updateDockGazeTracking();
         resetDockRevealAnimation();
+        dockRevealViewAttentionState.clear();
+        dockRevealViewAttention = false;
         glanceLoadHandler.removeCallbacks(glanceLoadRunnable);
+        modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
         devicePerformanceSampler.resetCpuBaseline();
+    }
+
+    private void reconcileClientOptionsStatusTicker() {
+        modeOptionsStatusHandler.removeCallbacks(refreshClientOptionsStatus);
+        if (hostActivityStarted && !presenterDestroyed && isClientOptionsOpen()) {
+            modeOptionsStatusHandler.postDelayed(refreshClientOptionsStatus, 1000L);
+        }
     }
 
     private void reconcileGlanceLoadTicker() {
@@ -2427,30 +2334,44 @@ public class XrStreamPresenter {
     /** Install all Galaxy XR activation paths so the collapsed pill never needs a second pinch. */
     static void configureDockRevealInteractions(View pill, Runnable revealAction,
                                                Consumer<Boolean> attentionAction) {
+        configureDockRevealInteractions(pill, revealAction, attentionAction,
+                new DockRevealViewAttentionState());
+    }
+
+    /** Independent hover and focus sources of the collapsed pill's View attention. */
+    static final class DockRevealViewAttentionState {
+        boolean hovered;
+        boolean focused;
+
+        boolean active() {
+            return hovered || focused;
+        }
+
+        void clear() {
+            hovered = false;
+            focused = false;
+        }
+    }
+
+    static void configureDockRevealInteractions(View pill, Runnable revealAction,
+                                               Consumer<Boolean> attentionAction,
+                                               DockRevealViewAttentionState attention) {
         java.util.Objects.requireNonNull(pill, "pill");
         java.util.Objects.requireNonNull(revealAction, "revealAction");
         java.util.Objects.requireNonNull(attentionAction, "attentionAction");
+        java.util.Objects.requireNonNull(attention, "attention");
         // Hover listeners run before View updates isHovered(). Track both sources independently
         // so losing focus cannot shrink the target while gaze is still on it, or vice versa.
-        class AttentionState {
-            boolean hovered;
-            boolean focused;
-
-            void update() {
-                attentionAction.accept(hovered || focused);
-            }
-        }
-        AttentionState attention = new AttentionState();
         pill.setOnHoverListener((v, event) -> {
             switch (event.getActionMasked()) {
                 case android.view.MotionEvent.ACTION_HOVER_ENTER:
                 case android.view.MotionEvent.ACTION_HOVER_MOVE:
                     attention.hovered = true;
-                    attention.update();
+                    attentionAction.accept(attention.active());
                     break;
                 case android.view.MotionEvent.ACTION_HOVER_EXIT:
                     attention.hovered = false;
-                    attention.update();
+                    attentionAction.accept(attention.active());
                     break;
                 default:
                     break;
@@ -2466,7 +2387,7 @@ public class XrStreamPresenter {
         });
         pill.setOnFocusChangeListener((v, hasFocus) -> {
             attention.focused = hasFocus;
-            attention.update();
+            attentionAction.accept(attention.active());
         });
         pill.setOnClickListener(v -> {
             if (shouldRevealCollapsedDock(DockRevealInteraction.EXPLICIT_CLICK)) {
@@ -2596,6 +2517,7 @@ public class XrStreamPresenter {
     private void setDockCollapsed(boolean collapsed) {
         if (!collapsed || !dockCollapsed) {
             resetDockRevealAnimation();
+            dockRevealViewAttentionState.clear();
             dockRevealViewAttention = false;
             dockRevealGazeAttention = false;
         }
@@ -2845,15 +2767,11 @@ public class XrStreamPresenter {
         }
 
         if (showStats && statsPanel == null && session != null) {
-            devicePerformanceSampler.resetCpuBaseline();
             createStatsPanel(panelHeightMeters);
             repositionStatsPanel();
         }
         if (statsPanel != null && !statsPanel.isDisposed()) {
             statsPanel.setEnabled(showStats);
-        }
-        if (statsChanged && showStats) {
-            devicePerformanceSampler.resetCpuBaseline();
         }
         if (statsChanged && notifyStatsListener && statsVisibilityListener != null) {
             statsVisibilityListener.onStatsVisibilityChanged(showStats);
@@ -2876,7 +2794,7 @@ public class XrStreamPresenter {
             }
             modeOptionsPanel.setEnabled(showModeOptions);
         }
-        if (isClientOptionsOpen()) {
+        if (hostActivityStarted && isClientOptionsOpen()) {
             modeOptionsStatusHandler.postDelayed(refreshClientOptionsStatus, 1000L);
         }
 
@@ -2956,10 +2874,6 @@ public class XrStreamPresenter {
                 addModeStatus(header, activity.getString(R.string.xr_mode_normal_source),
                         activity.getString(R.string.xr_mode_normal_detail));
                 break;
-            case HOST_SBS_RAW:
-                addModeStatus(header, activity.getString(R.string.xr_mode_host_raw_source),
-                        activity.getString(R.string.xr_mode_host_raw_detail));
-                break;
             case GAME_3D:
                 addModeStatus(header, activity.getString(R.string.xr_mode_game_source),
                         activity.getString(R.string.xr_mode_game_detail));
@@ -2975,6 +2889,8 @@ public class XrStreamPresenter {
             case CLIENT_SBS_AI:
                 addModeStatus(header, activity.getString(R.string.xr_mode_client_ai_description),
                         clientSbsRuntimeStatus(clientSbsModeSettingsModel));
+                break;
+            default:
                 break;
         }
         root.addView(header);
@@ -3002,9 +2918,6 @@ public class XrStreamPresenter {
         root.addView(qualityHeading);
 
         addModeQualityControls(root, mode);
-        if (mode == PresentationMode.HOST_SBS_RAW) {
-            addRawSbsModeOptions(root);
-        }
         if (mode == PresentationMode.CLIENT_SBS_AI) {
             LinearLayout clientRow = new LinearLayout(activity);
             clientRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -3446,107 +3359,6 @@ public class XrStreamPresenter {
         return true;
     }
 
-    private void addRawSbsModeOptions(LinearLayout root) {
-        RawSbsModeSettingsModel model = rawSbsModeSettingsModel;
-        LinearLayout card = new LinearLayout(activity);
-        card.setOrientation(LinearLayout.VERTICAL);
-        int cardPadding = dimen(R.dimen.xr_space_md);
-        card.setPadding(cardPadding, cardPadding, cardPadding, cardPadding);
-        card.setBackground(controlSurfaceBackground(
-                paletteColor(R.color.xr_surface_raised), paletteColor(R.color.xr_border_panel), 1));
-
-        LinearLayout heading = new LinearLayout(activity);
-        heading.setOrientation(LinearLayout.HORIZONTAL);
-        heading.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = controlText(
-                activity.getString(R.string.xr_raw_per_eye_resolution),
-                R.dimen.xr_text_title, paletteColor(R.color.xr_text_primary));
-        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
-        heading.addView(title, new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
-        rawSbsPerEyeResolutionSourceView = controlText(
-                rawSbsSourceText(model), SESSION_META_TEXT_DIMEN,
-                paletteColor(R.color.xr_text_secondary));
-        heading.addView(rawSbsPerEyeResolutionSourceView);
-        card.addView(heading);
-
-        rawSbsPerEyeResolutionChoiceGroup = buildChoiceGroup(
-                model.choices, model.selectedChoiceId, model.pendingResolutionName,
-                choiceId -> controlActionListener.onRawSbsPerEyeResolutionSelected(
-                        choiceId, rawSbsModeSettingsModel));
-        rawSbsPerEyeResolutionChoiceGroup.setEnabled(settingsControlsEnabled());
-        LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        choiceParams.topMargin = dimen(R.dimen.xr_space_sm);
-        card.addView(rawSbsPerEyeResolutionChoiceGroup, choiceParams);
-
-        rawSbsGeometryView = controlText(
-                rawSbsGeometryText(model), R.dimen.xr_text_emphasis,
-                paletteColor(R.color.xr_text_secondary));
-        rawSbsGeometryView.setPadding(0, dimen(R.dimen.xr_space_sm), 0, 0);
-        card.addView(rawSbsGeometryView);
-
-        rawSbsPerEyeResolutionPendingView =
-                controlText("", SESSION_META_TEXT_DIMEN,
-                        paletteColor(R.color.xr_status_warn));
-        rawSbsPerEyeResolutionPendingView.setPadding(
-                0, dimen(R.dimen.xr_space_xs), 0, 0);
-        card.addView(rawSbsPerEyeResolutionPendingView);
-        updateRawSbsPendingView(model);
-
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dimen(R.dimen.xr_space_md);
-        root.addView(card, params);
-    }
-
-    private String rawSbsSourceText(RawSbsModeSettingsModel model) {
-        return model.source == SessionSettingsModel.Source.GLOBAL
-                ? activity.getString(R.string.xr_setting_source_global)
-                : activity.getString(R.string.xr_setting_source_session);
-    }
-
-    private String rawSbsGeometryText(RawSbsModeSettingsModel model) {
-        ModeStreamQualityModel quality =
-                modeStreamQualityModels.get(PresentationMode.HOST_SBS_RAW);
-        int logicalWidth = prefConfig.width;
-        int logicalHeight = prefConfig.height;
-        if (quality != null) {
-            try {
-                String[] dimensions = quality.pendingQuality.resolution.split("x", 2);
-                logicalWidth = Integer.parseInt(dimensions[0]);
-                logicalHeight = Integer.parseInt(dimensions[1]);
-            }
-            catch (RuntimeException ignored) {
-                // The controller will repair malformed custom dimensions before reconnect.
-            }
-        }
-        int[] packed;
-        try {
-            packed = PreferenceConfiguration.rawSbsPackedDimensions(
-                    logicalWidth, logicalHeight, model.pendingResolution);
-        }
-        catch (IllegalArgumentException unsupported) {
-            return activity.getString(R.string.xr_raw_geometry_unsupported);
-        }
-        return activity.getString(R.string.xr_raw_geometry,
-                packed[0] / 2, packed[1], packed[0], packed[1]);
-    }
-
-    private void updateRawSbsPendingView(RawSbsModeSettingsModel model) {
-        if (rawSbsPerEyeResolutionPendingView == null) {
-            return;
-        }
-        rawSbsPerEyeResolutionPendingView.setVisibility(
-                model.hasPendingChange() ? View.VISIBLE : View.GONE);
-        if (model.hasPendingChange()) {
-            rawSbsPerEyeResolutionPendingView.setText(activity.getString(
-                    R.string.xr_setting_pending_active, model.appliedResolutionName));
-        }
-    }
-
     private void clearModeOptionsReferences() {
         moviePictureFormatChoiceGroup = null;
         gameSourceStatusView = null;
@@ -3562,10 +3374,6 @@ public class XrStreamPresenter {
         clientModelNameView = null;
         clientAspectBucketView = null;
         clientRuntimeStatusView = null;
-        rawSbsPerEyeResolutionChoiceGroup = null;
-        rawSbsPerEyeResolutionSourceView = null;
-        rawSbsPerEyeResolutionPendingView = null;
-        rawSbsGeometryView = null;
         modeOptionsContentRoot = null;
         modeOptionsFitScheduled = false;
         modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
@@ -3616,29 +3424,7 @@ public class XrStreamPresenter {
         if (mode == PresentationMode.CLIENT_SBS_AI) {
             updateClientSbsOptionsView();
         }
-        else if (mode == PresentationMode.HOST_SBS_RAW) {
-            updateRawSbsOptionsView();
-        }
         scheduleModeOptionsPanelFit();
-    }
-
-    private void updateRawSbsOptionsView() {
-        if (rawSbsPerEyeResolutionChoiceGroup == null) {
-            renderModeOptions();
-            return;
-        }
-        RawSbsModeSettingsModel model = rawSbsModeSettingsModel;
-        if (!rawSbsPerEyeResolutionChoiceGroup.setSelectedValue(
-                model.selectedChoiceId)) {
-            configureChoiceGroup(rawSbsPerEyeResolutionChoiceGroup,
-                    model.choices, model.selectedChoiceId, model.pendingResolutionName,
-                    choiceId -> controlActionListener.onRawSbsPerEyeResolutionSelected(
-                            choiceId, rawSbsModeSettingsModel));
-        }
-        rawSbsPerEyeResolutionChoiceGroup.setEnabled(settingsControlsEnabled());
-        rawSbsPerEyeResolutionSourceView.setText(rawSbsSourceText(model));
-        rawSbsGeometryView.setText(rawSbsGeometryText(model));
-        updateRawSbsPendingView(model);
     }
 
     private void updateClientSbsOptionsView() {
@@ -4108,8 +3894,6 @@ public class XrStreamPresenter {
 
     private String modeLabel(PresentationMode mode) {
         switch (mode) {
-            case HOST_SBS_RAW:
-                return activity.getString(R.string.xr_bar_host_sbs_raw);
             case HOST_SBS_AI:
                 return activity.getString(R.string.xr_bar_host_ai_3d);
             case CLIENT_SBS_AI:
@@ -4159,8 +3943,7 @@ public class XrStreamPresenter {
             return -1;
         }
         int fps = Math.round(parseFrameRate(model.pendingQuality.frameRate, prefConfig.fps));
-        boolean packed = usesPackedBitrateCost(
-                mode, rawSbsModeSettingsModel, prefConfig.rawSbsPerEyeResolution);
+        boolean packed = usesPackedBitrateCost(mode);
         return XrBitrateRecommendation.recommendedKbps(
                 packed, size[0], size[1], fps, codecIdFor(prefConfig.videoFormat));
     }
@@ -4507,9 +4290,7 @@ public class XrStreamPresenter {
                 && (!gameProviderV1Supported || requestMode != PresentationMode.GAME_3D)) {
             return 0;
         }
-        int[] wireDimensions = liveVideoModeWireDimensions(
-                requestMode, logicalWidth, logicalHeight,
-                prefConfig.rawSbsPerEyeResolution);
+        int[] wireDimensions = liveVideoModeWireDimensions(logicalWidth, logicalHeight);
         if (wireDimensions == null) {
             LimeLog.severe("XR: refusing invalid live video-mode geometry "
                     + logicalWidth + "x" + logicalHeight + " for " + requestMode);
@@ -5250,8 +5031,6 @@ public class XrStreamPresenter {
 
     private static String presenterModeName(PresentationMode mode) {
         switch (mode) {
-            case HOST_SBS_RAW:
-                return "Host SBS Raw";
             case HOST_SBS_AI:
                 return "Host AI 3D";
             case CLIENT_SBS_AI:
@@ -5869,9 +5648,16 @@ public class XrStreamPresenter {
         int hostWidth = modeOptionsHost.getWidth();
         int hostHeight = modeOptionsHost.getHeight();
         if (hostWidth <= 0 || hostHeight <= 0) {
-            scheduleModeOptionsPanelFit();
+            if (!modeOptionsFitScheduled
+                    && modeOptionsFitUnlaidRetries < MODE_OPTIONS_FIT_MAX_UNLAID_RETRIES) {
+                modeOptionsFitUnlaidRetries++;
+                modeOptionsFitScheduled = true;
+                modeOptionsStatusHandler.postDelayed(modeOptionsFitRunnable,
+                        MODE_OPTIONS_FIT_UNLAID_RETRY_DELAY_MS);
+            }
             return;
         }
+        modeOptionsFitUnlaidRetries = 0;
         if (modeOptionsBaseRasterHeightPixels <= 0) {
             modeOptionsBaseRasterHeightPixels = hostHeight;
             modeOptionsRasterHeightPixels = hostHeight;
@@ -6125,7 +5911,7 @@ public class XrStreamPresenter {
         revealDockTemporarily();
         schedulePanelRateReconcile();
 
-        // The initial Host/Raw mode is now proven to match a decoded frame. Mark it as the most
+        // The initial direct mode is now proven to match a decoded frame. Mark it as the most
         // successful presentation. Client SBS still needs its guarded GL surface handoff.
         if (deferredPresenterMode == PresentationMode.NORMAL) {
             persistPresentationState();
@@ -6194,13 +5980,10 @@ public class XrStreamPresenter {
         ModeStreamQualityModel targetQuality = modeStreamQualityModels.get(item.selectsMode);
         if (shouldReconnectBeforeModeEntry(
                 currentPresenterMode, item.selectsMode,
-                applyRequiresReconnect, targetQuality)
-                || requiresReconnectBeforeModeSwitch(
-                currentPresenterMode, item.selectsMode, prefConfig.rawSbsPerEyeResolution)) {
+                applyRequiresReconnect, targetQuality)) {
             // Reconnect before any host request or surface handoff. An ACK for an interim tuple
             // would otherwise replace the target mode's saved quality before Game could apply it.
-            // Raw Full additionally crosses its distinct 2W x H transport even at equal quality.
-            LimeLog.info("XR: reconnecting before presentation quality/transport boundary "
+            LimeLog.info("XR: reconnecting before presentation quality boundary "
                     + currentPresenterMode + " -> " + item.selectsMode);
             controlActionListener.onPresentationModeNeedsReconnect(item.selectsMode);
             return;
@@ -6588,16 +6371,6 @@ public class XrStreamPresenter {
                 prefConfig.width + "x" + prefConfig.height,
                 formatFrameRate(currentFps), prefConfig.bitrate);
         boolean resolutionChanged = size[0] != prefConfig.width || size[1] != prefConfig.height;
-        if (resolutionChanged && !supportsLiveResolutionChange(
-                currentPresenterMode, prefConfig.rawSbsPerEyeResolution)) {
-            // Raw Full's 2W x H transport is negotiated at connect and must reconnect. The
-            // controller classifies this too — refuse here as well so a mode/controller mismatch
-            // cannot corrupt state.
-            LimeLog.warning("XR: refusing a live resolution change in " + currentPresenterMode);
-            reportLiveQualityStartFailure(
-                    origin, currentPresenterMode + " cannot resize live");
-            return false;
-        }
 
         int requestId = nextVideoModeRequestId();
 
@@ -6826,9 +6599,8 @@ public class XrStreamPresenter {
             return;
         }
 
-        PresentationMode requestMode = liveQualityRequestMode();
         AcknowledgedVideoMode acknowledged = acknowledgedVideoMode(
-                pendingLiveQuality, requestMode, prefConfig.rawSbsPerEyeResolution,
+                pendingLiveQuality,
                 appliedSourceWidth, appliedSourceHeight,
                 appliedFramerateX100, effectiveBitrateKbps);
         if (acknowledged == null) {
@@ -7042,8 +6814,7 @@ public class XrStreamPresenter {
         int[] previousRaster = currentExactEncodedWidth > 0 && currentExactEncodedHeight > 0
                 ? new int[] {currentExactEncodedWidth, currentExactEncodedHeight}
                 : initialSurfacePixelDimensions(currentPresenterMode,
-                        prefConfig.width, prefConfig.height, hostSbsVideoFormat,
-                        prefConfig.rawSbsPerEyeResolution);
+                        prefConfig.width, prefConfig.height, hostSbsVideoFormat);
         boolean encodedRasterChanged = pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0
                 && (pendingExactEncodedWidth != previousRaster[0]
                 || pendingExactEncodedHeight != previousRaster[1]);
@@ -7067,18 +6838,14 @@ public class XrStreamPresenter {
     }
 
     /**
-     * The host's applied wire mode converted to a logical stream-quality tuple. Raw Full ACKs
-     * carry the already-packed {@code 2W x H} desktop; every other mode carries its logical/base
-     * dimensions. {@code bitrateKbps} is the host's post-budget encoder value rather than the
-     * requested wire budget. Fractional frame rates retain the hundredths-of-a-Hz precision
-     * carried by the ACK. Null when the host reported nothing usable.
+     * The host's applied wire mode converted to a logical stream-quality tuple. ACKs carry each
+     * mode's logical/base dimensions. {@code bitrateKbps} is the host's post-budget encoder value
+     * rather than the requested wire budget. Fractional frame rates retain the
+     * hundredths-of-a-Hz precision carried by the ACK. Null when the host reported nothing usable.
      */
     static StreamQualityTuple appliedTuple(
-            PresentationMode mode,
-            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution,
             int wireWidth, int wireHeight, int framerateX100, int bitrateKbps) {
-        int[] logicalDimensions = liveVideoModeLogicalDimensions(
-                mode, wireWidth, wireHeight, rawPerEyeResolution);
+        int[] logicalDimensions = liveVideoModeLogicalDimensions(wireWidth, wireHeight);
         if (logicalDimensions == null || framerateX100 <= 0 || bitrateKbps <= 0) {
             return null;
         }
@@ -7087,33 +6854,16 @@ public class XrStreamPresenter {
                 formatFrameRateX100(framerateX100), bitrateKbps);
     }
 
-    /** Identity-mode convenience retained for deterministic tuple-formatting tests. */
-    static StreamQualityTuple appliedTuple(int width, int height, int framerateX100,
-                                           int bitrateKbps) {
-        return appliedTuple(PresentationMode.NORMAL,
-                PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
-                width, height, framerateX100, bitrateKbps);
-    }
-
     /**
      * Reconciles an ACK without confusing its effective encoder bitrate with the total wire
      * budget sent in the request.
      */
     static AcknowledgedVideoMode acknowledgedVideoMode(
-            StreamQualityTuple requestedLogicalQuality, int width, int height,
-            int framerateX100, int effectiveEncoderBitrateKbps) {
-        return acknowledgedVideoMode(requestedLogicalQuality, PresentationMode.NORMAL,
-                PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
-                width, height, framerateX100, effectiveEncoderBitrateKbps);
-    }
-
-    static AcknowledgedVideoMode acknowledgedVideoMode(
-            StreamQualityTuple requestedLogicalQuality, PresentationMode mode,
-            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution,
+            StreamQualityTuple requestedLogicalQuality,
             int wireWidth, int wireHeight, int framerateX100,
             int effectiveEncoderBitrateKbps) {
         StreamQualityTuple effective = appliedTuple(
-                mode, rawPerEyeResolution, wireWidth, wireHeight,
+                wireWidth, wireHeight,
                 framerateX100, effectiveEncoderBitrateKbps);
         if (requestedLogicalQuality == null || effective == null) {
             return null;
@@ -7313,8 +7063,7 @@ public class XrStreamPresenter {
             return new int[] {pendingExactEncodedWidth, pendingExactEncodedHeight};
         }
         return initialSurfacePixelDimensions(liveQualityRequestMode(),
-                prefConfig.width, prefConfig.height, hostSbsVideoFormat,
-                prefConfig.rawSbsPerEyeResolution);
+                prefConfig.width, prefConfig.height, hostSbsVideoFormat);
     }
 
     private PresentationMode liveQualityRequestMode() {
@@ -7680,18 +7429,6 @@ public class XrStreamPresenter {
             return whole + "." + (hundredths / 10);
         }
         return whole + "." + (hundredths < 10 ? "0" : "") + hundredths;
-    }
-
-    /**
-     * Modes whose decoded frame size can change live. Raw <em>Full</em> is the only exclusion:
-     * its {@code 2W x H} packed transport is negotiated at connect and 0x3007 cannot renegotiate
-     * it. Raw Half streams {@code W x H} exactly like Normal and resizes live. Client SBS resizes
-     * through {@code Stereo3DRenderer}, which refuses a change to its immutable pipeline contract.
-     */
-    static boolean supportsLiveResolutionChange(
-            PresentationMode mode,
-            PreferenceConfiguration.RawSbsPerEyeResolution perEyeResolution) {
-        return !usesRawPackedTransport(mode, perEyeResolution);
     }
 
     /** Parses a {@code WxH} stream-quality resolution id; null when it is not usable. */
@@ -8218,8 +7955,24 @@ public class XrStreamPresenter {
                     Quaternion.Identity));
         }
         repositionControlBar(height);
-        viewStateStore.saveHeight(panelHeightMeters);
         cinemaViewExpanded = true;
+    }
+
+    /** Height written to the per-PC store: the pre-Cinema height while the preset is applied. */
+    static float durableHeightMeters(boolean cinemaViewExpanded,
+                                     float cinemaRestoreHeightMeters,
+                                     float panelHeightMeters) {
+        return cinemaViewExpanded && cinemaRestoreHeightMeters > 0.0f
+                ? cinemaRestoreHeightMeters : panelHeightMeters;
+    }
+
+    private float durableHeightMeters() {
+        return durableHeightMeters(cinemaViewExpanded, cinemaRestoreHeightMeters,
+                panelHeightMeters);
+    }
+
+    private boolean surfaceEntityUsable() {
+        return !presenterDestroyed && surfaceEntity != null && !surfaceEntity.isDisposed();
     }
 
     /** Cinema keeps its original size/pose behavior even if environment control is unavailable. */
@@ -8322,7 +8075,7 @@ public class XrStreamPresenter {
         // The Game callback persists the mode through an app/session-guarded editor. This store
         // owns only per-PC geometry, so a finishing Game cannot overwrite a replacement app's
         // presentation mode.
-        viewStateStore.saveHeight(panelHeightMeters);
+        viewStateStore.saveHeight(durableHeightMeters());
     }
 
     /**
@@ -8360,7 +8113,7 @@ public class XrStreamPresenter {
 
         panelHeightMeters = XrReconnectViewState.effectiveHeight(
                 shapeHeight, realWorldScaleY, panelHeightMeters);
-        viewStateStore.saveHeight(panelHeightMeters);
+        viewStateStore.saveHeight(durableHeightMeters());
         new XrReconnectViewState(panelHeightMeters, realWorldPose)
                 .writeTo(reconnectIntent);
         LimeLog.info("XR: captured reconnect view at height "
@@ -8440,28 +8193,12 @@ public class XrStreamPresenter {
                 (lt.getZ() + rt.getZ()) / 2.0f), left.getRotation());
     }
 
-    /** Quad aspect (width/height), including Raw Half's narrower encoded eye geometry. */
+    /** Quad aspect (width/height); Game and Movie apply their authored-stereo interpretation. */
     private float aspectFor(PresentationMode mode) {
         if (mode == PresentationMode.GAME_3D || mode == PresentationMode.MOVIE_3D) {
             return authoredStereoModeState.presentationAspect(mode, fullAspect);
         }
-        return presentationAspect(mode, fullAspect, prefConfig.rawSbsPerEyeResolution);
-    }
-
-    static float presentationAspect(PresentationMode mode, float logicalAspect) {
-        return presentationAspect(mode, logicalAspect,
-                PreferenceConfiguration.RawSbsPerEyeResolution.FULL);
-    }
-
-    static float presentationAspect(
-            PresentationMode mode, float logicalAspect,
-            PreferenceConfiguration.RawSbsPerEyeResolution rawPerEyeResolution) {
-        if (mode == PresentationMode.HOST_SBS_RAW
-                && rawPerEyeResolution
-                == PreferenceConfiguration.RawSbsPerEyeResolution.HALF) {
-            return logicalAspect / 2.0f;
-        }
-        return logicalAspect;
+        return fullAspect;
     }
 
     private SurfaceEntity.StereoMode stereoModeFor(PresentationMode mode) {
@@ -8490,6 +8227,7 @@ public class XrStreamPresenter {
                 currentPresenterMode,
                 streamPresentationReady,
                 modeSwitchInProgress,
+                liveQualityTransactionBusy() || pendingDecoderTransitionMode != null,
                 clientSbsHdrTransitionInProgress);
     }
 
@@ -8952,13 +8690,7 @@ public class XrStreamPresenter {
     static int[] initialSurfacePixelDimensions(PresentationMode mode,
                                                int logicalWidth,
                                                int logicalHeight,
-                                               int hostAiVideoFormat,
-                                               PreferenceConfiguration.RawSbsPerEyeResolution
-                                                       rawPerEyeResolution) {
-        if (mode == PresentationMode.HOST_SBS_RAW) {
-            return PreferenceConfiguration.rawSbsPackedDimensions(
-                    logicalWidth, logicalHeight, rawPerEyeResolution);
-        }
+                                               int hostAiVideoFormat) {
         if (isHostDepthPresenterMode(mode)) {
             return PreferenceConfiguration.hostSbsPackedDimensions(
                     logicalWidth, logicalHeight, hostAiVideoFormat);
@@ -8970,11 +8702,9 @@ public class XrStreamPresenter {
     static int[] decoderStreamDimensions(PresentationMode mode,
                                          int logicalWidth,
                                          int logicalHeight,
-                                         int hostAiVideoFormat,
-                                         PreferenceConfiguration.RawSbsPerEyeResolution
-                                                 rawPerEyeResolution) {
+                                         int hostAiVideoFormat) {
         return initialSurfacePixelDimensions(mode, logicalWidth, logicalHeight,
-                hostAiVideoFormat, rawPerEyeResolution);
+                hostAiVideoFormat);
     }
 
     private void updateDecoderStreamGeometry(
@@ -8986,20 +8716,10 @@ public class XrStreamPresenter {
                     pendingExactEncodedWidth, pendingExactEncodedHeight};
         } else {
             encodedDimensions = decoderStreamDimensions(
-                    mode, logicalWidth, logicalHeight, hostSbsVideoFormat,
-                    prefConfig.rawSbsPerEyeResolution);
+                    mode, logicalWidth, logicalHeight, hostSbsVideoFormat);
         }
         game.updateDecoderStreamGeometry(
                 encodedDimensions[0], encodedDimensions[1], fps);
-    }
-
-    static int[] initialSurfacePixelDimensions(PresentationMode mode,
-                                               int logicalWidth,
-                                               int logicalHeight,
-                                               int hostAiVideoFormat) {
-        return initialSurfacePixelDimensions(mode, logicalWidth, logicalHeight,
-                hostAiVideoFormat,
-                PreferenceConfiguration.RawSbsPerEyeResolution.FULL);
     }
 
     /** Re-pin the XR surface for a host presentation: the packed SBS frame ({@code 2W' x H'}) when a
@@ -9033,12 +8753,6 @@ public class XrStreamPresenter {
                     logicalWidth, logicalHeight, hostSbsVideoFormat);
             w = packed[0];
             h = packed[1];
-        } else if (currentPresenterMode == PresentationMode.HOST_SBS_RAW) {
-            int[] raw = PreferenceConfiguration.rawSbsPackedDimensions(
-                    logicalWidth, logicalHeight,
-                    prefConfig.rawSbsPerEyeResolution);
-            w = raw[0];
-            h = raw[1];
         } else {
             w = logicalWidth;
             h = logicalHeight;
@@ -9100,7 +8814,7 @@ public class XrStreamPresenter {
         currentExactEncodedHeight = 0;
         lastPresentationStateGeneration = 0;
         pendingClientPackedSwapProofArmed = false;
-        viewStateStore.saveHeight(panelHeightMeters);
+        viewStateStore.saveHeight(durableHeightMeters());
         if (surfaceEntity != null) {
             if (!surfaceEntity.isDisposed()) {
                 surfaceEntity.dispose();

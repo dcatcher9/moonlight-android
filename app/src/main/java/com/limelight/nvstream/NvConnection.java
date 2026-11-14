@@ -66,6 +66,9 @@ public class NvConnection {
 
     public boolean isStreamGammaV1Supported() { return context.streamGammaV1Supported; }
 
+    /** Authenticated serverinfo {@code GameProviderV1Supported=1} from this connection's launch. */
+    public boolean isGameProviderV1Supported() { return context.gameProviderV1Supported; }
+
     public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert)
     {
         this.appContext = appContext;
@@ -337,7 +340,8 @@ public class NvConnection {
             return false;
         }
 
-        ComputerDetails details = h.getComputerDetails(serverInfo);
+        ComputerDetails details = h.getComputerDetails(serverInfo,
+                serverInfoResponse.authenticated);
         context.isNvidiaServerSoftware = details.nvidiaServer;
         context.hostSessionIdSupported = details.hostSessionIdSupported;
         context.virtualDisplayOnlySupported = NvHTTP.isVirtualDisplayOnlySupported(

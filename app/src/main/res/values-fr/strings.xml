@@ -297,35 +297,18 @@
     <string name="toast_controller_type_changed">Le type de manette peut être différent en raison de l\'émulation du capteur de mouvement</string>
 
     <!-- Array strings -->
-    <string name="resolution_360p">360p</string>
-    <string name="resolution_480p">480p</string>
-    <string name="resolution_720p">720p</string>
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="resolution_4k">4K</string>
 
-    <string name="fps_30">30 FPS</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="fps_90">90 FPS</string>
-    <string name="fps_120">120 FPS</string>
 
     <string name="audioconf_stereo">Stéréo</string>
     <string name="audioconf_51surround">Son surround 5.1</string>
     <string name="audioconf_71surround">Son surround 7.1</string>
 
-    <string name="videoformat_auto">Automatique (recommandé)</string>
-    <string name="videoformat_av1always">Préférer AV1 (expérimental)</string>
-    <string name="videoformat_hevcalways">Préférer HEVC</string>
-    <string name="videoformat_h264always">Préférer H.264</string>
 
     <string name="title_frame_pacing">Frame-pacing vidéo</string>
     <string name="summary_frame_pacing">Spécifiez comment équilibrer latence et fluidité de la vidéo</string>
-    <string name="pacing_warp">Warp Drive (expérimental)</string>
-    <string name="pacing_warp2">Warp 2 (expérimental)</string>
-    <string name="pacing_latency">Préférer une latence plus faible</string>
-    <string name="pacing_balanced">Équilibré</string>
-    <string name="pacing_balanced_alt">Équilibré avec limite FPS</string>
-    <string name="pacing_smoothness">Préférer la qualité vidéo (risque d\'augmenter la latence)</string>
 
     <string name="keyboard_service_label">Clavier physique Moonlight 3D</string>
     <string name="accessibility_description_text">Utilisé uniquement lorsque les raccourcis clavier physiques sont interceptés par le système. Dans certains systèmes, plusieurs raccourcis clavier sont définis et utilisés par le système Android, empêchant leur transmission au PC hôte. Moonlight 3D ne regardera pas votre saisie, ni ne collectera votre mot de passe, votre numéro de carte de crédit ou toute autre information personnelle.</string>

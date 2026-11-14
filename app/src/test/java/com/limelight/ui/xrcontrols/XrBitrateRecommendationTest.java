@@ -47,8 +47,11 @@ public class XrBitrateRecommendationTest {
         assertEquals(50000, packed(1920, 1080, 90, CODEC_HEVC));
         assertEquals(70000, packed(2560, 1440, 72, CODEC_HEVC));
         assertEquals(100000, packed(2560, 1440, 90, CODEC_HEVC));
-        assertEquals(200000, packed(5120, 2160, 72, CODEC_HEVC));
-        assertEquals(300000, packed(5120, 2160, 90, CODEC_HEVC));
+        // 2 x 5120 exceeds the 8192 HEVC/AV1 axis limit; the host encodes the fitted 8192x1728.
+        assertEquals(140000, packed(5120, 2160, 72, CODEC_HEVC));
+        assertEquals(200000, packed(5120, 2160, 90, CODEC_HEVC));
+        assertEquals(XrBitrateRecommendation.idealKbps(false, 8192, 1728, 72, CODEC_HEVC),
+                XrBitrateRecommendation.idealKbps(true, 5120, 2160, 72, CODEC_HEVC));
     }
 
     @Test
@@ -73,14 +76,23 @@ public class XrBitrateRecommendationTest {
     }
 
     @Test
-    public void h264IsUnreachableOnLargePackedFrames() {
-        // ~470 Mbps would be needed at 4K host SBS; pointing at the top rung would imply a
-        // quality H.264 cannot deliver, so the answer is "change codec".
-        assertEquals(-1, packed(3840, 2160, 72, CODEC_H264));
-        assertEquals(-1, packed(5120, 2160, 60, CODEC_H264));
-        // It remains usable on smaller frames.
+    public void h264PackedFramesAreCostedAtTheCodecFittedRaster() {
+        // The host fits the packed raster inside H.264's 4096 axis limit, so 4K host SBS encodes
+        // 4096x1152 and 5120x2160 encodes 4096x864; both are reachable.
+        assertEquals(140000, packed(3840, 2160, 72, CODEC_H264));
+        assertEquals(70000, packed(5120, 2160, 60, CODEC_H264));
+        assertEquals(100000, packed(2560, 1440, 60, CODEC_H264));
+        // 2 x 1920 is inside the limit and is not scaled.
         assertEquals(100000, packed(1920, 1080, 60, CODEC_H264));
-        assertEquals(200000, packed(2560, 1440, 60, CODEC_H264));
+        assertEquals(XrBitrateRecommendation.idealKbps(false, 4096, 1152, 72, CODEC_H264),
+                XrBitrateRecommendation.idealKbps(true, 3840, 2160, 72, CODEC_H264));
+    }
+
+    @Test
+    public void h264IsUnreachableOnLargeFlatFrames() {
+        // ~390 Mbps would be needed; pointing at the top rung would imply a quality H.264
+        // cannot deliver, so the answer is "change codec".
+        assertEquals(-1, flat(5120, 2160, 90, CODEC_H264));
     }
 
     @Test

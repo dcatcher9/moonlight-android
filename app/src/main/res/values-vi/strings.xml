@@ -303,35 +303,18 @@
     <string name="toast_controller_type_changed">Loại gamepad có thể đã thay đổi do mô phỏng cảm biến chuyển động</string>
 
     <!-- Array strings -->
-    <string name="resolution_360p">360p</string>
-    <string name="resolution_480p">480p</string>
-    <string name="resolution_720p">720p</string>
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="resolution_4k">4K</string>
 
-    <string name="fps_30">30 FPS</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="fps_90">90 FPS</string>
-    <string name="fps_120">120 FPS</string>
 
     <string name="audioconf_stereo">Stereo</string>
     <string name="audioconf_51surround">Âm thanh vòm 5.1</string>
     <string name="audioconf_71surround">Âm thanh vòm 7.1</string>
 
-    <string name="videoformat_auto">Tự động (Khuyến nghị)</string>
-    <string name="videoformat_av1always">Ưu tiên AV1 (Thử nghiệm)</string>
-    <string name="videoformat_hevcalways">Ưu tiên HEVC</string>
-    <string name="videoformat_h264always">Ưu tiên H.264</string>
 
     <string name="title_frame_pacing">Định thời khung hình video</string>
     <string name="summary_frame_pacing">Chỉ định cách cân bằng độ trễ video và độ mượt</string>
-    <string name="pacing_warp">Warp Drive (Thử nghiệm)</string>
-    <string name="pacing_warp2">Warp 2 (Thử nghiệm)</string>
-    <string name="pacing_latency">Ưu tiên độ trễ thấp nhất</string>
-    <string name="pacing_balanced">Cân bằng</string>
-    <string name="pacing_balanced_alt">Cân bằng với giới hạn FPS</string>
-    <string name="pacing_smoothness">Ưu tiên video mượt nhất (có thể tăng đáng kể độ trễ)</string>
 
 
     <string name="keyboard_service_label">Bàn phím vật lý Moonlight 3D</string>

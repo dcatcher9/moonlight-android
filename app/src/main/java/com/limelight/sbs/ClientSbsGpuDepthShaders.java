@@ -32,7 +32,9 @@ final class ClientSbsGpuDepthShaders {
     private static final String HEADER = lines(
             "#version 310 es",
             "precision highp float;",
-            "precision highp int;"
+            "precision highp int;",
+            // Compute shaders default sampler2D to lowp; the R32F history fetches need full range.
+            "precision highp sampler2D;"
     );
 
     private static final String STATE = lines(
@@ -162,14 +164,6 @@ final class ClientSbsGpuDepthShaders {
             "                    + SCENE_CUT_RECORD_COMMON_SUPPORT_COUNT],",
             "            externalSceneCutWords[uExternalSceneCutWordOffset",
             "                    + SCENE_CUT_RECORD_DIAGNOSTIC_FLAGS]);",
-            "}",
-            "bool externalSceneCutRequested() {",
-            "    return (externalSceneEvidence() & SCENE_EVIDENCE_APPEARANCE) != 0u;",
-            "}",
-            "bool externalExposureLikeTransition() {",
-            "    uint evidence = externalSceneEvidence();",
-            "    return (evidence & SCENE_EVIDENCE_APPEARANCE) == 0u",
-            "            && (evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0u;",
             "}"
     );
 
@@ -270,23 +264,10 @@ final class ClientSbsGpuDepthShaders {
             "}"
     );
 
-    private static final String RAW_FIXED = lines(
-            "bool rawFixed(ivec2 destination, out uint fixedValue) {",
-            "    float rawValue;",
-            "    if (!sourceAlignedRaw(destination, rawValue)) {",
-            "        fixedValue = 0u;",
-            "        return false;",
-            "    }",
-            "    fixedValue = uint(clamp(rawValue, 0.0, 65535.0) * 65536.0 + 0.5);",
-            "    return true;",
-            "}"
-    );
-
     private static String rawInput(boolean removeReflectedPadding) {
         return RAW_INPUT_HEADER
                 + (removeReflectedPadding
-                ? REFLECTED_PADDING_SOURCE_ALIGNED_RAW : DIRECT_SOURCE_ALIGNED_RAW)
-                + RAW_FIXED;
+                ? REFLECTED_PADDING_SOURCE_ALIGNED_RAW : DIRECT_SOURCE_ALIGNED_RAW);
     }
 
     /** Clears the raw percentile histogram and range counters in one 256-thread dispatch. */
@@ -395,8 +376,6 @@ final class ClientSbsGpuDepthShaders {
         );
     }
 
-    static final String RAW_MIN_MAX = rawMinMax(true);
-
     static String rawHistogram(boolean removeReflectedPadding) {
         return HEADER + rawInput(removeReflectedPadding) + RAW_STATS + lines(
                 "layout(local_size_x = 16, local_size_y = 16) in;",
@@ -440,8 +419,6 @@ final class ClientSbsGpuDepthShaders {
                 "}"
         );
     }
-
-    static final String RAW_HISTOGRAM = rawHistogram(true);
 
     /** Resolves current validity and the normalization range before temporal filtering. */
     static final String RESOLVE_RAW_RANGE = HEADER + RAW_STATS_FOR_RESOLVE + STATE
@@ -1027,7 +1004,9 @@ final class ClientSbsGpuDepthShaders {
             "    if ((cutState & CUT_STATE_SETTLED) == 0 && wasInitialized",
             "            && sourceFrameAge >= CUT_SETTLE_VALID_DEPTH_UPDATES)",
             "        cutState = CUT_STATE_READY",
-            "                | (cutState & CUT_STATE_APPEARANCE_RECOVERY);",
+            "                | (cutState & (CUT_STATE_APPEARANCE_RECOVERY",
+            // This frame's confirmation request was recorded above and must survive settling.
+            "                | CUT_STATE_GEOMETRY_CONFIRMATION_PENDING));",
             "    if (!wasInitialized || hardCut) profileSceneAge = 0;",
             "    if (hardCut) {",
             "        cutState = CUT_STATE_LATCHED;",

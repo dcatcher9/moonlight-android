@@ -41,57 +41,9 @@ final class ClientSbsModelManifest {
         }
     }
 
-    static final String DEPTH_ANYTHING_V2_SMALL_STATIC_ID =
-            "depth-anything-v2-small-static-performance";
-    static final String MIDAS_V2_STATIC_ID = "midas-v2-float";
-    static final String DEPTHART_S448_FP16_ID = "depthart-s448-fp16";
     static final String ZIPDEPTH_BASE_FP16_ID = "zipdepth-base-fp16";
-    private static final String LEGACY_DEPTH_ANYTHING_V2_SMALL_QUALITY_ID =
-            "depth-anything-v2-small-static-buckets";
-    private static final String LEGACY_DEPTH_ANYTHING_V2_SMALL_DYNAMIC_ID =
-            "depth-anything-v2-small-dynamic";
-    private static final String LEGACY_DEPTH_ANYTHING_V2_SMALL_STATIC_350_ID =
-            "depth-anything-v2-small-static-350";
-    private static final String DEPTH_ANYTHING_V2_MODEL_ARCHIVE_ASSET =
-            "client-sbs-dav2-models.tar.xz";
-    private static final String MIDAS_V2_MODEL_ARCHIVE_ASSET =
-            "client-sbs-midas-models.tar.xz";
-    private static final String DEPTHART_S448_MODEL_ARCHIVE_ASSET =
-            "client-sbs-depthart-models.tar.xz";
     private static final String ZIPDEPTH_BASE_MODEL_ARCHIVE_ASSET =
             "client-sbs-zipdepth-models.tar.xz";
-    private static final String DEPTH_ANYTHING_V2_SMALL_STATIC_16_9_ASSET =
-            "depth-anything-v2-small-static-322x182-fp16weights.tflite.model";
-    private static final String DEPTH_ANYTHING_V2_SMALL_STATIC_16_9_SHA256 =
-            "82f8594f4ee615ab82f968aa461a3960c4cd680293fd087cb65d8631b18e4271";
-    private static final String DEPTH_ANYTHING_V2_SMALL_STATIC_21_9_ASSET =
-            "depth-anything-v2-small-static-350x154-fp16weights.tflite.model";
-    private static final String DEPTH_ANYTHING_V2_SMALL_STATIC_21_9_SHA256 =
-            "2739f306ce71b19a913cdc32c779226a620f7f81685a1946ac213fdbeeba67b0";
-    private static final String DEPTH_ANYTHING_V2_SMALL_STATIC_32_9_ASSET =
-            "depth-anything-v2-small-static-434x126-fp16weights.tflite.model";
-    private static final String DEPTH_ANYTHING_V2_SMALL_STATIC_32_9_SHA256 =
-            "353eb80fd6b9c6f97552a20b7bd29f79466a9b05287dcd4bfd93baaa4c1730f5";
-    private static final String MIDAS_V2_STATIC_16_9_ASSET =
-            "midas-v2-small-static-352x192-fp16weights.tflite.model";
-    private static final String MIDAS_V2_STATIC_16_9_SHA256 =
-            "2a3ee0a1e818c4f785bcd0ceb10f5c81f08b3b91304f2f15d113c1089d3e524e";
-    private static final String MIDAS_V2_STATIC_21_9_ASSET =
-            "midas-v2-small-static-384x160-fp16weights.tflite.model";
-    private static final String MIDAS_V2_STATIC_21_9_SHA256 =
-            "5a66ab484a888c3c9e1642580ac3086c7d6d3175a860ca1e82f30d7a58c532bd";
-    private static final String MIDAS_V2_STATIC_32_9_ASSET =
-            "midas-v2-small-static-448x128-fp16weights.tflite.model";
-    private static final String MIDAS_V2_STATIC_32_9_SHA256 =
-            "060ec0e16fd4e20f2626d6ac51d80853a1bdf9b2f082c3d933099784cf9cabfb";
-    private static final String DEPTHART_S448_STATIC_16_9_ASSET =
-            "depthart-s448-static-672x384-fp16weights.tflite.model";
-    private static final String DEPTHART_S448_STATIC_16_9_SHA256 =
-            "3de0ded3a2329a6cc4c89da535f4c1f3035dfc30c7e85359d48580003aad780b";
-    private static final String DEPTHART_S448_STATIC_21_9_ASSET =
-            "depthart-s448-static-928x384-fp16weights.tflite.model";
-    private static final String DEPTHART_S448_STATIC_21_9_SHA256 =
-            "d166bb5dcbe16ea386640a344a80134da8e225837f4609eae64f57916ec757f2";
     private static final String ZIPDEPTH_BASE_STATIC_16_9_ASSET =
             "zipdepth-base-static-672x384-fp16weights.tflite.model";
     private static final String ZIPDEPTH_BASE_STATIC_16_9_SHA256 =
@@ -104,64 +56,6 @@ final class ClientSbsModelManifest {
             "zipdepth-base-static-928x384-fp16weights.tflite.model";
     private static final String ZIPDEPTH_BASE_STATIC_32_9_SHA256 =
             "169d5e8802bea9aac839df6acb4a8dd8e92a53728ea6f4e39a4baca453fd34cc";
-
-    /**
-     * MiDaS v2.1 Small uses an EfficientNet-Lite3/refinement pyramid whose static dimensions must
-     * be divisible by 32. These graphs share the verified Qualcomm float weights and keep public
-     * tensors packed Float32 NHWC while storing large weights and computing internally in FP16.
-     */
-    static final ClientSbsModelManifest MIDAS_V2_STATIC_16_9 = createMidasStaticManifest(
-            "midas-v2-static-352x192",
-            MIDAS_V2_MODEL_ARCHIVE_ASSET,
-            MIDAS_V2_STATIC_16_9_ASSET,
-            MIDAS_V2_STATIC_16_9_SHA256,
-            352, 192);
-
-    static final ClientSbsModelManifest MIDAS_V2_STATIC_21_9 = createMidasStaticManifest(
-            "midas-v2-static-384x160",
-            MIDAS_V2_MODEL_ARCHIVE_ASSET,
-            MIDAS_V2_STATIC_21_9_ASSET,
-            MIDAS_V2_STATIC_21_9_SHA256,
-            384, 160);
-
-    static final ClientSbsModelManifest MIDAS_V2_STATIC_32_9 = createMidasStaticManifest(
-            "midas-v2-static-448x128",
-            MIDAS_V2_MODEL_ARCHIVE_ASSET,
-            MIDAS_V2_STATIC_32_9_ASSET,
-            MIDAS_V2_STATIC_32_9_SHA256,
-            448, 128);
-
-    private static final ClientSbsModelManifest[] MIDAS_V2_STATIC_BUCKETS = {
-            MIDAS_V2_STATIC_16_9,
-            MIDAS_V2_STATIC_21_9,
-            MIDAS_V2_STATIC_32_9,
-    };
-
-    /**
-     * DepthART-S448 checkpoint graphs at the short-384 quality tier. Input normalization from raw
-     * [0, 1] RGB is baked into each graph, so the shared GLES packer keeps its existing contract.
-     * Public tensors remain packed Float32, weights use FP16 storage, and the GPU policy requests
-     * FP16 compute. Isolated Galaxy delegation/output qualification has passed; sustained live
-     * decode/reprojection and thermal qualification remain separate gates.
-     */
-    static final ClientSbsModelManifest DEPTHART_S448_STATIC_16_9 =
-            createDepthArtStaticManifest(
-                    "depthart-s448-static-672x384",
-                    DEPTHART_S448_STATIC_16_9_ASSET,
-                    DEPTHART_S448_STATIC_16_9_SHA256,
-                    672, 384);
-
-    static final ClientSbsModelManifest DEPTHART_S448_STATIC_21_9 =
-            createDepthArtStaticManifest(
-                    "depthart-s448-static-928x384",
-                    DEPTHART_S448_STATIC_21_9_ASSET,
-                    DEPTHART_S448_STATIC_21_9_SHA256,
-                    928, 384);
-
-    private static final ClientSbsModelManifest[] DEPTHART_S448_STATIC_BUCKETS = {
-            DEPTHART_S448_STATIC_16_9,
-            DEPTHART_S448_STATIC_21_9,
-    };
 
     /**
      * Original ZipDepth Base graphs with the learned standard upsampler at short side 384.
@@ -198,93 +92,6 @@ final class ClientSbsModelManifest {
             ZIPDEPTH_BASE_STATIC_32_9,
     };
 
-    /** Galaxy-validated C4-aligned graph: 683/683 operators in one OpenCL FP16 partition. */
-    static final ClientSbsModelManifest DEPTH_ANYTHING_V2_SMALL_STATIC_16_9 =
-            createDepthAnythingStaticManifest(
-                    "depth-anything-v2-small-static-322x182",
-                    DEPTH_ANYTHING_V2_SMALL_STATIC_16_9_ASSET,
-                    DEPTH_ANYTHING_V2_SMALL_STATIC_16_9_SHA256,
-                    ClientSbsDepthInputShape.ASPECT_16_9);
-
-    /** Galaxy-validated C4-aligned graph: 683/683 operators in one OpenCL FP16 partition. */
-    static final ClientSbsModelManifest DEPTH_ANYTHING_V2_SMALL_STATIC_21_9 =
-            createDepthAnythingStaticManifest(
-                    "depth-anything-v2-small-static-350x154",
-                    DEPTH_ANYTHING_V2_SMALL_STATIC_21_9_ASSET,
-                    DEPTH_ANYTHING_V2_SMALL_STATIC_21_9_SHA256,
-                    ClientSbsDepthInputShape.ASPECT_21_9);
-
-    /** Galaxy-validated C4-aligned graph: 683/683 operators in one OpenCL FP16 partition. */
-    static final ClientSbsModelManifest DEPTH_ANYTHING_V2_SMALL_STATIC_32_9 =
-            createDepthAnythingStaticManifest(
-                    "depth-anything-v2-small-static-434x126",
-                    DEPTH_ANYTHING_V2_SMALL_STATIC_32_9_ASSET,
-                    DEPTH_ANYTHING_V2_SMALL_STATIC_32_9_SHA256,
-                    ClientSbsDepthInputShape.ASPECT_32_9);
-
-    private static ClientSbsModelManifest createDepthAnythingStaticManifest(
-            String id, String assetName, String assetSha256,
-            ClientSbsDepthInputShape shape) {
-        // DA-V2's output is disparity-like: larger value = nearer.
-        requireHighIsNearDepth(id, true);
-        return new ClientSbsModelManifest(
-                id,
-                DEPTH_ANYTHING_V2_MODEL_ARCHIVE_ASSET,
-                assetName,
-                assetSha256,
-                new TensorSpec(0, "rgb_nhwc",
-                        new int[] {1, shape.getHeight(), shape.getWidth(), 3}),
-                new TensorSpec(0, "depth_bhwc",
-                        new int[] {1, shape.getHeight(), shape.getWidth(), 1}),
-                true,
-                false,
-                GpuExecutionPolicy.AUTOMATIC_FP16,
-                Float.NaN);
-    }
-
-    /** Package-private so physical-device tests can describe test-APK-only MiDaS graphs. */
-    static ClientSbsModelManifest createMidasStaticManifest(
-            String id, String modelArchiveAssetName, String assetName,
-            String assetSha256, int width, int height) {
-        if (width % 32 != 0 || height % 32 != 0) {
-            throw new IllegalArgumentException("MiDaS static dimensions must be divisible by 32");
-        }
-        // MiDaS v2 emits inverse depth: larger value = nearer.
-        requireHighIsNearDepth(id, true);
-        return new ClientSbsModelManifest(
-                id,
-                modelArchiveAssetName,
-                assetName,
-                assetSha256,
-                new TensorSpec(0, "image", new int[] {1, height, width, 3}),
-                new TensorSpec(0, "depth_estimates", new int[] {1, height, width, 1}),
-                true,
-                false,
-                GpuExecutionPolicy.AUTOMATIC_FP16,
-                Float.NaN);
-    }
-
-    private static ClientSbsModelManifest createDepthArtStaticManifest(
-            String id, String assetName, String assetSha256, int width, int height) {
-        if (width % 16 != 0 || height % 16 != 0) {
-            throw new IllegalArgumentException(
-                    "DepthART static dimensions must be divisible by 16");
-        }
-        // DepthART emits disparity-like relative depth: larger value = nearer.
-        requireHighIsNearDepth(id, true);
-        return new ClientSbsModelManifest(
-                id,
-                DEPTHART_S448_MODEL_ARCHIVE_ASSET,
-                assetName,
-                assetSha256,
-                new TensorSpec(0, "image", new int[] {1, height, width, 3}),
-                new TensorSpec(0, "depth", new int[] {1, height, width, 1}),
-                true,
-                false,
-                GpuExecutionPolicy.AUTOMATIC_FP16,
-                Float.NaN);
-    }
-
     private static ClientSbsModelManifest createZipDepthBaseManifest(
             String id, String assetName, String assetSha256, int width, int height,
             float v2RawCoordinateScale) {
@@ -292,7 +99,8 @@ final class ClientSbsModelManifest {
             throw new IllegalArgumentException(
                     "ZipDepth static dimensions must be divisible by 32");
         }
-        // ZipDepth emits nonnegative affine-invariant inverse depth: larger value = nearer.
+        // ZipDepth emits nonnegative affine-invariant inverse depth: larger value = nearer. The V2
+        // coordinate chain implements only that high-is-near polarity.
         // These graph-specific priors came from the historical first-frame-centered fit against
         // Apollo's fused DAV2 field. The adaptive camera uses each as its minimum raw amplitude;
         // it does not use the old shot-latched mapping. Current preprocessing/runtime and the
@@ -301,16 +109,14 @@ final class ClientSbsModelManifest {
             throw new IllegalArgumentException(
                     "ZipDepth V2 raw coordinate scale must be finite and positive");
         }
-        requireHighIsNearDepth(id, true);
         return new ClientSbsModelManifest(
                 id,
                 ZIPDEPTH_BASE_MODEL_ARCHIVE_ASSET,
                 assetName,
                 assetSha256,
-                new TensorSpec(0, "image", new int[] {1, height, width, 3}),
-                new TensorSpec(0, "depth", new int[] {1, height, width, 1}),
+                new TensorSpec("image", new int[] {1, height, width, 3}),
+                new TensorSpec("depth", new int[] {1, height, width, 1}),
                 true,
-                false,
                 GpuExecutionPolicy.AUTOMATIC_FP16,
                 v2RawCoordinateScale);
     }
@@ -329,10 +135,9 @@ final class ClientSbsModelManifest {
                 "external-checkpoint-models.tar.xz",
                 "external-checkpoint.tflite",
                 assetSha256,
-                new TensorSpec(0, "rgb_nhwc", inputShape),
-                new TensorSpec(0, "checkpoint_nhwc", outputShape),
+                new TensorSpec("rgb_nhwc", inputShape),
+                new TensorSpec("checkpoint_nhwc", outputShape),
                 true,
-                false,
                 gpuExecutionPolicy,
                 Float.NaN);
         manifest.validateFloatGpuCheckpointContract();
@@ -368,50 +173,6 @@ final class ClientSbsModelManifest {
         return best;
     }
 
-    /**
-     * Returns the lower landscape aspect represented by a model's dedicated nearest-aspect probe
-     * bucket, or NaN when that family intentionally retains the legacy DA-V2 probe table.
-     */
-    static float minimumLandscapeAspectForDedicatedProbeBucket(
-            ClientSbsModelManifest manifest) {
-        ClientSbsModelManifest[] buckets;
-        if (containsManifest(DEPTHART_S448_STATIC_BUCKETS, manifest)) {
-            buckets = DEPTHART_S448_STATIC_BUCKETS;
-        }
-        else if (containsManifest(ZIPDEPTH_BASE_STATIC_BUCKETS, manifest)) {
-            buckets = ZIPDEPTH_BASE_STATIC_BUCKETS;
-        }
-        else {
-            return Float.NaN;
-        }
-
-        for (int i = 0; i < buckets.length; i++) {
-            if (buckets[i] != manifest) {
-                continue;
-            }
-            if (i == 0) {
-                return 4.0f / 3.0f;
-            }
-            float previousAspect = buckets[i - 1].getInputWidth()
-                    / (float) buckets[i - 1].getInputHeight();
-            float selectedAspect = buckets[i].getInputWidth()
-                    / (float) buckets[i].getInputHeight();
-            return (float) Math.sqrt(previousAspect * selectedAspect);
-        }
-        throw new IllegalArgumentException("Unregistered dedicated probe bucket: "
-                + manifest.getId());
-    }
-
-    private static boolean containsManifest(ClientSbsModelManifest[] manifests,
-                                            ClientSbsModelManifest candidate) {
-        for (ClientSbsModelManifest manifest : manifests) {
-            if (manifest == candidate) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private final String id;
     private final String modelArchiveAssetName;
     private final String assetName;
@@ -419,29 +180,13 @@ final class ClientSbsModelManifest {
     private final TensorSpec inputTensor;
     private final TensorSpec outputTensor;
     private final boolean directFullFrameResize;
-    private final boolean dynamicSpatialShape;
     private final GpuExecutionPolicy gpuExecutionPolicy;
     private final float v2RawCoordinateScale;
-
-    /**
-     * The V2 coordinate assumes HIGH-IS-NEAR relative depth: values above the adaptive zero map to
-     * positive near parallax. Apollo has an explicit polarity conversion step; the client graphs
-     * are authenticated in their final polarity, so a low-is-near graph would render every scene
-     * inside-out. Fail at manifest construction rather than silently inverting a future graph.
-     */
-    private static void requireHighIsNearDepth(String id, boolean highIsNearDepth) {
-        if (!highIsNearDepth) {
-            throw new IllegalArgumentException(
-                    "Model " + id + " declares low-is-near depth, which the client SBS chain does "
-                            + "not implement: it would render inverted stereo");
-        }
-    }
 
     private ClientSbsModelManifest(String id, String modelArchiveAssetName, String assetName,
                                    String assetSha256,
                                    TensorSpec inputTensor, TensorSpec outputTensor,
                                    boolean directFullFrameResize,
-                                   boolean dynamicSpatialShape,
                                    GpuExecutionPolicy gpuExecutionPolicy,
                                    float v2RawCoordinateScale) {
         if (id == null || id.isEmpty()) {
@@ -466,7 +211,6 @@ final class ClientSbsModelManifest {
         this.inputTensor = inputTensor;
         this.outputTensor = outputTensor;
         this.directFullFrameResize = directFullFrameResize;
-        this.dynamicSpatialShape = dynamicSpatialShape;
         this.gpuExecutionPolicy = gpuExecutionPolicy;
         this.v2RawCoordinateScale = v2RawCoordinateScale;
     }
@@ -523,10 +267,6 @@ final class ClientSbsModelManifest {
         return directFullFrameResize;
     }
 
-    boolean hasDynamicSpatialShape() {
-        return dynamicSpatialShape;
-    }
-
     GpuExecutionPolicy getGpuExecutionPolicy() {
         return gpuExecutionPolicy;
     }
@@ -537,25 +277,6 @@ final class ClientSbsModelManifest {
                     + " has no Depth Coordinate V2 raw calibration");
         }
         return v2RawCoordinateScale;
-    }
-
-    int getDepthOutputWidth(float sourceAspect) {
-        validateSourceAspect(sourceAspect);
-        return directFullFrameResize ? getOutputWidth()
-                : Math.max(1, Math.round(getOutputWidth() * Math.min(1.0f, sourceAspect)));
-    }
-
-    int getDepthOutputHeight(float sourceAspect) {
-        validateSourceAspect(sourceAspect);
-        return directFullFrameResize ? getOutputHeight()
-                : Math.max(1, Math.round(getOutputHeight()
-                * Math.min(1.0f, 1.0f / sourceAspect)));
-    }
-
-    private static void validateSourceAspect(float sourceAspect) {
-        if (!Float.isFinite(sourceAspect) || sourceAspect <= 0.0f) {
-            throw new IllegalArgumentException("sourceAspect must be finite and positive");
-        }
     }
 
     void validateFloatGpuRendererContract() {
@@ -582,15 +303,11 @@ final class ClientSbsModelManifest {
 
     /** One packed Float32 NHWC tensor contract. The shape is copied for immutability. */
     static final class TensorSpec {
-        private final int index;
         private final String name;
         private final int[] shape;
         private final int byteSize;
 
-        private TensorSpec(int index, String name, int[] shape) {
-            if (index < 0) {
-                throw new IllegalArgumentException("Tensor index must not be negative");
-            }
+        private TensorSpec(String name, int[] shape) {
             if (name == null || name.isEmpty()) {
                 throw new IllegalArgumentException("Tensor name must not be empty");
             }
@@ -608,14 +325,9 @@ final class ClientSbsModelManifest {
             if (bytes > Integer.MAX_VALUE) {
                 throw new IllegalArgumentException("Tensor byte size exceeds Java buffer limits");
             }
-            this.index = index;
             this.name = name;
             this.shape = shape.clone();
             this.byteSize = (int) bytes;
-        }
-
-        int getIndex() {
-            return index;
         }
 
         String getName() {

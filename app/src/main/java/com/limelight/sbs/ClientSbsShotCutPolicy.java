@@ -89,14 +89,6 @@ final class ClientSbsShotCutPolicy {
                 && (evidence & SCENE_EVIDENCE_EXPOSURE_LIKE) != 0;
     }
 
-    static boolean isPersistentLowStart(int evidence) {
-        return (evidence & SCENE_EVIDENCE_PERSISTENT_LOW_START) != 0;
-    }
-
-    static boolean isSupportedReturn(int evidence) {
-        return (evidence & SCENE_EVIDENCE_SUPPORTED_RETURN) != 0;
-    }
-
     static boolean isFirstStructurelessHold(int evidence, boolean comparable,
                                             boolean previousStructureSupported,
                                             boolean currentStructureSupported) {
@@ -169,18 +161,6 @@ final class ClientSbsShotCutPolicy {
                 && isGeometryLatched(cutState)
                 && validDepthUpdateAge >= CUT_SETTLE_VALID_DEPTH_UPDATES
                 && novelGeometryCut(changeFraction, geometryBaseline);
-    }
-
-    static boolean acceptsLowStructureReturnShotCut(boolean initialized,
-                                                    int lowStructureSceneMarker,
-                                                    boolean persistentLowStart,
-                                                    boolean supportedReturn,
-                                                    float changeFraction,
-                                                    float distributionShift) {
-        boolean lowStructureScene = lowStructureSceneMarker
-                == LOW_STRUCTURE_SCENE_ACTIVE || persistentLowStart;
-        return initialized && lowStructureScene && supportedReturn
-                && standaloneGeometryCut(changeFraction, distributionShift);
     }
 
     static boolean isGeometryConfirmationPending(int cutState) {

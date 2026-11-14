@@ -884,7 +884,7 @@ public final class SessionSettingsStoreTest {
                 .setModeValue(PresentationMode.HOST_SBS_RAW, FPS, "90", "60")
                 .setModeValue(PresentationMode.HOST_SBS_RAW, BITRATE, 80000, 20000)
                 .setModeValue(PresentationMode.HOST_SBS_RAW,
-                        PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
+                        "list_raw_sbs_per_eye_resolution",
                         "half", "full")
                 .commit());
         SessionRecord before = store.getCurrentSession(pc);
@@ -903,7 +903,7 @@ public final class SessionSettingsStoreTest {
         assertEquals("3840x2160", movie.get(RESOLUTION));
         assertEquals("90", movie.get(FPS));
         assertEquals(80000, movie.get(BITRATE));
-        assertFalse(movie.containsKey(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING));
+        assertFalse(movie.containsKey("list_raw_sbs_per_eye_resolution"));
         assertTrue(migrated.getModeOverrides(PresentationMode.GAME_3D).isEmpty());
         // Reads fail closed even before the next ordinary atomic write makes migration durable.
         assertEquals(legacyJson, storage.getString("session." + pc.getStorageId(), null));

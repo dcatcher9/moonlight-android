@@ -22,11 +22,6 @@ public final class ClientSbsV2CoordinateContract {
         return Float.isFinite(coordinate) ? coordinate : 0.0f;
     }
 
-    /** Retained as a source-compatible identity: the production coordinate has no depth curve. */
-    public static float shapeCoordinate(float coordinate) {
-        return Float.isFinite(coordinate) ? coordinate : 0.0f;
-    }
-
     public static float requestedParallax(float rawDepth, float zero, float rawAmplitude) {
         return FIXED_POP_STRENGTH * PARALLAX_PER_POP
                 * cameraCoordinate(rawDepth, zero, rawAmplitude);

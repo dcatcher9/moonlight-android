@@ -588,6 +588,55 @@ public final class XrGameStereoIntegrationTest {
         assertEquals(3, ShadowMoonBridge.getSetVideoModeV2CallCount());
     }
 
+    @Test
+    public void unsentBootstrapReconfirmationRetriesAfterADelayAndThenWidensNormally() {
+        ShadowMoonBridge.setVideoModeV2Result(0);
+        presenter.onFirstVideoFrameRendered();
+        idle();
+        assertEquals(1, ShadowMoonBridge.getSetVideoModeV2CallCount());
+        assertFalse(source.hasWidenFailure());
+
+        ShadowMoonBridge.setVideoModeV2Result(1);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(
+                XrStreamPresenter.GAME_SOURCE_RECONFIRM_RETRY_DELAY_MS));
+        assertEquals(2, ShadowMoonBridge.getSetVideoModeV2CallCount());
+        assertEquals(MoonBridge.SBS_MODE_GAME_MONO,
+                ShadowMoonBridge.getLastSetVideoModeV2Request()[0]);
+        ack(MoonBridge.VIDEO_MODE_ACK_APPLIED, MoonBridge.SBS_MODE_GAME_MONO, 10, 1920, 1080);
+        frame(1920, 1080);
+        ready(10, 1);
+        assertEquals(3, ShadowMoonBridge.getSetVideoModeV2CallCount());
+        assertEquals(MoonBridge.SBS_MODE_GAME_SBS,
+                ShadowMoonBridge.getLastSetVideoModeV2Request()[0]);
+        assertFalse(source.hasWidenFailure());
+    }
+
+    @Test
+    public void unsentBootstrapReconfirmationRetriesAreBounded() {
+        ShadowMoonBridge.setVideoModeV2Result(0);
+        presenter.onFirstVideoFrameRendered();
+        idle();
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(
+                XrStreamPresenter.GAME_SOURCE_RECONFIRM_RETRY_DELAY_MS
+                        * (XrStreamPresenter.GAME_SOURCE_RECONFIRM_MAX_START_RETRIES + 4)));
+        assertEquals(1 + XrStreamPresenter.GAME_SOURCE_RECONFIRM_MAX_START_RETRIES,
+                ShadowMoonBridge.getSetVideoModeV2CallCount());
+        assertFalse(source.hasWidenFailure());
+    }
+
+    @Test
+    public void unsentWideningLatchesAndIsNotRetriedByTheReconfirmationTimer() {
+        bootstrap();
+        ShadowMoonBridge.setVideoModeV2Result(0);
+        ready(10, 1);
+        assertEquals(2, ShadowMoonBridge.getSetVideoModeV2CallCount());
+        assertTrue(source.hasWidenFailure());
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(
+                XrStreamPresenter.GAME_SOURCE_RECONFIRM_RETRY_DELAY_MS * 4));
+        assertEquals(2, ShadowMoonBridge.getSetVideoModeV2CallCount());
+        assertTrue(source.hasWidenFailure());
+    }
+
     private void bootstrap() {
         presenter.onFirstVideoFrameRendered();
         idle();

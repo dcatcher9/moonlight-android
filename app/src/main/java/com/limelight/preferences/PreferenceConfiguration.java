@@ -30,31 +30,6 @@ public class PreferenceConfiguration {
         LEFT
     }
 
-    public enum RawSbsPerEyeResolution {
-        FULL("full", "Full", 2),
-        HALF("half", "Half", 1);
-
-        public final String preferenceValue;
-        public final String displayName;
-        private final int packedWidthMultiplier;
-
-        RawSbsPerEyeResolution(String preferenceValue, String displayName,
-                               int packedWidthMultiplier) {
-            this.preferenceValue = preferenceValue;
-            this.displayName = displayName;
-            this.packedWidthMultiplier = packedWidthMultiplier;
-        }
-
-        public static RawSbsPerEyeResolution fromPreferenceValue(String value) {
-            for (RawSbsPerEyeResolution resolution : values()) {
-                if (resolution.preferenceValue.equals(value)) {
-                    return resolution;
-                }
-            }
-            return FULL;
-        }
-    }
-
     public enum CinemaEnvironment {
         BLACK("black"),
         SYSTEM("system"),
@@ -80,15 +55,9 @@ public class PreferenceConfiguration {
     public static final String CUSTOM_REFRESH_RATE_PREF_STRING = "custom_refresh_rate";
     public static final String CUSTOM_RESOLUTION_PREF_STRING = "edit_diy_w_h";
 
-    private static final String LEGACY_RES_FPS_PREF_STRING = "list_resolution_fps";
-    private static final String LEGACY_ENABLE_51_SURROUND_PREF_STRING = "checkbox_51_surround";
-    private static final String LEGACY_STRETCH_PREF_STRING = "checkbox_stretch_video";
-    private static final String LEGACY_ENFORCE_REFRESH_RATE_STRING = "checkbox_enforce_refresh_rate";
-
     public static final String RESOLUTION_PREF_STRING = "list_resolution";
     public static final String FPS_PREF_STRING = "list_fps";
     public static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
-    private static final String BITRATE_PREF_OLD_STRING = "seekbar_bitrate";
     private static final String METERED_BITRATE_PREF_STRING = "seekbar_metered_bitrate_kbps";
     private static final String ENABLE_ULTRA_LOW_LATENCY_PREF_STRING = "checkbox_ultra_low_latency";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
@@ -110,14 +79,11 @@ public class PreferenceConfiguration {
     /** Retired selector key retained only so the one-time migration can remove old values. */
     public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
             "list_client_sbs_depth_model";
-    public static final String RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING =
-            "list_raw_sbs_per_eye_resolution";
     public static final String CINEMA_ENVIRONMENT_PREF_STRING = "list_cinema_environment";
     private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
     private static final String CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD = "checkbox_hide_osc_when_has_gamepad";
     private static final String ONLY_L3_R3_PREF_STRING = "checkbox_only_show_L3R3";
     private static final String SHOW_GUIDE_BUTTON_PREF_STRING = "checkbox_show_guide_button";
-    private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
     public static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
@@ -239,9 +205,6 @@ public class PreferenceConfiguration {
         return DEFAULT_AUDIO_BOOST_DB;
     }
 
-    public static final String DEFAULT_RAW_SBS_PER_EYE_RESOLUTION =
-            RawSbsPerEyeResolution.FULL.preferenceValue;
-
     private static final boolean DEFAULT_ONSCREEN_CONTROLLER = false;
     private static final boolean DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD = true;
     private static final boolean ONLY_L3_R3_DEFAULT = false;
@@ -344,56 +307,13 @@ public class PreferenceConfiguration {
         };
     }
 
-    /**
-     * Raw SBS quality is expressed as the intended view resolution. Full transports two complete
-     * eye views at {@code 2W x H}; Half keeps the packed frame at {@code W x H}, giving each eye
-     * {@code W/2 x H} encoded pixels presented on a matching half-width physical view.
-     */
-    public static int[] rawSbsPackedDimensions(int eyeWidth, int eyeHeight) {
-        return rawSbsPackedDimensions(eyeWidth, eyeHeight, RawSbsPerEyeResolution.FULL);
-    }
-
-    public static int[] rawSbsPackedDimensions(
-            int eyeWidth, int eyeHeight, RawSbsPerEyeResolution perEyeResolution) {
-        if (!isRawSbsTransportSupported(eyeWidth, eyeHeight, perEyeResolution)) {
-            throw new IllegalArgumentException(
-                    "Raw SBS dimensions cannot be packed within the 8192-pixel transport limit: "
-                            + eyeWidth + "x" + eyeHeight + " "
-                            + (perEyeResolution != null
-                                    ? perEyeResolution.displayName : "Unknown"));
-        }
-        return new int[] {
-                eyeWidth * perEyeResolution.packedWidthMultiplier, eyeHeight
-        };
-    }
-
-    public static boolean isRawSbsTransportSupported(int eyeWidth, int eyeHeight) {
-        return isRawSbsTransportSupported(
-                eyeWidth, eyeHeight, RawSbsPerEyeResolution.FULL);
-    }
-
-    public static boolean isRawSbsTransportSupported(
-            int eyeWidth, int eyeHeight, RawSbsPerEyeResolution perEyeResolution) {
-        if (perEyeResolution == null) {
-            return false;
-        }
-        long packedWidth = (long) eyeWidth * perEyeResolution.packedWidthMultiplier;
-        return eyeWidth > 0
-                && eyeHeight > 0
-                && packedWidth <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1
-                && (packedWidth & 1L) == 0L
-                && eyeHeight <= MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
-    }
-
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";
     public static final String RES_1080P = "1920x1080";
     public static final String RES_1440P = "2560x1440";
     public static final String RES_4K = "3840x2160";
-    // 21:9 ultrawide ladder.
-    public static final String RES_UW_1080P = "2560x1080";
-    public static final String RES_UW_1440P = "3440x1440";
+    // 21:9 ultrawide.
     public static final String RES_5K2K = "5120x2160";
 
     /**
@@ -410,7 +330,6 @@ public class PreferenceConfiguration {
     public static String migrateRetiredResolution(String resolution) {
         return RES_720P.equals(resolution) ? MIN_SELECTABLE_RESOLUTION : resolution;
     }
-    public static final String RES_NATIVE = "Native";
 
     public int width, height, bitrate;
     public float fps;
@@ -420,9 +339,6 @@ public class PreferenceConfiguration {
     public String customRefreshRate;
     public int meteredBitrate;
     public FormatOption videoFormat;
-    /** Raw SBS packing choice, captured once when the stream starts. */
-    public RawSbsPerEyeResolution rawSbsPerEyeResolution =
-            RawSbsPerEyeResolution.FULL;
     public CinemaEnvironment cinemaEnvironment = CinemaEnvironment.BLACK;
     public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
@@ -661,24 +577,6 @@ public class PreferenceConfiguration {
         return Integer.parseInt(resString.split("x")[1]);
     }
 
-    private static String getResolutionString(int width, int height) {
-        switch (height) {
-            case 360:
-                return RES_360P;
-            case 480:
-                return RES_480P;
-            default:
-            case 720:
-                return RES_720P;
-            case 1080:
-                return RES_1080P;
-            case 1440:
-                return RES_1440P;
-            case 2160:
-                return RES_4K;
-        }
-    }
-
     public static int getDefaultBitrate(String resString, String fpsString) {
         return DEFAULT_BITRATE_KBPS;
     }
@@ -750,15 +648,6 @@ public class PreferenceConfiguration {
     }
 
     private static int getFramePacingValue(SharedPreferences prefs) {
-        // Migrate legacy never drop frames option to the new location
-        if (prefs.contains(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)) {
-            boolean legacyNeverDropFrames = prefs.getBoolean(LEGACY_DISABLE_FRAME_DROP_PREF_STRING, false);
-            prefs.edit()
-                    .remove(LEGACY_DISABLE_FRAME_DROP_PREF_STRING)
-                    .putString(FRAME_PACING_PREF_STRING, legacyNeverDropFrames ? "balanced" : "latency")
-                    .apply();
-        }
-
         String str = prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
         if (str.equals("latency")) {
             return FRAME_PACING_MIN_LATENCY;
@@ -796,8 +685,6 @@ public class PreferenceConfiguration {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         prefs.edit()
                 .remove(BITRATE_PREF_STRING)
-                .remove(BITRATE_PREF_OLD_STRING)
-                .remove(LEGACY_RES_FPS_PREF_STRING)
                 .remove(RESOLUTION_PREF_STRING)
                 .remove(FPS_PREF_STRING)
                 .remove(VIDEO_FORMAT_PREF_STRING)
@@ -831,115 +718,27 @@ public class PreferenceConfiguration {
         }
         PreferenceConfiguration config = new PreferenceConfiguration();
 
-        // Migrate legacy preferences to the new locations
-        if (prefs.contains(LEGACY_ENABLE_51_SURROUND_PREF_STRING)) {
-            if (prefs.getBoolean(LEGACY_ENABLE_51_SURROUND_PREF_STRING, false)) {
-                prefs.edit()
-                        .remove(LEGACY_ENABLE_51_SURROUND_PREF_STRING)
-                        .putString(AUDIO_CONFIG_PREF_STRING, "51")
-                        .apply();
-            }
+        // The retired upstream keys (combined resolution/fps, 5.1 checkbox, stretch,
+        // enforce-refresh-rate, Mbps bitrate, never-drop-frames) are removed from the global
+        // preferences by LegacyProfileMigration before any read, so they are not read here.
+        String resStr = prefs.getString(RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
+
+        // Convert legacy resolution strings to the new style
+        if (!resStr.contains("x")) {
+            resStr = PreferenceConfiguration.convertFromLegacyResolutionString(resStr);
+            prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
         }
 
-        String str = prefs.getString(LEGACY_RES_FPS_PREF_STRING, null);
-        if (str != null) {
-            if (str.equals("360p30")) {
-                config.width = 640;
-                config.height = 360;
-                config.fps = 30;
-            }
-            else if (str.equals("360p60")) {
-                config.width = 640;
-                config.height = 360;
-                config.fps = 60;
-            }
-            else if (str.equals("720p30")) {
-                config.width = 1280;
-                config.height = 720;
-                config.fps = 30;
-            }
-            else if (str.equals("720p60")) {
-                config.width = 1280;
-                config.height = 720;
-                config.fps = 60;
-            }
-            else if (str.equals("1080p30")) {
-                config.width = 1920;
-                config.height = 1080;
-                config.fps = 30;
-            }
-            else if (str.equals("1080p60")) {
-                config.width = 1920;
-                config.height = 1080;
-                config.fps = 60;
-            }
-            else if (str.equals("4K30")) {
-                config.width = 3840;
-                config.height = 2160;
-                config.fps = 30;
-            }
-            else if (str.equals("4K60")) {
-                config.width = 3840;
-                config.height = 2160;
-                config.fps = 60;
-            }
-            else {
-                // Should never get here
-                config.width = 1280;
-                config.height = 720;
-                config.fps = 60;
-            }
-
-            // A retired 720p profile lands on the current floor rather than persisting a value
-            // the selector no longer offers.
-            String migratedLegacyRes = PreferenceConfiguration.migrateRetiredResolution(
-                    getResolutionString(config.width, config.height));
-            config.width = PreferenceConfiguration.getWidthFromResolutionString(migratedLegacyRes);
-            config.height = PreferenceConfiguration.getHeightFromResolutionString(migratedLegacyRes);
-
-            prefs.edit()
-                    .remove(LEGACY_RES_FPS_PREF_STRING)
-                    .putString(RESOLUTION_PREF_STRING, migratedLegacyRes)
-                    .putString(FPS_PREF_STRING, ""+config.fps)
-                    .apply();
-        }
-        else {
-            // Use the new preference location
-            String resStr = prefs.getString(RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
-
-            // Convert legacy resolution strings to the new style
-            if (!resStr.contains("x")) {
-                resStr = PreferenceConfiguration.convertFromLegacyResolutionString(resStr);
-                prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
-            }
-
-            // Retire a stored 720p in place so the stored value and the ladder stay consistent.
-            String migratedRes = PreferenceConfiguration.migrateRetiredResolution(resStr);
-            if (!migratedRes.equals(resStr)) {
-                resStr = migratedRes;
-                prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
-            }
-
-            config.width = PreferenceConfiguration.getWidthFromResolutionString(resStr);
-            config.height = PreferenceConfiguration.getHeightFromResolutionString(resStr);
-            config.fps = Float.parseFloat(prefs.getString(FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS));
+        // Retire a stored 720p in place so the stored value and the ladder stay consistent.
+        String migratedRes = PreferenceConfiguration.migrateRetiredResolution(resStr);
+        if (!migratedRes.equals(resStr)) {
+            resStr = migratedRes;
+            prefs.edit().putString(RESOLUTION_PREF_STRING, resStr).apply();
         }
 
-        if (prefs.contains(LEGACY_STRETCH_PREF_STRING)) {
-            boolean stretch = prefs.getBoolean(LEGACY_STRETCH_PREF_STRING, false);
-            prefs.edit()
-                    .remove(LEGACY_STRETCH_PREF_STRING)
-                    .putString(VIDEO_SCALE_MODE_PREF_STRING, stretch ? "stretch" : "fit")
-                    .apply();
-        }
-
-        if (prefs.contains(LEGACY_ENFORCE_REFRESH_RATE_STRING)) {
-            boolean enforce = prefs.getBoolean(LEGACY_ENFORCE_REFRESH_RATE_STRING, false);
-            prefs.edit()
-                    .remove(LEGACY_ENFORCE_REFRESH_RATE_STRING)
-                    .putBoolean(ENFORCE_DISPLAY_MODE_PREF_STRING, enforce)
-                    .apply();
-        }
+        config.width = PreferenceConfiguration.getWidthFromResolutionString(resStr);
+        config.height = PreferenceConfiguration.getHeightFromResolutionString(resStr);
+        config.fps = Float.parseFloat(prefs.getString(FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS));
 
         if (!prefs.contains(GAMEPAD_MOTION_SENSORS_PREF_STRING) && Build.VERSION.SDK_INT == Build.VERSION_CODES.S) {
             // Android 12 has a nasty bug that causes crashes when the app touches the InputDevice's
@@ -951,11 +750,9 @@ public class PreferenceConfiguration {
         }
 
         // This must happen after the preferences migration to ensure the preferences are populated
-        config.bitrate = prefs.getInt(
-                BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
+        config.bitrate = prefs.getInt(BITRATE_PREF_STRING, 0);
         if (config.bitrate == 0) {
-            config.bitrate = getDefaultBitrate(
-                    getResolutionString(config.width, config.height), String.valueOf(config.fps));
+            config.bitrate = getDefaultBitrate(resStr, String.valueOf(config.fps));
         }
 
         // Android XR exposes one authoritative bitrate in both Global Defaults and the current
@@ -986,16 +783,6 @@ public class PreferenceConfiguration {
         config.videoScaleMode = getVideoScaleMode(prefs);
 
         config.videoFormat = getVideoFormatValue(prefs);
-        String rawSbsPerEyeResolution;
-        try {
-            rawSbsPerEyeResolution = prefs.getString(
-                    RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
-                    DEFAULT_RAW_SBS_PER_EYE_RESOLUTION);
-        } catch (ClassCastException invalidStoredType) {
-            rawSbsPerEyeResolution = DEFAULT_RAW_SBS_PER_EYE_RESOLUTION;
-        }
-        config.rawSbsPerEyeResolution =
-                RawSbsPerEyeResolution.fromPreferenceValue(rawSbsPerEyeResolution);
         String cinemaEnvironment = null;
         try {
             cinemaEnvironment = prefs.getString(CINEMA_ENVIRONMENT_PREF_STRING,

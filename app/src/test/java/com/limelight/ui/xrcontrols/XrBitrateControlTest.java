@@ -164,6 +164,32 @@ public class XrBitrateControlTest {
     }
 
     @Test
+    public void codecWarningWithoutARecommendedRungIsVisibleTextUnderTheRow() {
+        Context context = themedContext();
+        XrBitrateControl control = new XrBitrateControl(context);
+        control.setChoices(ladder(), "50000", -1, "codec too slow", value -> true);
+        XrSegmentedLadder ladder = (XrSegmentedLadder) control.getChildAt(0);
+
+        assertEquals(View.GONE, ladder.recommendationMarker().getVisibility());
+        assertEquals(View.VISIBLE, ladder.captionView().getVisibility());
+        assertEquals("codec too slow", ladder.captionView().getText().toString());
+        assertEquals(ContextCompat.getColor(context, R.color.xr_status_warn),
+                ladder.captionView().getCurrentTextColor());
+
+        // Selecting another rung re-applies the selection and must keep the warning.
+        assertTrue(control.setSelectedChoiceId("70000"));
+        assertEquals(View.VISIBLE, ladder.captionView().getVisibility());
+        assertEquals("codec too slow", ladder.captionView().getText().toString());
+
+        control.setChoices(ladder(), "50000", 100000, "recommended", value -> true);
+        assertEquals(View.VISIBLE, ladder.recommendationMarker().getVisibility());
+        assertEquals(View.GONE, ladder.captionView().getVisibility());
+
+        control.setChoices(ladder(), "50000", -1, null, value -> true);
+        assertEquals(View.GONE, ladder.captionView().getVisibility());
+    }
+
+    @Test
     public void recommendationMarkerContrastsWithTheSelectedRung() {
         Context context = themedContext();
         XrBitrateControl control = new XrBitrateControl(context);

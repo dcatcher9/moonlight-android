@@ -62,6 +62,8 @@ public final class XrSegmentedLadder extends LinearLayout {
     private CaptionProvider captionProvider;
     private int selectedIndex;
     private int recommendedIndex = -1;
+    /** Hint supplied without any recommended choice; shown as visible text under the row. */
+    private CharSequence unmarkedHintText;
 
     public XrSegmentedLadder(@NonNull Context context) {
         this(context, null);
@@ -127,6 +129,9 @@ public final class XrSegmentedLadder extends LinearLayout {
         // fits over a segment, but a screen reader still needs the words.
         marker.setContentDescription(hintText);
         marker.setVisibility(hintText == null || recommendedIndex < 0 ? GONE : VISIBLE);
+        // A hint with no recommended choice has no segment to mark, so the caption line shows it.
+        unmarkedHintText = recommendedChoiceId == null && !android.text.TextUtils.isEmpty(hintText)
+                ? hintText : null;
 
         rebuildSegments();
         int index = indexOf(selectedChoiceId);
@@ -161,6 +166,11 @@ public final class XrSegmentedLadder extends LinearLayout {
     /** The row of segment buttons. Exposed so tests need not guess at the view hierarchy. */
     LinearLayout segmentRow() {
         return row;
+    }
+
+    /** The text line under the row: the selection caption, or a hint that marks no segment. */
+    TextView captionView() {
+        return caption;
     }
 
     /** The star marking the recommended segment, visible only when one is recommended. */
@@ -259,13 +269,23 @@ public final class XrSegmentedLadder extends LinearLayout {
             SessionSettingsModel.Choice choice = choices.get(selectedIndex);
             // No provider means no caption: the highlighted segment already shows the value, and
             // the live figure belongs in the glance bar rather than under the control that sets it.
-            if (captionProvider == null) {
+            if (captionProvider == null && unmarkedHintText == null) {
                 caption.setVisibility(GONE);
                 setContentDescription(choice.label);
             }
-            else {
+            else if (captionProvider == null) {
                 caption.setVisibility(VISIBLE);
-                caption.setText(captionProvider.captionFor(choice, selectedIndex, choices.size()));
+                caption.setText(unmarkedHintText);
+                caption.setTextColor(color(
+                        enabled ? R.color.xr_status_warn : R.color.xr_text_disabled));
+                setContentDescription(choice.label + ", " + unmarkedHintText);
+            }
+            else {
+                CharSequence selectionCaption =
+                        captionProvider.captionFor(choice, selectedIndex, choices.size());
+                caption.setVisibility(VISIBLE);
+                caption.setText(unmarkedHintText == null ? selectionCaption
+                        : android.text.TextUtils.concat(selectionCaption, "\n", unmarkedHintText));
                 caption.setTextColor(color(enabled ? R.color.xr_accent : R.color.xr_text_disabled));
                 setContentDescription(caption.getText());
             }
@@ -281,7 +301,7 @@ public final class XrSegmentedLadder extends LinearLayout {
         }
         View target = segments.get(recommendedIndex);
         if (target.getWidth() <= 0) {
-            target.post(this::updateHintPosition);
+            // onLayout() calls this again once the segment has a width.
             return;
         }
         int inset = dimen(R.dimen.xr_space_xs);

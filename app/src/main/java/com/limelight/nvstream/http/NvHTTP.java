@@ -464,7 +464,7 @@ public class NvHTTP {
         return new ComputerDetails.AddressTuple(address, port);
     }
 
-    public ComputerDetails getComputerDetails(String serverInfo) throws IOException, XmlPullParserException {
+    public ComputerDetails getComputerDetails(String serverInfo, boolean authenticated) throws IOException, XmlPullParserException {
         ComputerDetails details = new ComputerDetails();
 
         details.name = getXmlString(serverInfo, "hostname", false);
@@ -503,7 +503,7 @@ public class NvHTTP {
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
         details.runningGameUUID = getCurrentGameUUID(serverInfo);
-        populateHostSessionDetails(details, serverInfo);
+        populateHostSessionDetails(details, serverInfo, authenticated);
 
         // The MJOLNIR codename was used by GFE but never by any third-party server
         details.nvidiaServer = getXmlString(serverInfo, "state", true).contains("MJOLNIR");
@@ -522,10 +522,16 @@ public class NvHTTP {
         return normalizeHostSessionId(getXmlString(xml, "hostsessionid", false));
     }
 
-    static void populateHostSessionDetails(ComputerDetails details, String xml)
+    /**
+     * Like the other fork capabilities, the session-token capability and token are taken only
+     * from an authenticated serverinfo response; the HTTP fallback reports a tokenless host.
+     */
+    static void populateHostSessionDetails(ComputerDetails details, String xml,
+                                           boolean authenticated)
             throws IOException, XmlPullParserException {
-        details.hostSessionIdSupported = hasXmlTag(xml, "hostsessionid");
-        details.hostSessionId = normalizeHostSessionId(getXmlString(xml, "hostsessionid", false));
+        details.hostSessionIdSupported = authenticated && hasXmlTag(xml, "hostsessionid");
+        details.hostSessionId = details.hostSessionIdSupported
+                ? normalizeHostSessionId(getXmlString(xml, "hostsessionid", false)) : null;
     }
 
     private static String normalizeHostSessionId(String hostSessionId) {
@@ -549,7 +555,8 @@ public class NvHTTP {
     }
 
     public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
-        return getComputerDetails(getServerInfo(likelyOnline));
+        ServerInfoResponse response = getServerInfoWithProvenance(likelyOnline);
+        return getComputerDetails(response.xml, response.authenticated);
     }
 
     // This hack is Android-specific but we do it on all platforms

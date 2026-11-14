@@ -55,8 +55,6 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertFalse(configuration.playHostAudio);
         assertTrue(configuration.virtualDisplayOnly);
         assertEquals(3, configuration.audioBoostDb);
-        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
-                configuration.rawSbsPerEyeResolution);
     }
 
     @Test
@@ -98,32 +96,6 @@ public final class PreferenceConfigurationXrDefaultsTest {
                 .putInt(PreferenceConfiguration.AUDIO_BOOST_PREF_STRING, 6)
                 .commit());
         assertEquals(3, PreferenceConfiguration.readPreferences(context).audioBoostDb);
-    }
-
-    @Test
-    public void rawSbsPerEyeResolutionParsesHalfAndFallsBackToFull() {
-        SharedPreferences preferences =
-                PreferenceManager.getDefaultSharedPreferences(context);
-
-        assertTrue(preferences.edit()
-                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
-                        PreferenceConfiguration.RawSbsPerEyeResolution.HALF.preferenceValue)
-                .commit());
-        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.HALF,
-                PreferenceConfiguration.readPreferences(context).rawSbsPerEyeResolution);
-
-        assertTrue(preferences.edit()
-                .putString(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING,
-                        "unsupported")
-                .commit());
-        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
-                PreferenceConfiguration.readPreferences(context).rawSbsPerEyeResolution);
-
-        assertTrue(preferences.edit()
-                .putInt(PreferenceConfiguration.RAW_SBS_PER_EYE_RESOLUTION_PREF_STRING, 1)
-                .commit());
-        assertSame(PreferenceConfiguration.RawSbsPerEyeResolution.FULL,
-                PreferenceConfiguration.readPreferences(context).rawSbsPerEyeResolution);
     }
 
     @Test

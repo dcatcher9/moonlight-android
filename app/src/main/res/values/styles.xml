@@ -102,15 +102,6 @@
         <item name="android:windowBackground">@android:color/black</item>
     </style>
 
-    <declare-styleable name="ApertureViewGroup">
-        <attr name="aperture_color1" format="color" />
-        <attr name="aperture_color2" format="color" />
-        <attr name="aperture_border_width" format="dimension" />
-        <attr name="aperture_border_angle" format="dimension" />
-        <attr name="aperture_duration" format="integer" />
-        <attr name="aperture_middle_color" format="color" />
-    </declare-styleable>
-
     <declare-styleable name="SeekBarPreference">
         <attr name="xrMin" format="integer" />
         <attr name="xrStep" format="integer" />

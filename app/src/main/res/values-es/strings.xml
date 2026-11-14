@@ -109,8 +109,6 @@
     <string name="title_video_format">Cambiar la configuración del códec</string>
     <string name="summary_video_format">Los códecs más recientes pueden reducir los requisitos del ancho de banda del vídeo si tu dispositivo los admite. Las selecciones de los códecs pueden ignorarse si no son compatibles con el software del host o la GPU.</string>
     <!-- Array strings -->
-    <string name="videoformat_auto">Automático (Recomendado)</string>
-    <string name="videoformat_hevcalways">Preferir HEVC</string>
     <string name="nettest_title_done">Prueba de Red Completada</string>
     <string name="scut_not_paired">PC no emparejado</string>
     <string name="scut_invalid_uuid">El PC proporcionado no es válido</string>
@@ -145,9 +143,6 @@
     <string name="no_video_received_error">No se recibe video desde el equipo anfitrión.</string>
     <string name="applist_details_id">ID de Aplicación:</string>
     <string name="title_checkbox_mouse_emulation">Emulación de ratón usando el mando</string>
-    <string name="pacing_latency">Preferir la menor latencia posible</string>
-    <string name="pacing_balanced">Equilibrado</string>
-    <string name="pacing_smoothness">Preferir mayor fluidez de video (puede incrementar significativamente la latencia)</string>
     <string name="perf_overlay_decoder">Decodificador: %1$s</string>
     <string name="perf_overlay_incomingfps">Tasa de cuadros obtenida de la red: %1$.2f FPS</string>
     <string name="perf_overlay_renderingfps">Tasa de Cuadros Renderizada: %1$.2f FPS</string>
@@ -160,18 +155,14 @@
     <string name="summary_reset_osc">Reiniciar toda la configuración a las predeterminadas de tamaño y posición para los controles en pantalla</string>
     <string name="summary_troubleshooting">Mostrar consejos para diagnosticar y corregir errores comunes respecto a la transmisión</string>
     <string name="title_privacy_policy">Política de Privacidad</string>
-    <string name="resolution_360p">360p</string>
     <string name="resolution_1440p">1440p</string>
     <string name="resolution_4k">4K</string>
     <string name="suffix_osc_opacity">%</string>
     <string name="title_checkbox_enable_pip">Activar modo Pantalla-en-Pantalla para modo espectador</string>
-    <string name="resolution_720p">720p</string>
-    <string name="fps_120">120 FPS</string>
     <string name="audioconf_71surround">7.1 Sonido Envolvente</string>
     <string name="title_troubleshooting">Guía de Solución de Errores</string>
     <string name="resolution_1080p">1080p</string>
     <string name="summary_frame_pacing">Especificar como balancear la latencia de video y la fluidez</string>
-    <string name="pacing_balanced_alt">Equilibrado con limitador de FPS (Cuadros por Segundo)</string>
     <string name="audioconf_51surround">5.1 Sonido Envolvente</string>
     <string name="audioconf_stereo">Estéreo</string>
     <string name="check_ports_msg">Revisa la configuración de tu firewall, así como, las reglas de redireccionamiento para él(los) puerto(s):</string>
@@ -247,10 +238,6 @@
     <string name="title_setup_guide">Guía para la Configuración</string>
     <string name="summary_setup_guide">Mostrar instrucciones para como configurar tu PC para juegos para la transmisión</string>
     <string name="summary_privacy_policy">Mostrar la política de privacidad de Moonlight 3D</string>
-    <string name="resolution_480p">480p</string>
-    <string name="fps_30">30 FPS</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="fps_90">90 FPS</string>
     <string name="title_frame_pacing">Ritmo de cuadros por segundo en video</string>
     <string name="resolution_prefix_native_portrait">(Retrato)</string>
     <string name="frame_conversion_error">El PC anfitrión ha reportado un error fatal en el codificador de video.
@@ -267,8 +254,6 @@
     <string name="title_native_fps_dialog">Advertencia sobre FPS nativos</string>
     <string name="category_gamepad_settings">Ajustes del Gamepad</string>
     <string name="title_checkbox_gamepad_motion_sensors">Permitir el uso de los sensores de movimiento del gamepad</string>
-    <string name="videoformat_av1always">Preferir AV1 (Experimental)</string>
-    <string name="videoformat_h264always">Prefiero H.264</string>
     <string name="perf_overlay_hostprocessinglatency">Latencia de procesamiento del host mín/máx/promedio: %1$.1f/%2$.1f/%3$.1f ms</string>
     <string name="summary_checkbox_gamepad_touchpad_as_mouse">Fuerza la entrada del touchpad del gamepad para controlar el ratón del host, incluso cuando se emula un gamepad con touchpad.</string>
     <string name="title_checkbox_gamepad_touchpad_as_mouse">Controla siempre el ratón con el touchpad</string>

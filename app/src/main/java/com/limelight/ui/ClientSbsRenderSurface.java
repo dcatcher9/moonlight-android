@@ -176,14 +176,31 @@ public final class ClientSbsRenderSurface extends SurfaceView {
         }
 
         @Override public void close() {
-            pause();
-            destroyContext();
-            if (displayInitialized) {
-                if (!egl.eglTerminate(display)) {
-                    throw failure("terminate");
+            // Attempt every release step even when an earlier one fails, so one failed unbind
+            // cannot also leak the context and display. The first failure is still reported.
+            RuntimeException firstFailure = null;
+            try {
+                pause();
+            } catch (RuntimeException error) {
+                firstFailure = error;
+            }
+            try {
+                destroyContext();
+            } catch (RuntimeException error) {
+                if (firstFailure == null) {
+                    firstFailure = error;
                 }
-                display = EGL10.EGL_NO_DISPLAY;
-                displayInitialized = false;
+            }
+            if (displayInitialized) {
+                if (egl.eglTerminate(display)) {
+                    display = EGL10.EGL_NO_DISPLAY;
+                    displayInitialized = false;
+                } else if (firstFailure == null) {
+                    firstFailure = failure("terminate");
+                }
+            }
+            if (firstFailure != null) {
+                throw firstFailure;
             }
         }
 

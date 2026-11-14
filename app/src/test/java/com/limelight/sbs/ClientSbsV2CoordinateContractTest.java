@@ -31,8 +31,6 @@ public class ClientSbsV2CoordinateContractTest {
             float far = ClientSbsV2CoordinateContract.parallax(1.0f, zero, amplitude);
             assertEquals(gain * 3.0f / amplitude, near - far, 1.0e-8f);
         }
-        assertEquals(-1.5f, ClientSbsV2CoordinateContract.shapeCoordinate(-1.5f), 0.0f);
-        assertEquals(2.0f, ClientSbsV2CoordinateContract.shapeCoordinate(2.0f), 0.0f);
     }
 
     @Test

@@ -92,16 +92,11 @@
     <string name="title_enable_perf_overlay">Zobrazit během streamování informace o výkonu</string>
     <string name="summary_enable_perf_overlay">Zobrazit realtime informace o výkonu streamu během streamování</string>
     <string name="resolution_4k">4K</string>
-    <string name="fps_30">30 FPS</string>
     <string name="title_troubleshooting">Průvodce řešením problémů</string>
     <string name="summary_troubleshooting">Zobrazit tipy pro diagnózu a opravu běžných problémů se streamováním</string>
-    <string name="resolution_720p">720p</string>
     <string name="resolution_1080p">1080p</string>
     <string name="resolution_1440p">1440p</string>
-    <string name="videoformat_auto">Automaticky</string>
     <string name="audioconf_71surround">7.1 prostorový zvuk</string>
-    <string name="pacing_balanced">Vyvážené</string>
-    <string name="pacing_smoothness">Preferovat plynulejší video (může výrazně zvýšit zpoždění)</string>
     <string name="resolution_prefix_native_landscape">(na šířku)</string>
     <string name="resolution_prefix_native_portrait">(na výšku)</string>
     <string name="category_audio_settings">Nastavení zvuku</string>
@@ -109,9 +104,6 @@
     <string name="category_input_settings">Nastavení vstupu</string>
     <string name="summary_setup_guide">Zobrazit instrukce k nastavení vašeho herního PC pro streamování</string>
     <string name="dialog_title_osc_opacity">Změnit průhlednost</string>
-    <string name="fps_60">60 FPS</string>
-    <string name="fps_90">90 FPS</string>
-    <string name="fps_120">120 FPS</string>
     <string name="audioconf_stereo">Stereo</string>
     <string name="audioconf_51surround">5.1 prostorový zvuk</string>
     <string name="help_loading_msg">Načítání stránky s nápovědou…</string>
@@ -191,9 +183,6 @@
     <string name="summary_enable_post_stream_toast">Zobrazit informace o zpoždění po skončení streamování</string>
     <string name="title_privacy_policy">Zásady ochrany osobních údajů</string>
     <string name="summary_privacy_policy">Zobrazit zásady ochrany osobních údajů Moonlightu</string>
-    <string name="resolution_360p">360p</string>
-    <string name="resolution_480p">480p</string>
-    <string name="pacing_balanced_alt">Vyvážené s limitem FPS</string>
     <string name="scut_deleted_pc">PC smazán</string>
     <string name="scut_not_paired">PC nespárován</string>
     <string name="scut_pc_not_found">PC nenalezen</string>
@@ -241,10 +230,8 @@
     <string name="summary_video_format">HEVC sníží datový přenos, ale vyžaduje novější zařízení</string>
     <string name="title_enable_hdr">Povolit HDR (experimentální)</string>
     <string name="summary_enable_hdr">Streamovat v HDR, pokud jej hra a GPU počítače podporují. HDR vyžaduje GPU GTX 1000 nebo novější.</string>
-    <string name="videoformat_hevcalways">Vždy použít HEVC (může padat)</string>
     <string name="title_frame_pacing">Frame pacing videa</string>
     <string name="summary_frame_pacing">Zvolte, jak vyvážit zpoždění videa a jeho plynulost</string>
-    <string name="pacing_latency">Preferovat nejnižší zpoždění</string>
     <string name="title_enable_commit_text">Povolit vstup commit-textu (swipe/hlas)</string>
     <string name="summary_enable_commit_text">Předává vícestránkový text z softwarových klávesnic (psaní gesty, návrhy, diktování). Může narušit hry, které vyžadují jednotlivé stisky kláves.</string>
     <string name="xr_stats_host_source_repeats">Hostitelem ověřená opakování</string>

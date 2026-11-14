@@ -1,39 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string-array name="resolution_names">
-        <item>@string/resolution_360p</item>
-        <item>@string/resolution_480p</item>
-        <item>@string/resolution_720p</item>
-        <item>@string/resolution_1080p</item>
-        <item>@string/resolution_1440p</item>
-        <item>@string/resolution_4k</item>
-    </string-array>
-
-    <!-- Keep this in sync with PreferenceConfiguration.isNativeResolution()! -->
-    <string-array name="resolution_values" translatable="false">
-        <item>640x360</item>
-        <item>854x480</item>
-        <item>1280x720</item>
-        <item>1920x1080</item>
-        <item>2560x1440</item>
-        <item>3840x2160</item>
-    </string-array>
-
-    <string-array name="fps_names">
-        <item>@string/fps_30</item>
-        <item>@string/fps_60</item>
-        <item>@string/fps_72</item>
-        <item>@string/fps_90</item>
-        <item>@string/fps_120</item>
-    </string-array>
-    <string-array name="fps_values" translatable="false">
-        <item>30</item>
-        <item>60</item>
-        <item>72</item>
-        <item>90</item>
-        <item>120</item>
-    </string-array>
-
     <string-array name="video_scale_mode_names">
         <item>@string/video_scale_mode_fit</item>
         <item>@string/video_scale_mode_fill</item>
@@ -106,36 +72,6 @@
         <item>iw</item>
         <item>sv</item>
         <item>in</item>
-    </string-array>
-
-    <string-array name="video_format_names">
-        <item>@string/videoformat_auto</item>
-        <item>@string/videoformat_av1always</item>
-        <item>@string/videoformat_hevcalways</item>
-        <item>@string/videoformat_h264always</item>
-    </string-array>
-    <string-array name="video_format_values" translatable="false">
-        <item>auto</item>
-        <item>forceav1</item>
-        <item>forceh265</item>
-        <item>neverh265</item>
-    </string-array>
-
-    <string-array name="video_frame_pacing_names">
-        <item>@string/pacing_warp2</item>
-        <item>@string/pacing_warp</item>
-        <item>@string/pacing_latency</item>
-        <item>@string/pacing_balanced</item>
-        <item>@string/pacing_balanced_alt</item>
-        <item>@string/pacing_smoothness</item>
-    </string-array>
-    <string-array name="video_frame_pacing_values" translatable="false">
-        <item>warp2</item>
-        <item>warp</item>
-        <item>latency</item>
-        <item>balanced</item>
-        <item>cap-fps</item>
-        <item>smoothness</item>
     </string-array>
 
     <!-- Compact XR-facing choices. Keep the values aligned with the in-session settings panel. -->
@@ -244,14 +180,6 @@
         <item>neverh265</item>
     </string-array>
 
-    <string-array name="xr_raw_sbs_per_eye_resolution_names">
-        <item>@string/xr_raw_per_eye_full</item>
-        <item>@string/xr_raw_per_eye_half</item>
-    </string-array>
-    <string-array name="xr_raw_sbs_per_eye_resolution_values" translatable="false">
-        <item>full</item>
-        <item>half</item>
-    </string-array>
 
     <string-array name="xr_video_frame_pacing_names">
         <item>@string/xr_pacing_latency</item>

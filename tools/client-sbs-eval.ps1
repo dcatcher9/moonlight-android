@@ -48,7 +48,6 @@ try {
         "--tests" "com.limelight.binding.video.MediaCodecHelperRegularDecoderTest" `
         "--tests" "com.limelight.preferences.PreferenceConfigurationClientSbsModelMigrationTest" `
         "--tests" "com.limelight.preferences.PreferenceConfigurationPerformanceLoggingTest" `
-        "--tests" "com.limelight.utils.ClientSbsDepthInputShapeTest" `
         "--tests" "com.limelight.utils.ClientSbsGpuInferenceEngineTest" `
         "--tests" "com.limelight.utils.ClientSbsModelArchiveTest" `
         "--tests" "com.limelight.utils.ClientSbsPackagedModelArchiveTest" `

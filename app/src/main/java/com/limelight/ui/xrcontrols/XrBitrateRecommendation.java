@@ -1,5 +1,8 @@
 package com.limelight.ui.xrcontrols;
 
+import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.PreferenceConfiguration;
+
 import java.util.Arrays;
 import java.util.List;
 
@@ -11,9 +14,9 @@ import java.util.List;
  * allowed", not "how much will be used", and precision matters less than reach — which is why the
  * ladder is only six rungs and starts at 50.</p>
  *
- * <p>The estimate is bits-per-pixel of the ENCODED frame. Host SBS AI and Raw Full pack both eyes
- * side by side, so they encode twice the pixels of a flat mode at the same per-eye resolution.
- * Raw Half packs two half-width eyes into an ordinary-width frame and therefore uses the flat cost.
+ * <p>The estimate is bits-per-pixel of the ENCODED frame. Host SBS AI packs both eyes
+ * side by side, so it encodes twice the pixels of a flat mode at the same per-eye resolution
+ * unless the packed raster exceeds the codec's axis limit and is scaled down to fit.
  * Frame rate divides the budget rather than adding to it — bandwidth is fixed by the ceiling, so
  * doubling the rate halves the bits available per frame, which is why fps appears here at all.</p>
  */
@@ -64,15 +67,26 @@ public final class XrBitrateRecommendation {
         if (modeWidth <= 0 || height <= 0 || fps <= 0) {
             return 0;
         }
-        long pixels = (long) (packed ? modeWidth * 2 : modeWidth) * height;
+        long pixels;
+        if (packed) {
+            // The host fits the packed 2W x H raster inside the codec's axis limit before
+            // encoding, so cost the fitted raster. Auto is fitted with the HEVC/AV1 limit.
+            int[] fitted = PreferenceConfiguration.hostSbsPackedDimensions(modeWidth, height,
+                    CODEC_H264.equals(codecId)
+                            ? MoonBridge.VIDEO_FORMAT_H264 : MoonBridge.VIDEO_FORMAT_H265);
+            pixels = (long) fitted[0] * fitted[1];
+        } else {
+            pixels = (long) modeWidth * height;
+        }
         double bits = bitsPerPixelFor(codecId) * pixels * fps / WIRE_OVERHEAD;
         return (int) Math.round(bits / 1000.0);
     }
 
     /**
      * Recommended rung in kbps, or {@code -1} when the codec cannot reach this stream shape at any
-     * offered bitrate. A -1 is a prompt to change codec, not to select the top rung: H.264 at 4K
-     * host SBS needs roughly 470 Mbps, so pointing at 300 would imply a quality it cannot deliver.
+     * offered bitrate. A -1 is a prompt to change codec, not to select the top rung: flat H.264 at
+     * 5120x2160 and 90 fps needs roughly 390 Mbps, so pointing at 300 would imply a quality it
+     * cannot deliver. Packed shapes are costed at the codec-fitted raster the host encodes.
      */
     public static int recommendedKbps(boolean packed, int modeWidth, int height, int fps,
                                       String codecId) {

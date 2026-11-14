@@ -40,7 +40,7 @@ public class ClientSbsGpuDepthShadersTest {
 
     @Test
     public void rawDepthReadsPackedFloat32() {
-        String shader = ClientSbsGpuDepthShaders.RAW_MIN_MAX;
+        String shader = ClientSbsGpuDepthShaders.rawMinMax(true);
         assertTrue(shader.contains("uniform uint uRawPixelStrideBytes"));
         assertTrue(shader.contains("index * uRawPixelStrideBytes"));
         assertTrue(shader.contains("uintBitsToFloat(rawWords[absoluteByte >> 2u])"));
@@ -86,7 +86,7 @@ public class ClientSbsGpuDepthShadersTest {
 
     @Test
     public void histogramMathCannotOverflowAUintMultiply() {
-        String shader = ClientSbsGpuDepthShaders.RAW_HISTOGRAM;
+        String shader = ClientSbsGpuDepthShaders.rawHistogram(true);
         assertTrue(shader.contains("float(value - rawMinimum) * 256.0"));
         assertFalse(shader.contains("(value - rawMinimum) * 256u"));
         int localAtomic = shader.indexOf("atomicAdd(localHistogram[bin], 1u)");
@@ -249,7 +249,7 @@ public class ClientSbsGpuDepthShadersTest {
 
     @Test
     public void validTemporalDepthAdvancesIndependentlyFromReliableHistory() {
-        String rawMinMax = ClientSbsGpuDepthShaders.RAW_MIN_MAX;
+        String rawMinMax = ClientSbsGpuDepthShaders.rawMinMax(true);
         String rangeResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
         String cutResolve = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
         String temporal = ClientSbsGpuDepthShaders.temporalFilter(true);
@@ -446,7 +446,6 @@ public class ClientSbsGpuDepthShadersTest {
         assertTrue(rawResolve.contains("cutStateCounters.y = supportedReturn ? 0"));
         assertTrue(rawResolve.contains(
                 ": (persistentLowStart ? 1 : cutStateCounters.y)"));
-        assertTrue(resolve.contains("externalSceneCutRequested()"));
         assertTrue(resolve.contains("uint selectedSceneEvidence = currentSceneEvidence"));
         assertTrue(resolve.contains("bool hardCut = wasInitialized && stateFlags.w != 0u"));
         assertTrue(resolve.contains("cutState = CUT_STATE_LATCHED"));
@@ -517,7 +516,7 @@ public class ClientSbsGpuDepthShadersTest {
 
     @Test
     public void hardCutUsesFilteredTemporalDepthAndDistributionEvidence() {
-        String histogram = ClientSbsGpuDepthShaders.RAW_HISTOGRAM;
+        String histogram = ClientSbsGpuDepthShaders.rawHistogram(true);
         String rangeResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
         String temporal = ClientSbsGpuDepthShaders.temporalFilter(true);
         String cutResolve = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
@@ -549,7 +548,7 @@ public class ClientSbsGpuDepthShadersTest {
 
     @Test
     public void rawMeanAndCollapseUsePerWorkgroupWelfordReduction() {
-        String rawMinMax = ClientSbsGpuDepthShaders.RAW_MIN_MAX;
+        String rawMinMax = ClientSbsGpuDepthShaders.rawMinMax(true);
         String rawResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
         String profile = ClientSbsGpuDepthShaders.RESOLVE_PROFILE;
 
@@ -604,8 +603,8 @@ public class ClientSbsGpuDepthShadersTest {
     public void p2AndP98RemainCutDiagnosticsOnly() {
         String rawResolve = ClientSbsGpuDepthShaders.RESOLVE_RAW_RANGE;
         String otherProductionShaders = ClientSbsGpuDepthShaders.RESET_ALL_STATS
-                + ClientSbsGpuDepthShaders.RAW_MIN_MAX
-                + ClientSbsGpuDepthShaders.RAW_HISTOGRAM
+                + ClientSbsGpuDepthShaders.rawMinMax(true)
+                + ClientSbsGpuDepthShaders.rawHistogram(true)
                 + ClientSbsGpuDepthShaders.temporalFilter(true)
                 + ClientSbsGpuDepthShaders.RESOLVE_PROFILE
                 + ClientSbsGpuDepthShaders.RESET_STATE;
@@ -676,7 +675,6 @@ public class ClientSbsGpuDepthShadersTest {
 
         snapshot.updateFromState(state, 1L, 1);
 
-        assertFalse(snapshot.hasAdaptivePopClassification());
         assertEquals(ClientSbsGpuDepthProcessor.LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE,
                 snapshot.getEdgeFraction(), 0.0f);
         assertEquals(ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
@@ -860,27 +858,19 @@ public class ClientSbsGpuDepthShadersTest {
         assertEquals(101.0f, snapshot.getEffectiveRangeHigh(), 0.0001f);
         assertEquals(2.0f, snapshot.getEffectiveRangeWidth(), 0.0001f);
         assertTrue(snapshot.isStereoProfileInitialized());
-        assertEquals(0.0f, snapshot.getStretchLow(), 0.0001f);
-        assertEquals(0.0f, snapshot.getStretchHigh(), 0.0001f);
-        assertEquals(0.0f, snapshot.getStretchInverseRange(), 0.0001f);
         assertEquals(3.25f, snapshot.getSubjectDepth(), 0.0001f);
-        assertEquals(0.0f, snapshot.getRecenterDelta(), 0.0001f);
-        assertEquals(0.0f, snapshot.getZeroAnchorShift(), 0.0001f);
         assertEquals(ClientSbsGpuDepthProcessor.LEGACY_ADAPTIVE_POP_UNCLASSIFIED_EDGE,
                 snapshot.getEdgeFraction(), 0.0001f);
-        assertFalse(snapshot.hasAdaptivePopClassification());
         assertEquals(ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
                 snapshot.getPopStrength(), 0.0001f);
-        assertEquals(1.0f, snapshot.getPopRatio(), 0.0001f);
-        assertTrue(snapshot.wasExternalCutRequested());
+        assertTrue(snapshot.wasAppearanceProposalSelected());
         assertTrue(snapshot.wasHardCut());
         assertTrue(snapshot.isGeometryCutArmed());
         assertEquals(17, snapshot.getSceneAge());
-        assertEquals(3.25f, snapshot.getShotRawMean(), 0.0001f);
+        assertEquals(3.25f, snapshot.getRawZero(), 0.0001f);
         assertEquals(3.50f, snapshot.getCurrentRawMean(), 0.0001f);
         assertEquals(3L, snapshot.getHardCutCount());
         assertEquals(2L, snapshot.getAppearanceProposalCount());
-        assertEquals(2L, snapshot.getExternalCutRequestCount());
         assertEquals(1L, snapshot.getAcceptedAppearanceCutCount());
         assertEquals(1L, snapshot.getAcceptedGeometryCutCount());
         assertEquals(1L, snapshot.getAcceptedStructurelessEntryCutCount());

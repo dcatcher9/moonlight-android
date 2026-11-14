@@ -49,25 +49,21 @@ public final class XrAuthoredPresentationTest {
     public void glassesAndHeadsetKeepTheirRequestedRasterAcrossStartupAndLiveQuality() {
         for (PresentationMode mode : AUTHORED) {
             for (int[] requested : new int[][] {{1920, 1080}, {3840, 2160}}) {
-                for (PreferenceConfiguration.RawSbsPerEyeResolution legacyPacking
-                        : PreferenceConfiguration.RawSbsPerEyeResolution.values()) {
-                    for (int codec : new int[] {MoonBridge.VIDEO_FORMAT_H264,
-                            MoonBridge.VIDEO_FORMAT_H265, MoonBridge.VIDEO_FORMAT_AV1_MAIN10}) {
-                        String context = mode + " " + requested[0] + "x" + requested[1]
-                                + " codec=" + codec + " legacy=" + legacyPacking;
-                        assertArrayEquals(context, requested,
-                                XrStreamPresenter.initialSurfacePixelDimensions(mode,
-                                        requested[0], requested[1], codec, legacyPacking));
-                        assertArrayEquals(context, requested,
-                                XrStreamPresenter.decoderStreamDimensions(mode,
-                                        requested[0], requested[1], codec, legacyPacking));
-                    }
-                    assertArrayEquals(requested, XrStreamPresenter.liveVideoModeWireDimensions(
-                            mode, requested[0], requested[1], legacyPacking));
-                    assertArrayEquals(requested, XrStreamPresenter.liveVideoModeLogicalDimensions(
-                            mode, requested[0], requested[1], legacyPacking));
-                    assertTrue(XrStreamPresenter.supportsLiveResolutionChange(mode, legacyPacking));
+                for (int codec : new int[] {MoonBridge.VIDEO_FORMAT_H264,
+                        MoonBridge.VIDEO_FORMAT_H265, MoonBridge.VIDEO_FORMAT_AV1_MAIN10}) {
+                    String context = mode + " " + requested[0] + "x" + requested[1]
+                            + " codec=" + codec;
+                    assertArrayEquals(context, requested,
+                            XrStreamPresenter.initialSurfacePixelDimensions(mode,
+                                    requested[0], requested[1], codec));
+                    assertArrayEquals(context, requested,
+                            XrStreamPresenter.decoderStreamDimensions(mode,
+                                    requested[0], requested[1], codec));
                 }
+                assertArrayEquals(requested, XrStreamPresenter.liveVideoModeWireDimensions(
+                        requested[0], requested[1]));
+                assertArrayEquals(requested, XrStreamPresenter.liveVideoModeLogicalDimensions(
+                        requested[0], requested[1]));
             }
         }
     }
@@ -77,15 +73,7 @@ public final class XrAuthoredPresentationTest {
         for (PresentationMode mode : AUTHORED) {
             assertEquals(MoonBridge.SBS_MODE_OFF, wireMode(mode));
             assertTrue(XrStreamPresenter.isPresentationModeSupported(mode, false));
-            for (PreferenceConfiguration.RawSbsPerEyeResolution legacyPacking
-                    : PreferenceConfiguration.RawSbsPerEyeResolution.values()) {
-                assertFalse(XrStreamPresenter.usesRawPackedTransport(mode, legacyPacking));
-                assertFalse(XrStreamPresenter.usesPackedBitrateCost(mode, legacyPacking));
-                assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                        PresentationMode.NORMAL, mode, legacyPacking));
-                assertFalse(XrStreamPresenter.requiresReconnectBeforeModeSwitch(
-                        mode, PresentationMode.NORMAL, legacyPacking));
-            }
+            assertFalse(XrStreamPresenter.usesPackedBitrateCost(mode));
             assertFalse(XrStreamPresenter.hostSbsFormatChangeRequiresResize(mode,
                     3840, 2160, MoonBridge.VIDEO_FORMAT_H265, MoonBridge.VIDEO_FORMAT_H264));
         }

@@ -177,7 +177,6 @@
     <string name="audioconf_stereo">Stereo</string>
     <string name="audioconf_51surround">Sunet Surround 5.1</string>
     <string name="audioconf_71surround">Sunet Surround 7.1</string>
-    <string name="videoformat_hevcalways">Folosește HEVC mereu (se poate bloca)</string>
     <string name="xr_stats_host_source_repeats">Repetări confirmate de gazdă</string>
     <string name="xr_stats_host_source_repeats_value">%1$.1f fps | imagine păstrată</string>
     <string name="xr_stats_host_sample">Publicare de la gazdă</string>

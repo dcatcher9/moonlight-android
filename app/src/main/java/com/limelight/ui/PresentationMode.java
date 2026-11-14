@@ -3,7 +3,7 @@ package com.limelight.ui;
 /** Saved presentation intent. Active stereo packing is confirmed separately at runtime. */
 public enum PresentationMode {
     NORMAL,
-    /** Retained only for reading legacy settings and compatibility helpers; never a dock choice. */
+    /** Retained only so legacy stored settings still parse; never a dock choice. */
     @Deprecated
     HOST_SBS_RAW,
     HOST_SBS_AI,
