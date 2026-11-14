@@ -6,6 +6,8 @@ final class ClientSbsGpuDisparityShaders {
     static final float MAX_VERTICAL_SHEAR = 2.0f;
     static final float VERTICAL_MAJORANT_SHARE = 0.75f;
     static final float MAX_HORIZONTAL_SLOPE = 0.5f;
+    /** Lines per workgroup; the processor's dispatch count and the GLSL layout share it. */
+    static final int LOCAL_SIZE = 32;
 
     private ClientSbsGpuDisparityShaders() {
     }
@@ -145,7 +147,8 @@ final class ClientSbsGpuDisparityShaders {
         return "#version 310 es\n"
                 + "precision highp float;\n"
                 + "precision highp int;\n"
-                + "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;\n"
+                + "layout(local_size_x = " + LOCAL_SIZE
+                + ", local_size_y = 1, local_size_z = 1) in;\n"
                 + "const int FIELD_WIDTH = " + width + ";\n"
                 + "const int FIELD_HEIGHT = " + height + ";\n";
     }

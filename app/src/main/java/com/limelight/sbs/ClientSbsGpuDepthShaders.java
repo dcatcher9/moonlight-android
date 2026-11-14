@@ -25,6 +25,19 @@ final class ClientSbsGpuDepthShaders {
     private static final String FIXED_POP = String.format(java.util.Locale.US, "%.2f",
             ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH);
 
+    /** Edge of the square per-pixel workgroup; the processor's dispatch math shares it. */
+    static final int WORKGROUP_EDGE = 16;
+    /** Invocations in one per-pixel workgroup, which sizes its shared reduction arrays. */
+    static final int WORKGROUP_LANES = WORKGROUP_EDGE * WORKGROUP_EDGE;
+    /** Bins in each raw percentile histogram, cleared by one invocation per bin. */
+    static final int HISTOGRAM_BINS = 256;
+
+    private static final String PIXEL_WORKGROUP_LAYOUT = "layout(local_size_x = "
+            + WORKGROUP_EDGE + ", local_size_y = " + WORKGROUP_EDGE + ") in;";
+    /** First stride of the pairwise in-workgroup reduction. */
+    private static final String REDUCTION_LOOP = "    for (uint stride = "
+            + (WORKGROUP_LANES / 2) + "u; stride != 0u; stride >>= 1u) {";
+
     private static String lines(String... source) {
         return String.join("\n", source) + "\n";
     }
@@ -272,7 +285,7 @@ final class ClientSbsGpuDepthShaders {
 
     /** Clears the raw percentile histogram and range counters in one 256-thread dispatch. */
     static final String RESET_ALL_STATS = HEADER + RAW_STATS + lines(
-            "layout(local_size_x = 256) in;",
+            "layout(local_size_x = " + HISTOGRAM_BINS + ") in;",
             "void main() {",
             "    uint index = gl_LocalInvocationID.x;",
             "    rawHistogram[index] = 0u;",
@@ -293,13 +306,13 @@ final class ClientSbsGpuDepthShaders {
     static String rawMinMax(boolean removeReflectedPadding) {
         return HEADER + rawInput(removeReflectedPadding) + RAW_STATS + STATE
                 + FRAME_STATE_CONSTANTS + lines(
-                "layout(local_size_x = 16, local_size_y = 16) in;",
+                PIXEL_WORKGROUP_LAYOUT,
                 "uniform sampler2D uPreviousTemporalDepth;",
                 "layout(r32f, binding = 3) uniform writeonly highp image2D uReliableDepth;",
-                "shared uvec3 localRange[256];",
-                "shared float localMean[256];",
-                "shared float localM2[256];",
-                "shared uvec2 localGeometryRange[256];",
+                "shared uvec3 localRange[" + WORKGROUP_LANES + "];",
+                "shared float localMean[" + WORKGROUP_LANES + "];",
+                "shared float localM2[" + WORKGROUP_LANES + "];",
+                "shared uvec2 localGeometryRange[" + WORKGROUP_LANES + "];",
                 "void main() {",
                 "    uint lane = gl_LocalInvocationIndex;",
                 "    ivec2 point = ivec2(gl_GlobalInvocationID.xy);",
@@ -330,7 +343,7 @@ final class ClientSbsGpuDepthShaders {
                 "            ? uvec2(floatBitsToUint(rawValue == 0.0 ? 0.0 : rawValue))",
                 "            : uvec2(0xffffffffu, 0u);",
                 "    barrier();",
-                "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
+                REDUCTION_LOOP,
                 "        if (lane < stride) {",
                 "            uvec3 right = localRange[lane + stride];",
                 "            uint leftCount = localRange[lane].z;",
@@ -378,7 +391,7 @@ final class ClientSbsGpuDepthShaders {
 
     static String rawHistogram(boolean removeReflectedPadding) {
         return HEADER + rawInput(removeReflectedPadding) + RAW_STATS + lines(
-                "layout(local_size_x = 16, local_size_y = 16) in;",
+                PIXEL_WORKGROUP_LAYOUT,
                 "shared uint localHistogram[256];",
                 "shared uint localGeometryHistogram[256];",
                 "void main() {",
@@ -1052,7 +1065,7 @@ final class ClientSbsGpuDepthShaders {
     static String temporalFilter(boolean removeReflectedPadding) {
         return HEADER + rawInput(removeReflectedPadding)
                 + RAW_STATS + STATE + FRAME_STATE_CONSTANTS + lines(
-                "layout(local_size_x = 16, local_size_y = 16) in;",
+                PIXEL_WORKGROUP_LAYOUT,
                 "uniform sampler2D uPreviousDepth;",
                 "uniform sampler2D uReliableDepth;",
                 "uniform float uDepthAlpha;",
@@ -1060,7 +1073,7 @@ final class ClientSbsGpuDepthShaders {
                 "uniform float uSpatialThresholdScale;",
                 "layout(r32f, binding = 0) uniform writeonly highp image2D uCurrentDepth;",
                 "layout(r32f, binding = 2) uniform writeonly highp image2D uCurrentRawDepth;",
-                "shared uint localChangeCount[256];",
+                "shared uint localChangeCount[" + WORKGROUP_LANES + "];",
                 "bool mappedDepth(ivec2 point, out float mappedValue) {",
                 "    ivec2 p = clamp(point, ivec2(0), uOutputSize - ivec2(1));",
                 "    float rawValue;",
@@ -1139,7 +1152,7 @@ final class ClientSbsGpuDepthShaders {
                 "    }",
                 // Every lane must reach these barriers, including a partial edge workgroup.
                 "    barrier();",
-                "    for (uint stride = 128u; stride != 0u; stride >>= 1u) {",
+                REDUCTION_LOOP,
                 "        if (lane < stride)",
                 "            localChangeCount[lane] += localChangeCount[lane + stride];",
                 "        barrier();",

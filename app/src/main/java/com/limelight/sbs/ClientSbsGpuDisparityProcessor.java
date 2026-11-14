@@ -26,7 +26,7 @@ import com.limelight.LimeLog;
  */
 public final class ClientSbsGpuDisparityProcessor implements AutoCloseable {
     private static final int IMAGE_BINDING = 0;
-    private static final int LOCAL_SIZE = 32;
+    private static final int LOCAL_SIZE = ClientSbsGpuDisparityShaders.LOCAL_SIZE;
 
     private final int width;
     private final int height;

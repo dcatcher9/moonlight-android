@@ -84,11 +84,33 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     private static final int RAW_DEPTH_IMAGE_BINDING = 2;
     private static final int RELIABLE_DEPTH_IMAGE_BINDING = 3;
 
-    private static final int RAW_STATS_HEADER_BYTES = 4 * (8 + 2 * 256);
+    private static final int RAW_STATS_HEADER_BYTES =
+            4 * (8 + 2 * ClientSbsGpuDepthShaders.HISTOGRAM_BINS);
     private static final int RAW_GROUP_MOMENT_BYTES = 4 * Float.BYTES;
     // The original seven vectors plus cut auxiliary fields occupy 128 bytes; the V2 camera starts
     // at 128. Causal cut telemetry begins at144 and the adaptive camera/clock tail at224,
     // preserving every existing detector and health offset.
+    // std430 byte offsets of the leading ProcessorState fields read by the health snapshot.
+    // Names follow the GLSL field and component in ClientSbsGpuDepthShaders.STATE.
+    static final int RANGE_STATE_FRAME_LOW_BYTE_OFFSET = 0;
+    static final int RANGE_STATE_FRAME_HIGH_BYTE_OFFSET = 4;
+    static final int RANGE_STATE_EMA_LOW_BYTE_OFFSET = 8;
+    static final int RANGE_STATE_EMA_HIGH_BYTE_OFFSET = 12;
+    static final int PROFILE_C_CHANGE_FRACTION_BYTE_OFFSET = 48;
+    static final int PROFILE_C_CUT_EVIDENCE_BYTE_OFFSET = 60;
+    static final int STATE_FLAGS_PROFILE_INITIALIZED_BYTE_OFFSET = 68;
+    static final int STATE_FLAGS_FRAME_STATE_BYTE_OFFSET = 72;
+    static final int STATE_FLAGS_ACCEPTED_CUT_BYTE_OFFSET = 76;
+    static final int STATE_COUNTERS_CUT_STATE_BYTE_OFFSET = 84;
+    static final int STATE_COUNTERS_FRAME_NUMBER_BYTE_OFFSET = 92;
+    static final int HEALTH_COUNTERS_HARD_CUTS_BYTE_OFFSET = 96;
+    static final int HEALTH_COUNTERS_EMPTY_BYTE_OFFSET = 104;
+    static final int HEALTH_COUNTERS_COLLAPSED_BYTE_OFFSET = 108;
+    static final int CUT_STATE_COUNTERS_SOURCE_FRAME_AGE_BYTE_OFFSET = 120;
+    static final int V2_CAMERA_ACTIVE_ZERO_BYTE_OFFSET = 128;
+    static final int V2_CAMERA_CURRENT_MEAN_BYTE_OFFSET = 132;
+    static final int V2_CAMERA_VALID_COUNT_BYTE_OFFSET = 136;
+    static final int V2_CAMERA_INITIALIZED_BYTE_OFFSET = 140;
     static final int CUT_REASON_COUNTERS_BYTE_OFFSET = 144;
     static final int CUT_APPEARANCE_STATS_BYTE_OFFSET = 160;
     static final int CUT_APPEARANCE_META_BYTE_OFFSET = 176;
@@ -989,7 +1011,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
     }
 
     private static int groups(int length) {
-        return (length + 15) / 16;
+        return (length + ClientSbsGpuDepthShaders.WORKGROUP_EDGE - 1)
+                / ClientSbsGpuDepthShaders.WORKGROUP_EDGE;
     }
 
     static int clampSourceFrameDelta(long sourceFrameDelta) {
@@ -1154,7 +1177,8 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private long frameSequence;
         private int expectedRawSamples;
         private int validRawSamples;
-        // Reference-frame-scaled private profile age, not the source-step cut refractory.
+        // Read from byte offset 120, cutStateCounters.x, which the GLSL state block documents as
+        // the source-frame age. It is not stateCounters.x (byte offset 80), the profile age.
         private int sceneAge;
         private int frameNumber;
         private boolean hardCut;
@@ -1263,20 +1287,22 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             expectedRawSamples = expectedSamples;
             // v2Camera.z always carries the actual current field's valid-sample count, including
             // invalid fields whose stateCounters.z authority is cleared.
-            validRawSamples = Math.max(0, Math.round(state.getFloat(136)));
-            sceneAge = state.getInt(120);
-            geometryCutArmed = ClientSbsShotCutPolicy.isGeometryArmed(state.getInt(84));
-            frameNumber = state.getInt(92);
-            hardCut = state.getInt(76) != 0;
-            frameRangeLow = state.getFloat(0);
-            frameRangeHigh = state.getFloat(4);
+            validRawSamples = Math.max(0, Math.round(
+                    state.getFloat(V2_CAMERA_VALID_COUNT_BYTE_OFFSET)));
+            sceneAge = state.getInt(CUT_STATE_COUNTERS_SOURCE_FRAME_AGE_BYTE_OFFSET);
+            geometryCutArmed = ClientSbsShotCutPolicy.isGeometryArmed(
+                    state.getInt(STATE_COUNTERS_CUT_STATE_BYTE_OFFSET));
+            frameNumber = state.getInt(STATE_COUNTERS_FRAME_NUMBER_BYTE_OFFSET);
+            hardCut = state.getInt(STATE_FLAGS_ACCEPTED_CUT_BYTE_OFFSET) != 0;
+            frameRangeLow = state.getFloat(RANGE_STATE_FRAME_LOW_BYTE_OFFSET);
+            frameRangeHigh = state.getFloat(RANGE_STATE_FRAME_HIGH_BYTE_OFFSET);
             frameRangeWidth = frameRangeHigh - frameRangeLow;
-            effectiveRangeLow = state.getFloat(8);
-            effectiveRangeHigh = state.getFloat(12);
+            effectiveRangeLow = state.getFloat(RANGE_STATE_EMA_LOW_BYTE_OFFSET);
+            effectiveRangeHigh = state.getFloat(RANGE_STATE_EMA_HIGH_BYTE_OFFSET);
             effectiveRangeWidth = effectiveRangeHigh - effectiveRangeLow;
-            shotRawMean = state.getFloat(128);
-            currentRawMean = state.getFloat(132);
-            int frameState = state.getInt(72);
+            shotRawMean = state.getFloat(V2_CAMERA_ACTIVE_ZERO_BYTE_OFFSET);
+            currentRawMean = state.getFloat(V2_CAMERA_CURRENT_MEAN_BYTE_OFFSET);
+            int frameState = state.getInt(STATE_FLAGS_FRAME_STATE_BYTE_OFFSET);
             completeRawField = (frameState
                     & ClientSbsShotCutPolicy.FRAME_STATE_CURRENT_DEPTH_VALID) != 0;
             rawInverseAmplitude = positiveOrUnavailable(
@@ -1307,12 +1333,15 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             // Match publishProfile() exactly: both the persistent depth state and the
             // adaptive raw camera must exist. Current-field validity is reported separately
             // because a valid frame may deliberately hold history while remaining renderable.
-            stereoProfileInitialized = state.getInt(68) != 0 && state.getFloat(140) > 0.5f;
+            stereoProfileInitialized =
+                    state.getInt(STATE_FLAGS_PROFILE_INITIALIZED_BYTE_OFFSET) != 0
+                            && state.getFloat(V2_CAMERA_INITIALIZED_BYTE_OFFSET) > 0.5f;
             percentileRangeCollapsed = validRawSamples == 0
                     || isCollapsedRange(frameRangeLow, frameRangeHigh);
-            changeFraction = state.getFloat(48);
-            hardCutEvidence = state.getFloat(60);
-            hardCutCount = unsignedIntToLong(state.getInt(96));
+            changeFraction = state.getFloat(PROFILE_C_CHANGE_FRACTION_BYTE_OFFSET);
+            hardCutEvidence = state.getFloat(PROFILE_C_CUT_EVIDENCE_BYTE_OFFSET);
+            hardCutCount = unsignedIntToLong(
+                    state.getInt(HEALTH_COUNTERS_HARD_CUTS_BYTE_OFFSET));
             // Offset 100 remains the source-compatible proposal counter. The appended copy owns
             // the explicit causal ABI and must carry the same value.
             appearanceProposalCount = unsignedIntToLong(
@@ -1323,8 +1352,10 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
                     state.getInt(CUT_REASON_COUNTERS_BYTE_OFFSET + 2 * Integer.BYTES));
             acceptedStructurelessEntryCutCount = unsignedIntToLong(
                     state.getInt(CUT_REASON_COUNTERS_BYTE_OFFSET + 3 * Integer.BYTES));
-            emptyRawFrameCount = unsignedIntToLong(state.getInt(104));
-            collapsedRawFrameCount = unsignedIntToLong(state.getInt(108));
+            emptyRawFrameCount = unsignedIntToLong(
+                    state.getInt(HEALTH_COUNTERS_EMPTY_BYTE_OFFSET));
+            collapsedRawFrameCount = unsignedIntToLong(
+                    state.getInt(HEALTH_COUNTERS_COLLAPSED_BYTE_OFFSET));
             appearanceBlockCount = Math.max(0,
                     state.getInt(CUT_APPEARANCE_STATS_BYTE_OFFSET));
             long rawModerateCount = unsignedIntToLong(

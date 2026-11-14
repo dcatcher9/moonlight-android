@@ -9,6 +9,15 @@ final class ClientSbsGpuSceneCutShaders {
         return String.join("\n", source) + "\n";
     }
 
+    private static final String BLOCK_WORKGROUP_LAYOUT = "layout(local_size_x = "
+            + ClientSbsGpuSceneCutDetector.BLOCK_SIZE + ", local_size_y = "
+            + ClientSbsGpuSceneCutDetector.BLOCK_SIZE + ") in;";
+
+    /** Formats one 32-bit word exactly as the lower-case GLSL literals it replaces. */
+    private static String hexUintLiteral(int word) {
+        return String.format(java.util.Locale.US, "0x%08xu", word);
+    }
+
     private static final String HEADER = lines(
             "#version 310 es",
             "precision highp float;",
@@ -117,7 +126,7 @@ final class ClientSbsGpuSceneCutShaders {
             throw new IllegalArgumentException("Model input dimensions must be positive");
         }
         return HEADER + STATS + lines(
-            "layout(local_size_x = 16, local_size_y = 16) in;",
+            BLOCK_WORKGROUP_LAYOUT,
             "layout(rgba32ui, binding = 1) uniform writeonly highp uimage2D uCurrentLuma;",
             "uniform highp sampler2D uCurrentColor;",
             "uniform int uNearIdenticalCandidate;",
@@ -267,7 +276,7 @@ final class ClientSbsGpuSceneCutShaders {
     }
 
     static final String COMPARE = HEADER + STATS + lines(
-            "layout(local_size_x = 16, local_size_y = 16) in;",
+            BLOCK_WORKGROUP_LAYOUT,
             "layout(rgba32ui, binding = 0) uniform readonly highp uimage2D uPreviousLuma;",
             "layout(rgba32ui, binding = 1) uniform readonly highp uimage2D uCurrentLuma;",
             "uniform ivec2 uBlockGrid;",
@@ -398,17 +407,23 @@ final class ClientSbsGpuSceneCutShaders {
                 "uniform uvec2 uCurrentCapturedAtNs;",
                 "const uint TENSOR_WIDTH = " + tensorWidth + "u;",
                 "const uint TENSOR_HEIGHT = " + tensorHeight + "u;",
-                "const uint TILE_SIZE = 16u;",
+                "const uint TILE_SIZE = " + ClientSbsNearIdenticalPolicy.TILE_SIZE + "u;",
                 "const uint GRID_WIDTH = (TENSOR_WIDTH + TILE_SIZE - 1u) / TILE_SIZE;",
                 "const uint GRID_HEIGHT = (TENSOR_HEIGHT + TILE_SIZE - 1u) / TILE_SIZE;",
                 "const uint GRID_TILE_COUNT = GRID_WIDTH * GRID_HEIGHT;",
                 "const uint EXPECTED_TEXELS = TENSOR_WIDTH * TENSOR_HEIGHT;",
-                "const uint DECISION_REUSE = 0u;",
-                "const uint DECISION_INFER = 1u;",
-                "const uint DECISION_COOKIE = 0xd1ec15a5u;",
-                "const uint TOKEN_LOW_COOKIE = 0xa3756c91u;",
-                "const uint TOKEN_HIGH_COOKIE = 0x5c8a936eu;",
-                "const uint RECORD_MAGIC = 0x504f5250u;",
+                "const uint DECISION_REUSE = "
+                        + ClientSbsNearIdenticalPolicy.DECISION_REUSE_TAG + "u;",
+                "const uint DECISION_INFER = "
+                        + ClientSbsNearIdenticalPolicy.DECISION_INFER_TAG + "u;",
+                "const uint DECISION_COOKIE = "
+                        + hexUintLiteral(ClientSbsNearIdenticalPolicy.DECISION_COOKIE) + ";",
+                "const uint TOKEN_LOW_COOKIE = "
+                        + hexUintLiteral(ClientSbsNearIdenticalPolicy.TOKEN_LOW_COOKIE) + ";",
+                "const uint TOKEN_HIGH_COOKIE = "
+                        + hexUintLiteral(ClientSbsNearIdenticalPolicy.TOKEN_HIGH_COOKIE) + ";",
+                "const uint RECORD_MAGIC = "
+                        + hexUintLiteral(ClientSbsNearIdenticalPolicy.PROPOSAL_MAGIC) + ";",
                 "const uint REASON_REUSE = "
                         + ClientSbsNearIdenticalPolicy.REASON_REUSE + "u;",
                 "const uint REASON_NOT_CANDIDATE = "
@@ -644,7 +659,7 @@ final class ClientSbsGpuSceneCutShaders {
             throw new IllegalArgumentException("Model input dimensions must be positive");
         }
         return HEADER + STATS + FRACTION_AT_LEAST + lines(
-                "layout(local_size_x = 16, local_size_y = 16) in;",
+                BLOCK_WORKGROUP_LAYOUT,
                 "layout(rgba32ui, binding = 0) uniform readonly highp uimage2D uPreviousLuma;",
                 "layout(rgba32ui, binding = 1) uniform writeonly highp uimage2D uCurrentLuma;",
                 "layout(std430, binding = 1) readonly buffer ProcessorState {",

@@ -55,10 +55,13 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     public static final int DIAGNOSTIC_EXPOSURE_LIKE = 1 << 7;
     /** The retained model-input reference has enough ordinal structure for comparison. */
     public static final int DIAGNOSTIC_PREVIOUS_STRUCTURE_SUPPORTED = 1 << 8;
-    public static final int NEAR_IDENTICAL_DECISION_RECORD_BYTES = 8 * Integer.BYTES;
+    /** Source-compatible name for {@link ClientSbsNearIdenticalPolicy#DECISION_RECORD_BYTES}. */
+    public static final int NEAR_IDENTICAL_DECISION_RECORD_BYTES =
+            ClientSbsNearIdenticalPolicy.DECISION_RECORD_BYTES;
     public static final int NEAR_IDENTICAL_DECISION_SLOT_COUNT = 2;
 
-    private static final int BLOCK_SIZE = 16;
+    /** Pixels per color-cut block edge and invocations per compute workgroup edge. */
+    static final int BLOCK_SIZE = 16;
     private static final int STATS_SSBO_BINDING = 0;
     private static final int OUTPUT_SSBO_BINDING = 1;
     private static final int INPUT_TENSOR_SSBO_BINDING = 2;
