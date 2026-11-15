@@ -29,7 +29,7 @@ public final class XrDockRevealInteractionTest {
         Button pill = focusablePill(themedActivity());
         AtomicInteger reveals = new AtomicInteger();
         AtomicBoolean attention = new AtomicBoolean();
-        XrStreamPresenter.configureDockRevealInteractions(
+        XrDockController.configureDockRevealInteractions(
                 pill, reveals::incrementAndGet, attention::set);
 
         assertTrue(pill.requestFocus());
@@ -46,7 +46,7 @@ public final class XrDockRevealInteractionTest {
         Button pill = new Button(themedActivity());
         AtomicInteger reveals = new AtomicInteger();
         AtomicBoolean attention = new AtomicBoolean();
-        XrStreamPresenter.configureDockRevealInteractions(
+        XrDockController.configureDockRevealInteractions(
                 pill, reveals::incrementAndGet, attention::set);
 
         hover(pill, MotionEvent.ACTION_HOVER_ENTER);
@@ -65,7 +65,7 @@ public final class XrDockRevealInteractionTest {
         Button pill = focusablePill(themedActivity());
         AtomicInteger reveals = new AtomicInteger();
         AtomicBoolean attention = new AtomicBoolean();
-        XrStreamPresenter.configureDockRevealInteractions(
+        XrDockController.configureDockRevealInteractions(
                 pill, reveals::incrementAndGet, attention::set);
 
         hover(pill, MotionEvent.ACTION_HOVER_ENTER);
@@ -90,7 +90,7 @@ public final class XrDockRevealInteractionTest {
         AtomicBoolean attention = new AtomicBoolean();
         DockRevealViewAttentionState state =
                 new DockRevealViewAttentionState();
-        XrStreamPresenter.configureDockRevealInteractions(
+        XrDockController.configureDockRevealInteractions(
                 pill, () -> { }, attention::set, state);
 
         hover(pill, MotionEvent.ACTION_HOVER_ENTER);
@@ -111,7 +111,7 @@ public final class XrDockRevealInteractionTest {
         AtomicInteger pressReveals = new AtomicInteger();
         Button pressedPill = new Button(activity);
         pressedPill.setFocusable(false);
-        XrStreamPresenter.configureDockRevealInteractions(
+        XrDockController.configureDockRevealInteractions(
                 pressedPill, pressReveals::incrementAndGet, active -> { });
         MotionEvent down = MotionEvent.obtain(1L, 1L, MotionEvent.ACTION_DOWN,
                 10f, 10f, 0);
@@ -121,7 +121,7 @@ public final class XrDockRevealInteractionTest {
 
         AtomicInteger clickReveals = new AtomicInteger();
         Button clickedPill = new Button(activity);
-        XrStreamPresenter.configureDockRevealInteractions(
+        XrDockController.configureDockRevealInteractions(
                 clickedPill, clickReveals::incrementAndGet, active -> { });
         assertTrue(clickedPill.performClick());
         assertEquals(1, clickReveals.get());

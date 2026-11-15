@@ -141,9 +141,9 @@ public class XrSolidPanelTest {
         pill.setVisibility(View.GONE);
         LinearLayout glance = new LinearLayout(controller.get());
         glance.setAlpha(0.42f);
-        ReflectionHelpers.setField(presenter, "barPanel", panel);
-        ReflectionHelpers.setField(presenter, "controlBarRow", row);
-        ReflectionHelpers.setField(presenter, "dockRevealPill", pill);
+        ReflectionHelpers.setField(dock(), "barPanel", panel);
+        ReflectionHelpers.setField(dock(), "controlBarRow", row);
+        ReflectionHelpers.setField(dock(), "dockRevealPill", pill);
         ReflectionHelpers.setField(
                 ReflectionHelpers.getField(presenter, "glanceStrip"), "glanceRoot", glance);
         ReflectionHelpers.setField(presenter, "panelHeightMeters", 1.5f);
@@ -271,23 +271,23 @@ public class XrSolidPanelTest {
     @Test
     public void eyeGazeDoublesThePillWithoutOpeningTheDockOrDependingOnViewHover() {
         PanelEntity panel = collapsedDock();
-        ReflectionHelpers.callInstanceMethod(presenter, "onDockGazeChanged",
+        ReflectionHelpers.callInstanceMethod(dock(), "onDockGazeChanged",
                 ClassParameter.from(boolean.class, true));
         idleFor(350);
         assertEquals(2f, lastScale(panel), 0f);
-        assertTrue(ReflectionHelpers.getField(presenter, "dockCollapsed"));
+        assertTrue(ReflectionHelpers.getField(dock(), "dockCollapsed"));
 
         // An unrelated View hover exit cannot undo an active eye-gaze hit.
-        ReflectionHelpers.callInstanceMethod(presenter, "onDockRevealViewAttentionChanged",
+        ReflectionHelpers.callInstanceMethod(dock(), "onDockRevealViewAttentionChanged",
                 ClassParameter.from(boolean.class, false));
         idleFor(350);
         assertEquals(2f, lastScale(panel), 0f);
 
-        ReflectionHelpers.callInstanceMethod(presenter, "onDockGazeChanged",
+        ReflectionHelpers.callInstanceMethod(dock(), "onDockGazeChanged",
                 ClassParameter.from(boolean.class, false));
         idleFor(750);
         assertEquals(1f, lastScale(panel), 0f);
-        assertTrue(ReflectionHelpers.getField(presenter, "dockCollapsed"));
+        assertTrue(ReflectionHelpers.getField(dock(), "dockCollapsed"));
     }
 
     @Test
@@ -306,7 +306,7 @@ public class XrSolidPanelTest {
         assertFalse(hasPendingPillShrink());
         idleFor(750);
         assertEquals(2f, lastScale(panel), 0f);
-        assertTrue(ReflectionHelpers.getField(presenter, "dockCollapsed"));
+        assertTrue(ReflectionHelpers.getField(dock(), "dockCollapsed"));
     }
 
     @Test
@@ -373,7 +373,7 @@ public class XrSolidPanelTest {
     public void gazeSamplingFollowsVisibilityAndClosesBeforePanelDisposal() {
         PanelEntity panel = collapsedDock();
         XrDockGazeTracker tracker = mock(XrDockGazeTracker.class);
-        ReflectionHelpers.setField(presenter, "dockGazeTracker", tracker);
+        ReflectionHelpers.setField(dock(), "dockGazeTracker", tracker);
         setCollapsed(true);
         verify(tracker).setActive(true);
         clearInvocations(tracker);
@@ -397,6 +397,10 @@ public class XrSolidPanelTest {
         destroyed.verify(panel).dispose();
     }
 
+    private Object dock() {
+        return ReflectionHelpers.getField(presenter, "dockController");
+    }
+
     private PanelEntity collapsedDock() {
         // Keep Robolectric from fast-forwarding every vsync so intermediate animation frames
         // and direction changes can be checked against an ordinary display cadence.
@@ -407,25 +411,25 @@ public class XrSolidPanelTest {
         when(panel.getSizeInPixels()).thenReturn(new IntSize2d(2000, 200));
         Button pill = new Button(controller.get());
         pill.setText("Normal · Live");
-        ReflectionHelpers.setField(presenter, "barPanel", panel);
-        ReflectionHelpers.setField(presenter, "dockRevealPill", pill);
+        ReflectionHelpers.setField(dock(), "barPanel", panel);
+        ReflectionHelpers.setField(dock(), "dockRevealPill", pill);
         setCollapsed(true);
         return panel;
     }
 
     private void setPillAttention(boolean active) {
-        ReflectionHelpers.callInstanceMethod(presenter, "animateDockRevealAttention",
+        ReflectionHelpers.callInstanceMethod(dock(), "animateDockRevealAttention",
                 ClassParameter.from(boolean.class, active));
     }
 
     private void setGazeAttention(boolean active) {
-        ReflectionHelpers.callInstanceMethod(presenter, "onDockGazeChanged",
+        ReflectionHelpers.callInstanceMethod(dock(), "onDockGazeChanged",
                 ClassParameter.from(boolean.class, active));
     }
 
     private boolean hasPendingPillShrink() {
-        Handler handler = ReflectionHelpers.getField(presenter, "dockVisibilityHandler");
-        Runnable shrink = ReflectionHelpers.getField(presenter, "shrinkDockRevealRunnable");
+        Handler handler = ReflectionHelpers.getField(dock(), "dockVisibilityHandler");
+        Runnable shrink = ReflectionHelpers.getField(dock(), "shrinkDockRevealRunnable");
         return handler.hasCallbacks(shrink);
     }
 
@@ -443,7 +447,7 @@ public class XrSolidPanelTest {
     }
 
     private void setCollapsed(boolean collapsed) {
-        ReflectionHelpers.callInstanceMethod(presenter, "setDockCollapsed",
+        ReflectionHelpers.callInstanceMethod(dock(), "setDockCollapsed",
                 ClassParameter.from(boolean.class, collapsed));
     }
 

@@ -294,58 +294,58 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void dockAutoCollapseAllowsOnlyFullyIdleState() {
-        assertTrue(XrStreamPresenter.shouldAutoCollapseDock(
+        assertTrue(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, false, false, false, false, false, false));
     }
 
     @Test
     public void dockAutoCollapseIsBlockedByEveryUnsafeState() {
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 false, true, XrControlUiState.Surface.NONE,
                 false, false, false, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, false, XrControlUiState.Surface.NONE,
                 false, false, false, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.MODE_OPTIONS,
                 false, false, false, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.SESSION_SETTINGS,
                 false, false, false, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 true, false, false, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, true, false, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, false, true, false, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, false, false, true, false, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, false, false, false, true, false, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, false, false, false, false, true, false));
-        assertFalse(XrStreamPresenter.shouldAutoCollapseDock(
+        assertFalse(XrDockController.shouldAutoCollapseDock(
                 true, true, XrControlUiState.Surface.NONE,
                 false, false, false, false, false, false, true));
     }
 
     @Test
     public void collapsedDockRevealsOnFirstPressOrClickWhileFocusAndHoverStayOnPill() {
-        assertTrue(XrStreamPresenter.shouldRevealCollapsedDock(
-                XrStreamPresenter.DockRevealInteraction.EXPLICIT_CLICK));
-        assertTrue(XrStreamPresenter.shouldRevealCollapsedDock(
-                XrStreamPresenter.DockRevealInteraction.PRESS_DOWN));
-        assertFalse(XrStreamPresenter.shouldRevealCollapsedDock(
-                XrStreamPresenter.DockRevealInteraction.HOVER));
-        assertFalse(XrStreamPresenter.shouldRevealCollapsedDock(
-                XrStreamPresenter.DockRevealInteraction.FOCUS));
+        assertTrue(XrDockController.shouldRevealCollapsedDock(
+                XrDockController.DockRevealInteraction.EXPLICIT_CLICK));
+        assertTrue(XrDockController.shouldRevealCollapsedDock(
+                XrDockController.DockRevealInteraction.PRESS_DOWN));
+        assertFalse(XrDockController.shouldRevealCollapsedDock(
+                XrDockController.DockRevealInteraction.HOVER));
+        assertFalse(XrDockController.shouldRevealCollapsedDock(
+                XrDockController.DockRevealInteraction.FOCUS));
     }
 
     @Test
