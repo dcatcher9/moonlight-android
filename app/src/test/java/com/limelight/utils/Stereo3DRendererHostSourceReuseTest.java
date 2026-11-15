@@ -8,7 +8,7 @@ import com.limelight.ui.ClientSbsRenderSurface;
 import com.limelight.binding.video.DecodedSourceIdentityTracker;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.sbs.ClientSbsFrameSlots;
-import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
+import com.limelight.sbs.ClientSbsGpuNearReuseClassifier;
 
 import org.junit.After;
 import org.junit.Before;
@@ -54,7 +54,7 @@ public class Stereo3DRendererHostSourceReuseTest {
         repeat = ReflectionHelpers.getField(renderer, "hostSourceRepeat");
         repeat.settled = true;
         repeat.ownerConfirmed = true;
-        set("gpuSceneCutDetector", mock(ClientSbsGpuSceneCutDetector.class));
+        set("gpuNearReuseClassifier", mock(ClientSbsGpuNearReuseClassifier.class));
         set("gpuDepthActive", true);
         set("activeClientSbsGeneration", 1);
         AtomicInteger generation = ReflectionHelpers.getField(renderer, "clientSbsGeneration");
@@ -113,10 +113,10 @@ public class Stereo3DRendererHostSourceReuseTest {
 
     @Test
     public void lostOrResetPendingGpuHistoryCannotRetainOutput() {
-        set("gpuSceneCutResetPending", true);
+        set("gpuNearReuseResetPending", true);
         assertFalse(consume());
-        set("gpuSceneCutResetPending", false);
-        set("gpuSceneCutDetector", null);
+        set("gpuNearReuseResetPending", false);
+        set("gpuNearReuseClassifier", null);
         assertFalse(consume());
     }
 

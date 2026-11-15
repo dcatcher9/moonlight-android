@@ -89,7 +89,7 @@ public class Stereo3DRendererStrictFailureContractTest {
         assertTrue(initialization.contains("boolean geometryReady = gpuComputeReady"));
         assertTrue(initialization.contains("&& gpuDisparityProcessor != null;"));
         assertFalse(initialization.contains(
-                "gpuDisparityProcessor != null && gpuSceneCutDetector != null"));
+                "gpuDisparityProcessor != null && gpuNearReuseClassifier != null"));
         assertTrue(initialization.contains(
                 "near-reuse classifier unavailable; every frame "));
         assertTrue(initialization.contains("runs inference"));

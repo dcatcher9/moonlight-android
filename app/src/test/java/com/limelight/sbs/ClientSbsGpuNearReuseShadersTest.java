@@ -6,10 +6,10 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
-public class ClientSbsGpuSceneCutShadersTest {
+public class ClientSbsGpuNearReuseShadersTest {
     @Test
     public void fusedPassPacksAndReducesOnlyNearIdenticalTileEvidence() {
-        String shader = ClientSbsGpuSceneCutShaders.createPackAndClassify(350, 196);
+        String shader = ClientSbsGpuNearReuseShaders.createPackAndClassify(350, 196);
         assertTrue(shader.contains("layout(local_size_x = 16, local_size_y = 16)"));
         assertTrue(shader.contains("binding = 2) buffer InputTensor"));
         assertTrue(shader.contains("float tensorValues[]"));
@@ -28,7 +28,7 @@ public class ClientSbsGpuSceneCutShadersTest {
 
     @Test
     public void fusedPassMeasuresNearIdenticalEvidenceAgainstCommittedTensorOnly() {
-        String shader = ClientSbsGpuSceneCutShaders.createPackAndClassify(350, 196);
+        String shader = ClientSbsGpuNearReuseShaders.createPackAndClassify(350, 196);
         assertTrue(shader.contains("binding = 3) readonly buffer PreviousInputTensor"));
         assertTrue(shader.contains("binding = 0) readonly buffer NearReuseOwner"));
         assertTrue(shader.contains("uniform int uNearIdenticalCandidate"));
@@ -66,7 +66,7 @@ public class ClientSbsGpuSceneCutShadersTest {
 
     @Test
     public void nearIdenticalResolveValidatesExactHostBoundsAndPublishesAuthenticatedRecord() {
-        String shader = ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(350, 196);
+        String shader = ClientSbsGpuNearReuseShaders.createNearIdenticalResolve(350, 196);
         assertTrue(shader.contains("layout(local_size_x = 64)"));
         assertTrue(shader.contains(
                 "layout(rgba32ui, binding = 0) uniform readonly highp uimage2D uTileEvidence"));
@@ -123,12 +123,12 @@ public class ClientSbsGpuSceneCutShadersTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void nearIdenticalResolveRejectsInvalidTensorShape() {
-        ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(350, 0);
+        ClientSbsGpuNearReuseShaders.createNearIdenticalResolve(350, 0);
     }
 
     @Test
     public void fusedPassPreservesTopFirstTensorAndRectangularPartialTileMath() {
-        String shader = ClientSbsGpuSceneCutShaders.createPackAndClassify(392, 168);
+        String shader = ClientSbsGpuNearReuseShaders.createPackAndClassify(392, 168);
         assertTrue(shader.contains("const uint TENSOR_WIDTH = 392u"));
         assertTrue(shader.contains("const uint TENSOR_HEIGHT = 168u"));
         assertTrue(shader.contains("bool inBounds = all(lessThan(point, INPUT_SIZE))"));
@@ -143,12 +143,12 @@ public class ClientSbsGpuSceneCutShadersTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void fusedPassRejectsInvalidTensorShape() {
-        ClientSbsGpuSceneCutShaders.createPackAndClassify(0, 196);
+        ClientSbsGpuNearReuseShaders.createPackAndClassify(0, 196);
     }
 
     @Test
     public void v2ValidRealInferenceCommitsItsInputAndBecomesTheReuseOwner() {
-        String commit = ClientSbsGpuSceneCutShaders.createCommit(896, 384);
+        String commit = ClientSbsGpuNearReuseShaders.createCommit(896, 384);
         assertTrue(commit.contains("binding = 0) buffer NearReuseOwner"));
         assertFalse(commit.contains("binding = 0) readonly buffer NearReuseOwner"));
         assertTrue(commit.contains("binding = 1) readonly buffer ProcessorState"));
@@ -186,7 +186,7 @@ public class ClientSbsGpuSceneCutShadersTest {
 
     @Test
     public void invalidOrCollapsedRealInferenceCommitsNothingAndInvalidatesTheOwner() {
-        String commit = ClientSbsGpuSceneCutShaders.createCommit(672, 384);
+        String commit = ClientSbsGpuNearReuseShaders.createCommit(672, 384);
         int invalidBranch = commit.indexOf("if (!v2ValidField) {");
         int invalidReturn = commit.indexOf("return;", invalidBranch);
         assertTrue(invalidBranch >= 0 && invalidReturn > invalidBranch);
@@ -207,9 +207,9 @@ public class ClientSbsGpuSceneCutShadersTest {
     @Test
     public void noShaderRetainsSceneCutEvidenceOrReliableHistoryState() {
         String[] shaders = {
-                ClientSbsGpuSceneCutShaders.createPackAndClassify(672, 384),
-                ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(672, 384),
-                ClientSbsGpuSceneCutShaders.createCommit(672, 384)
+                ClientSbsGpuNearReuseShaders.createPackAndClassify(672, 384),
+                ClientSbsGpuNearReuseShaders.createNearIdenticalResolve(672, 384),
+                ClientSbsGpuNearReuseShaders.createCommit(672, 384)
         };
         for (String shader : shaders) {
             for (String removed : new String[] {
@@ -224,7 +224,7 @@ public class ClientSbsGpuSceneCutShadersTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void commitRejectsInvalidTensorShape() {
-        ClientSbsGpuSceneCutShaders.createCommit(672, -1);
+        ClientSbsGpuNearReuseShaders.createCommit(672, -1);
     }
 
     private static int occurrences(String text, String needle) {

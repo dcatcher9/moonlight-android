@@ -25,7 +25,7 @@ import com.limelight.sbs.ClientSbsFrameSlots;
 import com.limelight.sbs.ClientSbsGlCompute;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuDisparityProcessor;
-import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
+import com.limelight.sbs.ClientSbsGpuNearReuseClassifier;
 import com.limelight.sbs.ClientSbsGpuTimer;
 import com.limelight.sbs.ClientSbsV2CoordinateContract;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
@@ -285,12 +285,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** Optional host-style slope conditioner over the calibrated ZipDepth disparity candidate. */
     private ClientSbsGpuDisparityProcessor gpuDisparityProcessor;
     /** GPU-only near-identical reuse decision paired with the single in-flight model tensor. */
-    private ClientSbsGpuSceneCutDetector gpuSceneCutDetector;
+    private ClientSbsGpuNearReuseClassifier gpuNearReuseClassifier;
     /**
      * Generation reset deferred until native has finished mapping the classifier's shared decision
      * SSBO. Renderer-thread access alone is insufficient now that the inference context reads it.
      */
-    private boolean gpuSceneCutResetPending;
+    private boolean gpuNearReuseResetPending;
     /** Stats counters, sampling epoch, GPU-timer stride and depth-health polling state. */
     private final ClientSbsPerfStats perf = new ClientSbsPerfStats();
     private final AtomicReference<GpuInferenceResult> latestGpuInferenceResult =
@@ -929,11 +929,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             gpuDisparityProcessor.abandonAfterContextLoss();
             gpuDisparityProcessor = null;
         }
-        if (gpuSceneCutDetector != null) {
-            gpuSceneCutDetector.abandonAfterContextLoss();
-            gpuSceneCutDetector = null;
+        if (gpuNearReuseClassifier != null) {
+            gpuNearReuseClassifier.abandonAfterContextLoss();
+            gpuNearReuseClassifier = null;
         }
-        gpuSceneCutResetPending = false;
+        gpuNearReuseResetPending = false;
         ClientSbsGpuTimer abandonedTimer = perf.gpuTimer;
         perf.gpuTimer = null;
         if (abandonedTimer != null) {
@@ -1806,7 +1806,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /** Starts one exact capture plus GPU inference/reuse arbitration on the GL thread, if ready. */
     private boolean captureLatestFrameIfReady() {
-        resetGpuSceneCutDetectorWhenIdle();
+        resetNearReuseClassifierWhenIdle();
         ClientSbsGpuInferenceEngine engine = gpuInferenceEngine;
         int currentGeneration = clientSbsGeneration.get();
         boolean hasUncapturedFrame = hasFrameForActiveGeneration
@@ -1854,7 +1854,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
         if (tracker == null || !clientSbs || !matchedOutputPresented || !hasPresentableDepth()
                 || !hostSourceRepeat.ownerConfirmed
-                || gpuSceneCutDetector == null || gpuSceneCutResetPending
+                || gpuNearReuseClassifier == null || gpuNearReuseResetPending
                 || !surfaceLifecycleReady || !outputSurfaceValidated
                 || activeClientSbsGeneration != clientSbsGeneration.get()
                 || hdrInputTransition.isBlockingFrames() || presentationCompletion.hasPending()
@@ -2251,18 +2251,18 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         } else {
             gpuDisparityProcessor = null;
         }
-        gpuSceneCutResetPending = false;
+        gpuNearReuseResetPending = false;
         if (modelInputTargetReady) {
             try {
-                gpuSceneCutDetector = new ClientSbsGpuSceneCutDetector(
+                gpuNearReuseClassifier = new ClientSbsGpuNearReuseClassifier(
                         modelInputWidth, modelInputHeight);
             } catch (Throwable error) {
-                gpuSceneCutDetector = null;
+                gpuNearReuseClassifier = null;
                 LimeLog.warning("Client SBS GPU near-reuse classifier unavailable; every frame "
                         + "runs inference: " + error.getMessage());
             }
         } else {
-            gpuSceneCutDetector = null;
+            gpuNearReuseClassifier = null;
         }
         // The classifier enables near-identical reuse and native lazy packing, but it is not a
         // dependency of depth/reprojection: without it every capture packs eagerly and infers.
@@ -2919,8 +2919,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         final ClientSbsFrameSlots.Lease colorFrameLease;
         final int generation;
         final long inferenceClaimToken;
-        final boolean sceneCutAvailable;
-        final ClientSbsGpuSceneCutDetector sceneCutDetector;
+        final boolean classifierAvailable;
+        final ClientSbsGpuNearReuseClassifier nearReuseClassifier;
         final boolean nearIdenticalCandidate;
         final int modelInputTextureId;
         final int nearIdenticalDecisionBufferId;
@@ -2930,8 +2930,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         RenderResult(long inputReadyFence, long previousOutputConsumedFence, int bufferSlot,
                      ClientSbsFrameSlots.Lease colorFrameLease,
-                     long inferenceClaimToken, boolean sceneCutAvailable,
-                     ClientSbsGpuSceneCutDetector sceneCutDetector,
+                     long inferenceClaimToken, boolean classifierAvailable,
+                     ClientSbsGpuNearReuseClassifier nearReuseClassifier,
                      boolean nearIdenticalCandidate, int nearIdenticalDecisionBufferId,
                      int nearIdenticalDecisionByteOffset, long performanceEpoch,
                      int modelInputTextureId) {
@@ -2941,8 +2941,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.colorFrameLease = colorFrameLease;
             this.generation = colorFrameLease.getGeneration();
             this.inferenceClaimToken = inferenceClaimToken;
-            this.sceneCutAvailable = sceneCutAvailable;
-            this.sceneCutDetector = sceneCutDetector;
+            this.classifierAvailable = classifierAvailable;
+            this.nearReuseClassifier = nearReuseClassifier;
             this.nearIdenticalCandidate = nearIdenticalCandidate;
             this.modelInputTextureId = modelInputTextureId;
             this.nearIdenticalDecisionBufferId = nearIdenticalDecisionBufferId;
@@ -2958,8 +2958,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.colorFrameLease = null;
             this.generation = -1;
             this.inferenceClaimToken = 0L;
-            this.sceneCutAvailable = false;
-            this.sceneCutDetector = null;
+            this.classifierAvailable = false;
+            this.nearReuseClassifier = null;
             this.nearIdenticalCandidate = false;
             this.modelInputTextureId = 0;
             this.nearIdenticalDecisionBufferId = 0;
@@ -2979,24 +2979,24 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         final ClientSbsFrameSlots.Lease colorFrameLease;
         final int generation;
         final long inferenceClaimToken;
-        final boolean sceneCutAvailable;
-        final ClientSbsGpuSceneCutDetector sceneCutDetector;
+        final boolean classifierAvailable;
+        final ClientSbsGpuNearReuseClassifier nearReuseClassifier;
         final boolean reusedDepth;
         final long performanceEpoch;
 
         GpuInferenceResult(long outputReadyFence, int bufferSlot,
                            ClientSbsFrameSlots.Lease colorFrameLease,
                            int generation, long inferenceClaimToken,
-                           boolean sceneCutAvailable,
-                           ClientSbsGpuSceneCutDetector sceneCutDetector,
+                           boolean classifierAvailable,
+                           ClientSbsGpuNearReuseClassifier nearReuseClassifier,
                            boolean reusedDepth, long performanceEpoch) {
             this.outputReadyFence = outputReadyFence;
             this.bufferSlot = bufferSlot;
             this.colorFrameLease = colorFrameLease;
             this.generation = generation;
             this.inferenceClaimToken = inferenceClaimToken;
-            this.sceneCutAvailable = sceneCutAvailable;
-            this.sceneCutDetector = sceneCutDetector;
+            this.classifierAvailable = classifierAvailable;
+            this.nearReuseClassifier = nearReuseClassifier;
             this.reusedDepth = reusedDepth;
             this.performanceEpoch = performanceEpoch;
         }
@@ -3050,9 +3050,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
 
         hostSourceRepeat.recordCapture(bufferSlot, latchedSourceIdentity, videoTextureTransform);
-        ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
-        boolean nearIdenticalCandidate = sceneCutDetector != null
-                && sceneCutDetector.hasCommittedInferenceHistory()
+        ClientSbsGpuNearReuseClassifier nearReuseClassifier = gpuNearReuseClassifier;
+        boolean nearIdenticalCandidate = nearReuseClassifier != null
+                && nearReuseClassifier.hasCommittedInferenceHistory()
                 && hasPresentableDepth();
         if (nearIdenticalCandidate && !couldHaveReusableModelOwner(
                 lastModelInferenceFrameSequence, lastModelInferenceCapturedAtNs,
@@ -3061,7 +3061,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // cannot be newer than our newest real model observation. GPU still owns acceptance.
             nearIdenticalCandidate = false;
         }
-        boolean lazyInputPacking = engine.supportsLazyInputPacking() && sceneCutDetector != null;
+        boolean lazyInputPacking = engine.supportsLazyInputPacking() && nearReuseClassifier != null;
         int nearIdenticalDecisionBufferId = 0;
         int nearIdenticalDecisionByteOffset = 0;
 
@@ -3070,8 +3070,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // matched-color copy below.
         boolean modelGpuTimerStarted = perf.beginGpuTimer(
                 ClientSbsGpuTimer.Stage.MODEL_INPUT);
-        boolean tensorPackedWithSceneCut = false;
-        boolean sceneCutFramePending = false;
+        boolean tensorPackedByClassifier = false;
+        boolean classifierFramePending = false;
         try {
             try {
                 int inputBufferId = engine.getInputBufferId(bufferSlot);
@@ -3082,30 +3082,30 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT
                         | GLES31.GL_TEXTURE_FETCH_BARRIER_BIT);
 
-                if (sceneCutDetector != null) {
+                if (nearReuseClassifier != null) {
                     try {
-                        sceneCutDetector.processRendererOwnedAndPack(fboTextureId, inputBufferId,
+                        nearReuseClassifier.processRendererOwnedAndPack(fboTextureId, inputBufferId,
                                 nearIdenticalCandidate, inferenceClaimToken, bufferSlot,
                                 colorFrameLease.getFrameSequence(),
                                 colorFrameLease.getCapturedAtNs(), lazyInputPacking);
-                        tensorPackedWithSceneCut = true;
-                        sceneCutFramePending = true;
+                        tensorPackedByClassifier = true;
+                        classifierFramePending = true;
                         if (nearIdenticalCandidate) {
                             nearIdenticalDecisionBufferId =
-                                    sceneCutDetector.getNearIdenticalDecisionBufferId();
+                                    nearReuseClassifier.getNearIdenticalDecisionBufferId();
                             nearIdenticalDecisionByteOffset =
-                                    sceneCutDetector.getNearIdenticalDecisionByteOffset(bufferSlot);
+                                    nearReuseClassifier.getNearIdenticalDecisionByteOffset(bufferSlot);
                         }
                     } catch (Throwable error) {
                         LimeLog.warning("Client SBS GPU near-reuse classifier disabled: "
                                 + error.getMessage());
                         // The classifier is optional; retain the primary pipeline's original
                         // failure. Nothing replaces the installed classifier during this capture.
-                        closeFailedSceneCutDetector(sceneCutDetector);
+                        closeFailedNearReuseClassifier(nearReuseClassifier);
                     }
                 }
 
-                if (!tensorPackedWithSceneCut) {
+                if (!tensorPackedByClassifier) {
                     // Without the optional classifier the tensor is packed eagerly and every
                     // capture infers.
                     GpuPackProgramBindings bindings = gpuPackProgramBindings;
@@ -3153,12 +3153,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
             long previousOutputFence = gpuOutputConsumedFences.getAndSet(bufferSlot, 0L);
             RenderResult task = new RenderResult(inputReadyFence, previousOutputFence, bufferSlot,
-                    colorFrameLease, inferenceClaimToken, tensorPackedWithSceneCut,
-                    tensorPackedWithSceneCut ? sceneCutDetector : null,
-                    tensorPackedWithSceneCut && nearIdenticalCandidate,
-                    tensorPackedWithSceneCut ? nearIdenticalDecisionBufferId : 0,
-                    tensorPackedWithSceneCut ? nearIdenticalDecisionByteOffset : 0,
-                    performanceEpoch, tensorPackedWithSceneCut && lazyInputPacking ? fboTextureId : 0);
+                    colorFrameLease, inferenceClaimToken, tensorPackedByClassifier,
+                    tensorPackedByClassifier ? nearReuseClassifier : null,
+                    tensorPackedByClassifier && nearIdenticalCandidate,
+                    tensorPackedByClassifier ? nearIdenticalDecisionBufferId : 0,
+                    tensorPackedByClassifier ? nearIdenticalDecisionByteOffset : 0,
+                    performanceEpoch, tensorPackedByClassifier && lazyInputPacking ? fboTextureId : 0);
             if (!inferenceInputQueue.offer(task)) {
                 // inputReadyFence was submitted after previousOutputFence on this context, so it
                 // alone covers the slot.
@@ -3179,20 +3179,20 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // The renderer keeps this transaction pending across native arbitration. Only a
             // successfully postprocessed actual inference may replace the comparison reference;
             // a reuse discards it after publishing the current color.
-            sceneCutFramePending = false;
+            classifierFramePending = false;
 
             // The worker now owns both fences for this tensor slot.
             lastCapturedFrameSequence = latchedFrameSequence;
             return true;
         } finally {
-            if (sceneCutFramePending) {
+            if (classifierFramePending) {
                 try {
-                    sceneCutDetector.discardPendingFrame();
+                    nearReuseClassifier.discardPendingFrame();
                 } catch (Throwable error) {
                     LimeLog.warning("Client SBS GPU near-reuse discard failed; disabling "
                             + "near-identical reuse: " + error.getMessage());
                     // Preserve the primary capture failure.
-                    closeFailedSceneCutDetector(sceneCutDetector);
+                    closeFailedNearReuseClassifier(nearReuseClassifier);
                 }
             }
         }
@@ -3508,36 +3508,36 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /** Lets the GPU commit this input only if its exact depth result is valid for V2. */
     private boolean commitActualInferenceHistory(GpuInferenceResult result) {
-        ClientSbsGpuSceneCutDetector detector = result.sceneCutDetector;
-        if (detector == null || detector != gpuSceneCutDetector) {
+        ClientSbsGpuNearReuseClassifier classifier = result.nearReuseClassifier;
+        if (classifier == null || classifier != gpuNearReuseClassifier) {
             return false;
         }
         try {
-            detector.commitAcceptedFrame(
+            classifier.commitAcceptedFrame(
                     gpuDepthProcessor.getFrameStateBufferId());
             return true;
         } catch (Throwable error) {
             LimeLog.warning("Client SBS GPU inference-history commit failed; disabling "
                     + "near-identical reuse: " + error.getMessage());
             // Depth for this frame is already valid; only the optional classifier is lost.
-            closeFailedSceneCutDetector(detector);
+            closeFailedNearReuseClassifier(classifier);
             return false;
         }
     }
 
     /** Reuse freezes the model-input history at the last accepted actual inference. */
     private void discardReusedInferenceHistory(GpuInferenceResult result) {
-        ClientSbsGpuSceneCutDetector detector = result.sceneCutDetector;
-        if (detector == null || detector != gpuSceneCutDetector) {
+        ClientSbsGpuNearReuseClassifier classifier = result.nearReuseClassifier;
+        if (classifier == null || classifier != gpuNearReuseClassifier) {
             return;
         }
         try {
-            detector.discardPendingFrame();
+            classifier.discardPendingFrame();
         } catch (Throwable error) {
             LimeLog.warning("Client SBS GPU reused-frame history discard failed; disabling "
                     + "near-identical reuse: " + error.getMessage());
             // Cached depth remains valid; future frames simply force inference.
-            closeFailedSceneCutDetector(detector);
+            closeFailedNearReuseClassifier(classifier);
         }
     }
 
@@ -3545,14 +3545,14 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      * Closes a failed optional classifier, ignoring any close failure, and uninstalls it when
      * it is still the renderer's current classifier.
      */
-    private void closeFailedSceneCutDetector(ClientSbsGpuSceneCutDetector detector) {
+    private void closeFailedNearReuseClassifier(ClientSbsGpuNearReuseClassifier classifier) {
         try {
-            detector.close();
+            classifier.close();
         } catch (Throwable ignored) {
             // The caller has already reported the failure that retired this classifier.
         }
-        if (gpuSceneCutDetector == detector) {
-            gpuSceneCutDetector = null;
+        if (gpuNearReuseClassifier == classifier) {
+            gpuNearReuseClassifier = null;
         }
     }
 
@@ -3560,7 +3560,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         cancelStaleDepthWatchdog();
         activeClientSbsGeneration = generation;
         dropPendingCapture();
-        gpuSceneCutResetPending = true;
+        gpuNearReuseResetPending = true;
         clearPublishedPresentationState(true);
         colorFrameSlots.reset();
         if (gpuDepthProcessor != null) {
@@ -3570,7 +3570,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 requestGpuShutdown("depth-state reset failed: " + error.getMessage());
             }
         }
-        resetGpuSceneCutDetectorWhenIdle();
+        resetNearReuseClassifierWhenIdle();
         perf.resetDepthTelemetryEra();
         hasFrameForActiveGeneration = false;
         lastCapturedFrameSequence = latchedFrameSequence;
@@ -3581,22 +3581,22 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      * ownership. In particular, reset() clears the decision SSBO that native maps after the input
      * fence, so writing it while a claim is live would be an unsynchronized cross-context race.
      */
-    private void resetGpuSceneCutDetectorWhenIdle() {
-        if (!gpuSceneCutResetPending || inferenceClaim.get() != 0L) {
+    private void resetNearReuseClassifierWhenIdle() {
+        if (!gpuNearReuseResetPending || inferenceClaim.get() != 0L) {
             return;
         }
-        gpuSceneCutResetPending = false;
-        ClientSbsGpuSceneCutDetector sceneCutDetector = gpuSceneCutDetector;
-        if (sceneCutDetector == null) {
+        gpuNearReuseResetPending = false;
+        ClientSbsGpuNearReuseClassifier nearReuseClassifier = gpuNearReuseClassifier;
+        if (nearReuseClassifier == null) {
             return;
         }
         try {
-            sceneCutDetector.reset();
+            nearReuseClassifier.reset();
         } catch (Throwable error) {
             LimeLog.warning("Client SBS GPU near-reuse reset failed; disabling "
                     + "near-identical reuse: " + error.getMessage());
             // The classifier is optional; keep the primary depth failure isolated.
-            closeFailedSceneCutDetector(sceneCutDetector);
+            closeFailedNearReuseClassifier(nearReuseClassifier);
         }
     }
 
@@ -3780,8 +3780,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         boolean completionFenceRetained = false;
         boolean colorAdopted = false;
         try {
-            if (!hasDepthProfile() || result.sceneCutDetector == null
-                    || result.sceneCutDetector != gpuSceneCutDetector) {
+            if (!hasDepthProfile() || result.nearReuseClassifier == null
+                    || result.nearReuseClassifier != gpuNearReuseClassifier) {
                 throw new IllegalStateException(
                         "Near-identical reuse lost its GPU-authenticated inference owner");
             }
@@ -3819,8 +3819,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 perf.perfNearIdenticalReuses.incrementAndGet();
             }
 
-            hostSourceRepeat.ownerConfirmed = result.sceneCutDetector != null
-                    && result.sceneCutDetector == gpuSceneCutDetector;
+            hostSourceRepeat.ownerConfirmed = result.nearReuseClassifier != null
+                    && result.nearReuseClassifier == gpuNearReuseClassifier;
             releaseInferenceClaim(result.inferenceClaimToken);
             return true;
         } catch (Throwable error) {
@@ -4465,7 +4465,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                 renderResult.nearIdenticalCandidate,
                                 renderResult.nearIdenticalDecisionBufferId,
                                 renderResult.nearIdenticalDecisionByteOffset,
-                                renderResult.sceneCutAvailable ? renderResult.inferenceClaimToken : 0L,
+                                renderResult.classifierAvailable ? renderResult.inferenceClaimToken : 0L,
                                 renderResult.modelInputTextureId);
                         ClientSbsGpuInferenceEngine.RunDisposition disposition =
                                 gpuEngine.getLastRunDisposition(renderResult.bufferSlot);
@@ -4505,8 +4505,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                 renderResult.colorFrameLease,
                                 renderResult.generation,
                                 renderResult.inferenceClaimToken,
-                                renderResult.sceneCutAvailable,
-                                renderResult.sceneCutDetector,
+                                renderResult.classifierAvailable,
+                                renderResult.nearReuseClassifier,
                                 disposition == ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
                                 renderResult.performanceEpoch);
                         if (!latestGpuInferenceResult.compareAndSet(null, gpuResult)) {

@@ -1,8 +1,8 @@
 package com.limelight.sbs;
 
-/** Compute shaders used by {@link ClientSbsGpuSceneCutDetector}. */
-final class ClientSbsGpuSceneCutShaders {
-    private ClientSbsGpuSceneCutShaders() {
+/** Compute shaders used by {@link ClientSbsGpuNearReuseClassifier}. */
+final class ClientSbsGpuNearReuseShaders {
+    private ClientSbsGpuNearReuseShaders() {
     }
 
     private static String lines(String... source) {
@@ -30,8 +30,8 @@ final class ClientSbsGpuSceneCutShaders {
     );
 
     private static final String TILE_WORKGROUP_LAYOUT = "layout(local_size_x = "
-            + ClientSbsGpuSceneCutDetector.TILE_SIZE + ", local_size_y = "
-            + ClientSbsGpuSceneCutDetector.TILE_SIZE + ") in;";
+            + ClientSbsGpuNearReuseClassifier.TILE_SIZE + ", local_size_y = "
+            + ClientSbsGpuNearReuseClassifier.TILE_SIZE + ") in;";
 
     /** Formats one 32-bit word exactly as the lower-case GLSL literals it replaces. */
     private static String hexUintLiteral(int word) {
@@ -46,7 +46,7 @@ final class ClientSbsGpuSceneCutShaders {
 
     /*
      * Identity of the real inference whose model input is the comparison reference. Keep this
-     * std430 declaration in step with ClientSbsGpuSceneCutDetector.OWNER_BYTES: two uvec2 at
+     * std430 declaration in step with ClientSbsGpuNearReuseClassifier.OWNER_BYTES: two uvec2 at
      * bytes 0 and 8, one uint at 16, and the block rounded up to its 8-byte alignment (24).
      */
     private static String owner(String access) {

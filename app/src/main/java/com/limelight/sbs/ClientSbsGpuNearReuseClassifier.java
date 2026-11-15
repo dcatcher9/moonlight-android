@@ -32,7 +32,7 @@ import java.nio.ByteBuffer;
  * program, SSBO bindings 0/1/2/3, image binding 0, and texture unit 0's 2D binding are zero;
  * texture unit 0 is active. No other binding is changed.</p>
  */
-public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
+public final class ClientSbsGpuNearReuseClassifier implements AutoCloseable {
     public static final int NEAR_IDENTICAL_DECISION_SLOT_COUNT = 2;
 
     /** Pixels per evidence tile edge and invocations per compute workgroup edge. */
@@ -43,7 +43,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private static final int INPUT_TENSOR_SSBO_BINDING = 2;
     private static final int PREVIOUS_INPUT_TENSOR_SSBO_BINDING = 3;
     private static final int TILE_EVIDENCE_IMAGE_BINDING = 0;
-    // std430 layout of the NearReuseOwner block in ClientSbsGpuSceneCutShaders: two uvec2
+    // std430 layout of the NearReuseOwner block in ClientSbsGpuNearReuseShaders: two uvec2
     // (8-byte aligned) followed by one uint; the block size rounds up to its 8-byte alignment.
     static final int OWNER_FRAME_SEQUENCE_BYTE_OFFSET = 0;
     static final int OWNER_CAPTURED_AT_NS_BYTE_OFFSET = 8;
@@ -88,7 +88,7 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private boolean validateDispatchesIndividually = true;
     private boolean released;
 
-    public ClientSbsGpuSceneCutDetector(int inputWidth, int inputHeight) {
+    public ClientSbsGpuNearReuseClassifier(int inputWidth, int inputHeight) {
         this.inputWidth = requirePositiveDimension(inputWidth, "inputWidth");
         this.inputHeight = requirePositiveDimension(inputHeight, "inputHeight");
         tileGridWidth = tilesForPixels(inputWidth);
@@ -299,12 +299,12 @@ public final class ClientSbsGpuSceneCutDetector implements AutoCloseable {
     private void initializePrograms() {
         packAndClassifyProgram = createComputeProgram(
                 "pack model tensor and classify near-identical tiles",
-                ClientSbsGpuSceneCutShaders.createPackAndClassify(inputWidth, inputHeight));
+                ClientSbsGpuNearReuseShaders.createPackAndClassify(inputWidth, inputHeight));
         nearIdenticalResolveProgram = createComputeProgram("resolve near-identical reuse",
-                ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(
+                ClientSbsGpuNearReuseShaders.createNearIdenticalResolve(
                         inputWidth, inputHeight));
         commitProgram = createComputeProgram("commit accepted inference input",
-                ClientSbsGpuSceneCutShaders.createCommit(inputWidth, inputHeight));
+                ClientSbsGpuNearReuseShaders.createCommit(inputWidth, inputHeight));
     }
 
     private void initializeStorage() {

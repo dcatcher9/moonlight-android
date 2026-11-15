@@ -115,10 +115,10 @@ public class ClientSbsComputeProgramConsistencyTest {
                 .dispatch("commit accepted inference input",
                         "tilesForPixels(inputWidth), tilesForPixels(inputHeight), 1", 16, 16);
         for (int[] size : TENSOR_SIZES) {
-            pack.sources.add(ClientSbsGpuSceneCutShaders.createPackAndClassify(size[0], size[1]));
+            pack.sources.add(ClientSbsGpuNearReuseShaders.createPackAndClassify(size[0], size[1]));
             resolve.sources.add(
-                    ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(size[0], size[1]));
-            commit.sources.add(ClientSbsGpuSceneCutShaders.createCommit(size[0], size[1]));
+                    ClientSbsGpuNearReuseShaders.createNearIdenticalResolve(size[0], size[1]));
+            commit.sources.add(ClientSbsGpuNearReuseShaders.createCommit(size[0], size[1]));
         }
         programs.add(pack);
         programs.add(resolve);
@@ -252,7 +252,7 @@ public class ClientSbsComputeProgramConsistencyTest {
     @Test
     public void nearReuseClassifierUniformsBindingsDispatchesAndBarriersMatchItsShaders()
             throws IOException {
-        String java = readSource("sbs/ClientSbsGpuSceneCutDetector.java");
+        String java = readSource("sbs/ClientSbsGpuNearReuseClassifier.java");
         List<Program> programs = nearReusePrograms();
         assertProgramsCoverEveryCreatedProgram(java, programs);
         Map<String, Set<String>> lookups = javaUniformLookups(java);
@@ -330,18 +330,18 @@ public class ClientSbsComputeProgramConsistencyTest {
         // Dispatch math: one workgroup per 16x16 tile, and a tile grid that covers the tensor.
         for (int[] size : TENSOR_SIZES) {
             for (int length : size) {
-                int tiles = ClientSbsGpuSceneCutDetector.tilesForPixels(length);
+                int tiles = ClientSbsGpuNearReuseClassifier.tilesForPixels(length);
                 assertTrue(tiles * 16 >= length && (tiles - 1) * 16 < length);
             }
             // The 64-lane resolve strides over every tile from a single workgroup.
-            String resolve = ClientSbsGpuSceneCutShaders.createNearIdenticalResolve(
+            String resolve = ClientSbsGpuNearReuseShaders.createNearIdenticalResolve(
                     size[0], size[1]);
             assertTrue(resolve.contains(
                     "for (uint tileIndex = lane; tileIndex < GRID_TILE_COUNT; tileIndex += 64u)"));
         }
 
         // The owner block's std430 layout matches the bytes Java allocates and clears.
-        String shader = ClientSbsGpuSceneCutShaders.createCommit(672, 384);
+        String shader = ClientSbsGpuNearReuseShaders.createCommit(672, 384);
         int block = shader.indexOf("buffer NearReuseOwner {");
         String fields = shader.substring(block, shader.indexOf("};", block));
         int sequence = fields.indexOf("uvec2 nearOwnerFrameSequence;");
@@ -349,11 +349,11 @@ public class ClientSbsComputeProgramConsistencyTest {
         int valid = fields.indexOf("uint nearOwnerValid;");
         assertTrue(sequence >= 0 && captured > sequence && valid > captured);
         assertEquals(3, occurrences(fields, ";"));
-        assertEquals(0, ClientSbsGpuSceneCutDetector.OWNER_FRAME_SEQUENCE_BYTE_OFFSET);
-        assertEquals(8, ClientSbsGpuSceneCutDetector.OWNER_CAPTURED_AT_NS_BYTE_OFFSET);
-        assertEquals(16, ClientSbsGpuSceneCutDetector.OWNER_VALID_BYTE_OFFSET);
+        assertEquals(0, ClientSbsGpuNearReuseClassifier.OWNER_FRAME_SEQUENCE_BYTE_OFFSET);
+        assertEquals(8, ClientSbsGpuNearReuseClassifier.OWNER_CAPTURED_AT_NS_BYTE_OFFSET);
+        assertEquals(16, ClientSbsGpuNearReuseClassifier.OWNER_VALID_BYTE_OFFSET);
         // 20 bytes of members rounded up to the block's 8-byte (uvec2) alignment.
-        assertEquals(24, ClientSbsGpuSceneCutDetector.OWNER_BYTES);
+        assertEquals(24, ClientSbsGpuNearReuseClassifier.OWNER_BYTES);
     }
 
     @Test

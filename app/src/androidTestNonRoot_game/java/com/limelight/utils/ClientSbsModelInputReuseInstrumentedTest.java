@@ -20,7 +20,7 @@ import android.view.Surface;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
-import com.limelight.sbs.ClientSbsGpuSceneCutDetector;
+import com.limelight.sbs.ClientSbsGpuNearReuseClassifier;
 import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
 
 import org.junit.Test;
@@ -154,8 +154,8 @@ public final class ClientSbsModelInputReuseInstrumentedTest {
     @Test
     public void decodedFramesReuseOnlyAgainstAV2ValidRealInference() {
         try (EglFixture ignored = EglFixture.create();
-             ClientSbsGpuSceneCutDetector classifier =
-                     new ClientSbsGpuSceneCutDetector(WIDTH, HEIGHT);
+             ClientSbsGpuNearReuseClassifier classifier =
+                     new ClientSbsGpuNearReuseClassifier(WIDTH, HEIGHT);
              ClientSbsGpuDepthProcessor depth = new ClientSbsGpuDepthProcessor(
                      WIDTH, HEIGHT, WIDTH / (float) HEIGHT, false, 0.05f)) {
             int[] textures = new int[2], fbos = new int[1], buffers = new int[2];
@@ -271,7 +271,7 @@ public final class ClientSbsModelInputReuseInstrumentedTest {
         texture.getTransformMatrix(transform);
     }
 
-    private static void classify(ClientSbsGpuSceneCutDetector classifier, int texture,
+    private static void classify(ClientSbsGpuNearReuseClassifier classifier, int texture,
                                  int tensor, boolean candidate, long frame, boolean lazy) {
         classifier.processRendererOwnedAndPack(texture, tensor, candidate, frame, 0,
                 frame, frame * 16_000_000L, lazy);
@@ -279,7 +279,7 @@ public final class ClientSbsModelInputReuseInstrumentedTest {
         assertNoGlError("near-reuse classification");
     }
 
-    private static int readDecisionReason(ClientSbsGpuSceneCutDetector classifier) {
+    private static int readDecisionReason(ClientSbsGpuNearReuseClassifier classifier) {
         GLES31.glMemoryBarrier(GLES31.GL_BUFFER_UPDATE_BARRIER_BIT);
         GLES30.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER,
                 classifier.getNearIdenticalDecisionBufferId());
