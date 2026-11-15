@@ -188,6 +188,21 @@ public final class GameTransportReconnectTest {
         verify(presenter, never()).captureReconnectViewState(any(Intent.class));
     }
 
+    @Test public void appScheduledReconnectRetriesARefusedResumeWithTheFirstBackoff() {
+        game.connected = false;
+        ReflectionHelpers.setField(game, "connecting", true);
+        game.getIntent().putExtra(TransportReconnectPolicy.EXTRA_APP_RECONNECT, true);
+        assertFalse(schedule(403, true));
+        game.stageFailed("Virtual Display", 0, 503);
+        shadowOf(Looper.getMainLooper()).idle();
+        game.nativeStopCompleted.run();
+        assertNull(surfaceReleased);
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1));
+        surfaceReleased.run();
+        assertEquals(1, game.getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0));
+        assertEquals(1, game.recreationCount);
+    }
+
     @Test public void resume503CarriesBudgetAndUsesSecondBackoff() {
         game.connected = false;
         ReflectionHelpers.setField(game, "connecting", true);

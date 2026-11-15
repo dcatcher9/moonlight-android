@@ -787,6 +787,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         automaticReconnectScheduled = automaticAttempt > 0;
         XrStreamPresenter presenter = presenterOrNull();
         Intent reconnectIntent = createXrReconnectIntent(this, getIntent());
+        reconnectIntent.putExtra(TransportReconnectPolicy.EXTRA_APP_RECONNECT, true);
         if (automaticReconnectScheduled) {
             reconnectIntent.putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, automaticAttempt);
         }
@@ -874,7 +875,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         int previousAttempts = getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0);
         if (reconnectScheduled || !streamActivityStarted || automaticReconnectCancelled
                 || isFinishing() || isDestroyed() || quitOnStop
-                || (startupFailure ? previousAttempts == 0 : !connected && previousAttempts == 0)
+                // A startup failure is retried only when the app itself started this connection:
+                // an automatic recovery attempt, or a reconnect it scheduled (settings change,
+                // capability downgrade). The host can refuse such a resume while it is still
+                // restoring displays after the disconnect and keeps the session for a retry.
+                // A resume the user chose from the library reports its failure instead.
+                || (startupFailure
+                        ? previousAttempts == 0 && !getIntent().getBooleanExtra(
+                                TransportReconnectPolicy.EXTRA_APP_RECONNECT, false)
+                        : !connected && previousAttempts == 0)
                 || !TransportReconnectPolicy.canRetry(getHostSessionLaunchRequest(getIntent()),
                         previousAttempts, errorCode, startupFailure, portFlags)) {
             return false;

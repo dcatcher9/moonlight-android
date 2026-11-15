@@ -6,6 +6,8 @@ import com.limelight.nvstream.jni.MoonBridge;
 /** Bounded transport recovery; the host still decides whether the captured session exists. */
 final class TransportReconnectPolicy {
     static final String EXTRA_ATTEMPT = "TransportReconnectAttempt";
+    /** Set on the Intent of an Activity that the app itself recreated to reconnect a stream. */
+    static final String EXTRA_APP_RECONNECT = "XrAppInitiatedReconnect";
     static final int MAX_ATTEMPTS = 5;
     static final long STABLE_PLAYBACK_MILLIS = 10_000;
 
