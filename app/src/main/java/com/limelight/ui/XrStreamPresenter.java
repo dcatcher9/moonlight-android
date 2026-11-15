@@ -330,17 +330,23 @@ public class XrStreamPresenter {
     private boolean appliedStatsRequested;
     private final DevicePerformanceSampler devicePerformanceSampler =
             new DevicePerformanceSampler();
-    private static final int HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS = 100;
-    static final long HOST_SBS_TELEMETRY_RETRY_DELAY_MS = 500L;
-    static final int HOST_SBS_TELEMETRY_MAX_RETRIES = 3;
     private final HostSbsTelemetryTracker hostSbsTelemetryTracker =
             new HostSbsTelemetryTracker();
-    private final android.os.Handler hostSbsTelemetryRetryHandler =
-            new android.os.Handler(android.os.Looper.getMainLooper());
-    private int hostSbsTelemetryRequestCounter;
-    private boolean hostSbsTelemetryRequested;
-    private int hostSbsTelemetryRetryAttempts;
-    private boolean hostSbsTelemetryRetryPending;
+    private final XrHostTelemetrySubscription hostTelemetrySubscription =
+            new XrHostTelemetrySubscription(hostSbsTelemetryTracker,
+                    new XrHostTelemetrySubscription.Host() {
+                        @Override
+                        public boolean shouldObserveHostSbsTelemetry() {
+                            return XrStreamPresenter.this.shouldObserveHostSbsTelemetry();
+                        }
+
+                        @Override
+                        public int sendHostTelemetryControl(boolean enabled, boolean focused,
+                                                            int requestId, int intervalMs) {
+                            return XrStreamPresenter.this.sendHostTelemetryControl(
+                                    enabled, focused, requestId, intervalMs);
+                        }
+                    });
     /**
      * Set before native connection teardown starts. Once set, this presenter must never call any
      * control-stream API because moonlight-common destroys its transport mutexes during
@@ -350,18 +356,6 @@ public class XrStreamPresenter {
     private boolean presenterDestroyed;
     /** Apollo-3D control messages are opt-in; regular Sunshine/Apollo must never receive them. */
     private boolean hostControlExtensionsSupported = true;
-    private final Runnable hostSbsTelemetryRetryRunnable =
-            this::retryHostSbsTelemetrySubscription;
-
-    private void retryHostSbsTelemetrySubscription() {
-        hostSbsTelemetryRetryPending = false;
-        if (!hostSbsTelemetryRequested || !shouldObserveHostSbsTelemetry()) {
-            return;
-        }
-        hostSbsTelemetryRetryAttempts++;
-        sendHostSbsTelemetrySubscriptionAttempt();
-    }
-
     /** Small centered overlay shown in front of the video while the host prepares its engine or
      *  initializes the stream-specific 3D pipeline
      *  (driven by the host's 0x3006 depth-status push via {@link #onDepthStatus}). */
@@ -875,7 +869,7 @@ public class XrStreamPresenter {
             invalidateGameSourceProof();
             liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
             panelRateReconcilePosted = false;
-            clearHostSbsTelemetrySubscriptionState();
+            hostTelemetrySubscription.clearState();
             if (deferredPresenterMode == PresentationMode.HOST_SBS_AI) {
                 deferredPresenterMode = PresentationMode.NORMAL;
             }
@@ -888,7 +882,7 @@ public class XrStreamPresenter {
             }
         }
         updateHostDebugDumpAvailability();
-        reconcileHostSbsTelemetrySubscription();
+        hostTelemetrySubscription.reconcile();
     }
 
     /** Enables v2 only after RTSP advertises the fixed atomic-presentation feature bit. */
@@ -1857,7 +1851,7 @@ public class XrStreamPresenter {
             statsVisibilityListener.onStatsVisibilityChanged(showStats);
         }
         if (statsChanged) {
-            reconcileHostSbsTelemetrySubscription();
+            hostTelemetrySubscription.reconcile();
         }
 
         boolean showModeOptions = visible == XrControlUiState.Surface.MODE_OPTIONS
@@ -2197,23 +2191,7 @@ public class XrStreamPresenter {
     /** Main-thread delivery of an already-parsed immutable host telemetry body. */
     public void onHostSbsTelemetryState(
             HostSbsTelemetrySnapshot snapshot, long receivedAtMs) {
-        // Closing Stats also closes this subscription's local ownership. An already queued
-        // publication must not rebuild hidden history or trigger stale-packet logging.
-        if (!hostSbsTelemetryRequested || !shouldObserveHostSbsTelemetry()) {
-            return;
-        }
-        if (!hostSbsTelemetryTracker.accept(snapshot, receivedAtMs)) {
-            LimeLog.info("XR: dropping stale or unowned host SBS telemetry"
-                    + (snapshot != null ? " request=" + snapshot.requestId
-                    + " generation=" + snapshot.generation
-                    + " sequence=" + snapshot.sequence : ""));
-        }
-    }
-
-    private int nextHostSbsTelemetryRequestId() {
-        hostSbsTelemetryRequestCounter =
-                (hostSbsTelemetryRequestCounter % 0xFFFF) + 1;
-        return hostSbsTelemetryRequestCounter;
+        hostTelemetrySubscription.onState(snapshot, receivedAtMs);
     }
 
     private boolean controlTransportOpen() {
@@ -2294,90 +2272,6 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Owns depth-health telemetry only while Stats observes the active, proven Host SBS AI mode.
-     * Closing Stats cancels the subscription and chart era; operational host status is independent.
-     */
-    private void reconcileHostSbsTelemetrySubscription() {
-        boolean enable = shouldObserveHostSbsTelemetry();
-        if (enable == hostSbsTelemetryRequested) {
-            return;
-        }
-
-        cancelHostSbsTelemetryRetry(true);
-        if (!enable) {
-            if (hostSbsTelemetryRequested) {
-                sendHostTelemetryControl(
-                        false, false, nextHostSbsTelemetryRequestId(),
-                        HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS);
-            }
-            hostSbsTelemetryRequested = false;
-            hostSbsTelemetryTracker.deactivate();
-            return;
-        }
-
-        hostSbsTelemetryRequested = true;
-        sendHostSbsTelemetrySubscriptionAttempt();
-    }
-
-    private void sendHostSbsTelemetrySubscriptionAttempt() {
-        if (!hostSbsTelemetryRequested || !shouldObserveHostSbsTelemetry()) {
-            return;
-        }
-        int requestId = nextHostSbsTelemetryRequestId();
-        hostSbsTelemetryTracker.activateRequest(requestId);
-        int intervalMs = HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS;
-        int result = sendHostTelemetryControl(
-                true, true, requestId, intervalMs);
-        if (result < 0) {
-            cancelHostSbsTelemetryRetry(false);
-            hostSbsTelemetryTracker.markSubscriptionUnavailable(
-                    requestId, SbsDepthTelemetrySnapshot.Availability.UNSUPPORTED);
-            LimeLog.info("XR: host SBS telemetry is unsupported by this host");
-        } else if (result == 0) {
-            hostSbsTelemetryTracker.markSubscriptionUnavailable(
-                    requestId, SbsDepthTelemetrySnapshot.Availability.FAILED);
-            LimeLog.warning("XR: host SBS telemetry subscription could not be queued");
-            scheduleHostSbsTelemetryRetry();
-        } else {
-            cancelHostSbsTelemetryRetry(true);
-            LimeLog.info("XR: host SBS telemetry subscribed at " + intervalMs
-                    + " ms (request " + requestId + ")");
-        }
-    }
-
-    private void scheduleHostSbsTelemetryRetry() {
-        if (!hostSbsTelemetryRequested || !shouldObserveHostSbsTelemetry()) {
-            return;
-        }
-        if (hostSbsTelemetryRetryPending
-                || hostSbsTelemetryRetryAttempts >= HOST_SBS_TELEMETRY_MAX_RETRIES) {
-            if (hostSbsTelemetryRetryAttempts >= HOST_SBS_TELEMETRY_MAX_RETRIES) {
-                LimeLog.warning("XR: host SBS telemetry subscription retry limit reached");
-            }
-            return;
-        }
-        hostSbsTelemetryRetryPending = true;
-        hostSbsTelemetryRetryHandler.postDelayed(
-                hostSbsTelemetryRetryRunnable, HOST_SBS_TELEMETRY_RETRY_DELAY_MS);
-    }
-
-    private void cancelHostSbsTelemetryRetry(boolean resetAttempts) {
-        hostSbsTelemetryRetryHandler.removeCallbacks(hostSbsTelemetryRetryRunnable);
-        hostSbsTelemetryRetryPending = false;
-        if (resetAttempts) {
-            hostSbsTelemetryRetryAttempts = 0;
-        }
-    }
-
-    private boolean clearHostSbsTelemetrySubscriptionState() {
-        cancelHostSbsTelemetryRetry(true);
-        boolean wasRequested = hostSbsTelemetryRequested;
-        hostSbsTelemetryRequested = false;
-        hostSbsTelemetryTracker.deactivate();
-        return wasRequested;
-    }
-
-    /**
      * Ends the host telemetry subscription while moonlight-common's control transport is still
      * alive. {@link Game} calls this synchronously before {@code NvConnection.stop()} starts.
      * Repeated calls are local no-ops and delayed UI/retry work cannot reopen the subscription.
@@ -2405,13 +2299,13 @@ public class XrStreamPresenter {
         decoderTransitionGenerations.clear();
         updateHostDebugDumpAvailability();
 
-        boolean wasTelemetryRequested = clearHostSbsTelemetrySubscriptionState();
+        boolean wasTelemetryRequested = hostTelemetrySubscription.clearState();
         if (wasTelemetryRequested) {
             // This is deliberately the only send allowed after the fence closes. Game invokes the
             // hook synchronously before it starts NvConnection.stop(), so the mutex is still live.
             MoonBridge.sendHostSbsTelemetrySubscription(
-                    false, false, nextHostSbsTelemetryRequestId(),
-                    HOST_SBS_TELEMETRY_FOCUSED_INTERVAL_MS);
+                    false, false, hostTelemetrySubscription.nextRequestId(),
+                    XrHostTelemetrySubscription.FOCUSED_INTERVAL_MS);
         }
     }
 
@@ -2583,7 +2477,7 @@ public class XrStreamPresenter {
         }
 
         streamPresentationReady = true;
-        reconcileHostSbsTelemetrySubscription();
+        hostTelemetrySubscription.reconcile();
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
                 item.setEnabled(settingsControlsEnabled() && XrPresentationPolicy.isPresentationModeSupported(
@@ -4052,7 +3946,7 @@ public class XrStreamPresenter {
         // Same-wire and deferred Client SBS switches can commit without a live-quality ACK.
         // Release the scoped window preference here too when the committed producer changes.
         applyPresentationFrameRatePreference();
-        reconcileHostSbsTelemetrySubscription();
+        hostTelemetrySubscription.reconcile();
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         applyContentColorMetadata();
         LimeLog.info("XR: stereo mode -> " + label);
@@ -5030,7 +4924,7 @@ public class XrStreamPresenter {
         // Native connection cleanup has already completed by StreamContainer teardown time. Only
         // clear local state here; the synchronous pre-stop hook owns the final transport write.
         controlTransportClosing = true;
-        clearHostSbsTelemetrySubscriptionState();
+        hostTelemetrySubscription.clearState();
         modeOptionsPane.stopClientOptionsStatusTicker();
         dockController.cancelCollapseTimer();
         cancelLiveQualityAckTimeout();

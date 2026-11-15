@@ -44,12 +44,12 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         ((XrControlUiState) getField(presenter, "controlUiState")).hideStats();
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
 
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
-        invoke(presenter, "retryHostSbsTelemetrySubscription");
-        invoke(presenter, "sendHostSbsTelemetrySubscriptionAttempt");
-        invoke(presenter, "scheduleHostSbsTelemetryRetry");
+        invoke(subscription(presenter), "reconcile");
+        invoke(subscription(presenter), "retry");
+        invoke(subscription(presenter), "sendSubscriptionAttempt");
+        invoke(subscription(presenter), "scheduleRetry");
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS * 2,
                 TimeUnit.MILLISECONDS);
 
         assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
@@ -64,7 +64,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         HostSbsTelemetryTracker tracker = tracker(presenter);
         int requestId = tracker.getRequestId();
         presenter.onHostSbsTelemetryState(snapshot(requestId, 1, 1.5f), 100);
@@ -78,8 +78,8 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
 
         presenter.onHostSbsTelemetryState(snapshot(requestId, 2, 1.6f), 210);
         presenter.onHostSbsTelemetryState(snapshot(0, 3, 1.7f), 220);
-        invoke(presenter, "retryHostSbsTelemetrySubscription");
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "retry");
+        invoke(subscription(presenter), "reconcile");
         assertFalse(tracker.isActive());
         assertNull(tracker.sampleAtStatsTick(220));
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
@@ -95,7 +95,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         HostSbsTelemetryTracker tracker = tracker(presenter);
         int oldRequestId = tracker.getRequestId();
         presenter.onHostSbsTelemetryState(snapshot(oldRequestId, 1, 1.3f), 100);
@@ -119,7 +119,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         assertEquals(1, tracker.sampleAtStatsTick(320).popTrend.length);
         assertEquals(1.6f, tracker.sampleAtStatsTick(320).popTrend[0], 0.0001f);
 
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         assertEquals(2, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         presenter.onConnectionStopping();
         controller.destroy();
@@ -130,22 +130,22 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(0);
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
-        assertTrue((boolean) getField(presenter, "hostSbsTelemetryRetryPending"));
+        invoke(subscription(presenter), "reconcile");
+        assertTrue((boolean) getField(subscription(presenter), "retryPending"));
 
         presenter.toggleStats();
-        assertFalse((boolean) getField(presenter, "hostSbsTelemetryRetryPending"));
+        assertFalse((boolean) getField(subscription(presenter), "retryPending"));
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS * 2,
                 TimeUnit.MILLISECONDS);
-        invoke(presenter, "retryHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "retry");
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
 
         presenter.toggleStats();
         assertEquals(2, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
-        assertTrue((boolean) getField(presenter, "hostSbsTelemetryRetryPending"));
-        assertEquals(0, getField(presenter, "hostSbsTelemetryRetryAttempts"));
+        assertTrue((boolean) getField(subscription(presenter), "retryPending"));
+        assertEquals(0, getField(subscription(presenter), "retryAttempts"));
         presenter.onConnectionStopping();
         controller.destroy();
     }
@@ -157,23 +157,23 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(0, 0, 1);
 
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS - 1,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS - 1,
                 TimeUnit.MILLISECONDS);
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(1, TimeUnit.MILLISECONDS);
         assertEquals(2, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS,
                 TimeUnit.MILLISECONDS);
         assertEquals(3, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS * 2,
                 TimeUnit.MILLISECONDS);
         assertEquals(3, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
@@ -188,12 +188,12 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
                 createReadyHostSbsPresenter(boundedController.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(0);
 
-        invoke(bounded, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(bounded), "reconcile");
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS
-                        * (XrStreamPresenter.HOST_SBS_TELEMETRY_MAX_RETRIES + 2L),
+                XrHostTelemetrySubscription.RETRY_DELAY_MS
+                        * (XrHostTelemetrySubscription.MAX_RETRIES + 2L),
                 TimeUnit.MILLISECONDS);
-        assertEquals(1 + XrStreamPresenter.HOST_SBS_TELEMETRY_MAX_RETRIES,
+        assertEquals(1 + XrHostTelemetrySubscription.MAX_RETRIES,
                 ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         bounded.onConnectionStopping();
         boundedController.destroy();
@@ -202,13 +202,13 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         XrStreamPresenter cancelled =
                 createReadyHostSbsPresenter(cancelledController.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(0);
-        invoke(cancelled, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(cancelled), "reconcile");
         cancelled.onConnectionStopping();
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
 
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS * 2,
                 TimeUnit.MILLISECONDS);
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         cancelledController.destroy();
@@ -220,10 +220,10 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(-1);
 
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS
-                        * (XrStreamPresenter.HOST_SBS_TELEMETRY_MAX_RETRIES + 2L),
+                XrHostTelemetrySubscription.RETRY_DELAY_MS
+                        * (XrHostTelemetrySubscription.MAX_RETRIES + 2L),
                 TimeUnit.MILLISECONDS);
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
@@ -238,7 +238,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
 
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
         presenter.onConnectionStopping();
@@ -247,11 +247,11 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         // Neither repeated lifecycle delivery nor delayed UI reconciliation may touch the native
         // control transport after the pre-stop hook has closed ownership.
         presenter.onConnectionStopping();
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         presenter.onDestroy();
         presenter.onDestroy();
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS * 2,
                 TimeUnit.MILLISECONDS);
 
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
@@ -266,16 +266,16 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(0);
 
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
 
         // This models defensive final cleanup after native teardown. It must not try to send the
         // unsubscribe packet through an already-destroyed moonlight-common mutex.
         presenter.onDestroy();
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(
-                XrStreamPresenter.HOST_SBS_TELEMETRY_RETRY_DELAY_MS * 2,
+                XrHostTelemetrySubscription.RETRY_DELAY_MS * 2,
                 TimeUnit.MILLISECONDS);
-        invoke(presenter, "reconcileHostSbsTelemetrySubscription");
+        invoke(subscription(presenter), "reconcile");
 
         assertEquals(1, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         assertEquals(0, ShadowMoonBridge.getHostSbsTelemetryDisableCallCount());
@@ -302,6 +302,10 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         setField(presenter, "statsVisible", true);
         ((XrControlUiState) getField(presenter, "controlUiState")).showStats();
         return presenter;
+    }
+
+    private static Object subscription(XrStreamPresenter presenter) throws Exception {
+        return getField(presenter, "hostTelemetrySubscription");
     }
 
     private static HostSbsTelemetryTracker tracker(XrStreamPresenter presenter) throws Exception {
