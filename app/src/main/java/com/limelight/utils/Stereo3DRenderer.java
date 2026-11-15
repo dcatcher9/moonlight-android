@@ -95,14 +95,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** Renderer-owned source geometry; never aliases the presenter's optimistic preferences. */
     private int sourceWidth;
     private int sourceHeight;
-    /**
-     * Monotonic decoder-callback identity. Unlike successful GL latches, this advances for every
-     * callback so latest-only SurfaceTexture coalescing cannot hide source-frame steps from the
-     * source-order and scene-cut observations. Access is guarded by {@link #frameLock}.
-     */
-    private long decoderFrameCallbackSequence;
-    /** Sequence attached to the newest coalesced callback; guarded by {@link #frameLock}. */
-    private long pendingFrameCallbackSequence;
     /** Callback sequence of the buffer most recently latched by updateTexImage(). */
     private long latchedFrameSequence;
     private long lastCapturedFrameSequence;
@@ -182,9 +174,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             0.0f, 0.0f, 1.0f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f
     };
-    private final AtomicBoolean frameAvailable = new AtomicBoolean(false);
-    /** Client-SBS generation associated with the coalesced callback; guarded by frameLock. */
-    private int pendingFrameGeneration = -1;
+    /**
+     * Coalesced newest-callback metadata. Every access except {@code hasPendingFrame()} is
+     * guarded by {@link #frameLock}.
+     */
+    private final DecoderFrameMailbox decoderFrameMailbox = new DecoderFrameMailbox();
     /** Coalesces decoder callbacks into one GL-thread latch event without forcing an EGL swap. */
     private final ClientSbsFrameDrainScheduler frameDrainScheduler =
             new ClientSbsFrameDrainScheduler();
@@ -1343,7 +1337,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
             // The decoder keeps writing to the same SurfaceTexture across this output-only resize.
             // Physically acquire its latest queued image before rolling the renderer generation;
-            // clearing only frameAvailable can leave BufferQueue's notification edge consumed and
+            // clearing only the mailbox can leave BufferQueue's notification edge consumed and
             // starve every callback after a rapid same-aspect resize/rollback pair.
             int resizedGeneration = discardPendingFrameAndAdvanceLiveResizeGeneration();
             if (resizedGeneration <= 0) {
@@ -1401,7 +1395,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         this::invalidateQueuedFrameDrain,
                         () -> {
                             // This is deliberately unconditional. UI-side resize staging has
-                            // already cleared frameAvailable, but BufferQueue may still own the
+                            // already cleared the mailbox, but BufferQueue may still own the
                             // corresponding image and notification edge.
                             texture.updateTexImage();
                             lastLatchedSurfaceTimestampNs = texture.getTimestamp();
@@ -1619,10 +1613,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 return;
             }
             int callbackGeneration = clientSbsGeneration.get();
-            decoderFrameCallbackSequence++;
-            frameAvailable.set(true);
-            pendingFrameGeneration = callbackGeneration;
-            pendingFrameCallbackSequence = decoderFrameCallbackSequence;
+            decoderFrameMailbox.publish(callbackGeneration);
             // Publish and enqueue under one lock. Otherwise an old-generation callback could
             // enqueue after the resize invalidates drains, claim drain admission, and prevent the
             // first new-generation callback from scheduling the event that would re-arm latching.
@@ -1706,9 +1697,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /** Drops the coalesced decoder-callback metadata. The caller must hold frameLock. */
     private void clearPendingDecoderFrameLocked() {
-        frameAvailable.set(false);
-        pendingFrameGeneration = -1;
-        pendingFrameCallbackSequence = 0L;
+        decoderFrameMailbox.clear();
     }
 
     static int decodedSourceFrameDelta(long previousObservationSequence,
@@ -1829,7 +1818,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         // The EGL owner runs queued events before a dirty draw. Once a result, deadline,
         // or lifecycle boundary needs that draw, this existing event must also yield and must not
-        // re-arm callbacks. The draw itself will latch the newest metadata left in frameAvailable.
+        // re-arm callbacks. The draw itself will latch the newest metadata left in the mailbox.
         if (!frameDrainScheduler.beginDrain()) {
             return;
         }
@@ -1840,7 +1829,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         if (!hasCurrentEglContextAndDrawSurface()) {
             // The EGL owner may execute queued events while paused, before an EGL window is
-            // current. Leave frameAvailable set and let the next real draw perform the latch.
+            // current. Leave the mailbox pending and let the next real draw perform the latch.
             requestPriorityRender();
             return;
         }
@@ -2040,13 +2029,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** Latches one coalesced decoder frame. Must run with this renderer's EGL context current. */
     private boolean latchPendingVideoFrame() {
         synchronized (frameLock) {
-            if (!frameAvailable.getAndSet(false)) {
+            if (!decoderFrameMailbox.take()) {
                 return false;
             }
-            int frameGeneration = pendingFrameGeneration;
-            long frameCallbackSequence = pendingFrameCallbackSequence;
-            pendingFrameGeneration = -1;
-            pendingFrameCallbackSequence = 0L;
+            int frameGeneration = decoderFrameMailbox.takenGeneration();
+            long frameCallbackSequence = decoderFrameMailbox.takenCallbackSequence();
             if (!clientSbs || frameGeneration != clientSbsGeneration.get()) {
                 return false;
             }
@@ -2705,7 +2692,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         synchronized (firstModeEntryFrameLock) {
             while (awaitingFirstModeEntryFrame && clientSbs && !shuttingDown.get()
                     && !hasFreshModeEntryFrame(
-                    frameAvailable.get(), hasFrameForActiveGeneration,
+                    decoderFrameMailbox.hasPendingFrame(), hasFrameForActiveGeneration,
                     activeClientSbsGeneration, clientSbsGeneration.get())) {
                 long remainingNs = deadlineNs - System.nanoTime();
                 if (remainingNs <= 0L) {
@@ -2723,7 +2710,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
             boolean ready = clientSbs && !shuttingDown.get()
                     && hasFreshModeEntryFrame(
-                    frameAvailable.get(), hasFrameForActiveGeneration,
+                    decoderFrameMailbox.hasPendingFrame(), hasFrameForActiveGeneration,
                     activeClientSbsGeneration, clientSbsGeneration.get());
             awaitingFirstModeEntryFrame = false;
             if (ready) {
