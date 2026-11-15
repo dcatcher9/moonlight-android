@@ -109,7 +109,7 @@ final class XrStatsFormat {
                 ? formatStatsFloat(telemetry.effectivePop, 3) : "n/a";
         String result = ready + " | raw valid " + valid + " | reported pop " + pop;
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_RANGE)) {
-            result += " | cut range " + formatStatsFloat(telemetry.effectiveRangeWidth, 4);
+            result += " | raw range width " + formatStatsFloat(telemetry.effectiveRangeWidth, 4);
         }
         return result;
     }

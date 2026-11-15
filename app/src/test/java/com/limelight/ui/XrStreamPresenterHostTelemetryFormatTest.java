@@ -31,7 +31,7 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 0, 0, 10);
         assertEquals("Live | 1036x584 | host depth telemetry",
                 XrStatsFormat.formatHostSbsTelemetryStatus(telemetry));
-        assertEquals("pipeline ready | raw valid 100.0% | reported pop 1.700 | cut range 0.4000",
+        assertEquals("pipeline ready | raw valid 100.0% | reported pop 1.700 | raw range width 0.4000",
                 XrStatsFormat.formatHostV2Field(telemetry));
 
         SbsDepthTelemetrySnapshot initializedOnly = SbsDepthTelemetrySnapshot.available(
