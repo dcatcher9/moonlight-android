@@ -124,12 +124,9 @@ import androidx.preference.PreferenceManager;
 import android.os.Looper;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Queue;
-import java.util.ArrayDeque;
 
 import java.io.ByteArrayInputStream;
 import java.lang.reflect.InvocationTargetException;
@@ -415,25 +412,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private float zoomButtonStartX, zoomButtonStartY;
 
     // Queue for batching commitText payloads
-    private static final int UTF8_CHUNK_SIZE = 512;
-    private final Queue<String> commitTextQueue = new ArrayDeque<>();
-    private final Handler commitTextHandler = new Handler(Looper.getMainLooper());
-
-    private final Runnable flushCommitTextQueue = new Runnable() {
-        @Override
-        public void run() {
-            if (commitTextQueue.isEmpty()) {
-                return;
-            }
-            String chunk = commitTextQueue.poll();
-            if (conn != null) {
-                conn.sendUtf8Text(chunk);
-            }
-            if (!commitTextQueue.isEmpty()) {
-                commitTextHandler.postDelayed(this, 15);
-            }
-        }
-    };
+    private final CommitTextQueue commitTextQueue = new CommitTextQueue(
+            new Handler(Looper.getMainLooper()), chunk -> {
+                if (conn != null) {
+                    conn.sendUtf8Text(chunk);
+                }
+            });
 
     private final Runnable backgroundPing = () -> {
         if (connected) {
@@ -5798,7 +5782,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (!prefConfig.enableCommitText || conn == null) {
             return false;
         }
-        enqueueCommitText(text.toString());
+        commitTextQueue.enqueue(text.toString());
         return true;
     }
 
@@ -5816,28 +5800,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
         return true;
-    }
-
-    private void enqueueCommitText(String text) {
-        if (text == null || text.isEmpty()) {
-            return;
-        }
-        byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
-        int offset = 0;
-        while (offset < utf8.length) {
-            int end = Math.min(offset + UTF8_CHUNK_SIZE, utf8.length);
-            // Ensure we don't cut inside a multi-byte sequence
-            while (end < utf8.length && (utf8[end] & 0xC0) == 0x80) {
-                end--; // step back until we are at start of code point
-            }
-            String chunk = new String(utf8, offset, end - offset, StandardCharsets.UTF_8);
-            commitTextQueue.add(chunk);
-            offset = end;
-        }
-        // Kick off flushing if not already scheduled
-        if (commitTextQueue.size() == 1) {
-            commitTextHandler.post(flushCommitTextQueue);
-        }
     }
 
     /** Helper ricorsivo per trovare la prima SurfaceView nel layout corrente */
