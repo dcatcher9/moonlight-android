@@ -1036,9 +1036,11 @@ capability bit and its nonzero value remains mandatory for exact resume/cancel p
 Sunshine and Apollo omit that element, so they use the standard GameStream running-app identity for
 resume and the standard tokenless cancel request. Absence is not equivalent to an advertised zero.
 
-- A new host session restores that app's saved settings and last successfully applied presentation
-  intent on that PC. An app without a saved profile inherits Global Settings and starts in **2D**
-  (`NORMAL`). The new active-session record receives fresh ownership and generation identity.
+- A new host session restores that app's saved settings on that PC and always starts in **2D**
+  (`NORMAL`), with 2D's saved stream quality. It does not continue the presentation mode the app
+  last used; each mode's saved quality remains available when the user selects it. An app without
+  a saved profile inherits Global Settings. The new active-session record receives fresh ownership
+  and generation identity, and its recorded mode is 2D.
 - Resuming the same host session/app, including an automatic in-place settings restart,
   starts with the last successfully applied presentation intent and that mode's saved stream-quality
   tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
@@ -1147,7 +1149,8 @@ the offline/online no-lookahead policy does not change these control packets or 
 Artemis stores a settings profile separately for each app on each paired PC. Profiles contain shared
 stream overrides, independent per-mode overrides, and the last successfully applied presentation
 intent. Ending the host app or starting another app preserves these profiles; returning to the same
-app on the same PC restores its profile. The same app on another PC has a separate profile.
+app on the same PC restores its profile. The stored presentation intent is continued only by a
+resume; a new host session starts in 2D. The same app on another PC has a separate profile.
 Global Settings remain the inheritance source wherever a profile has no override, and an override
 is stored only while it differs from its current global value.
 
@@ -1752,7 +1755,7 @@ For every mode/surface change, test:
   Apollo-3D control messages, use app-identity resume/tokenless cancel, and reconnect for quality
   changes; verify Apollo-3D retains exact generation-token checks and live controls.
 - Set gamma, shared settings, and distinct mode quality tuples; end the host app and launch it again.
-  The same app on the same PC must restore those settings and its last successful intent. Launch
+  The same app on the same PC must restore those settings and start in 2D. Launch
   another app on that PC and the same app on another PC to verify independent profiles. An app
   without a profile starts 2D with inherited global defaults. Host-confirmed resume and the
   automatic settings restart restore the last successful intent with that mode's saved quality tuple.

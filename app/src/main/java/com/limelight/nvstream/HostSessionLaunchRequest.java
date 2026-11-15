@@ -34,7 +34,8 @@ public final class HostSessionLaunchRequest implements Serializable {
     /**
      * A fresh launch has no session to match, so it carries no app or token. It still records
      * whether the observed host advertised the session-token control extensions, which the
-     * client uses as the host capability until the launch response confirms it.
+     * client uses as the host capability until the launch response confirms it. It does not
+     * select a presentation mode: a fresh launch starts in 2D.
      */
     public static HostSessionLaunchRequest start(ComputerDetails host) {
         return new HostSessionLaunchRequest(Kind.START, 0, null,

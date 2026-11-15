@@ -60,7 +60,7 @@ public final class GameXrSessionStartupTest {
     }
 
     @Test
-    public void freshSameAppLaunchRestoresAppSettingsWithNewSessionOwnership() {
+    public void freshSameAppLaunchStartsIn2dWithNewOwnershipAndKeepsTheSavedProfile() {
         SessionSettingsStore.SessionRecord staleRecord = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, staleRecord.getLocalSessionId())
                 .setModeValue(PresentationMode.CLIENT_SBS_AI,
@@ -76,14 +76,15 @@ public final class GameXrSessionStartupTest {
         PreferenceConfiguration configuration =
                 PreferenceConfiguration.readPreferences(game, startup);
 
-        assertEquals(PresentationMode.CLIENT_SBS_AI,
+        // A new host session starts in 2D with 2D's quality; the saved mode is not continued.
+        assertEquals(PresentationMode.NORMAL,
                 game.getXrStartupPresenterMode());
-        assertEquals(1920, configuration.width);
-        assertEquals(1080, configuration.height);
-        assertEquals(30.0f, configuration.fps, 0.001f);
+        assertEquals(3840, configuration.width);
+        assertEquals(2160, configuration.height);
+        assertEquals(90.0f, configuration.fps, 0.001f);
         SessionSettingsStore.SessionRecord replacement = store.getCurrentSession(pc);
         assertNotEquals(staleRecord.getLocalSessionId(), replacement.getLocalSessionId());
-        assertEquals(PresentationMode.CLIENT_SBS_AI,
+        assertEquals(PresentationMode.NORMAL,
                 replacement.getLastSuccessfulMode());
         assertFalse(replacement.getResumeMetadata().isHostConfirmedResume());
         assertEquals(null, replacement.getResumeMetadata().getHostSessionId());
@@ -160,7 +161,7 @@ public final class GameXrSessionStartupTest {
     }
 
     @Test
-    public void freshLaunchKeepsSavedHostAiOnlyWhenTheObservedHostAdvertisedControlExtensions() {
+    public void freshLaunchStartsIn2dEvenWhenTheObservedHostAdvertisedControlExtensions() {
         SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, record.getLocalSessionId())
                 .setLastSuccessfulMode(PresentationMode.HOST_SBS_AI)
@@ -172,10 +173,13 @@ public final class GameXrSessionStartupTest {
         Game supported = Robolectric.buildActivity(Game.class, launchIntent(false)
                 .putExtra(Game.EXTRA_LAUNCH_REQUEST, HostSessionLaunchRequest.start(host))).get();
         prepareCurrentSessionPreferences(supported);
-        assertEquals(PresentationMode.HOST_SBS_AI, supported.getXrStartupPresenterMode());
-        assertEquals(PresentationMode.HOST_SBS_AI,
+        assertEquals(PresentationMode.NORMAL, supported.getXrStartupPresenterMode());
+        assertEquals(PresentationMode.NORMAL,
                 store.getCurrentSession(pc).getLastSuccessfulMode());
 
+        assertTrue(store.edit(pc, app, store.getCurrentSession(pc).getLocalSessionId())
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_AI)
+                .commit());
         Game standard = Robolectric.buildActivity(Game.class, launchIntent(false)).get();
         prepareCurrentSessionPreferences(standard);
         assertEquals(PresentationMode.NORMAL, standard.getXrStartupPresenterMode());

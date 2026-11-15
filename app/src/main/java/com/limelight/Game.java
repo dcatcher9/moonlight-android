@@ -492,6 +492,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         else {
             // A non-resume launch gets a fresh local generation and host capability. Its settings
             // come from this app's profile on this PC, independently of the ended session identity.
+            // Its presentation mode does not: a new host session starts in 2D (see below).
             sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
                     System.currentTimeMillis());
         }
@@ -499,12 +500,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         SessionSettingsStore.Snapshot snapshot =
                 sessionSettingsStore.snapshot(sessionPc, globalPreferences);
         PresentationMode startupModeOverride = null;
-        if (snapshot.getRecord() != null
-                && snapshot.getRecord().getLastSuccessfulMode()
-                == PresentationMode.HOST_SBS_AI
-                && !hostSessionIdSupported) {
-            LimeLog.warning("Host SBS AI is unavailable on a standard Sunshine/Apollo host; "
-                    + "restoring Normal");
+        PresentationMode savedMode = snapshot.getRecord() != null
+                ? snapshot.getRecord().getLastSuccessfulMode() : PresentationMode.NORMAL;
+        // Only a resume continues the previous presentation mode. A new host session starts in
+        // 2D whatever the app's profile last used; its saved per-mode quality is kept.
+        boolean freshSessionStartsNormal = !resume && savedMode != PresentationMode.NORMAL;
+        boolean hostAiUnavailable = savedMode == PresentationMode.HOST_SBS_AI
+                && !hostSessionIdSupported;
+        if (snapshot.getRecord() != null && (freshSessionStartsNormal || hostAiUnavailable)) {
+            if (freshSessionStartsNormal) {
+                LimeLog.info("New host session starts in Normal; saved mode " + savedMode
+                        + " applies only to a resume");
+            }
+            else {
+                LimeLog.warning("Host SBS AI is unavailable on a standard Sunshine/Apollo host; "
+                        + "restoring Normal");
+            }
             boolean repaired = sessionSettingsStore.edit(
                             sessionPc, sessionApp,
                             snapshot.getRecord().getLocalSessionId())
@@ -515,7 +526,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
             else {
                 startupModeOverride = PresentationMode.NORMAL;
-                LimeLog.warning("Unable to persist the Host SBS AI startup repair; "
+                LimeLog.warning("Unable to persist the Normal startup mode; "
                         + "forcing Normal for this launch");
             }
         }
@@ -4752,9 +4763,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Host SBS is normally switched live from the XR control bar. On a host-confirmed resume,
         // a saved Host SBS AI presentation preference is carried in the earlier HTTP request, so
-        // no duplicate control message is needed after the connection starts. A fresh launch
-        // does the same when the observed host advertised the control extensions; otherwise it
-        // requests the Normal presentation.
+        // no duplicate control message is needed after the connection starts. Fresh launches
+        // always request the Normal presentation.
     }
 
     @Override
