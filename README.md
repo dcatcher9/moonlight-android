@@ -152,16 +152,17 @@ for application placement and recovery behavior.
 
 Host AI 3D and Client AI 3D use the current Depth Coordinate V2 mapping, with different depth models
 and GPU pipelines. Client AI 3D calibrates each ZipDepth aspect graph to that shared coordinate and
-uses a fixed stereo strength. Its zero-disparity screen plane comes from the arithmetic mean of
-the raw depth field, latched when usable depth first establishes a shot and on accepted scene cuts.
-It stays fixed as objects move within the scene.
+uses a fixed stereo strength. Its zero-disparity screen plane follows the arithmetic mean of
+the raw depth field, and its depth amplitude follows that field's robust range. The first usable
+depth sets both; afterwards they adapt continuously at bounded rates, so the plane moves smoothly
+when the content changes. Client AI 3D has no scene-cut detection.
 
 ```mermaid
 flowchart TD
-    START["First usable depth in a new shot"]
-    START --> PLANE["Set the screen plane<br/>from the shot's average depth"]
-    PLANE --> HOLD["Keep that plane steady<br/>as objects move"]
-    HOLD -->|"Scene cut accepted"| START
+    START["First usable depth"]
+    START --> PLANE["Set the screen plane and amplitude<br/>from the depth field"]
+    PLANE --> FOLLOW["Follow the average depth and range<br/>at bounded rates"]
+    FOLLOW -->|"Each new depth result"| FOLLOW
 ```
 
 Client AI 3D reuses valid geometry for sufficiently similar content and presents the current color
@@ -170,7 +171,7 @@ keeping depth failures from applying invalid geometry to the current image.
 
 The models can still produce different detail and artifacts. Host AI 3D also owns foreground-window
 and subtitle plane conditioning; these are not part of Client AI 3D. The
-[XR architecture](./docs/android-xr-sbs.md#fixed-client-sbs-depth-coordinate-v2) owns the live client
+[XR architecture](./docs/android-xr-sbs.md#adaptive-client-sbs-depth-coordinate-v2) owns the live client
 geometry, and the [client–host parity guide](./docs/client-host-sbs-parity.md) distinguishes current
 behavior from historical experiments.
 
