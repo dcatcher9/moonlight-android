@@ -60,4 +60,28 @@ public class CommitTextQueueTest {
                 .idleFor(Duration.ofMillis(CommitTextQueue.FLUSH_INTERVAL_MS));
         assertEquals(Arrays.asList("a", "b"), sent);
     }
+
+    @Test
+    public void sendsEveryChunkOfACommitLongerThanOneChunk() {
+        List<String> sent = new ArrayList<>();
+        CommitTextQueue queue =
+                new CommitTextQueue(new Handler(Looper.getMainLooper()), sent::add);
+        char[] letters = new char[CommitTextQueue.UTF8_CHUNK_SIZE * 2 + 10];
+        Arrays.fill(letters, 'x');
+        String text = new String(letters);
+
+        queue.enqueue(text);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(1, sent.size());
+        shadowOf(Looper.getMainLooper())
+                .idleFor(Duration.ofMillis(CommitTextQueue.FLUSH_INTERVAL_MS * 2));
+
+        assertEquals(3, sent.size());
+        assertEquals(text, String.join("", sent));
+
+        // The queue drained, so a following commit schedules its own flush.
+        queue.enqueue("y");
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("y", sent.get(3));
+    }
 }

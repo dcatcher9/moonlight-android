@@ -49,9 +49,10 @@ final class CommitTextQueue {
         if (text == null || text.isEmpty()) {
             return;
         }
+        // A non-empty queue always has a flush tick pending, so only an empty one needs a kick.
+        boolean idle = queue.isEmpty();
         queue.addAll(splitUtf8(text, UTF8_CHUNK_SIZE));
-        // Kick off flushing if not already scheduled
-        if (queue.size() == 1) {
+        if (idle) {
             handler.post(flush);
         }
     }
