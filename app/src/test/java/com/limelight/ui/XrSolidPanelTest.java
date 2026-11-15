@@ -132,7 +132,7 @@ public class XrSolidPanelTest {
         when(panel.getSizeInPixels()).thenReturn(new IntSize2d(2000, 200));
         LinearLayout row = new LinearLayout(controller.get());
         Button pill = new Button(controller.get());
-        ReflectionHelpers.callInstanceMethod(presenter, "styleControlButton",
+        ReflectionHelpers.callInstanceMethod(dock(), "styleControlButton",
                 ClassParameter.from(Button.class, pill));
         pill.setText("Normal · Live");
         pill.setMinWidth(0);

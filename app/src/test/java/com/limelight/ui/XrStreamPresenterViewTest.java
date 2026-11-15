@@ -154,16 +154,16 @@ public final class XrStreamPresenterViewTest {
         AuthoredStereoModeState authored = (AuthoredStereoModeState) getField(
                 presenter, "authoredStereoModeState");
         FrameLayout host = new FrameLayout(activity);
-        setField(presenter, "modeOptionsHost", host);
+        setField(modeOptions(presenter), "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
         state.toggleModeOptions(PresentationMode.MOVIE_3D.name());
 
-        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
-        render.invoke(presenter);
+        render.invoke(modeOptions(presenter));
 
         XrChoiceGroup group = (XrChoiceGroup) getField(
-                presenter, "moviePictureFormatChoiceGroup");
+                modeOptions(presenter), "moviePictureFormatChoiceGroup");
         assertEquals(3, group.getChildCount());
         assertTrue(group.getChildAt(0) instanceof AppCompatButton);
         assertTrue(group.getChildAt(1) instanceof AppCompatButton);
@@ -207,8 +207,8 @@ public final class XrStreamPresenterViewTest {
         assertEquals(streamHeight, prefs.height);
 
         state.toggleModeOptions(PresentationMode.NORMAL.name());
-        render.invoke(presenter);
-        assertNull(getField(presenter, "moviePictureFormatChoiceGroup"));
+        render.invoke(modeOptions(presenter));
+        assertNull(getField(modeOptions(presenter), "moviePictureFormatChoiceGroup"));
         presenter.onDestroy();
         controller.destroy();
     }
@@ -224,19 +224,19 @@ public final class XrStreamPresenterViewTest {
                 activity, PreferenceConfiguration.readPreferences(activity),
                 surface -> { }, visible -> { });
         FrameLayout host = new FrameLayout(activity);
-        setField(presenter, "modeOptionsHost", host);
+        setField(modeOptions(presenter), "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
         state.toggleModeOptions(PresentationMode.GAME_3D.name());
-        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
-        render.invoke(presenter);
+        render.invoke(modeOptions(presenter));
 
         List<String> text = visibleTexts(host);
         assertTrue(text.contains(activity.getString(R.string.xr_mode_game_detail)));
         assertTrue(text.contains(activity.getString(R.string.xr_game_showing_2d)));
         assertTrue(text.contains(activity.getString(R.string.xr_game_source_unavailable)));
         assertFalse(text.contains("Auto"));
-        assertNull(getField(presenter, "moviePictureFormatChoiceGroup"));
+        assertNull(getField(modeOptions(presenter), "moviePictureFormatChoiceGroup"));
         assertSame(PresentationMode.NORMAL, getField(presenter, "currentPresenterMode"));
         controller.destroy();
     }
@@ -253,16 +253,16 @@ public final class XrStreamPresenterViewTest {
                 activity, PreferenceConfiguration.readPreferences(activity),
                 surface -> { }, visible -> { });
         FrameLayout host = new FrameLayout(activity);
-        setField(presenter, "modeOptionsHost", host);
+        setField(modeOptions(presenter), "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
         state.toggleModeOptions(PresentationMode.NORMAL.name());
 
-        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
-        render.invoke(presenter);
+        render.invoke(modeOptions(presenter));
 
         XrResolutionSelector selector = (XrResolutionSelector) getField(
-                presenter, "modeResolutionSelector");
+                modeOptions(presenter), "modeResolutionSelector");
         assertEquals(XrResolutionOptions.modeSubpaneOptions().size(),
                 selector.getCardCount());
         assertNull(selector.findCardByResolutionId(
@@ -286,22 +286,22 @@ public final class XrStreamPresenterViewTest {
         XrStreamPresenter presenter = new XrStreamPresenter(
                 activity, prefs, surface -> { }, visible -> { });
         FrameLayout host = new FrameLayout(activity);
-        setField(presenter, "modeOptionsHost", host);
+        setField(modeOptions(presenter), "modeOptionsHost", host);
         XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
         state.toggleModeOptions(PresentationMode.CLIENT_SBS_AI.name());
 
-        Method render = XrStreamPresenter.class.getDeclaredMethod("renderModeOptions");
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
         render.setAccessible(true);
-        render.invoke(presenter);
+        render.invoke(modeOptions(presenter));
 
-        TextView modelName = (TextView) getField(presenter, "clientModelNameView");
+        TextView modelName = (TextView) getField(modeOptions(presenter), "clientModelNameView");
         assertEquals("ZipDepth Base FP16 · short 384", modelName.getText().toString());
         assertThrows(NoSuchFieldException.class,
                 () -> XrStreamPresenter.class.getDeclaredField("clientModelChoiceGroup"));
 
         assertThrows(NoSuchFieldException.class,
                 () -> XrStreamPresenter.class.getDeclaredField("modeApplyButton"));
-        Button modeDefaults = (Button) getField(presenter, "modeDefaultsButton");
+        Button modeDefaults = (Button) getField(modeOptions(presenter), "modeDefaultsButton");
         assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT,
                 modeDefaults.getLayoutParams().width);
 
@@ -809,6 +809,10 @@ public final class XrStreamPresenterViewTest {
 
     private static int dp(Activity activity, int value) {
         return Math.round(value * activity.getResources().getDisplayMetrics().density);
+    }
+
+    private static Object modeOptions(XrStreamPresenter presenter) {
+        return org.robolectric.util.ReflectionHelpers.getField(presenter, "modeOptionsPane");
     }
 
     private static Object stats(XrStreamPresenter presenter) {

@@ -162,7 +162,7 @@ public class XrStreamPresenterCinemaEnvironmentTest {
     @Test
     public void cinemaTileEntersThenTogglesSharedOptionsAndExitClosesThePane() {
         FrameLayout host = new FrameLayout(activityController.get());
-        ReflectionHelpers.setField(presenter, "modeOptionsHost", host);
+        ReflectionHelpers.setField(modeOptionsPane(), "modeOptionsHost", host);
         XrControlUiState controls = ReflectionHelpers.getField(presenter, "controlUiState");
         tapCinemaTile();
         assertTrue(cinemaSelected());
@@ -171,8 +171,8 @@ public class XrStreamPresenterCinemaEnvironmentTest {
         tapCinemaTile();
         assertEquals(XrControlUiState.Surface.CINEMA_OPTIONS, controls.getVisibleSurface());
         assertTrue(host.getChildAt(0) instanceof ScrollView);
-        XrChoiceGroup choices = ReflectionHelpers.getField(presenter, "cinemaEnvironmentChoiceGroup");
-        Button action = ReflectionHelpers.getField(presenter, "cinemaActionButton");
+        XrChoiceGroup choices = ReflectionHelpers.getField(modeOptionsPane(), "cinemaEnvironmentChoiceGroup");
+        Button action = ReflectionHelpers.getField(modeOptionsPane(), "cinemaActionButton");
         assertEquals(3, choices.getChildCount());
         assertEquals("black", choices.getSelectedValue());
         assertEquals("Exit Cinema", action.getText().toString());
@@ -186,7 +186,7 @@ public class XrStreamPresenterCinemaEnvironmentTest {
         assertEquals(XrControlUiState.Surface.NONE, controls.getVisibleSurface());
         assertTrue(cinemaSelected());
         tapCinemaTile();
-        action = ReflectionHelpers.getField(presenter, "cinemaActionButton");
+        action = ReflectionHelpers.getField(modeOptionsPane(), "cinemaActionButton");
         action.performClick();
         assertFalse(cinemaSelected());
         assertEquals(XrControlUiState.Surface.NONE, controls.getVisibleSurface());
@@ -205,9 +205,9 @@ public class XrStreamPresenterCinemaEnvironmentTest {
         opacityPreference = 0.35f;
         tapCinema();
         acknowledgeApplied();
-        ReflectionHelpers.setField(presenter, "modeOptionsHost", new FrameLayout(activityController.get()));
+        ReflectionHelpers.setField(modeOptionsPane(), "modeOptionsHost", new FrameLayout(activityController.get()));
         tapCinemaTile();
-        XrChoiceGroup choices = ReflectionHelpers.getField(presenter, "cinemaEnvironmentChoiceGroup");
+        XrChoiceGroup choices = ReflectionHelpers.getField(modeOptionsPane(), "cinemaEnvironmentChoiceGroup");
         clearInvocations(surface);
 
         choices.getButtonAt(1).performClick();
@@ -223,10 +223,10 @@ public class XrStreamPresenterCinemaEnvironmentTest {
 
     @Test
     public void hiddenOrReplacedCinemaChoicesCannotApplyLateClicks() {
-        ReflectionHelpers.setField(presenter, "modeOptionsHost", new FrameLayout(activityController.get()));
+        ReflectionHelpers.setField(modeOptionsPane(), "modeOptionsHost", new FrameLayout(activityController.get()));
         tapCinemaTile();
         tapCinemaTile();
-        XrChoiceGroup oldChoices = ReflectionHelpers.getField(presenter, "cinemaEnvironmentChoiceGroup");
+        XrChoiceGroup oldChoices = ReflectionHelpers.getField(modeOptionsPane(), "cinemaEnvironmentChoiceGroup");
         tapCinemaTile();
         oldChoices.getButtonAt(2).performClick();
         assertSame(PreferenceConfiguration.CinemaEnvironment.BLACK,
@@ -236,7 +236,7 @@ public class XrStreamPresenterCinemaEnvironmentTest {
         oldChoices.getButtonAt(1).performClick();
         assertSame(PreferenceConfiguration.CinemaEnvironment.BLACK,
                 PreferenceConfiguration.readPreferences(activityController.get()).cinemaEnvironment);
-        XrChoiceGroup currentChoices = ReflectionHelpers.getField(presenter, "cinemaEnvironmentChoiceGroup");
+        XrChoiceGroup currentChoices = ReflectionHelpers.getField(modeOptionsPane(), "cinemaEnvironmentChoiceGroup");
         currentChoices.getButtonAt(2).performClick();
         assertSame(PreferenceConfiguration.CinemaEnvironment.PASSTHROUGH,
                 PreferenceConfiguration.readPreferences(activityController.get()).cinemaEnvironment);
@@ -244,11 +244,11 @@ public class XrStreamPresenterCinemaEnvironmentTest {
 
     @Test
     public void disabledCinemaControlsCannotSaveOrApplyALateChoice() {
-        ReflectionHelpers.setField(presenter, "modeOptionsHost", new FrameLayout(activityController.get()));
+        ReflectionHelpers.setField(modeOptionsPane(), "modeOptionsHost", new FrameLayout(activityController.get()));
         tapCinemaTile();
         tapCinemaTile();
-        XrChoiceGroup choices = ReflectionHelpers.getField(presenter, "cinemaEnvironmentChoiceGroup");
-        Button action = ReflectionHelpers.getField(presenter, "cinemaActionButton");
+        XrChoiceGroup choices = ReflectionHelpers.getField(modeOptionsPane(), "cinemaEnvironmentChoiceGroup");
+        Button action = ReflectionHelpers.getField(modeOptionsPane(), "cinemaActionButton");
         presenter.setSessionControlsEnabled(false);
         assertFalse(choices.isEnabled());
         assertFalse(action.isEnabled());
@@ -397,6 +397,10 @@ public class XrStreamPresenterCinemaEnvironmentTest {
 
     private boolean cinemaSelected() {
         return ReflectionHelpers.getField(cinemaController(), "cinemaViewExpanded");
+    }
+
+    private Object modeOptionsPane() {
+        return ReflectionHelpers.getField(presenter, "modeOptionsPane");
     }
 
     private Object cinemaController() {

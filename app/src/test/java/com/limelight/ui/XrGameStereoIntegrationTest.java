@@ -145,10 +145,12 @@ public final class XrGameStereoIntegrationTest {
     @Test
     public void bootstrapThenReadyWidensOnlyAfterAckAndMatchingFrameAndKeepsFallbackPacked()
             throws Exception {
-        ReflectionHelpers.setField(presenter, "modeOptionsHost", new FrameLayout(game));
+        ReflectionHelpers.setField(modeOptionsPane(), "modeOptionsHost", new FrameLayout(game));
         XrControlUiState ui = ReflectionHelpers.getField(presenter, "controlUiState");
         ui.toggleModeOptions(PresentationMode.GAME_3D.name());
-        invoke("renderModeOptions", new Class<?>[0]);
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+        render.invoke(modeOptionsPane());
         assertSourceCard(R.string.xr_game_waiting, R.string.xr_game_source_waiting);
         bootstrap();
         ready(10, 1);
@@ -718,14 +720,18 @@ public final class XrGameStereoIntegrationTest {
     }
 
     private void assertSourceCard(int statusResource, int detailResource) {
-        TextView status = ReflectionHelpers.getField(presenter, "gameSourceStatusView");
-        TextView detail = ReflectionHelpers.getField(presenter, "gameSourceDetailView");
+        TextView status = ReflectionHelpers.getField(modeOptionsPane(), "gameSourceStatusView");
+        TextView detail = ReflectionHelpers.getField(modeOptionsPane(), "gameSourceDetailView");
         assertEquals(game.getString(statusResource), status.getText().toString());
         assertEquals(game.getString(detailResource), detail.getText().toString());
     }
 
     private static void idle() {
         Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
+
+    private Object modeOptionsPane() {
+        return ReflectionHelpers.getField(presenter, "modeOptionsPane");
     }
 
     private Object invoke(String name, Class<?>[] parameterTypes, Object... arguments) throws Exception {

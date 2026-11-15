@@ -55,6 +55,7 @@ public class XrPaletteTest {
             "XrSessionSettingsPane.java",
             "XrCinemaController.java",
             "XrDockController.java",
+            "XrModeOptionsPane.java",
     };
 
     /**
