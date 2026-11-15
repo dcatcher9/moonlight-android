@@ -1,7 +1,5 @@
 package com.limelight.sbs;
 
-import java.util.Arrays;
-
 /**
  * Source-neutral, immutable SBS depth-health sample used by the XR statistics presentation.
  *
@@ -66,9 +64,6 @@ public final class SbsDepthTelemetrySnapshot {
     public final long emptyDepthFrames;
     public final long collapsedDepthFrames;
     public final long sampleFrame;
-    public final float[] popTrend;
-    public final float[] edgeTrend;
-    public final float[] anchorTrend;
     /** Present only for host samples; rates use host copy timestamps, never packet arrival time. */
     public final HostPerformance hostPerformance;
 
@@ -110,10 +105,7 @@ public final class SbsDepthTelemetrySnapshot {
         }
     }
 
-    /** Shared by snapshots without chart history; a zero-length array has nothing to mutate. */
-    private static final float[] NO_TREND = new float[0];
-
-    /** Mutable construction parameters. Trend arrays held here are already owned copies. */
+    /** Mutable construction parameters. */
     private static final class Params {
         Availability availability;
         int validFields;
@@ -132,15 +124,12 @@ public final class SbsDepthTelemetrySnapshot {
         long emptyDepthFrames;
         long collapsedDepthFrames;
         long sampleFrame;
-        float[] popTrend = NO_TREND;
-        float[] edgeTrend = NO_TREND;
-        float[] anchorTrend = NO_TREND;
         HostPerformance hostPerformance;
 
         Params() {
         }
 
-        /** Starts from an existing snapshot, sharing its immutable trend arrays. */
+        /** Starts from an existing snapshot. */
         Params(SbsDepthTelemetrySnapshot source) {
             availability = source.availability;
             validFields = source.validFields;
@@ -159,18 +148,7 @@ public final class SbsDepthTelemetrySnapshot {
             emptyDepthFrames = source.emptyDepthFrames;
             collapsedDepthFrames = source.collapsedDepthFrames;
             sampleFrame = source.sampleFrame;
-            popTrend = source.popTrend;
-            edgeTrend = source.edgeTrend;
-            anchorTrend = source.anchorTrend;
             hostPerformance = source.hostPerformance;
-        }
-
-        /** The single defensive copy of caller-owned trend arrays. */
-        Params copyTrends(float[] popTrend, float[] edgeTrend, float[] anchorTrend) {
-            this.popTrend = copy(popTrend);
-            this.edgeTrend = copy(edgeTrend);
-            this.anchorTrend = copy(anchorTrend);
-            return this;
         }
     }
 
@@ -192,9 +170,6 @@ public final class SbsDepthTelemetrySnapshot {
         this.emptyDepthFrames = params.emptyDepthFrames;
         this.collapsedDepthFrames = params.collapsedDepthFrames;
         this.sampleFrame = params.sampleFrame;
-        this.popTrend = params.popTrend;
-        this.edgeTrend = params.edgeTrend;
-        this.anchorTrend = params.anchorTrend;
         this.hostPerformance = params.hostPerformance;
     }
 
@@ -243,23 +218,8 @@ public final class SbsDepthTelemetrySnapshot {
         return new SbsDepthTelemetrySnapshot(params);
     }
 
-    public SbsDepthTelemetrySnapshot withTrends(
-            float[] popTrend, float[] edgeTrend, float[] anchorTrend) {
-        return new SbsDepthTelemetrySnapshot(new Params(this)
-                .copyTrends(popTrend, edgeTrend, anchorTrend));
-    }
-
     public SbsDepthTelemetrySnapshot withHostPerformance(HostPerformance performance) {
         Params params = new Params(this);
-        params.hostPerformance = performance;
-        return new SbsDepthTelemetrySnapshot(params);
-    }
-
-    /** {@link #withTrends} followed by {@link #withHostPerformance}, built once. */
-    SbsDepthTelemetrySnapshot withTrendsAndHostPerformance(
-            float[] popTrend, float[] edgeTrend, float[] anchorTrend,
-            HostPerformance performance) {
-        Params params = new Params(this).copyTrends(popTrend, edgeTrend, anchorTrend);
         params.hostPerformance = performance;
         return new SbsDepthTelemetrySnapshot(params);
     }
@@ -278,21 +238,5 @@ public final class SbsDepthTelemetrySnapshot {
 
     public boolean isInitialized() {
         return hasRuntime(RUNTIME_INITIALIZED);
-    }
-
-    public boolean isAdaptivePopClassified() {
-        return hasRuntime(RUNTIME_CLASSIFIED)
-                && hasValid(VALID_EDGE)
-                && Float.isFinite(classifiedEdgeFraction)
-                && classifiedEdgeFraction >= 0.0f;
-    }
-
-    public boolean isRangeCollapsed() {
-        return hasRuntime(RUNTIME_RANGE_COLLAPSED);
-    }
-
-    private static float[] copy(float[] source) {
-        return source == null || source.length == 0
-                ? NO_TREND : Arrays.copyOf(source, source.length);
     }
 }

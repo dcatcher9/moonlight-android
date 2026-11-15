@@ -174,17 +174,12 @@ public final class HostSbsTelemetrySnapshotTest {
     }
 
     @Test
-    public void effectivePopRemainsAbsoluteThroughNeutralHistory() {
+    public void effectivePopRemainsAbsoluteInDepthTelemetry() {
         HostSbsTelemetrySnapshot parsed =
                 HostSbsTelemetrySnapshot.parse(stateBody(7, 1, 1, 1.75f));
         SbsDepthTelemetrySnapshot neutral = parsed.toDepthTelemetry();
-        SbsDepthTelemetryHistory history = new SbsDepthTelemetryHistory();
-        history.add(neutral);
-        SbsDepthTelemetrySnapshot chart = history.attach(neutral);
 
         assertEquals(1.75f, neutral.effectivePop, 0.0001f);
-        assertEquals(1, chart.popTrend.length);
-        assertEquals(1.75f, chart.popTrend[0], 0.0001f);
         assertTrue(neutral.isInitialized());
     }
 

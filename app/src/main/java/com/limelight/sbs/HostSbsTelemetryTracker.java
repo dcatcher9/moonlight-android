@@ -3,16 +3,16 @@ package com.limelight.sbs;
 /**
  * Main-thread ownership and ordering gate for one stream's host SBS telemetry subscription.
  *
- * <p>Each distinct accepted host publication advances chart history at network delivery. The
- * slower stats-table repaint only attaches that history to the latest immutable state, so it
- * neither drops intermediate 10 Hz samples nor duplicates a repeated heartbeat.</p>
+ * <p>Each accepted host publication replaces the latest immutable state and advances the
+ * cumulative-counter rate windows at network delivery. The slower stats-table repaint reads the
+ * latest state and those rates, so a repeated heartbeat neither renews a rate nor ages the
+ * state.</p>
  */
 public final class HostSbsTelemetryTracker {
     public static final long STALE_AFTER_MS = 2500L;
     private static final long U32_MASK = 0xFFFFFFFFL;
     private static final long U32_HALF_RANGE = 0x80000000L;
 
-    private final SbsDepthTelemetryHistory history = new SbsDepthTelemetryHistory();
     private boolean active;
     private int requestId = -1;
     private HostSbsTelemetrySnapshot latest;
@@ -22,7 +22,6 @@ public final class HostSbsTelemetryTracker {
     private final CounterRates outputs = new CounterRates();
     private long acceptedGeneration = -1L;
     private long acceptedSequence = -1L;
-    private boolean staleHistoryCleared;
     private SbsDepthTelemetrySnapshot.Availability fallbackAvailability =
             SbsDepthTelemetrySnapshot.Availability.WAITING;
 
@@ -52,9 +51,7 @@ public final class HostSbsTelemetryTracker {
         latest = null;
         latestReceivedAtMs = 0L;
         fallbackAvailability = availability;
-        history.clear();
         clearRates();
-        staleHistoryCleared = true;
     }
 
     /** Leaves Host SBS ownership. Late packets from the disabled request are rejected. */
@@ -80,16 +77,14 @@ public final class HostSbsTelemetryTracker {
             if (snapshot.generation == acceptedGeneration) {
                 if (snapshot.sequence == acceptedSequence) {
                     // Apollo may repeat its latest publication as a heartbeat when a static
-                    // scene produces no new renderer sample. It is live evidence, not another
-                    // chart era or a reason to append/clear history.
+                    // scene produces no new renderer sample. It is live evidence, not a new
+                    // publication.
                     if (transportWasStale) {
-                        history.clear();
                         invalidateRatesAfterGap();
                     }
                     latest = snapshot;
                     latestReceivedAtMs = Math.max(
                             latestReceivedAtMs, boundedReceivedAtMs);
-                    staleHistoryCleared = false;
                     // Performance is serialized from its generation-owned collector at send
                     // time. Its copy IDs can advance without another depth-health sample.
                     acceptPerformance(snapshot, boundedReceivedAtMs);
@@ -102,32 +97,26 @@ public final class HostSbsTelemetryTracker {
                 if (!isNewerUnsigned32(snapshot.generation, acceptedGeneration)) {
                     return false;
                 }
-                // A new host pipeline/subscription generation is a new chart era.
-                history.clear();
+                // A new host pipeline/subscription generation starts new rate windows.
                 clearRates();
             }
         }
         acceptedGeneration = snapshot.generation;
         acceptedSequence = snapshot.sequence;
-        // A repaint may not have occurred during the silence, so enforce the stale-era boundary
-        // at delivery too. Otherwise a fresh sequence would visually bridge an unobserved gap.
+        // A repaint may not have occurred during the silence, so enforce the stale boundary at
+        // delivery too. Otherwise a fresh sequence would bridge a rate window across the gap.
         if (transportWasStale) {
-            history.clear();
             invalidateRatesAfterGap();
         }
         if (snapshot.status != HostSbsTelemetrySnapshot.STATUS_OK) {
-            // Explicit unavailable/unsupported/failed state supersedes old live-looking charts.
-            history.clear();
+            // Explicit unavailable/unsupported/failed state supersedes old live-looking rates.
             clearRates();
         }
 
         latest = snapshot;
         publicationReceivedAtMs = boundedReceivedAtMs;
         latestReceivedAtMs = Math.max(latestReceivedAtMs, boundedReceivedAtMs);
-        staleHistoryCleared = false;
-        SbsDepthTelemetrySnapshot sample = snapshot.toDepthTelemetry();
-        if (sample.isAvailable()) {
-            history.add(sample);
+        if (snapshot.status == HostSbsTelemetrySnapshot.STATUS_OK) {
             acceptPerformance(snapshot, boundedReceivedAtMs);
         }
         return true;
@@ -141,23 +130,19 @@ public final class HostSbsTelemetryTracker {
             return SbsDepthTelemetrySnapshot.unavailable(fallbackAvailability);
         }
         if (Math.max(0L, nowMs - latestReceivedAtMs) > STALE_AFTER_MS) {
-            if (!staleHistoryCleared) {
-                history.clear();
-                invalidateRatesAfterGap();
-                staleHistoryCleared = true;
-            }
+            // Idempotent until the next accepted publication establishes a baseline.
+            invalidateRatesAfterGap();
             return SbsDepthTelemetrySnapshot.unavailable(
                     SbsDepthTelemetrySnapshot.Availability.STALE);
         }
 
         SbsDepthTelemetrySnapshot sample = latest.toDepthTelemetry();
         if (!sample.isAvailable()) {
-            history.clear();
             return sample;
         }
         boolean outcomeFresh = outcomes.isFresh(nowMs);
         boolean outputFresh = outputs.isFresh(nowMs);
-        return history.attach(sample,
+        return sample.withHostPerformance(
                 new SbsDepthTelemetrySnapshot.HostPerformance(latest,
                         Math.max(0L, nowMs - publicationReceivedAtMs),
                         outcomes.hasBaseline ? Math.max(0L, nowMs - outcomes.receivedAtMs) : -1L,
@@ -191,9 +176,7 @@ public final class HostSbsTelemetryTracker {
         clearRates();
         acceptedGeneration = -1L;
         acceptedSequence = -1L;
-        staleHistoryCleared = false;
         fallbackAvailability = SbsDepthTelemetrySnapshot.Availability.WAITING;
-        history.clear();
     }
 
     static boolean isNewerUnsigned32(long candidate, long current) {

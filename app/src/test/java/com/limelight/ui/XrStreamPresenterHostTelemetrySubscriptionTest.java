@@ -60,7 +60,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
     }
 
     @Test
-    public void closingStatsUnsubscribesAndLatePacketsCannotRestoreHistory() throws Exception {
+    public void closingStatsUnsubscribesAndLatePacketsCannotRestoreState() throws Exception {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
@@ -68,7 +68,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         HostSbsTelemetryTracker tracker = tracker(presenter);
         int requestId = tracker.getRequestId();
         presenter.onHostSbsTelemetryState(snapshot(requestId, 1, 1.5f), 100);
-        assertEquals(1, tracker.sampleAtStatsTick(100).popTrend.length);
+        assertEquals(1.5f, tracker.sampleAtStatsTick(100).effectivePop, 0.0001f);
 
         presenter.toggleStats();
         assertFalse(presenter.isStatsVisible());
@@ -91,7 +91,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
     }
 
     @Test
-    public void reopeningStatsUsesFreshRequestAndChartHistory() throws Exception {
+    public void reopeningStatsUsesFreshRequestAndDiscardsPriorState() throws Exception {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
@@ -100,7 +100,7 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         int oldRequestId = tracker.getRequestId();
         presenter.onHostSbsTelemetryState(snapshot(oldRequestId, 1, 1.3f), 100);
         presenter.onHostSbsTelemetryState(snapshot(0, 2, 1.4f), 200);
-        assertEquals(2, tracker.sampleAtStatsTick(200).popTrend.length);
+        assertEquals(1.4f, tracker.sampleAtStatsTick(200).effectivePop, 0.0001f);
 
         presenter.toggleStats();
         presenter.toggleStats();
@@ -110,14 +110,14 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         assertEquals(2, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());
         assertEquals(SbsDepthTelemetrySnapshot.Availability.WAITING,
                 tracker.sampleAtStatsTick(300).availability);
-        assertEquals(0, tracker.sampleAtStatsTick(300).popTrend.length);
 
         presenter.onHostSbsTelemetryState(snapshot(oldRequestId, 3, 1.9f), 310);
         assertEquals(SbsDepthTelemetrySnapshot.Availability.WAITING,
                 tracker.sampleAtStatsTick(310).availability);
         presenter.onHostSbsTelemetryState(snapshot(tracker.getRequestId(), 4, 1.6f), 320);
-        assertEquals(1, tracker.sampleAtStatsTick(320).popTrend.length);
-        assertEquals(1.6f, tracker.sampleAtStatsTick(320).popTrend[0], 0.0001f);
+        assertEquals(SbsDepthTelemetrySnapshot.Availability.AVAILABLE,
+                tracker.sampleAtStatsTick(320).availability);
+        assertEquals(1.6f, tracker.sampleAtStatsTick(320).effectivePop, 0.0001f);
 
         invoke(subscription(presenter), "reconcile");
         assertEquals(2, ShadowMoonBridge.getHostSbsTelemetryEnabledCallCount());

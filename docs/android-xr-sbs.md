@@ -1484,8 +1484,8 @@ capability, transition, failure, and bounded playback-recovery logs remain avail
 stops its device/CPU sampling, detailed Client-SBS counters, GL timer queries, and asynchronous
 health-copy polling; reopening starts fresh sample windows rather than including hidden time.
 Host SBS depth-health telemetry follows the same visibility rule: hiding Stats unsubscribes,
-cancels subscription retries, and clears its chart history; reopening requests fresh samples at
-100 ms. Late replies cannot restore a hidden subscription. Operational host depth/mode status and
+cancels subscription retries, and drops the latest host state and its rate windows; reopening
+requests fresh samples at 100 ms. Late replies cannot restore a hidden subscription. Operational host depth/mode status and
 the host's independent diagnostics switch remain active under their own policies.
 Host Stats uses the current 240-byte telemetry v2 extension. Original Sunshine/Apollo hosts
 without this extension remain supported and report Host telemetry as unsupported. The parser
@@ -1558,9 +1558,9 @@ Health copies contain the 64-byte depth state: validity bits, fault counters, th
 camera and the source clock. Copies,
 fences and maps remain asynchronous, failures back off without disabling valid depth, and recovery
 requires a fresh completed sample. Near reuse freezes postprocess health. Client health is sampled
-every five visible observations and keeps no trend history. Host trends retain their 120 samples at the visible
-100 ms cadence. All plots use oldest-left/newest-right sample slots, not an invented
-fixed wall-clock axis; repeated host heartbeat publications do not duplicate event points.
+every five visible observations. Stats draws no plots and neither side keeps a sample history:
+the host pane shows the latest publication received at the visible 100 ms cadence, and a repeated
+host heartbeat publication renews liveness without renewing a rate or the publication age.
 
 GL latches may outpace inference/reuse adoption while the transaction is occupied. Composition
 and swaps follow real inference plus reuse adoption; drains without adoption retain the existing

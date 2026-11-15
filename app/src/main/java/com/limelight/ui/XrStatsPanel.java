@@ -2,7 +2,6 @@ package com.limelight.ui;
 
 import android.app.Activity;
 import android.text.TextUtils;
-import android.view.Gravity;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -19,17 +18,15 @@ import androidx.xr.scenecore.SurfaceEntity;
 
 import com.limelight.R;
 import com.limelight.binding.video.StreamPerformanceSnapshot;
-import com.limelight.sbs.ClientSbsMetricHistory;
 import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.sbs.HostSbsTelemetryTracker;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
-import com.limelight.ui.xrcontrols.XrSparklineView;
 import com.limelight.utils.ClientSbsPerformanceSnapshot;
 
 import java.util.Locale;
 
 /**
- * The XR performance-stats panel: its SceneCore panel, the pooled table rows and trend rows, and
+ * The XR performance-stats panel: its SceneCore panel, the pooled table rows, and
  * the fit of the panel height to its content. {@link XrStreamPresenter} decides when Stats is
  * visible and where the panel sits; everything here runs on the main thread.
  */
@@ -106,12 +103,6 @@ final class XrStatsPanel {
 
     static final String STATS_ROW_METRIC = "stats-metric";
     static final String STATS_ROW_SECTION = "stats-section";
-
-    /**
-     * Trend rows carry a third child. They need their own pool tag: reusing a plain metric row and
-     * appending a sparkline each refresh stacked a new plot on the row every window.
-     */
-    static final String STATS_ROW_TREND = "stats-trend";
 
     /** Compact performance-stats panel wrapped inward from the screen's right edge. */
     private PanelEntity statsPanel;
@@ -705,33 +696,8 @@ final class XrStatsPanel {
         value.setLineSpacing(0f, 1.08f);
         value.setPadding(0, statsDp(3), 0, statsDp(3));
 
-        if (STATS_ROW_TREND.equals(tag)) {
-            value.setSingleLine(true);
-            value.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            // Keep the value and its plot inside one bounded table cell. The previous third
-            // global TableLayout column depended on runtime font measurement to remain inside
-            // SceneCore's clipped panel raster. Sharing the remaining width makes the plot's
-            // bounds independent of the widest metric label in another row.
-            LinearLayout trendContent = new LinearLayout(activity);
-            trendContent.setOrientation(LinearLayout.HORIZONTAL);
-            trendContent.setGravity(Gravity.CENTER_VERTICAL);
-            trendContent.setWeightSum(1.0f);
-            trendContent.addView(value, new LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.72f));
-
-            XrSparklineView spark = new XrSparklineView(activity);
-            LinearLayout.LayoutParams sparkParams =
-                    new LinearLayout.LayoutParams(0, statsDp(32), 0.28f);
-            sparkParams.leftMargin = statsDp(14);
-            sparkParams.topMargin = statsDp(4);
-            trendContent.addView(spark, sparkParams);
-
-            row.addView(label);
-            row.addView(trendContent);
-        } else {
-            row.addView(label);
-            row.addView(value);
-        }
+        row.addView(label);
+        row.addView(value);
         return row;
     }
 
@@ -756,58 +722,6 @@ final class XrStatsPanel {
             return paletteColor(R.color.xr_status_warn);
         }
         return paletteColor(R.color.xr_status_ok);
-    }
-
-    /**
-     * Row with a history plot after the value. Kept to metrics whose meaning depends on their
-     * recent shape, such as depth change and accepted-cut counters.
-     */
-    private void addTrendStatsRow(String label, String value, int valueColor,
-                                   float[] trend, boolean asDeltas,
-                                   float rangeMin, float rangeMax) {
-        float[] plotted = trend;
-        int count = trend == null ? 0 : trend.length;
-        if (asDeltas && count > 1) {
-            float[] deltas = new float[count - 1];
-            count = ClientSbsMetricHistory.toDeltas(trend, count, deltas);
-            plotted = deltas;
-        }
-        if (count < 2) {
-            // Nothing to plot yet: fall back to a plain row so the value still shows during the
-            // first seconds of a session rather than leaving a gap. The sample count is not
-            // appended here -- the sparkline's content description carries it, in the working
-            // case as well as this one.
-            addStatsRow(label, value, valueColor);
-            return;
-        }
-        String trendSummary = XrSparklineView.describeTrend(plotted, count);
-        if (asDeltas) {
-            String restart = XrSparklineView.describeCounterRestart(
-                    trend, trend != null ? trend.length : 0);
-            if (restart != null) {
-                trendSummary += ", " + restart;
-            }
-        }
-
-        TableRow row = obtainStatsRow(STATS_ROW_TREND);
-        setStatsText((TextView) row.getChildAt(0), label);
-        LinearLayout trendContent = (LinearLayout) row.getChildAt(1);
-        TextView valueView = (TextView) trendContent.getChildAt(0);
-        setStatsText(valueView, value);
-        valueView.setTextColor(valueColor);
-        XrSparklineView spark = (XrSparklineView) trendContent.getChildAt(1);
-        // A plain View has neither a role nor a text equivalent. Include the actual recent shape,
-        // rather than merely proving the sparkline exists, so accessibility users receive the
-        // distinction this plot was added to expose.
-        spark.setContentDescription(label + " trend, " + count + " samples, "
-                + trendSummary);
-        spark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
-        spark.setColors(valueColor, paletteColor(R.color.xr_border_panel));
-        spark.setRange(rangeMin, rangeMax);
-        spark.setValues(plotted, count,
-                asDeltas
-                        ? ClientSbsMetricHistory.CAPACITY - 1
-                        : ClientSbsMetricHistory.CAPACITY);
     }
 
     private void addStatsRow(String label, String value, int valueColor) {
