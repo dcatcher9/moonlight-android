@@ -334,8 +334,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private final Object liveStreamResizeLock = new Object();
 
     /**
-     * Fields the local V2 pipeline measures. Change fraction, cut range, scene age and cut counts
-     * are host-only and stay unavailable on the client.
+     * Fields the local V2 pipeline measures. Edge, anchor, subject and range fields are host-only
+     * and stay unavailable on the client.
      */
     static int depthTelemetryValidFields() {
         return SbsDepthTelemetrySnapshot.VALID_CONFIG
@@ -362,10 +362,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 depthMapWidth, depthMapHeight, 0,
                 ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
                 ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
-                ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH, Float.NaN, Float.NaN,
+                ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH, Float.NaN,
                 Float.NaN, Float.NaN, health.validFraction,
-                Float.NaN, 0L, 0L,
-                0L, health.incompleteRawFrames,
+                Float.NaN, health.incompleteRawFrames,
                 health.collapsedRawFrames, 0L);
     }
 

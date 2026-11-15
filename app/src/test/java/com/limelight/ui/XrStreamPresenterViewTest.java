@@ -606,9 +606,9 @@ public final class XrStreamPresenterViewTest {
         addTrend.setAccessible(true);
 
         String[] labels = {
-                "Cut edge evidence",
-                "Cut depth change",
-                "Scene cuts",
+                "Edge evidence",
+                "Depth change",
+                "Event count",
                 "Frame age",
                 "Network jitter"
         };
@@ -616,7 +616,7 @@ public final class XrStreamPresenterViewTest {
         for (int i = 0; i < labels.length; i++) {
             addTrend.invoke(stats(presenter), labels[i], "sample " + i, 0xFFFFFFFF,
                     new float[] {i, i + 0.5f, i + 1.0f},
-                    "Scene cuts".equals(labels[i]), Float.NaN, Float.NaN);
+                    "Event count".equals(labels[i]), Float.NaN, Float.NaN);
         }
         finish.invoke(stats(presenter));
 
@@ -633,12 +633,12 @@ public final class XrStreamPresenterViewTest {
             LinearLayout trendContent = (LinearLayout) firstRows[i].getChildAt(1);
             assertEquals(2, trendContent.getChildCount());
             firstSparklines[i] = trendContent.getChildAt(1);
-            assertEquals("Scene cuts".equals(labels[i])
+            assertEquals("Event count".equals(labels[i])
                             ? ClientSbsMetricHistory.CAPACITY - 1
                             : ClientSbsMetricHistory.CAPACITY,
                     slotCapacity.getInt(firstSparklines[i]));
-            int plottedSamples = "Scene cuts".equals(labels[i]) ? 2 : 3;
-            String summary = "Scene cuts".equals(labels[i])
+            int plottedSamples = "Event count".equals(labels[i]) ? 2 : 3;
+            String summary = "Event count".equals(labels[i])
                     ? "steady, recent range 0.5 to 0.5, latest 0.5"
                     : "rising, recent range " + (float) i + " to " + (i + 1.0f)
                             + ", latest " + (i + 1.0f);
@@ -651,7 +651,7 @@ public final class XrStreamPresenterViewTest {
         for (int i = 0; i < labels.length; i++) {
             addTrend.invoke(stats(presenter), labels[i], "updated " + i, 0xFFFFFFFF,
                     new float[] {i + 0.1f, i + 0.6f, i + 1.1f},
-                    "Scene cuts".equals(labels[i]), Float.NaN, Float.NaN);
+                    "Event count".equals(labels[i]), Float.NaN, Float.NaN);
         }
         finish.invoke(stats(presenter));
 
@@ -689,14 +689,14 @@ public final class XrStreamPresenterViewTest {
         addTrend.setAccessible(true);
 
         begin.invoke(stats(presenter));
-        addTrend.invoke(stats(presenter), "Cut depth change", "warming", 0xFFFFFFFF,
+        addTrend.invoke(stats(presenter), "Depth change", "warming", 0xFFFFFFFF,
                 new float[] {1.0f}, false, 0.0f, 2.0f);
         finish.invoke(stats(presenter));
         TableRow fallback = (TableRow) table.getChildAt(0);
         assertTrue(fallback.getChildAt(1) instanceof TextView);
 
         begin.invoke(stats(presenter));
-        addTrend.invoke(stats(presenter), "Cut depth change", "live", 0xFFFFFFFF,
+        addTrend.invoke(stats(presenter), "Depth change", "live", 0xFFFFFFFF,
                 new float[] {1.0f, 1.5f}, false, 0.0f, 2.0f);
         finish.invoke(stats(presenter));
         TableRow trend = (TableRow) table.getChildAt(0);
@@ -704,7 +704,7 @@ public final class XrStreamPresenterViewTest {
         assertTrue(trend.getChildAt(1) instanceof LinearLayout);
 
         begin.invoke(stats(presenter));
-        addTrend.invoke(stats(presenter), "Cut depth change", "reset", 0xFFFFFFFF,
+        addTrend.invoke(stats(presenter), "Depth change", "reset", 0xFFFFFFFF,
                 new float[] {1.0f}, false, 0.0f, 2.0f);
         finish.invoke(stats(presenter));
         TableRow resetFallback = (TableRow) table.getChildAt(0);

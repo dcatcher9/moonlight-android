@@ -1488,7 +1488,9 @@ cancels subscription retries, and clears its chart history; reopening requests f
 100 ms. Late replies cannot restore a hidden subscription. Operational host depth/mode status and
 the host's independent diagnostics switch remain active under their own policies.
 Host Stats uses the current 240-byte telemetry v2 extension. Original Sunshine/Apollo hosts
-without this extension remain supported and report Host telemetry as unsupported. The pane
+without this extension remain supported and report Host telemetry as unsupported. The parser
+skips the body's reserved bytes 44..47 and 64..75 and accepts its reserved valid-field bits 3, 8
+and 9 and runtime-flag bits 4, 5 and 8 either set or clear; none of them reaches Stats. The pane
 reports publication sequence/receive age and GPU-copy sequence/receive age separately: a
 transport heartbeat keeps the connection live without making an old GPU observation fresh.
 With host diagnostics enabled, consecutive cumulative GPU outcome copies provide infer/reuse/

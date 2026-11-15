@@ -3,7 +3,14 @@ package com.limelight.sbs;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** Immutable parser result for Apollo's exact 240-byte host SBS telemetry v2 state body. */
+/**
+ * Immutable parser result for Apollo's exact 240-byte host SBS telemetry v2 state body.
+ *
+ * <p>Bytes 44..47 and 64..75, valid-field bits 3, 8 and 9 and runtime-flag bits 4, 5 and 8 are
+ * reserved. The parser skips those bytes without inspecting them and accepts those bits set or
+ * clear, so a host that fills them and a host that zeroes them both parse. The reserved bits are
+ * masked out of {@link #toDepthTelemetry()}.</p>
+ */
 public final class HostSbsTelemetrySnapshot {
     public static final int WIRE_SIZE = 240;
     public static final int VERSION_2 = 2;
@@ -11,8 +18,17 @@ public final class HostSbsTelemetrySnapshot {
     public static final int VALID_OUTPUT = 1 << 12;
     public static final int VALID_STAGE_BASE = 1 << 13;
     public static final int STAGE_COUNT = 8;
+    /** Wire range of the depth-health bits; the performance bits start above it. */
     private static final int VALID_HEALTH = (1 << 11) - 1;
     private static final int VALID_ALL = (1 << 21) - 1;
+    /** Reserved valid-field bits: accepted on the wire, never reported as a field. */
+    static final int VALID_RESERVED = (1 << 3) | (1 << 8) | (1 << 9);
+    /** Reserved runtime-flag bits: accepted on the wire, never reported as a flag. */
+    static final int RUNTIME_RESERVED = (1 << 4) | (1 << 5) | (1 << 8);
+    private static final int RUNTIME_WIRE_ALL =
+            SbsDepthTelemetrySnapshot.RUNTIME_ALL | RUNTIME_RESERVED;
+    private static final int RESERVED_FLOAT_BYTES = 4;
+    private static final int RESERVED_COUNTER_BYTES = 12;
 
     /** One independently sampled stage; unavailable fields never become zero-cost evidence. */
     public static final class Stage {
@@ -50,14 +66,10 @@ public final class HostSbsTelemetrySnapshot {
     /** Absolute effective pop strength supplied by Apollo. */
     public final float effectivePop;
     public final float classifiedEdgeFraction;
-    public final float changeFraction;
     public final float zeroAnchorShiftPx;
     public final float subjectDepth;
     public final float validDepthFraction;
     public final float effectiveRangeWidth;
-    public final long sceneAge;
-    public final long hardCutCount;
-    public final long externalCutRequests;
     public final long emptyDepthFrames;
     public final long collapsedDepthFrames;
     public final long sampleFrame;
@@ -85,9 +97,8 @@ public final class HostSbsTelemetrySnapshot {
             int version, int status, int requestId, long generation, long sequence,
             int validFields, int runtimeFlags, int depthWidth, int depthHeight,
             int zeroPlaneMode, float popFloor, float popCeiling, float effectivePop,
-            float classifiedEdgeFraction, float changeFraction, float zeroAnchorShiftPx,
+            float classifiedEdgeFraction, float zeroAnchorShiftPx,
             float subjectDepth, float validDepthFraction, float effectiveRangeWidth,
-            long sceneAge, long hardCutCount, long externalCutRequests,
             long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame,
             long outcomeEpoch, long outcomeSequence, long outcomeCopyHostMs,
             long inferredTotal, long reusedTotal, long invalidTotal,
@@ -108,14 +119,10 @@ public final class HostSbsTelemetrySnapshot {
         this.popCeiling = popCeiling;
         this.effectivePop = effectivePop;
         this.classifiedEdgeFraction = classifiedEdgeFraction;
-        this.changeFraction = changeFraction;
         this.zeroAnchorShiftPx = zeroAnchorShiftPx;
         this.subjectDepth = subjectDepth;
         this.validDepthFraction = validDepthFraction;
         this.effectiveRangeWidth = effectiveRangeWidth;
-        this.sceneAge = sceneAge;
-        this.hardCutCount = hardCutCount;
-        this.externalCutRequests = externalCutRequests;
         this.emptyDepthFrames = emptyDepthFrames;
         this.collapsedDepthFrames = collapsedDepthFrames;
         this.sampleFrame = sampleFrame;
@@ -165,14 +172,12 @@ public final class HostSbsTelemetrySnapshot {
         float popCeiling = body.getFloat();
         float effectivePop = body.getFloat();
         float edge = body.getFloat();
-        float change = body.getFloat();
+        skipReserved(body, RESERVED_FLOAT_BYTES);
         float anchor = body.getFloat();
         float subject = body.getFloat();
         float validFraction = body.getFloat();
         float rangeWidth = body.getFloat();
-        long sceneAge = unsignedInt(body);
-        long cuts = unsignedInt(body);
-        long external = unsignedInt(body);
+        skipReserved(body, RESERVED_COUNTER_BYTES);
         long empty = unsignedInt(body);
         long collapsed = unsignedInt(body);
         long sampleFrame = unsignedInt(body);
@@ -200,14 +205,14 @@ public final class HostSbsTelemetrySnapshot {
         Stage outputGpu = readStage(body, validFields, 7);
         validateState(status, validFields, runtimeFlags, zeroPlaneMode,
                 reserved0, reserved1, reserved2,
-                popFloor, popCeiling, effectivePop, edge, change, anchor,
+                popFloor, popCeiling, effectivePop, edge, anchor,
                 subject, validFraction, rangeWidth);
 
         return new HostSbsTelemetrySnapshot(
                 version, status, requestId, generation, sequence,
                 validFields, runtimeFlags, depthWidth, depthHeight, zeroPlaneMode,
-                popFloor, popCeiling, effectivePop, edge, change, anchor, subject,
-                validFraction, rangeWidth, sceneAge, cuts, external, empty, collapsed,
+                popFloor, popCeiling, effectivePop, edge, anchor, subject,
+                validFraction, rangeWidth, empty, collapsed,
                 sampleFrame, outcomeEpoch, outcomeSequence, outcomeCopyHostMs,
                 inferredTotal, reusedTotal, invalidTotal, outputSampleHostMs,
                 warpedTotal, packedRepeatTotal, flatTotal, conversionCpu, encodeRetrieveCpu,
@@ -232,7 +237,7 @@ public final class HostSbsTelemetrySnapshot {
             int status, int validFields, int runtimeFlags, int zeroPlaneMode,
             int reserved0, int reserved1, int reserved2,
             float popFloor, float popCeiling, float effectivePop,
-            float edge, float change, float anchor, float subject,
+            float edge, float anchor, float subject,
             float validFraction, float rangeWidth) {
         if (status < STATUS_OK || status > STATUS_FAILED) {
             throw new IllegalArgumentException(
@@ -246,7 +251,7 @@ public final class HostSbsTelemetrySnapshot {
             throw new IllegalArgumentException(
                     "Host SBS telemetry v2 contains unknown valid-field bits");
         }
-        if ((runtimeFlags & ~SbsDepthTelemetrySnapshot.RUNTIME_ALL) != 0) {
+        if ((runtimeFlags & ~RUNTIME_WIRE_ALL) != 0) {
             throw new IllegalArgumentException(
                     "Host SBS telemetry v2 contains unknown runtime-flag bits");
         }
@@ -267,8 +272,6 @@ public final class HostSbsTelemetrySnapshot {
                 "effective pop", effectivePop);
         requireFinite(validFields, SbsDepthTelemetrySnapshot.VALID_EDGE,
                 "classified edge fraction", edge);
-        requireFinite(validFields, SbsDepthTelemetrySnapshot.VALID_CHANGE,
-                "change fraction", change);
         requireFinite(validFields, SbsDepthTelemetrySnapshot.VALID_ANCHOR,
                 "zero-anchor shift", anchor);
         requireFinite(validFields, SbsDepthTelemetrySnapshot.VALID_SUBJECT,
@@ -301,13 +304,23 @@ public final class HostSbsTelemetrySnapshot {
                     SbsDepthTelemetrySnapshot.Availability.FAILED);
         }
         return SbsDepthTelemetrySnapshot.available(
-                validFields & VALID_HEALTH, runtimeFlags, depthWidth, depthHeight, zeroPlaneMode,
+                validFields & VALID_HEALTH & ~VALID_RESERVED, runtimeFlags & ~RUNTIME_RESERVED,
+                depthWidth, depthHeight, zeroPlaneMode,
                 popFloor, popCeiling,
                 // Already absolute on the wire. Never multiply by floor or a local ratio.
                 effectivePop,
-                classifiedEdgeFraction, changeFraction, zeroAnchorShiftPx, subjectDepth,
-                validDepthFraction, effectiveRangeWidth, sceneAge, hardCutCount,
-                externalCutRequests, emptyDepthFrames, collapsedDepthFrames, sampleFrame);
+                classifiedEdgeFraction, zeroAnchorShiftPx, subjectDepth,
+                validDepthFraction, effectiveRangeWidth,
+                emptyDepthFrames, collapsedDepthFrames, sampleFrame);
+    }
+
+    /** True when the body carries any outcome, output or stage field. */
+    public boolean hasPerformanceFields() {
+        return (validFields & ~VALID_HEALTH) != 0;
+    }
+
+    private static void skipReserved(ByteBuffer body, int byteCount) {
+        body.position(body.position() + byteCount);
     }
 
     private static int unsignedByte(ByteBuffer body) {

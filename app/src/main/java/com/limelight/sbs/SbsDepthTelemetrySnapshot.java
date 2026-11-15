@@ -13,26 +13,23 @@ public final class SbsDepthTelemetrySnapshot {
     public static final int VALID_CONFIG = 1 << 0;
     public static final int VALID_EFFECTIVE = 1 << 1;
     public static final int VALID_EDGE = 1 << 2;
-    public static final int VALID_CHANGE = 1 << 3;
     public static final int VALID_ANCHOR = 1 << 4;
     public static final int VALID_SUBJECT = 1 << 5;
     public static final int VALID_DEPTH_FRACTION = 1 << 6;
     public static final int VALID_RANGE = 1 << 7;
-    public static final int VALID_SCENE = 1 << 8;
-    public static final int VALID_CUTS = 1 << 9;
     public static final int VALID_FAULTS = 1 << 10;
-    public static final int VALID_ALL = (1 << 11) - 1;
+    public static final int VALID_ALL = VALID_CONFIG | VALID_EFFECTIVE | VALID_EDGE
+            | VALID_ANCHOR | VALID_SUBJECT | VALID_DEPTH_FRACTION | VALID_RANGE | VALID_FAULTS;
 
     public static final int RUNTIME_INITIALIZED = 1 << 0;
     public static final int RUNTIME_ADAPTIVE = 1 << 1;
     public static final int RUNTIME_CLASSIFIED = 1 << 2;
     public static final int RUNTIME_ANCHOR_VALID = 1 << 3;
-    public static final int RUNTIME_GEOMETRY_ARMED = 1 << 4;
-    public static final int RUNTIME_APPEARANCE_ARMED = 1 << 5;
     public static final int RUNTIME_RANGE_COLLAPSED = 1 << 6;
     public static final int RUNTIME_DEPTH_READY = 1 << 7;
-    public static final int RUNTIME_HARD_CUT_PULSE = 1 << 8;
-    public static final int RUNTIME_ALL = (1 << 9) - 1;
+    public static final int RUNTIME_ALL = RUNTIME_INITIALIZED | RUNTIME_ADAPTIVE
+            | RUNTIME_CLASSIFIED | RUNTIME_ANCHOR_VALID | RUNTIME_RANGE_COLLAPSED
+            | RUNTIME_DEPTH_READY;
 
     public enum Availability {
         AVAILABLE("Available"),
@@ -62,22 +59,15 @@ public final class SbsDepthTelemetrySnapshot {
     /** Absolute effective pop strength. It is never a ratio. */
     public final float effectivePop;
     public final float classifiedEdgeFraction;
-    public final float changeFraction;
     public final float zeroAnchorShiftPx;
     public final float subjectDepth;
     public final float validDepthFraction;
     public final float effectiveRangeWidth;
-    public final long sceneAge;
-    public final long hardCutCount;
-    /** Host protocol external cut requests. Client SBS does not report them. */
-    public final long externalCutRequests;
     public final long emptyDepthFrames;
     public final long collapsedDepthFrames;
     public final long sampleFrame;
     public final float[] popTrend;
     public final float[] edgeTrend;
-    public final float[] changeTrend;
-    public final float[] cutTrend;
     public final float[] anchorTrend;
     /** Present only for host samples; rates use host copy timestamps, never packet arrival time. */
     public final HostPerformance hostPerformance;
@@ -116,7 +106,7 @@ public final class SbsDepthTelemetrySnapshot {
         }
 
         public boolean hasPerformanceSamples() {
-            return (source.validFields & ~VALID_ALL) != 0;
+            return source.hasPerformanceFields();
         }
     }
 
@@ -135,21 +125,15 @@ public final class SbsDepthTelemetrySnapshot {
         float popCeiling;
         float effectivePop;
         float classifiedEdgeFraction;
-        float changeFraction;
         float zeroAnchorShiftPx;
         float subjectDepth;
         float validDepthFraction;
         float effectiveRangeWidth;
-        long sceneAge;
-        long hardCutCount;
-        long externalCutRequests;
         long emptyDepthFrames;
         long collapsedDepthFrames;
         long sampleFrame;
         float[] popTrend = NO_TREND;
         float[] edgeTrend = NO_TREND;
-        float[] changeTrend = NO_TREND;
-        float[] cutTrend = NO_TREND;
         float[] anchorTrend = NO_TREND;
         HostPerformance hostPerformance;
 
@@ -168,32 +152,23 @@ public final class SbsDepthTelemetrySnapshot {
             popCeiling = source.popCeiling;
             effectivePop = source.effectivePop;
             classifiedEdgeFraction = source.classifiedEdgeFraction;
-            changeFraction = source.changeFraction;
             zeroAnchorShiftPx = source.zeroAnchorShiftPx;
             subjectDepth = source.subjectDepth;
             validDepthFraction = source.validDepthFraction;
             effectiveRangeWidth = source.effectiveRangeWidth;
-            sceneAge = source.sceneAge;
-            hardCutCount = source.hardCutCount;
-            externalCutRequests = source.externalCutRequests;
             emptyDepthFrames = source.emptyDepthFrames;
             collapsedDepthFrames = source.collapsedDepthFrames;
             sampleFrame = source.sampleFrame;
             popTrend = source.popTrend;
             edgeTrend = source.edgeTrend;
-            changeTrend = source.changeTrend;
-            cutTrend = source.cutTrend;
             anchorTrend = source.anchorTrend;
             hostPerformance = source.hostPerformance;
         }
 
         /** The single defensive copy of caller-owned trend arrays. */
-        Params copyTrends(float[] popTrend, float[] edgeTrend, float[] changeTrend,
-                          float[] cutTrend, float[] anchorTrend) {
+        Params copyTrends(float[] popTrend, float[] edgeTrend, float[] anchorTrend) {
             this.popTrend = copy(popTrend);
             this.edgeTrend = copy(edgeTrend);
-            this.changeTrend = copy(changeTrend);
-            this.cutTrend = copy(cutTrend);
             this.anchorTrend = copy(anchorTrend);
             return this;
         }
@@ -210,21 +185,15 @@ public final class SbsDepthTelemetrySnapshot {
         this.popCeiling = params.popCeiling;
         this.effectivePop = params.effectivePop;
         this.classifiedEdgeFraction = params.classifiedEdgeFraction;
-        this.changeFraction = params.changeFraction;
         this.zeroAnchorShiftPx = params.zeroAnchorShiftPx;
         this.subjectDepth = params.subjectDepth;
         this.validDepthFraction = params.validDepthFraction;
         this.effectiveRangeWidth = params.effectiveRangeWidth;
-        this.sceneAge = params.sceneAge;
-        this.hardCutCount = params.hardCutCount;
-        this.externalCutRequests = params.externalCutRequests;
         this.emptyDepthFrames = params.emptyDepthFrames;
         this.collapsedDepthFrames = params.collapsedDepthFrames;
         this.sampleFrame = params.sampleFrame;
         this.popTrend = params.popTrend;
         this.edgeTrend = params.edgeTrend;
-        this.changeTrend = params.changeTrend;
-        this.cutTrend = params.cutTrend;
         this.anchorTrend = params.anchorTrend;
         this.hostPerformance = params.hostPerformance;
     }
@@ -233,9 +202,8 @@ public final class SbsDepthTelemetrySnapshot {
             int validFields, int runtimeFlags,
             int depthWidth, int depthHeight, int zeroPlaneMode,
             float popFloor, float popCeiling, float effectivePop,
-            float classifiedEdgeFraction, float changeFraction, float zeroAnchorShiftPx,
+            float classifiedEdgeFraction, float zeroAnchorShiftPx,
             float subjectDepth, float validDepthFraction, float effectiveRangeWidth,
-            long sceneAge, long hardCutCount, long externalCutRequests,
             long emptyDepthFrames, long collapsedDepthFrames, long sampleFrame) {
         Params params = new Params();
         params.availability = Availability.AVAILABLE;
@@ -248,14 +216,10 @@ public final class SbsDepthTelemetrySnapshot {
         params.popCeiling = popCeiling;
         params.effectivePop = effectivePop;
         params.classifiedEdgeFraction = classifiedEdgeFraction;
-        params.changeFraction = changeFraction;
         params.zeroAnchorShiftPx = zeroAnchorShiftPx;
         params.subjectDepth = subjectDepth;
         params.validDepthFraction = validDepthFraction;
         params.effectiveRangeWidth = effectiveRangeWidth;
-        params.sceneAge = sceneAge;
-        params.hardCutCount = hardCutCount;
-        params.externalCutRequests = externalCutRequests;
         params.emptyDepthFrames = emptyDepthFrames;
         params.collapsedDepthFrames = collapsedDepthFrames;
         params.sampleFrame = sampleFrame;
@@ -272,7 +236,6 @@ public final class SbsDepthTelemetrySnapshot {
         params.popCeiling = Float.NaN;
         params.effectivePop = Float.NaN;
         params.classifiedEdgeFraction = Float.NaN;
-        params.changeFraction = Float.NaN;
         params.zeroAnchorShiftPx = Float.NaN;
         params.subjectDepth = Float.NaN;
         params.validDepthFraction = Float.NaN;
@@ -281,10 +244,9 @@ public final class SbsDepthTelemetrySnapshot {
     }
 
     public SbsDepthTelemetrySnapshot withTrends(
-            float[] popTrend, float[] edgeTrend, float[] changeTrend,
-            float[] cutTrend, float[] anchorTrend) {
+            float[] popTrend, float[] edgeTrend, float[] anchorTrend) {
         return new SbsDepthTelemetrySnapshot(new Params(this)
-                .copyTrends(popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend));
+                .copyTrends(popTrend, edgeTrend, anchorTrend));
     }
 
     public SbsDepthTelemetrySnapshot withHostPerformance(HostPerformance performance) {
@@ -295,10 +257,9 @@ public final class SbsDepthTelemetrySnapshot {
 
     /** {@link #withTrends} followed by {@link #withHostPerformance}, built once. */
     SbsDepthTelemetrySnapshot withTrendsAndHostPerformance(
-            float[] popTrend, float[] edgeTrend, float[] changeTrend,
-            float[] cutTrend, float[] anchorTrend, HostPerformance performance) {
-        Params params = new Params(this)
-                .copyTrends(popTrend, edgeTrend, changeTrend, cutTrend, anchorTrend);
+            float[] popTrend, float[] edgeTrend, float[] anchorTrend,
+            HostPerformance performance) {
+        Params params = new Params(this).copyTrends(popTrend, edgeTrend, anchorTrend);
         params.hostPerformance = performance;
         return new SbsDepthTelemetrySnapshot(params);
     }
@@ -324,18 +285,6 @@ public final class SbsDepthTelemetrySnapshot {
                 && hasValid(VALID_EDGE)
                 && Float.isFinite(classifiedEdgeFraction)
                 && classifiedEdgeFraction >= 0.0f;
-    }
-
-    public boolean isCutArmed() {
-        return isGeometryArmed() || isAppearanceArmed();
-    }
-
-    public boolean isGeometryArmed() {
-        return hasRuntime(RUNTIME_GEOMETRY_ARMED);
-    }
-
-    public boolean isAppearanceArmed() {
-        return hasRuntime(RUNTIME_APPEARANCE_ARMED);
     }
 
     public boolean isRangeCollapsed() {

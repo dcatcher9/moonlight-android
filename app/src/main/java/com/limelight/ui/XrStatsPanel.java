@@ -461,22 +461,6 @@ final class XrStatsPanel {
         addStatsRow(activity.getString(R.string.xr_stats_host_camera),
                 activity.getString(R.string.xr_stats_host_camera_unavailable),
                 paletteColor(R.color.xr_text_disabled));
-
-        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)) {
-            addTrendStatsRow("Cut depth change",
-                    XrStatsFormat.formatStatsFloat(telemetry.changeFraction, 4),
-                    paletteColor(R.color.xr_text_primary), telemetry.changeTrend,
-                    false, 0.0f, 1.0f);
-        }
-        if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_CUTS)
-                && telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_SCENE)) {
-            int sceneAge = (int)Math.min(Integer.MAX_VALUE, telemetry.sceneAge);
-            addTrendStatsRow("Scene cuts",
-                    XrStatsFormat.formatHostSceneCutStatus(telemetry.hardCutCount, sceneAge,
-                            telemetry.isGeometryArmed(), telemetry.isAppearanceArmed()),
-                    paletteColor(R.color.xr_text_secondary), telemetry.cutTrend,
-                    true, Float.NaN, Float.NaN);
-        }
         if (telemetry.hasValid(SbsDepthTelemetrySnapshot.VALID_FAULTS)) {
             addStatsRow("Depth faults",
                     String.format(Locale.US, "empty %d | collapsed %d",

@@ -43,13 +43,12 @@ public class Stereo3DRendererTelemetryPolicyTest {
                 | SbsDepthTelemetrySnapshot.VALID_EFFECTIVE
                 | SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION
                 | SbsDepthTelemetrySnapshot.VALID_FAULTS, fields);
-        // Host-only fields: the client has no cut detector, cut range, scene age or change
-        // fraction, and no adaptive-pop, anchor or subject classifier.
+        // Host-only fields: the client has no range field and no adaptive-pop, anchor or subject
+        // classifier.
         for (int hostOnly : new int[] {
-                SbsDepthTelemetrySnapshot.VALID_EDGE, SbsDepthTelemetrySnapshot.VALID_CHANGE,
+                SbsDepthTelemetrySnapshot.VALID_EDGE,
                 SbsDepthTelemetrySnapshot.VALID_ANCHOR, SbsDepthTelemetrySnapshot.VALID_SUBJECT,
-                SbsDepthTelemetrySnapshot.VALID_RANGE, SbsDepthTelemetrySnapshot.VALID_SCENE,
-                SbsDepthTelemetrySnapshot.VALID_CUTS}) {
+                SbsDepthTelemetrySnapshot.VALID_RANGE}) {
             assertFalse((fields & hostOnly) != 0);
         }
     }

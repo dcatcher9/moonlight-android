@@ -27,8 +27,8 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED
                         | SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY,
                 1036, 584, 2, 1.2f, 2.0f, 1.7f,
-                0.1f, 0.2f, -2.0f, 0.5f, 1.0f, 0.4f,
-                8, 1, 0, 0, 0, 10);
+                0.1f, -2.0f, 0.5f, 1.0f, 0.4f,
+                0, 0, 10);
         assertEquals("Live | 1036x584 | host depth telemetry",
                 XrStatsFormat.formatHostSbsTelemetryStatus(telemetry));
         assertEquals("pipeline ready | raw valid 100.0% | reported pop 1.700 | cut range 0.4000",
@@ -38,8 +38,8 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION,
                 SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED,
                 1036, 584, 0, Float.NaN, Float.NaN, Float.NaN,
-                Float.NaN, Float.NaN, Float.NaN, Float.NaN, 1.0f, Float.NaN,
-                8, 1, 0, 0, 0, 10);
+                Float.NaN, Float.NaN, Float.NaN, 1.0f, Float.NaN,
+                0, 0, 10);
         assertEquals("state initialized | raw valid 100.0% | reported pop n/a",
                 XrStatsFormat.formatHostV2Field(initializedOnly));
         String reported = XrStatsFormat.formatHostV2Field(telemetry);
@@ -57,37 +57,9 @@ public final class XrStreamPresenterHostTelemetryFormatTest {
                 SbsDepthTelemetrySnapshot.VALID_EFFECTIVE,
                 SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED,
                 0, 0, 0, 2.25f, 2.25f, 2.25f,
-                Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN,
-                0, 0, 0, 0, 0, 0);
+                Float.NaN, Float.NaN, Float.NaN, Float.NaN, Float.NaN,
+                0, 0, 0);
         assertEquals("state initialized | raw valid n/a | reported pop 2.250",
                 XrStatsFormat.formatHostV2Field(configured));
-    }
-
-    @Test
-    public void reportsGeometryAndAppearanceCutArmingSeparately() {
-        SbsDepthTelemetrySnapshot bothArmed = SbsDepthTelemetrySnapshot.available(
-                SbsDepthTelemetrySnapshot.VALID_SCENE
-                        | SbsDepthTelemetrySnapshot.VALID_CUTS,
-                SbsDepthTelemetrySnapshot.RUNTIME_GEOMETRY_ARMED
-                        | SbsDepthTelemetrySnapshot.RUNTIME_APPEARANCE_ARMED,
-                0, 0, 0, 0.0f, 0.0f, 0.0f,
-                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                12, 4, 2, 0, 0, 0);
-        assertEquals("4 total | scene age 12 frames | geometry armed | appearance armed",
-                XrStatsFormat.formatHostSceneCutStatus(
-                        bothArmed.hardCutCount, (int)bothArmed.sceneAge,
-                        bothArmed.isGeometryArmed(), bothArmed.isAppearanceArmed()));
-
-        SbsDepthTelemetrySnapshot appearanceOnly = SbsDepthTelemetrySnapshot.available(
-                SbsDepthTelemetrySnapshot.VALID_SCENE
-                        | SbsDepthTelemetrySnapshot.VALID_CUTS,
-                SbsDepthTelemetrySnapshot.RUNTIME_APPEARANCE_ARMED,
-                0, 0, 0, 0.0f, 0.0f, 0.0f,
-                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                3, 1, 0, 0, 0, 0);
-        assertEquals("1 total | scene age 3 frames | geometry disarmed | appearance armed",
-                XrStatsFormat.formatHostSceneCutStatus(
-                        appearanceOnly.hardCutCount, (int)appearanceOnly.sceneAge,
-                        appearanceOnly.isGeometryArmed(), appearanceOnly.isAppearanceArmed()));
     }
 }

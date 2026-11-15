@@ -29,14 +29,10 @@ public final class HostSbsTelemetrySnapshotTest {
         assertEquals(2.00f, parsed.popCeiling, 0.0001f);
         assertEquals(1.75f, parsed.effectivePop, 0.0001f);
         assertEquals(-1.0f, parsed.classifiedEdgeFraction, 0.0001f);
-        assertEquals(0.25f, parsed.changeFraction, 0.0001f);
         assertEquals(-3.5f, parsed.zeroAnchorShiftPx, 0.0001f);
         assertEquals(0.65f, parsed.subjectDepth, 0.0001f);
         assertEquals(0.98f, parsed.validDepthFraction, 0.0001f);
         assertEquals(0.42f, parsed.effectiveRangeWidth, 0.0001f);
-        assertEquals(123L, parsed.sceneAge);
-        assertEquals(7L, parsed.hardCutCount);
-        assertEquals(3L, parsed.externalCutRequests);
         assertEquals(4L, parsed.emptyDepthFrames);
         assertEquals(5L, parsed.collapsedDepthFrames);
         assertEquals(0xFFFFFFFFL, parsed.sampleFrame);
@@ -81,7 +77,7 @@ public final class HostSbsTelemetrySnapshotTest {
 
     @Test
     public void rejectsNonfiniteAssertedFloatFieldsForEveryV2Status() {
-        int[] floatOffsets = {28, 32, 36, 40, 44, 48, 52, 56, 60};
+        int[] floatOffsets = {28, 32, 36, 40, 48, 52, 56, 60};
         for (int offset : floatOffsets) {
             byte[] malformed = stateBody(1, 1, 1, 1.5f);
             putFloat(malformed, offset, Float.NaN);
@@ -93,6 +89,67 @@ public final class HostSbsTelemetrySnapshotTest {
                 (byte)HostSbsTelemetrySnapshot.STATUS_UNAVAILABLE;
         putFloat(unavailableWithAssertedInfinity, 36, Float.POSITIVE_INFINITY);
         assertMalformed(unavailableWithAssertedInfinity);
+    }
+
+    @Test
+    public void skipsReservedWordsAndBitsAHostStillFills() {
+        // stateBody() sets every health bit, runtime bit 4 and non-zero reserved words.
+        byte[] filled = stateBody(1, 1, 1, 1.5f);
+        putInt(filled, 16, SbsDepthTelemetrySnapshot.RUNTIME_ALL
+                | HostSbsTelemetrySnapshot.RUNTIME_RESERVED);
+        putFloat(filled, 44, Float.NaN);
+        putInt(filled, 64, -1);
+        putInt(filled, 68, -1);
+        putInt(filled, 72, -1);
+
+        HostSbsTelemetrySnapshot parsed = HostSbsTelemetrySnapshot.parse(filled);
+        assertEquals((1 << 11) - 1, parsed.validFields);
+        assertEquals(4L, parsed.emptyDepthFrames);
+        assertEquals(5L, parsed.collapsedDepthFrames);
+        SbsDepthTelemetrySnapshot depth = parsed.toDepthTelemetry();
+        assertEquals(SbsDepthTelemetrySnapshot.VALID_ALL, depth.validFields);
+        assertEquals(0, depth.validFields & HostSbsTelemetrySnapshot.VALID_RESERVED);
+        assertEquals(SbsDepthTelemetrySnapshot.RUNTIME_ALL, depth.runtimeFlags);
+    }
+
+    @Test
+    public void parsesAHostThatZeroesReservedWordsAndBits() {
+        byte[] zeroed = stateBody(1, 1, 1, 1.5f);
+        int validFields = SbsDepthTelemetrySnapshot.VALID_CONFIG
+                | SbsDepthTelemetrySnapshot.VALID_EFFECTIVE
+                | SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION
+                | SbsDepthTelemetrySnapshot.VALID_FAULTS;
+        putInt(zeroed, 12, validFields);
+        putInt(zeroed, 16, SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED);
+        putInt(zeroed, 44, 0);
+        putInt(zeroed, 64, 0);
+        putInt(zeroed, 68, 0);
+        putInt(zeroed, 72, 0);
+
+        HostSbsTelemetrySnapshot parsed = HostSbsTelemetrySnapshot.parse(zeroed);
+        SbsDepthTelemetrySnapshot depth = parsed.toDepthTelemetry();
+        assertEquals(validFields, depth.validFields);
+        assertEquals(SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED, depth.runtimeFlags);
+        assertEquals(0.98f, depth.validDepthFraction, 0.0001f);
+        assertEquals(4L, depth.emptyDepthFrames);
+        assertEquals(5L, depth.collapsedDepthFrames);
+        assertEquals(0xFFFFFFFFL, depth.sampleFrame);
+    }
+
+    @Test
+    public void reservedBitsStayInsideTheAcceptedWireMasks() {
+        assertEquals(0, SbsDepthTelemetrySnapshot.VALID_ALL
+                & HostSbsTelemetrySnapshot.VALID_RESERVED);
+        assertEquals(0, SbsDepthTelemetrySnapshot.RUNTIME_ALL
+                & HostSbsTelemetrySnapshot.RUNTIME_RESERVED);
+        assertEquals((1 << 11) - 1, SbsDepthTelemetrySnapshot.VALID_ALL
+                | HostSbsTelemetrySnapshot.VALID_RESERVED);
+        assertEquals((1 << 9) - 1, SbsDepthTelemetrySnapshot.RUNTIME_ALL
+                | HostSbsTelemetrySnapshot.RUNTIME_RESERVED);
+
+        byte[] unknownRuntime = stateBody(1, 1, 1, 1.5f);
+        putInt(unknownRuntime, 16, 1 << 9);
+        assertMalformed(unknownRuntime);
     }
 
     @Test
@@ -194,7 +251,8 @@ public final class HostSbsTelemetrySnapshotTest {
             assertEquals(0xfffffff0L + index, stages[index].latestHostMs);
         }
         // Stage/outcome/output bits are not misrepresented as depth-health validity.
-        assertEquals((1 << 11) - 1, parsed.toDepthTelemetry().validFields);
+        assertEquals(SbsDepthTelemetrySnapshot.VALID_ALL,
+                parsed.toDepthTelemetry().validFields);
     }
 
     @Test
@@ -248,7 +306,7 @@ public final class HostSbsTelemetrySnapshotTest {
                 | SbsDepthTelemetrySnapshot.RUNTIME_ADAPTIVE
                 | SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY
                 | SbsDepthTelemetrySnapshot.RUNTIME_ANCHOR_VALID
-                | SbsDepthTelemetrySnapshot.RUNTIME_GEOMETRY_ARMED);
+                | (1 << 4)); // reserved runtime bit
         body.putShort((short)1036);
         body.putShort((short)584);
         body.put((byte)2);
@@ -259,12 +317,12 @@ public final class HostSbsTelemetrySnapshotTest {
         body.putFloat(2.00f);
         body.putFloat(effectivePop);
         body.putFloat(-1.0f);
-        body.putFloat(0.25f);
+        body.putFloat(0.25f); // reserved bytes 44..47
         body.putFloat(-3.5f);
         body.putFloat(0.65f);
         body.putFloat(0.98f);
         body.putFloat(0.42f);
-        body.putInt(123);
+        body.putInt(123); // reserved bytes 64..75
         body.putInt(7);
         body.putInt(3);
         body.putInt(4);

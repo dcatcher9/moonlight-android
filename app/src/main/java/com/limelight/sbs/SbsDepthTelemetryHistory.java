@@ -4,8 +4,6 @@ package com.limelight.sbs;
 public final class SbsDepthTelemetryHistory {
     private final ClientSbsMetricHistory pop = new ClientSbsMetricHistory();
     private final ClientSbsMetricHistory edge = new ClientSbsMetricHistory();
-    private final ClientSbsMetricHistory change = new ClientSbsMetricHistory();
-    private final ClientSbsMetricHistory cuts = new ClientSbsMetricHistory();
     private final ClientSbsMetricHistory anchor = new ClientSbsMetricHistory();
 
     public synchronized void add(SbsDepthTelemetrySnapshot sample) {
@@ -20,13 +18,6 @@ public final class SbsDepthTelemetryHistory {
         if (sample.isAdaptivePopClassified()) {
             edge.add(sample.classifiedEdgeFraction);
         }
-        if (sample.hasValid(SbsDepthTelemetrySnapshot.VALID_CHANGE)
-                && Float.isFinite(sample.changeFraction)) {
-            change.add(sample.changeFraction);
-        }
-        if (sample.hasValid(SbsDepthTelemetrySnapshot.VALID_CUTS)) {
-            cuts.add(sample.hardCutCount);
-        }
         if (sample.hasValid(SbsDepthTelemetrySnapshot.VALID_ANCHOR)
                 && Float.isFinite(sample.zeroAnchorShiftPx)) {
             anchor.add(sample.zeroAnchorShiftPx);
@@ -38,7 +29,7 @@ public final class SbsDepthTelemetryHistory {
         if (sample == null) {
             return null;
         }
-        return sample.withTrends(copy(pop), copy(edge), copy(change), copy(cuts), copy(anchor));
+        return sample.withTrends(copy(pop), copy(edge), copy(anchor));
     }
 
     /** {@link #attach(SbsDepthTelemetrySnapshot)} plus host performance, as one snapshot. */
@@ -49,14 +40,12 @@ public final class SbsDepthTelemetryHistory {
             return null;
         }
         return sample.withTrendsAndHostPerformance(
-                copy(pop), copy(edge), copy(change), copy(cuts), copy(anchor), performance);
+                copy(pop), copy(edge), copy(anchor), performance);
     }
 
     public synchronized void clear() {
         pop.clear();
         edge.clear();
-        change.clear();
-        cuts.clear();
         anchor.clear();
     }
 

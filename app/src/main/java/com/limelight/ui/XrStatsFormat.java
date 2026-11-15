@@ -139,16 +139,6 @@ final class XrStatsFormat {
         }
     }
 
-    static String formatHostSceneCutStatus(
-            long totalCuts, int sceneAgeFrames,
-            boolean geometryArmed, boolean appearanceArmed) {
-        return String.format(Locale.US,
-                "%d total | scene age %d frames | geometry %s | appearance %s",
-                totalCuts, sceneAgeFrames,
-                geometryArmed ? "armed" : "disarmed",
-                appearanceArmed ? "armed" : "disarmed");
-    }
-
     static String formatDepthHealthUnavailable(boolean readbackFailed) {
         return readbackFailed
                 ? "Telemetry unavailable | retrying"

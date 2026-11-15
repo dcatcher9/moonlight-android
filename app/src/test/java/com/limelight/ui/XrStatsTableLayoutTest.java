@@ -89,7 +89,7 @@ public final class XrStatsTableLayoutTest {
         }
         String trendValue =
                 "change 0.184 | range shift 0.027 | internal 0.441 | baseline 0.205";
-        addTrend.invoke(stats(presenter), "Cut depth change", trendValue,
+        addTrend.invoke(stats(presenter), "Depth change", trendValue,
                 0xFFFFFFFF, samples, false, 0f, 1f);
 
         int raster = intConstant("STATS_RASTER_WIDTH");
