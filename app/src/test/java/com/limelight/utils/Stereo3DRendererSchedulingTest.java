@@ -264,7 +264,7 @@ public class Stereo3DRendererSchedulingTest {
             throws IOException {
         String source = rendererSource();
         String repeat = source.substring(source.indexOf("private boolean consumeProvenSourceRepeat()"),
-                source.indexOf("static boolean canRetainHostSource("));
+                source.indexOf("private void scheduleCaptureAfterSwap("));
         int acceptedMarker = repeat.indexOf("Trace.beginSection(\"ClientSbs.sourceRepeat\")");
         assertTrue(acceptedMarker > repeat.lastIndexOf("return false"));
         assertTrue(repeat.indexOf("return true", acceptedMarker) > acceptedMarker);
@@ -449,7 +449,9 @@ public class Stereo3DRendererSchedulingTest {
     private static String rendererSource() throws IOException {
         return Files.readString(new File(
                 "src/main/java/com/limelight/utils/Stereo3DRenderer.java").toPath(),
-                StandardCharsets.UTF_8);
+                StandardCharsets.UTF_8)
+                // Assertions use "\n"; the checkout may carry CRLF.
+                .replace("\r\n", "\n");
     }
 
     private static int occurrences(String text, String needle) {
