@@ -100,8 +100,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private long lastCapturedFrameSequence;
     private boolean hasFrameForActiveGeneration;
     private int activeClientSbsGeneration;
-    /** Last actual depth observation; reuse never advances the cut detector's source-step age. */
-    private long lastDepthObservationFrameSequence;
     private long lastModelInferenceFrameSequence;
     private long lastModelInferenceCapturedAtNs;
 
@@ -261,8 +259,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private int modelInputPackProgram;
     private int simple3dProgram;
     private int videoTextureId;
-    /** Context-owned point sampling for ordinal evidence; RGB keeps its existing linear sampler. */
-    private int ordinalPointSampler;
     private QuadProgramBindings simpleProgramBindings;
     private QuadProgramBindings modelInputProgramBindings;
     private GpuPackProgramBindings gpuPackProgramBindings;
@@ -288,10 +284,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private ClientSbsGpuDepthProcessor gpuDepthProcessor;
     /** Optional host-style slope conditioner over the calibrated ZipDepth disparity candidate. */
     private ClientSbsGpuDisparityProcessor gpuDisparityProcessor;
-    /** GPU-only color discontinuity signal paired with the single in-flight model tensor. */
+    /** GPU-only near-identical reuse decision paired with the single in-flight model tensor. */
     private ClientSbsGpuSceneCutDetector gpuSceneCutDetector;
     /**
-     * Generation reset deferred until native has finished mapping the detector's shared decision
+     * Generation reset deferred until native has finished mapping the classifier's shared decision
      * SSBO. Renderer-thread access alone is insufficient now that the inference context reads it.
      */
     private boolean gpuSceneCutResetPending;
@@ -337,18 +333,15 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private volatile int outputHeightOverride;
     private final Object liveStreamResizeLock = new Object();
 
-    static int depthTelemetryValidFields(boolean profileInitialized) {
-        int validFields = SbsDepthTelemetrySnapshot.VALID_CONFIG
+    /**
+     * Fields the local V2 pipeline measures. Change fraction, cut range, scene age and cut counts
+     * are host-only and stay unavailable on the client.
+     */
+    static int depthTelemetryValidFields() {
+        return SbsDepthTelemetrySnapshot.VALID_CONFIG
                 | SbsDepthTelemetrySnapshot.VALID_EFFECTIVE
-                | SbsDepthTelemetrySnapshot.VALID_CHANGE
                 | SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION
-                | SbsDepthTelemetrySnapshot.VALID_RANGE
-                | SbsDepthTelemetrySnapshot.VALID_CUTS
                 | SbsDepthTelemetrySnapshot.VALID_FAULTS;
-        if (profileInitialized) {
-            validFields |= SbsDepthTelemetrySnapshot.VALID_SCENE;
-        }
-        return validFields;
     }
 
     private SbsDepthTelemetrySnapshot toDepthTelemetry(DepthHealthState health) {
@@ -360,25 +353,19 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         int runtimeFlags = health.currentGeometryReady
                 ? SbsDepthTelemetrySnapshot.RUNTIME_DEPTH_READY : 0;
-        if (health.profileInitialized) {
+        if (health.cameraInitialized) {
             runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_INITIALIZED;
         }
-        if (health.geometryCutArmed) {
-            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_GEOMETRY_ARMED;
-        }
-        if (health.rangeCollapsed) {
-            runtimeFlags |= SbsDepthTelemetrySnapshot.RUNTIME_RANGE_COLLAPSED;
-        }
         return SbsDepthTelemetrySnapshot.available(
-                depthTelemetryValidFields(health.profileInitialized),
+                depthTelemetryValidFields(),
                 runtimeFlags,
                 depthMapWidth, depthMapHeight, 0,
                 ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
                 ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH,
-                health.popStrength, health.edgeFraction, health.changeFraction,
+                ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH, Float.NaN, Float.NaN,
                 Float.NaN, Float.NaN, health.validFraction,
-                health.effectiveRangeWidth, health.sceneAge, health.hardCutCount,
-                health.appearanceProposals, health.emptyRawFrames,
+                Float.NaN, 0L, 0L,
+                0L, health.incompleteRawFrames,
                 health.collapsedRawFrames, 0L);
     }
 
@@ -554,20 +541,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         /** A readback failed and the diagnostic path is waiting for its bounded retry. */
         public final boolean depthHealthReadbackFailed;
         public final float validDepthFraction;
-        public final float effectiveDepthRangeWidth;
-        /** Whether the current diagnostic P2/P98 cut range is collapsed. */
-        public final boolean cutRangeCollapsed;
         public final float stereoPopStrength;
-        public final long depthHardCutCount;
-        public final boolean depthGeometryCutArmed;
-        public final long depthAppearanceProposalCount;
-        public final long depthAcceptedAppearanceCutCount;
-        public final long depthAcceptedGeometryCutCount;
-        public final long depthAcceptedStructurelessEntryCutCount;
-        /** Cumulative incomplete or otherwise invalid raw-depth transactions. */
+        /** Cumulative raw fields with a missing, non-finite or negative texel. */
         public final long depthInvalidRawFrames;
-        /** Cumulative frames whose diagnostic P2/P98 cut range collapsed. */
-        public final long depthCutRangeCollapsedFrames;
+        /** Cumulative complete raw fields rejected by the V2 collapse/quantile test. */
+        public final long depthCollapsedRawFrames;
         public final float depthRawZero;
         public final float depthCurrentRawMean;
         public final float depthRawInverseAmplitude;
@@ -579,21 +557,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         public final long depthHealthSampleSequence;
         /** Whether the complete current raw field passes both depth and V2 validity gates. */
         public final boolean depthCurrentValid;
-        /** Whether this current field advanced the reliable comparison-history tuple. */
-        public final boolean depthHistoryAdvanced;
         public final boolean depthCurrentGeometryReady;
-        public final float depthAppearanceRawChangeFraction;
-        public final float depthAppearanceMeanLumaDelta;
-        public final float depthAppearanceStructuralChangeFraction;
-        public final float depthAppearanceCurrentSupportFraction;
-        public final float depthAppearanceCommonSupportFraction;
-        public final int depthCutDecisionFlags;
-        /** Monotonic identity of the latched cut event represented by the diagnostic fields. */
-        public final long depthCutEventSequence;
-        public final float depthLatestChangeFraction;
-        public final float depthLatestRangeShift;
-        public final float depthLatestInternalCutEvidence;
-        public final float depthGeometryChangeBaseline;
 
         private ClientSbsPerformanceSnapshot(Stereo3DRenderer owner, boolean active,
                                              String backend, long elapsedNs) {
@@ -666,18 +630,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     depthTelemetry.availability
                             == SbsDepthTelemetrySnapshot.Availability.READBACK_FAILED;
             this.validDepthFraction = depthTelemetry.validDepthFraction;
-            this.effectiveDepthRangeWidth = depthTelemetry.effectiveRangeWidth;
-            this.cutRangeCollapsed = depthTelemetry.isRangeCollapsed();
             this.stereoPopStrength = depthTelemetry.effectivePop;
-            this.depthHardCutCount = depthTelemetry.hardCutCount;
-            this.depthGeometryCutArmed = health.geometryCutArmed;
-            this.depthAppearanceProposalCount = health.appearanceProposals;
-            this.depthAcceptedAppearanceCutCount = health.acceptedAppearanceCuts;
-            this.depthAcceptedGeometryCutCount = health.acceptedGeometryCuts;
-            this.depthAcceptedStructurelessEntryCutCount =
-                    health.acceptedStructurelessEntryCuts;
             this.depthInvalidRawFrames = depthTelemetry.emptyDepthFrames;
-            this.depthCutRangeCollapsedFrames = depthTelemetry.collapsedDepthFrames;
+            this.depthCollapsedRawFrames = depthTelemetry.collapsedDepthFrames;
             this.depthRawZero = health.rawZero;
             this.depthCurrentRawMean = health.currentRawMean;
             this.depthRawInverseAmplitude = health.rawInverseAmplitude;
@@ -688,22 +643,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.depthCameraClockArmed = health.cameraClockArmed;
             this.depthHealthSampleSequence = health.sampleSequence;
             this.depthCurrentValid = health.currentDepthValid;
-            this.depthHistoryAdvanced = health.historyAdvanced;
             this.depthCurrentGeometryReady = health.currentGeometryReady;
-            this.depthAppearanceRawChangeFraction = health.appearanceRawChangeFraction;
-            this.depthAppearanceMeanLumaDelta = health.appearanceMeanLumaDelta;
-            this.depthAppearanceStructuralChangeFraction =
-                    health.appearanceStructuralChangeFraction;
-            this.depthAppearanceCurrentSupportFraction =
-                    health.appearanceCurrentSupportFraction;
-            this.depthAppearanceCommonSupportFraction =
-                    health.appearanceCommonSupportFraction;
-            this.depthCutDecisionFlags = health.cutDecisionFlags;
-            this.depthCutEventSequence = health.cutEventSequence;
-            this.depthLatestChangeFraction = health.latestDepthChangeFraction;
-            this.depthLatestRangeShift = health.latestRangeShift;
-            this.depthLatestInternalCutEvidence = health.latestInternalCutEvidence;
-            this.depthGeometryChangeBaseline = health.geometryChangeBaseline;
         }
 
         private static float rate(long count, long elapsedNs) {
@@ -966,7 +906,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // Explicit glDelete* calls are invalid here. StreamContainer next closes the EGL owner
         // asynchronously; context destruction releases these objects before XR disposal.
         // Context-loss reinitialization is handled separately in onSurfaceCreated().
-        ordinalPointSampler = 0;
 
         prefConfig = null;
         activeInferenceBackend = "Unavailable";
@@ -1700,16 +1639,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         decoderFrameMailbox.clear();
     }
 
-    static int decodedSourceFrameDelta(long previousObservationSequence,
-                                       long currentObservationSequence) {
-        if (previousObservationSequence <= 0L
-                || currentObservationSequence <= previousObservationSequence) {
-            return 1;
-        }
-        return (int) Math.min(currentObservationSequence - previousObservationSequence,
-                65535L);
-    }
-
     static long postSwapCaptureTicket(int generation, int validationEpoch) {
         if (generation <= 0 || validationEpoch <= 0) {
             return 0L;
@@ -1918,7 +1847,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /**
      * A negotiated exact encoder-input repeat needs no model draw, color copy, decision map or
      * packed swap. The decoder and SurfaceTexture still drain. Neither the real inference owner
-     * nor depth/cut/history advances; only the transport proof extends to this newer delivery.
+     * nor depth or comparison history advances; only the transport proof extends to this newer
+     * delivery.
      */
     private boolean consumeProvenSourceRepeat() {
         DecodedSourceIdentityTracker tracker = decodedSourceIdentityTracker;
@@ -2220,9 +2150,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         shuttingDown.set(false);
         invalidateQueuedFrameDrain();
         lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
-        // onSurfaceCreated denotes a new context: abandon the previous sampler name rather than
-        // deleting it through a context that may already have reused the same integer.
-        ordinalPointSampler = createOrdinalPointSampler();
         videoTextureId = createExternalOESTexture();
         videoSurfaceTexture = new SurfaceTexture(videoTextureId);
         decoderSurfaceGeneration = requestedDecoderSurfaceGeneration;
@@ -2290,7 +2217,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         aiModel.getOutputWidth(), aiModel.getOutputHeight(),
                         pipelineContract.getModelContentAspect(),
                         !pipelineContract.usesDirectFullFrameResize(),
-                        Math.max(prefConfig.fps, 1), aiModel.getV2RawCoordinateScale());
+                        aiModel.getV2RawCoordinateScale());
                 perf.applyHealthSamplingStateOnGlThread(gpuDepthProcessor);
                 gpuComputeReady = gpuDepthProcessor.getOutputWidth() == depthMapWidth
                         && gpuDepthProcessor.getOutputHeight() == depthMapHeight;
@@ -2325,23 +2252,20 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             gpuDisparityProcessor = null;
         }
         gpuSceneCutResetPending = false;
-        if (modelInputTargetReady && ordinalPointSampler != 0
-                && modelInputProgramBindings != null
-                && modelInputProgramBindings.ordinalTexture >= 0) {
+        if (modelInputTargetReady) {
             try {
                 gpuSceneCutDetector = new ClientSbsGpuSceneCutDetector(
                         modelInputWidth, modelInputHeight);
             } catch (Throwable error) {
                 gpuSceneCutDetector = null;
-                LimeLog.warning("Client SBS GPU color-cut detector unavailable; using bounded "
-                        + "depth-only cut confirmation: " + error.getMessage());
+                LimeLog.warning("Client SBS GPU near-reuse classifier unavailable; every frame "
+                        + "runs inference: " + error.getMessage());
             }
         } else {
             gpuSceneCutDetector = null;
         }
-        // Ordinal color evidence improves cut classification and enables near-identical reuse, but
-        // it is not a hard dependency of depth/reprojection. The depth resolver has a bounded
-        // two-observation fallback when this optional detector is unavailable.
+        // The classifier enables near-identical reuse and native lazy packing, but it is not a
+        // dependency of depth/reprojection: without it every capture packs eagerly and infers.
         boolean geometryReady = gpuComputeReady && warpMapAvailable
                 && gpuDisparityProcessor != null;
         if (aiGlPipelineReady && geometryReady) {
@@ -2962,48 +2886,16 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
         }
 
-        boolean ordinalInput = bindings.ordinalTexture >= 0;
-        boolean restoreDither = ordinalInput && GLES20.glIsEnabled(GLES20.GL_DITHER);
-        if (ordinalInput) {
-            // One source texture, two sampling policies. Only alpha uses the nearest source-cell
-            // sample; the model's area-filtered RGB continues to use texture unit zero unchanged.
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
-            GLES20.glBindTexture(GL_TEXTURE_EXTERNAL_OES, videoTextureId);
-            GLES30.glBindSampler(1, ordinalPointSampler);
-            GLES20.glUniform1i(bindings.ordinalTexture, 1);
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            if (restoreDither) GLES20.glDisable(GLES20.GL_DITHER);
-        }
+        // The model-input target is the near-reuse comparison reference, so its RGBA8
+        // quantization must be deterministic. The flat presentation draw keeps the GL default.
+        boolean restoreDither = program == modelInputProgram
+                && GLES20.glIsEnabled(GLES20.GL_DITHER);
+        if (restoreDither) GLES20.glDisable(GLES20.GL_DITHER);
         try {
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         } finally {
-            if (ordinalInput) {
-                GLES30.glBindSampler(1, 0);
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-                if (restoreDither) GLES20.glEnable(GLES20.GL_DITHER);
-            }
+            if (restoreDither) GLES20.glEnable(GLES20.GL_DITHER);
         }
-    }
-
-    private int createOrdinalPointSampler() {
-        int[] samplers = new int[1];
-        drainGlErrors();
-        GLES30.glGenSamplers(1, samplers, 0);
-        int sampler = samplers[0];
-        if (sampler != 0) {
-            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
-            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
-            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-            GLES30.glSamplerParameteri(sampler, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        }
-        int error = GLES20.glGetError();
-        if (sampler == 0 || error != GLES20.GL_NO_ERROR) {
-            if (sampler != 0) GLES30.glDeleteSamplers(1, samplers, 0);
-            LimeLog.warning("Client SBS ordinal point sampler unavailable: GL=0x"
-                    + Integer.toHexString(error) + "; using depth-only cut evidence");
-            return 0;
-        }
-        return sampler;
     }
 
     private static final class RendererFinishRequest {
@@ -3165,7 +3057,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (nearIdenticalCandidate && !couldHaveReusableModelOwner(
                 lastModelInferenceFrameSequence, lastModelInferenceCapturedAtNs,
                 colorFrameLease.getFrameSequence(), colorFrameLease.getCapturedAtNs())) {
-            // Negative-only upper bound: the GPU's reliable owner may be older or invalid, but
+            // Negative-only upper bound: the GPU's reuse owner may be older or invalid, but
             // cannot be newer than our newest real model observation. GPU still owns acceptance.
             nearIdenticalCandidate = false;
         }
@@ -3193,8 +3085,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 if (sceneCutDetector != null) {
                     try {
                         sceneCutDetector.processRendererOwnedAndPack(fboTextureId, inputBufferId,
-                                gpuDepthProcessor.getSceneCutMailboxBufferId(),
-                                gpuDepthProcessor.getSceneCutMailboxByteOffset(bufferSlot),
                                 nearIdenticalCandidate, inferenceClaimToken, bufferSlot,
                                 colorFrameLease.getFrameSequence(),
                                 colorFrameLease.getCapturedAtNs(), lazyInputPacking);
@@ -3207,17 +3097,17 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                     sceneCutDetector.getNearIdenticalDecisionByteOffset(bufferSlot);
                         }
                     } catch (Throwable error) {
-                        LimeLog.warning("Client SBS GPU color-cut detector disabled: "
+                        LimeLog.warning("Client SBS GPU near-reuse classifier disabled: "
                                 + error.getMessage());
-                        // The detector is optional; retain the primary pipeline's original
-                        // failure. Nothing replaces the installed detector during this capture.
+                        // The classifier is optional; retain the primary pipeline's original
+                        // failure. Nothing replaces the installed classifier during this capture.
                         closeFailedSceneCutDetector(sceneCutDetector);
                     }
                 }
 
                 if (!tensorPackedWithSceneCut) {
-                    // Preserve a depth-only fallback if the optional scene-cut program fails at
-                    // runtime.
+                    // Without the optional classifier the tensor is packed eagerly and every
+                    // capture infers.
                     GpuPackProgramBindings bindings = gpuPackProgramBindings;
                     GLES20.glUseProgram(modelInputPackProgram);
                     GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -3287,7 +3177,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
 
             // The renderer keeps this transaction pending across native arbitration. Only a
-            // successfully postprocessed actual inference may advance either temporal history;
+            // successfully postprocessed actual inference may replace the comparison reference;
             // a reuse discards it after publishing the current color.
             sceneCutFramePending = false;
 
@@ -3299,8 +3189,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 try {
                     sceneCutDetector.discardPendingFrame();
                 } catch (Throwable error) {
-                    LimeLog.warning("Client SBS GPU color-cut discard failed; using depth-only "
-                            + "cut evidence: " + error.getMessage());
+                    LimeLog.warning("Client SBS GPU near-reuse discard failed; disabling "
+                            + "near-identical reuse: " + error.getMessage());
                     // Preserve the primary capture failure.
                     closeFailedSceneCutDetector(sceneCutDetector);
                 }
@@ -3602,7 +3492,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     private void resetSourceFrameAgeTracking() {
-        lastDepthObservationFrameSequence = 0L;
         lastModelInferenceFrameSequence = 0L;
         lastModelInferenceCapturedAtNs = 0L;
     }
@@ -3617,7 +3506,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         return true;
     }
 
-    /** Lets the GPU advance only the histories authorized by this exact depth result. */
+    /** Lets the GPU commit this input only if its exact depth result is valid for V2. */
     private boolean commitActualInferenceHistory(GpuInferenceResult result) {
         ClientSbsGpuSceneCutDetector detector = result.sceneCutDetector;
         if (detector == null || detector != gpuSceneCutDetector) {
@@ -3625,18 +3514,18 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         try {
             detector.commitAcceptedFrame(
-                    gpuDepthProcessor.getHistoryDecisionStateBufferId());
+                    gpuDepthProcessor.getFrameStateBufferId());
             return true;
         } catch (Throwable error) {
             LimeLog.warning("Client SBS GPU inference-history commit failed; disabling "
-                    + "color cuts and near-identical reuse: " + error.getMessage());
-            // Depth for this frame is already valid; only the optional detector is lost.
+                    + "near-identical reuse: " + error.getMessage());
+            // Depth for this frame is already valid; only the optional classifier is lost.
             closeFailedSceneCutDetector(detector);
             return false;
         }
     }
 
-    /** Reuse freezes model-input and scene-cut histories at the last actual inference. */
+    /** Reuse freezes the model-input history at the last accepted actual inference. */
     private void discardReusedInferenceHistory(GpuInferenceResult result) {
         ClientSbsGpuSceneCutDetector detector = result.sceneCutDetector;
         if (detector == null || detector != gpuSceneCutDetector) {
@@ -3646,21 +3535,21 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             detector.discardPendingFrame();
         } catch (Throwable error) {
             LimeLog.warning("Client SBS GPU reused-frame history discard failed; disabling "
-                    + "color cuts and near-identical reuse: " + error.getMessage());
+                    + "near-identical reuse: " + error.getMessage());
             // Cached depth remains valid; future frames simply force inference.
             closeFailedSceneCutDetector(detector);
         }
     }
 
     /**
-     * Closes a failed optional detector, ignoring any close failure, and uninstalls it when it
-     * is still the renderer's current detector.
+     * Closes a failed optional classifier, ignoring any close failure, and uninstalls it when
+     * it is still the renderer's current classifier.
      */
     private void closeFailedSceneCutDetector(ClientSbsGpuSceneCutDetector detector) {
         try {
             detector.close();
         } catch (Throwable ignored) {
-            // The caller has already reported the failure that retired this detector.
+            // The caller has already reported the failure that retired this classifier.
         }
         if (gpuSceneCutDetector == detector) {
             gpuSceneCutDetector = null;
@@ -3688,7 +3577,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     /**
-     * Resets detector/history storage only after the single-flight native transaction releases
+     * Resets classifier/history storage only after the single-flight native transaction releases
      * ownership. In particular, reset() clears the decision SSBO that native maps after the input
      * fence, so writing it while a claim is live would be an unsynchronized cross-context race.
      */
@@ -3704,9 +3593,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         try {
             sceneCutDetector.reset();
         } catch (Throwable error) {
-            LimeLog.warning("Client SBS GPU color-cut reset failed; using depth-only "
-                    + "cut evidence: " + error.getMessage());
-            // Color-cut evidence is optional; keep the primary depth failure isolated.
+            LimeLog.warning("Client SBS GPU near-reuse reset failed; disabling "
+                    + "near-identical reuse: " + error.getMessage());
+            // The classifier is optional; keep the primary depth failure isolated.
             closeFailedSceneCutDetector(sceneCutDetector);
         }
     }
@@ -3791,10 +3680,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             int outputBufferId = engine.getOutputBufferId(result.bufferSlot);
             int outputPixelStrideBytes =
                     engine.getOutputPixelStrideBytes(result.bufferSlot);
-            long sourceFrameSequence = result.colorFrameLease.getFrameSequence();
-            int sourceFrameDelta = decodedSourceFrameDelta(
-                    lastDepthObservationFrameSequence, sourceFrameSequence);
-            lastDepthObservationFrameSequence = sourceFrameSequence;
 
             // Publish the completed result's exact color first, but explicitly invalidate depth
             // until this same result has finished postprocessing. That frees the superseded
@@ -3818,17 +3703,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     ClientSbsGpuTimer.Stage.DEPTH_PROFILE);
             ClientSbsGpuDepthProcessor.Result processed;
             try {
-                if (result.sceneCutAvailable) {
-                    processed = processor.processRendererOwnedWithGpuSceneCut(
-                            outputBufferId, 0, outputPixelStrideBytes,
-                            processor.getSceneCutMailboxBufferId(),
-                            processor.getSceneCutMailboxByteOffset(result.bufferSlot),
-                            sourceFrameDelta, result.colorFrameLease.getCapturedAtNs());
-                } else {
-                    processed = processor.processRendererOwned(
-                            outputBufferId, 0, outputPixelStrideBytes, false,
-                            sourceFrameDelta, result.colorFrameLease.getCapturedAtNs());
-                }
+                processed = processor.processRendererOwned(
+                        outputBufferId, 0, outputPixelStrideBytes,
+                        result.colorFrameLease.getCapturedAtNs());
             } finally {
                 perf.endGpuTimer(depthGpuTimerStarted);
             }
@@ -3847,8 +3724,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             warpMapValid = false;
             matchedOutputPresented = false;
 
-            // This copy/commit is ordered after valid depth postprocessing and before the output
-            // consumer fence. Only real inference advances the retained comparison owner.
+            // This copy/commit is ordered after depth postprocessing and before the output
+            // consumer fence. Only a V2-valid real inference becomes the comparison owner.
             commitActualInferenceHistory(result);
             lastModelInferenceFrameSequence = result.colorFrameLease.getFrameSequence();
             lastModelInferenceCapturedAtNs = result.colorFrameLease.getCapturedAtNs();
@@ -3933,7 +3810,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             hostSourceRepeat.lastProvenRepeatSequence = 0L;
             colorAdopted = true;
 
-            // Freeze normalization, cut, profile, conditioned disparity, and the cached warp. Only this
+            // Freeze the camera, profile, conditioned disparity, and the cached warp. Only this
             // current exact color and presentation-dirty bit change on reuse.
             discardReusedInferenceHistory(result);
             matchedOutputPresented = false;

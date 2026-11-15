@@ -17,7 +17,7 @@ import com.limelight.LimeLog;
  * separately qualified ZipDepth graph scale as its amplitude floor. This processor maps that
  * coordinate linearly with fixed pop, applies an independent signed display bound, then builds
  * vertical upper/lower Lipschitz envelopes and a horizontal least majorant for one unique inverse.
- * P2/P98 normalization remains upstream only for scene-cut analysis.</p>
+ * </p>
  *
  * <p>Each line is owned by one invocation and scanned serially. The largest production field is
  * only 928 by 384, so this avoids the host's Q30/chunk machinery while preserving the exact float

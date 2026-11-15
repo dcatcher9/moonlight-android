@@ -11,44 +11,34 @@ import org.junit.Test;
 public class ClientSbsGpuSceneCutDetectorTest {
     @Test
     public void modelDimensionsUseCeilingDividedSixteenPixelTiles() {
-        assertEquals(22, ClientSbsGpuSceneCutDetector.blocksForPixels(350));
-        assertEquals(13, ClientSbsGpuSceneCutDetector.blocksForPixels(196));
-        assertEquals(25, ClientSbsGpuSceneCutDetector.blocksForPixels(392));
-        assertEquals(11, ClientSbsGpuSceneCutDetector.blocksForPixels(168));
-        assertEquals(31, ClientSbsGpuSceneCutDetector.blocksForPixels(490));
-        assertEquals(9, ClientSbsGpuSceneCutDetector.blocksForPixels(140));
+        assertEquals(16, ClientSbsGpuSceneCutDetector.TILE_SIZE);
+        assertEquals(42, ClientSbsGpuSceneCutDetector.tilesForPixels(672));
+        assertEquals(56, ClientSbsGpuSceneCutDetector.tilesForPixels(896));
+        assertEquals(58, ClientSbsGpuSceneCutDetector.tilesForPixels(928));
+        assertEquals(24, ClientSbsGpuSceneCutDetector.tilesForPixels(384));
+        assertEquals(22, ClientSbsGpuSceneCutDetector.tilesForPixels(350));
+        assertEquals(13, ClientSbsGpuSceneCutDetector.tilesForPixels(196));
     }
 
     @Test
     public void exactAndPartialTilesHaveExpectedCounts() {
-        assertEquals(1, ClientSbsGpuSceneCutDetector.blocksForPixels(1));
-        assertEquals(1, ClientSbsGpuSceneCutDetector.blocksForPixels(16));
-        assertEquals(2, ClientSbsGpuSceneCutDetector.blocksForPixels(17));
-        assertEquals(16, ClientSbsGpuSceneCutDetector.blocksForPixels(256));
+        assertEquals(1, ClientSbsGpuSceneCutDetector.tilesForPixels(1));
+        assertEquals(1, ClientSbsGpuSceneCutDetector.tilesForPixels(16));
+        assertEquals(2, ClientSbsGpuSceneCutDetector.tilesForPixels(17));
+        assertEquals(16, ClientSbsGpuSceneCutDetector.tilesForPixels(256));
     }
 
     @Test
-    public void comparisonDispatchCoversRectangularLumaGridEdgeTiles() {
-        int gridWidth = ClientSbsGpuSceneCutDetector.blocksForPixels(350);
-        int gridHeight = ClientSbsGpuSceneCutDetector.blocksForPixels(196);
-
-        assertEquals(22, gridWidth);
-        assertEquals(13, gridHeight);
-        assertEquals(2, ClientSbsGpuSceneCutDetector.workgroupsForItems(gridWidth));
-        assertEquals(1, ClientSbsGpuSceneCutDetector.workgroupsForItems(gridHeight));
-    }
-
-    @Test
-    public void compareCompletionOrdersSsboWritesAndLaterLumaImageWrites() {
+    public void packCompletionOrdersTensorWritesAndTileEvidenceImageReads() {
         assertEquals(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT
                         | GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT,
-                ClientSbsGpuSceneCutDetector.compareCompletionBarrierBits());
+                ClientSbsGpuSceneCutDetector.packCompletionBarrierBits());
     }
 
     @Test
     public void nearIdenticalDecisionRecordsUseTwoAlignedThirtyTwoByteSlots() {
-        assertEquals(32, ClientSbsGpuSceneCutDetector.NEAR_IDENTICAL_DECISION_RECORD_BYTES);
+        assertEquals(32, ClientSbsNearIdenticalPolicy.DECISION_RECORD_BYTES);
         assertEquals(2, ClientSbsGpuSceneCutDetector.NEAR_IDENTICAL_DECISION_SLOT_COUNT);
         assertEquals(0,
                 ClientSbsGpuSceneCutDetector.nearIdenticalDecisionByteOffsetForSlot(0));
@@ -67,45 +57,36 @@ public class ClientSbsGpuSceneCutDetectorTest {
     }
 
     @Test
-    public void discardedFrameDoesNotAdvanceAcceptedHistory() {
+    public void discardedFrameDoesNotOfferHistory() {
         ClientSbsGpuSceneCutDetector.FrameTransaction transaction =
                 new ClientSbsGpuSceneCutDetector.FrameTransaction();
 
         assertFalse(transaction.hasHistory());
         assertFalse(transaction.hasPendingFrame());
-        assertEquals(0L, transaction.getFrameSequence());
-        assertEquals(1, transaction.beginPendingFrame());
-        assertEquals(1, transaction.getPendingLumaIndex());
+        transaction.beginPendingFrame();
         assertTrue(transaction.hasPendingFrame());
 
         transaction.discardPendingFrame();
 
         assertFalse(transaction.hasHistory());
         assertFalse(transaction.hasPendingFrame());
-        assertEquals(0, transaction.getPreviousLumaIndex());
-        assertEquals(0L, transaction.getFrameSequence());
-        assertEquals(1, transaction.beginPendingFrame());
-        assertEquals(1, transaction.getPendingLumaIndex());
+        transaction.beginPendingFrame();
+        assertTrue(transaction.hasPendingFrame());
     }
 
     @Test
-    public void acceptedFramesCommitAlternatingLumaHistoryAndSequence() {
+    public void committedRealInferenceOffersHistoryUntilReset() {
         ClientSbsGpuSceneCutDetector.FrameTransaction transaction =
                 new ClientSbsGpuSceneCutDetector.FrameTransaction();
 
-        assertEquals(1, transaction.beginPendingFrame());
-        assertEquals(1, transaction.getPendingLumaIndex());
+        transaction.beginPendingFrame();
         transaction.commitAcceptedFrame();
         assertTrue(transaction.hasHistory());
         assertFalse(transaction.hasPendingFrame());
-        assertEquals(1, transaction.getPreviousLumaIndex());
-        assertEquals(1L, transaction.getFrameSequence());
 
-        assertEquals(0, transaction.beginPendingFrame());
-        assertEquals(0, transaction.getPendingLumaIndex());
-        transaction.commitAcceptedFrame();
-        assertEquals(0, transaction.getPreviousLumaIndex());
-        assertEquals(2L, transaction.getFrameSequence());
+        transaction.reset();
+        assertFalse(transaction.hasHistory());
+        assertFalse(transaction.hasPendingFrame());
     }
 
     @Test
@@ -115,15 +96,12 @@ public class ClientSbsGpuSceneCutDetectorTest {
 
         transaction.beginPendingFrame();
         transaction.commitAcceptedFrame();
-        int committedLuma = transaction.getPreviousLumaIndex();
 
         transaction.beginPendingFrame();
         transaction.discardPendingFrame();
 
         assertTrue(transaction.hasHistory());
         assertFalse(transaction.hasPendingFrame());
-        assertEquals(committedLuma, transaction.getPreviousLumaIndex());
-        assertEquals(1L, transaction.getFrameSequence());
     }
 
     @Test(expected = IllegalStateException.class)
@@ -139,13 +117,18 @@ public class ClientSbsGpuSceneCutDetectorTest {
         new ClientSbsGpuSceneCutDetector.FrameTransaction().commitAcceptedFrame();
     }
 
+    @Test(expected = IllegalStateException.class)
+    public void rejectsDiscardWithoutPendingFrame() {
+        new ClientSbsGpuSceneCutDetector.FrameTransaction().discardPendingFrame();
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsZeroLength() {
-        ClientSbsGpuSceneCutDetector.blocksForPixels(0);
+        ClientSbsGpuSceneCutDetector.tilesForPixels(0);
     }
 
     @Test(expected = IllegalArgumentException.class)
     public void rejectsNegativeLength() {
-        ClientSbsGpuSceneCutDetector.blocksForPixels(-1);
+        ClientSbsGpuSceneCutDetector.tilesForPixels(-1);
     }
 }

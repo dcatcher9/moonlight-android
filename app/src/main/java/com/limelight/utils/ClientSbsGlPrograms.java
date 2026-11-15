@@ -99,7 +99,6 @@ final class ClientSbsGlPrograms {
         /** Source pixels per model texel, per axis; drives the model-input box filter. */
         final int downsampleRatio;
         final int sourceSize;
-        final int ordinalTexture;
 
         QuadProgramBindings(int program) {
             position = GLES20.glGetAttribLocation(program, "a_Position");
@@ -110,7 +109,6 @@ final class ClientSbsGlPrograms {
             sourceAspect = GLES20.glGetUniformLocation(program, "u_sourceAspect");
             downsampleRatio = GLES20.glGetUniformLocation(program, "u_downsampleRatio");
             sourceSize = GLES20.glGetUniformLocation(program, "u_sourceSize");
-            ordinalTexture = GLES20.glGetUniformLocation(program, "u_OrdinalTexture");
         }
     }
 

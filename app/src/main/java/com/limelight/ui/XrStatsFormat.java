@@ -3,7 +3,6 @@ package com.limelight.ui;
 import android.app.Activity;
 
 import com.limelight.R;
-import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
@@ -51,10 +50,9 @@ final class XrStatsFormat {
     }
 
     static String formatClientV2State(boolean ready, boolean currentValid,
-                                      boolean historyAdvanced, float validFraction) {
+                                      float validFraction) {
         return "ready " + yesNo(ready)
                 + " | current valid " + yesNo(currentValid)
-                + " | history " + (historyAdvanced ? "advance" : "hold")
                 + " | valid " + (Float.isFinite(validFraction)
                 ? String.format(Locale.US, "%.1f%%", validFraction * 100.0f) : "n/a");
     }
@@ -89,54 +87,16 @@ final class XrStatsFormat {
                 + " | sample " + healthSampleSequence;
     }
 
-    static String formatClientCutDepthEvidence(float changeFraction, float rangeShift,
-                                                float internalEvidence, float baseline,
-                                                float cutRangeWidth,
-                                                boolean cutRangeCollapsed) {
-        return "change " + formatStatsFloat(changeFraction, 3)
-                + " | range shift " + formatStatsFloat(rangeShift, 3)
-                + " | internal " + formatStatsFloat(internalEvidence, 3)
-                + " | baseline " + formatStatsFloat(baseline, 3)
-                + " | cut range " + formatStatsFloat(cutRangeWidth, 4)
-                + (cutRangeCollapsed ? " collapsed" : "");
-    }
-
-    static String formatClientCutAppearanceEvidence(float rawChange, float meanLumaDelta,
-                                                     float structuralChange,
-                                                     float currentSupport,
-                                                     float commonSupport) {
-        return "raw " + formatStatsFloat(rawChange, 3)
-                + " | luma " + formatStatsFloat(meanLumaDelta, 3)
-                + " | structure " + formatStatsFloat(structuralChange, 3)
-                + " | support " + formatStatsFloat(currentSupport, 3)
-                + "/" + formatStatsFloat(commonSupport, 3);
-    }
-
-    static String formatClientCutDecision(int flags, long eventSequence,
-                                          boolean geometryArmed) {
-        return clientCutReasonName(flags).replace('_', ' ')
-                + " | event " + eventSequence
-                + " | geometry armed " + yesNo(geometryArmed)
-                + String.format(Locale.US, " | flags 0x%05x", flags);
-    }
-
-    static String formatClientCutCounts(long total, long appearance, long geometry,
-                                        long structureless, long proposals) {
-        return String.format(Locale.US,
-                "total %d | appearance %d | geometry %d | low %d | proposals %d",
-                total, appearance, geometry, structureless, proposals);
-    }
-
     static String formatClientFaults(long colorBusy, long flat, boolean depthHealthAvailable,
-                                     long invalidRaw, long collapsedCutRange) {
+                                     long invalidRaw, long collapsedRaw) {
         String result = String.format(Locale.US, "color_busy %d | flat %d",
                 colorBusy, flat);
         if (!depthHealthAvailable) {
             return result + " | raw n/a";
         }
         return result + String.format(Locale.US,
-                " | raw invalid %d | cut range collapsed %d",
-                invalidRaw, collapsedCutRange);
+                " | raw invalid %d | raw collapsed %d",
+                invalidRaw, collapsedRaw);
     }
 
     static String formatHostV2Field(SbsDepthTelemetrySnapshot telemetry) {
@@ -177,67 +137,6 @@ final class XrStatsFormat {
             default:
                 return "2D";
         }
-    }
-
-    static String formatSceneCutStatus(long totalCuts, int sceneAgeFrames,
-                                       boolean geometryArmed, long appearanceProposals) {
-        return String.format(Locale.US,
-                "%d total | scene age %d frames | geometry %s | appearance proposals %d",
-                totalCuts, sceneAgeFrames, geometryArmed ? "armed" : "disarmed",
-                appearanceProposals);
-    }
-
-    static String clientCutReasonName(int flags) {
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_APPEARANCE) != 0) {
-            return "appearance";
-        }
-        if ((flags
-                & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_STRUCTURELESS_ENTRY) != 0) {
-            return "structureless_entry";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_ACCEPTED_GEOMETRY) != 0) {
-            return (flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0
-                    ? "geometry_depth_only" : "geometry";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_SELECTED_APPEARANCE) != 0) {
-            if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_CURRENT_DEPTH_VALID) == 0) {
-                return "appearance_pending_depth";
-            }
-            if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_ARMED) == 0) {
-                return "appearance_unarmed";
-            }
-            if ((flags
-                    & ClientSbsGpuDepthProcessor.CUT_DECISION_APPEARANCE_DEPTH_CORROBORATED) == 0) {
-                return "appearance_depth_rejected";
-            }
-            return "appearance_not_accepted";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_EXPOSURE_LIKE) != 0) {
-            return "exposure_veto";
-        }
-        if ((flags
-                & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CONFIRMATION_REJECTED) != 0) {
-            return (flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0
-                    ? "geometry_depth_only_rejected" : "geometry_confirmation_rejected";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_DEPTH_ONLY_FALLBACK) != 0) {
-            return "geometry_depth_only_pending";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_DEPTH_TRIGGER) != 0
-                && (flags
-                & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_STRUCTURE_CORROBORATED) == 0) {
-            return "geometry_structure_rejected";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_GEOMETRY_CANDIDATE) != 0) {
-            return "geometry_pending";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_PERSISTENT_LOW_START) != 0) {
-            return "structureless_start";
-        }
-        if ((flags & ClientSbsGpuDepthProcessor.CUT_DECISION_SUPPORTED_RETURN) != 0) {
-            return "structure_supported_return";
-        }
-        return "none";
     }
 
     static String formatHostSceneCutStatus(

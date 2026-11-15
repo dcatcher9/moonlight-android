@@ -3,7 +3,6 @@ package com.limelight.utils;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuTimer;
 import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
-import com.limelight.sbs.ClientSbsV2CoordinateContract;
 import com.limelight.sbs.SbsDepthTelemetryHistory;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -269,33 +268,10 @@ final class ClientSbsPerfStats {
         /** True after a readback error and until a fresh GPU health sample arrives. */
         final boolean readbackFailed;
         final float validFraction;
-        final float effectiveRangeWidth;
-        final boolean rangeCollapsed;
-        final float popStrength;
-        /** Retired adaptive-pop diagnostic retained only by the source-neutral telemetry ABI. */
-        final float edgeFraction;
-        final float changeFraction;
-        final int sceneAge;
-        /**
-         * Accepted shot cuts since the session began. A running count is what separates "the cut
-         * detector fired once on a real cut" from "it is retriggering on ordinary motion", which a
-         * momentary sample of sceneAge cannot show.
-         */
-        final long hardCutCount;
         /** Whether persistent raw camera state has been initialized. */
-        final boolean profileInitialized;
-        /**
-         * Whether the cut detector can fire at all. Without it a flat cut count is ambiguous --
-         * no cuts happened, or the detector has been disarmed and could not have reported them.
-         */
-        final boolean geometryCutArmed;
-        /** Current-frame appearance proposals observed by the local color detector. */
-        final long appearanceProposals;
-        final long acceptedAppearanceCuts;
-        final long acceptedGeometryCuts;
-        final long acceptedStructurelessEntryCuts;
+        final boolean cameraInitialized;
         /** Cumulative estimator faults; a climbing count is invisible in any instantaneous value. */
-        final long emptyRawFrames;
+        final long incompleteRawFrames;
         final long collapsedRawFrames;
         final float rawZero;
         final float currentRawMean;
@@ -306,40 +282,14 @@ final class ClientSbsPerfStats {
         final boolean cameraClockArmed;
         final long sampleSequence;
         final boolean currentDepthValid;
-        final boolean historyAdvanced;
         final boolean currentGeometryReady;
-        final float appearanceRawChangeFraction;
-        final float appearanceMeanLumaDelta;
-        final float appearanceStructuralChangeFraction;
-        final float appearanceCurrentSupportFraction;
-        final float appearanceCommonSupportFraction;
-        final int cutDecisionFlags;
-        /** Monotonic identity of the most recently latched notable cut decision. */
-        final long cutEventSequence;
-        final float latestDepthChangeFraction;
-        final float latestRangeShift;
-        final float latestInternalCutEvidence;
-        final float geometryChangeBaseline;
-
 
         private DepthHealthState(boolean readbackFailed) {
             available = false;
             this.readbackFailed = readbackFailed;
             validFraction = 0.0f;
-            effectiveRangeWidth = 0.0f;
-            rangeCollapsed = true;
-            popStrength = ClientSbsV2CoordinateContract.FIXED_POP_STRENGTH;
-            edgeFraction = Float.NaN;
-            changeFraction = 0.0f;
-            sceneAge = 0;
-            hardCutCount = 0L;
-            profileInitialized = false;
-            geometryCutArmed = false;
-            appearanceProposals = 0L;
-            acceptedAppearanceCuts = 0L;
-            acceptedGeometryCuts = 0L;
-            acceptedStructurelessEntryCuts = 0L;
-            emptyRawFrames = 0L;
+            cameraInitialized = false;
+            incompleteRawFrames = 0L;
             collapsedRawFrames = 0L;
             rawZero = Float.NaN;
             currentRawMean = Float.NaN;
@@ -350,45 +300,20 @@ final class ClientSbsPerfStats {
             cameraClockArmed = false;
             sampleSequence = 0L;
             currentDepthValid = false;
-            historyAdvanced = false;
             currentGeometryReady = false;
-            appearanceRawChangeFraction = 0.0f;
-            appearanceMeanLumaDelta = 0.0f;
-            appearanceStructuralChangeFraction = 0.0f;
-            appearanceCurrentSupportFraction = 0.0f;
-            appearanceCommonSupportFraction = 0.0f;
-            cutDecisionFlags = 0;
-            cutEventSequence = 0L;
-            latestDepthChangeFraction = Float.NaN;
-            latestRangeShift = Float.NaN;
-            latestInternalCutEvidence = 0.0f;
-            geometryChangeBaseline = 0.0f;
         }
 
         DepthHealthState(ClientSbsGpuDepthProcessor.HealthSnapshot snapshot) {
             available = true;
             readbackFailed = false;
             validFraction = snapshot.getValidRawFraction();
-            effectiveRangeWidth = snapshot.getEffectiveRangeWidth();
-            rangeCollapsed = snapshot.isPercentileRangeCollapsed();
-            edgeFraction = snapshot.getEdgeFraction();
-            changeFraction = snapshot.getChangeFraction();
-            sceneAge = snapshot.getSceneAge();
-            popStrength = snapshot.getPopStrength();
-            hardCutCount = snapshot.getHardCutCount();
-            profileInitialized = snapshot.isStereoProfileInitialized();
-            geometryCutArmed = snapshot.isGeometryCutArmed();
-            appearanceProposals = snapshot.getAppearanceProposalCount();
-            acceptedAppearanceCuts = snapshot.getAcceptedAppearanceCutCount();
-            acceptedGeometryCuts = snapshot.getAcceptedGeometryCutCount();
-            acceptedStructurelessEntryCuts =
-                    snapshot.getAcceptedStructurelessEntryCutCount();
-            emptyRawFrames = snapshot.getEmptyRawFrameCount();
+            cameraInitialized = snapshot.isCameraInitialized();
+            incompleteRawFrames = snapshot.getIncompleteRawFrameCount();
             collapsedRawFrames = snapshot.getCollapsedRawFrameCount();
-            rawZero = profileInitialized ? snapshot.getRawZero() : Float.NaN;
+            rawZero = cameraInitialized ? snapshot.getRawZero() : Float.NaN;
             currentRawMean = Float.isFinite(snapshot.getTargetRawInverseAmplitude())
                     ? snapshot.getCurrentRawMean() : Float.NaN;
-            rawInverseAmplitude = profileInitialized
+            rawInverseAmplitude = cameraInitialized
                     ? snapshot.getRawInverseAmplitude() : Float.NaN;
             targetRawInverseAmplitude = snapshot.getTargetRawInverseAmplitude();
             rawPercentileLow = snapshot.getRawPercentileLow();
@@ -396,22 +321,7 @@ final class ClientSbsPerfStats {
             cameraClockArmed = snapshot.isCameraClockArmed();
             sampleSequence = snapshot.getFrameSequence();
             currentDepthValid = snapshot.isCurrentDepthValid();
-            historyAdvanced = snapshot.didHistoryAdvance();
             currentGeometryReady = snapshot.isCurrentGeometryReady();
-            appearanceRawChangeFraction = snapshot.getAppearanceRawChangeFraction();
-            appearanceMeanLumaDelta = snapshot.getAppearanceMeanLumaDelta();
-            appearanceStructuralChangeFraction =
-                    snapshot.getAppearanceStructuralChangeFraction();
-            appearanceCurrentSupportFraction =
-                    snapshot.getAppearanceCurrentSupportFraction();
-            appearanceCommonSupportFraction =
-                    snapshot.getAppearanceCommonSupportFraction();
-            cutDecisionFlags = snapshot.getCutDecisionFlags();
-            cutEventSequence = snapshot.getCutEventSequence();
-            latestDepthChangeFraction = snapshot.getLatestDepthChangeFraction();
-            latestRangeShift = snapshot.getLatestRangeShift();
-            latestInternalCutEvidence = snapshot.getLatestInternalCutEvidence();
-            geometryChangeBaseline = snapshot.getGeometryChangeBaseline();
         }
     }
 }

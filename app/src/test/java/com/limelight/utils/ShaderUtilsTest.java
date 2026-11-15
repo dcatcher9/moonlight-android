@@ -75,16 +75,17 @@ public class ShaderUtilsTest {
     }
 
     @Test
-    public void ordinalFetchIsRestrictedToTheDetectorStencilWithoutChangingRgbIntegration() {
+    public void modelInputWritesOnlyResizedRgbWithOpaqueAlpha() {
         for (boolean direct : new boolean[] {true, false}) {
             String shader = ClientSbsShaders.createModelInputFragment(direct);
-            assertTrue(shader.contains("bool isOrdinalAnchor(ivec2 targetPixel)"));
-            assertTrue(shader.contains("tensorSize = floor(u_sourceSize / u_downsampleRatio"));
-            assertTrue(shader.contains("min(vec2(16.0), tensorSize - tileOrigin)"));
-            assertTrue(shader.contains("vec2 middle = floor(last * 0.5)"));
-            assertTrue(shader.contains("if (isOrdinalAnchor(targetPixel)) ordinal = sourcePointOrdinal(sourceUv)"));
             assertTrue(shader.contains("color = sampleModelFootprint(sourceLo, sourceHi)"));
             assertTrue(shader.contains("color = sampleModelColorBilinear(sourceUv)"));
+            assertTrue(shader.contains("gl_FragColor = vec4(color, 1.0);"));
+            // One decoder sampler: no second point-sampled source fetch feeds alpha.
+            assertEquals(1, shader.split("samplerExternalOES", -1).length - 1);
+            assertEquals(1, shader.split("texture2D\\(", -1).length - 1);
+            assertFalse(shader.contains("u_OrdinalTexture"));
+            assertFalse(shader.toLowerCase(java.util.Locale.US).contains("ordinal"));
         }
     }
 

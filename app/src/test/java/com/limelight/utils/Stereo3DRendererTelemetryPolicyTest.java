@@ -37,19 +37,21 @@ public class Stereo3DRendererTelemetryPolicyTest {
     }
 
     @Test
-    public void localV2DepthValidityDoesNotClaimRetiredAdaptiveOrAnchorFields() {
-        int waiting = Stereo3DRenderer.depthTelemetryValidFields(false);
-        assertTrue((waiting & SbsDepthTelemetrySnapshot.VALID_EFFECTIVE) != 0);
-        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
-        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
-        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SUBJECT) != 0);
-        assertFalse((waiting & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
-
-        int ready = Stereo3DRenderer.depthTelemetryValidFields(true);
-        assertTrue((ready & SbsDepthTelemetrySnapshot.VALID_SCENE) != 0);
-        assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_EDGE) != 0);
-        assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_ANCHOR) != 0);
-        assertFalse((ready & SbsDepthTelemetrySnapshot.VALID_SUBJECT) != 0);
+    public void localV2DepthValidityClaimsOnlyFieldsTheClientMeasures() {
+        int fields = Stereo3DRenderer.depthTelemetryValidFields();
+        assertEquals(SbsDepthTelemetrySnapshot.VALID_CONFIG
+                | SbsDepthTelemetrySnapshot.VALID_EFFECTIVE
+                | SbsDepthTelemetrySnapshot.VALID_DEPTH_FRACTION
+                | SbsDepthTelemetrySnapshot.VALID_FAULTS, fields);
+        // Host-only fields: the client has no cut detector, cut range, scene age or change
+        // fraction, and no adaptive-pop, anchor or subject classifier.
+        for (int hostOnly : new int[] {
+                SbsDepthTelemetrySnapshot.VALID_EDGE, SbsDepthTelemetrySnapshot.VALID_CHANGE,
+                SbsDepthTelemetrySnapshot.VALID_ANCHOR, SbsDepthTelemetrySnapshot.VALID_SUBJECT,
+                SbsDepthTelemetrySnapshot.VALID_RANGE, SbsDepthTelemetrySnapshot.VALID_SCENE,
+                SbsDepthTelemetrySnapshot.VALID_CUTS}) {
+            assertFalse((fields & hostOnly) != 0);
+        }
     }
 
     @Test
@@ -58,15 +60,16 @@ public class Stereo3DRendererTelemetryPolicyTest {
         // Health state is sampled asynchronously; the renderer copies it before a subsequent GPU
         // observation can overwrite the buffer-backed view. Exercise that boundary with a complete
         // raw field rejected by the source clock, then with a genuinely accepted observation.
-        ByteBuffer state = ByteBuffer.allocate(256).order(ByteOrder.nativeOrder());
-        state.putInt(68, 1);
-        state.putInt(72, frameStateFlag("FRAME_STATE_CURRENT_DEPTH_VALID"));
-        state.putFloat(128, 0.3f);
-        state.putFloat(132, 0.4f);
-        state.putFloat(140, 1.0f);
-        state.putFloat(224, 20.0f);
-        state.putFloat(232, 0.1f);
-        state.putFloat(236, 0.7f);
+        // std430 ProcessorState: frameState at 0, v2Camera at 16, adaptiveCamera at 32 and
+        // cameraClock at 48 in a 64-byte block.
+        ByteBuffer state = ByteBuffer.allocate(64).order(ByteOrder.nativeOrder());
+        state.putInt(0, ClientSbsGpuDepthProcessor.FRAME_STATE_CURRENT_DEPTH_VALID);
+        state.putFloat(16, 0.3f);
+        state.putFloat(20, 0.4f);
+        state.putFloat(28, 1.0f);
+        state.putFloat(32, 20.0f);
+        state.putFloat(40, 0.1f);
+        state.putFloat(44, 0.7f);
         ClientSbsGpuDepthProcessor.HealthSnapshot health =
                 new ClientSbsGpuDepthProcessor.HealthSnapshot();
         Method update = health.getClass().getDeclaredMethod("updateFromState",
@@ -85,10 +88,10 @@ public class Stereo3DRendererTelemetryPolicyTest {
         assertTrue(Float.isNaN(floatField(copyType, held, "targetRawInverseAmplitude")));
         assertTrue(Float.isNaN(floatField(copyType, held, "rawPercentileLow")));
 
-        state.putInt(72, state.getInt(72)
-                | frameStateFlag("FRAME_STATE_CURRENT_V2_VALID"));
-        state.putFloat(228, 10.0f);
-        state.putInt(248, 1);
+        state.putInt(0, state.getInt(0)
+                | ClientSbsGpuDepthProcessor.FRAME_STATE_CURRENT_V2_VALID);
+        state.putFloat(36, 10.0f);
+        state.putInt(56, 1);
         update.invoke(health, state, 40L, 100);
         Object accepted = constructor.newInstance(health);
         assertEquals(0.4f, floatField(copyType, accepted, "currentRawMean"), 0.0f);
@@ -102,12 +105,5 @@ public class Stereo3DRendererTelemetryPolicyTest {
         Field field = type.getDeclaredField(name);
         field.setAccessible(true);
         return field.getFloat(owner);
-    }
-
-    private static int frameStateFlag(String name) throws Exception {
-        Field field = Class.forName("com.limelight.sbs.ClientSbsShotCutPolicy")
-                .getDeclaredField(name);
-        field.setAccessible(true);
-        return field.getInt(null);
     }
 }

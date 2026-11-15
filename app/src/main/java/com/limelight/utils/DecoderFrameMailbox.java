@@ -20,7 +20,7 @@ final class DecoderFrameMailbox {
     /**
      * Monotonic decoder-callback identity. Unlike successful GL latches, this advances for every
      * callback so latest-only SurfaceTexture coalescing cannot hide source-frame steps from the
-     * source-order and scene-cut observations.
+     * source-order observations.
      */
     private long callbackSequence;
     private int takenGeneration = -1;

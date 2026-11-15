@@ -76,7 +76,7 @@ public class Stereo3DRendererStrictFailureContractTest {
     }
 
     @Test
-    public void optionalColorCutDetectorCannotDisableDepthPipeline() throws Exception {
+    public void optionalNearReuseClassifierCannotDisableDepthPipeline() throws Exception {
         String source = readRendererSource();
         String initialization = methodBody(
                 source,
@@ -90,8 +90,10 @@ public class Stereo3DRendererStrictFailureContractTest {
         assertTrue(initialization.contains("&& gpuDisparityProcessor != null;"));
         assertFalse(initialization.contains(
                 "gpuDisparityProcessor != null && gpuSceneCutDetector != null"));
-        assertTrue(initialization.contains("color-cut detector unavailable; using bounded"));
-        assertTrue(initialization.contains("depth-only cut confirmation"));
+        assertTrue(initialization.contains(
+                "near-reuse classifier unavailable; every frame "));
+        assertTrue(initialization.contains("runs inference"));
+        assertTrue(initialization.contains("if (modelInputTargetReady) {"));
         assertFalse(actualCommit.contains("resetSourceFrameAgeTracking()"));
         assertFalse(reuseDiscard.contains("resetSourceFrameAgeTracking()"));
     }

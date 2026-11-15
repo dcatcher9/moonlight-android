@@ -93,14 +93,14 @@ final class XrStatsPanel {
     static final String[] CLIENT_GPU_STAGE_LABELS = {
             "Model input GPU",
             "Matched color GPU",
-            "Depth / cut GPU",
+            "Depth GPU",
             "SBS compose GPU"
     };
 
     static final String[] CLIENT_GPU_STAGE_DETAILS = {
             "resize + classify (pack on infer worker)",
             "full-res capture",
-            "adaptive camera + cut",
+            "raw validity + adaptive camera",
             "condition + map + draw"
     };
 
@@ -408,11 +408,11 @@ final class XrStatsPanel {
             Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbs) {
         long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs
                 + clientSbs.depthInvalidRawFrames
-                + clientSbs.depthCutRangeCollapsedFrames;
+                + clientSbs.depthCollapsedRawFrames;
         addStatsRow("Faults",
                 XrStatsFormat.formatClientFaults(clientSbs.colorSlotBusySkips, clientSbs.flatSbsOutputs,
                         clientSbs.depthHealthAvailable, clientSbs.depthInvalidRawFrames,
-                        clientSbs.depthCutRangeCollapsedFrames),
+                        clientSbs.depthCollapsedRawFrames),
                 faults > 0L ? paletteColor(R.color.xr_status_warn)
                         : paletteColor(R.color.xr_text_primary));
 
@@ -427,8 +427,7 @@ final class XrStatsPanel {
 
         addStatsRow(activity.getString(R.string.xr_stats_sampled_geometry),
                 XrStatsFormat.formatClientV2State(clientSbs.depthCurrentGeometryReady,
-                        clientSbs.depthCurrentValid, clientSbs.depthHistoryAdvanced,
-                        clientSbs.validDepthFraction),
+                        clientSbs.depthCurrentValid, clientSbs.validDepthFraction),
                 clientSbs.depthCurrentGeometryReady
                         ? paletteColor(R.color.xr_status_ok)
                         : paletteColor(R.color.xr_status_warn));
@@ -448,34 +447,6 @@ final class XrStatsPanel {
         addStatsRow(activity.getString(R.string.xr_stats_linear_mapping),
                 XrStatsFormat.formatClientLinearMapping(clientSbs.stereoPopStrength,
                         clientSbs.depthCameraClockArmed, clientSbs.depthHealthSampleSequence),
-                paletteColor(R.color.xr_text_secondary));
-        addStatsRow("Last cut depth evidence",
-                XrStatsFormat.formatClientCutDepthEvidence(clientSbs.depthLatestChangeFraction,
-                        clientSbs.depthLatestRangeShift,
-                        clientSbs.depthLatestInternalCutEvidence,
-                        clientSbs.depthGeometryChangeBaseline,
-                        clientSbs.effectiveDepthRangeWidth,
-                        clientSbs.cutRangeCollapsed),
-                paletteColor(R.color.xr_text_primary));
-        addStatsRow("Last cut appearance evidence",
-                XrStatsFormat.formatClientCutAppearanceEvidence(
-                        clientSbs.depthAppearanceRawChangeFraction,
-                        clientSbs.depthAppearanceMeanLumaDelta,
-                        clientSbs.depthAppearanceStructuralChangeFraction,
-                        clientSbs.depthAppearanceCurrentSupportFraction,
-                        clientSbs.depthAppearanceCommonSupportFraction),
-                paletteColor(R.color.xr_text_primary));
-        addStatsRow("Last cut decision",
-                XrStatsFormat.formatClientCutDecision(clientSbs.depthCutDecisionFlags,
-                        clientSbs.depthCutEventSequence,
-                        clientSbs.depthGeometryCutArmed),
-                paletteColor(R.color.xr_text_secondary));
-        addStatsRow("Cut counts",
-                XrStatsFormat.formatClientCutCounts(clientSbs.depthHardCutCount,
-                        clientSbs.depthAcceptedAppearanceCutCount,
-                        clientSbs.depthAcceptedGeometryCutCount,
-                        clientSbs.depthAcceptedStructurelessEntryCutCount,
-                        clientSbs.depthAppearanceProposalCount),
                 paletteColor(R.color.xr_text_secondary));
     }
 
