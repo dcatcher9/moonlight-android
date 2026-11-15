@@ -330,13 +330,16 @@ public final class XrStreamPresenterViewTest {
         PreferenceConfiguration prefs = PreferenceConfiguration.readPreferences(activity);
         XrStreamPresenter presenter = new XrStreamPresenter(
                 activity, prefs, surface -> { }, visible -> { });
-        Method build = XrStreamPresenter.class.getDeclaredMethod("buildSessionSettingsView");
+        Object pane = getField(presenter, "sessionSettingsPane");
+        Method build = XrSessionSettingsPane.class.getDeclaredMethod("buildSessionSettingsView");
         build.setAccessible(true);
-        build.invoke(presenter);
+        build.invoke(pane);
 
         assertThrows(NoSuchFieldException.class,
                 () -> XrStreamPresenter.class.getDeclaredField("sessionApplyButton"));
-        Button defaults = (Button) getField(presenter, "sessionDefaultsButton");
+        assertThrows(NoSuchFieldException.class,
+                () -> XrSessionSettingsPane.class.getDeclaredField("sessionApplyButton"));
+        Button defaults = (Button) getField(pane, "sessionDefaultsButton");
         LinearLayout.LayoutParams params =
                 (LinearLayout.LayoutParams) defaults.getLayoutParams();
         assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT, params.width);
@@ -359,17 +362,18 @@ public final class XrStreamPresenterViewTest {
         XrStreamPresenter presenter = new XrStreamPresenter(activity,
                 PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
         presenter.setSettingsTransactionPending(true);
-        Method build = XrStreamPresenter.class.getDeclaredMethod("buildSessionSettingsView");
+        Object pane = getField(presenter, "sessionSettingsPane");
+        Method build = XrSessionSettingsPane.class.getDeclaredMethod("buildSessionSettingsView");
         build.setAccessible(true);
-        build.invoke(presenter);
-        java.util.Map<?, ?> groups = (java.util.Map<?, ?>) getField(presenter, "sessionChoiceGroups");
+        build.invoke(pane);
+        java.util.Map<?, ?> groups = (java.util.Map<?, ?>) getField(pane, "sessionChoiceGroups");
         XrChoiceGroup hdr = (XrChoiceGroup) groups.get(com.limelight.ui.xrcontrols.SessionSettingsModel.Key.HDR);
         assertFalse(hdr.isEnabled());
-        Method update = XrStreamPresenter.class.getDeclaredMethod("updateSessionSettingsView");
+        Method update = XrSessionSettingsPane.class.getDeclaredMethod("updateSessionSettingsView");
         update.setAccessible(true);
-        update.invoke(presenter);
+        update.invoke(pane);
         assertFalse(hdr.isEnabled());
-        build.invoke(presenter);
+        build.invoke(pane);
         hdr = (XrChoiceGroup) groups.get(com.limelight.ui.xrcontrols.SessionSettingsModel.Key.HDR);
         assertFalse(hdr.isEnabled());
         presenter.setSettingsTransactionPending(false);
@@ -423,13 +427,13 @@ public final class XrStreamPresenterViewTest {
 
         assertEquals(R.dimen.xr_text_display, XrStatsPanel.STATS_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_title,
-                XrStreamPresenter.SESSION_SUMMARY_TEXT_DIMEN);
+                XrSessionSettingsPane.SESSION_SUMMARY_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_title,
-                XrStreamPresenter.SESSION_GROUP_TEXT_DIMEN);
+                XrSessionSettingsPane.SESSION_GROUP_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_display,
-                XrStreamPresenter.SESSION_ROW_TITLE_TEXT_DIMEN);
+                XrSessionSettingsPane.SESSION_ROW_TITLE_TEXT_DIMEN);
         assertEquals(R.dimen.xr_text_title,
-                XrStreamPresenter.SESSION_META_TEXT_DIMEN);
+                XrSessionSettingsPane.SESSION_META_TEXT_DIMEN);
         assertEquals("2D", activity.getString(R.string.xr_bar_2d));
         assertEquals("Host AI 3D", activity.getString(R.string.xr_bar_host_ai_3d));
         assertEquals("Client AI 3D", activity.getString(R.string.xr_bar_client_ai_3d));

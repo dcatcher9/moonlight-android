@@ -368,17 +368,17 @@ public class XrStreamPresenterLayoutTest {
 
     @Test
     public void sharedSessionSettingsUseTwoSemanticColumns() {
-        assertEquals(0, XrStreamPresenter.sharedSettingColumn(
+        assertEquals(0, XrSessionSettingsPane.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.HDR));
-        assertEquals(0, XrStreamPresenter.sharedSettingColumn(
+        assertEquals(0, XrSessionSettingsPane.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.VIDEO_RANGE));
-        assertEquals(0, XrStreamPresenter.sharedSettingColumn(
+        assertEquals(0, XrSessionSettingsPane.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.CODEC));
-        assertEquals(1, XrStreamPresenter.sharedSettingColumn(
+        assertEquals(1, XrSessionSettingsPane.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.FRAME_PACING));
-        assertEquals(1, XrStreamPresenter.sharedSettingColumn(
+        assertEquals(1, XrSessionSettingsPane.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.AUDIO_LAYOUT));
-        assertEquals(1, XrStreamPresenter.sharedSettingColumn(
+        assertEquals(1, XrSessionSettingsPane.sharedSettingColumn(
                 com.limelight.ui.xrcontrols.SessionSettingsModel.Key.PLAY_AUDIO_ON_PC));
     }
 }

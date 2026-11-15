@@ -157,8 +157,9 @@ public class GameXrSettingsAutoApplyTest {
                 PreferenceConfiguration.readPreferences(game), surface -> { }, shown -> { });
         visible.setControlActionListener(actions);
         visible.setSessionSettingsModel(settings.getSessionModel());
-        ReflectionHelpers.callInstanceMethod(visible, "buildSessionSettingsView");
-        java.util.Map<?, ?> groups = ReflectionHelpers.getField(visible, "sessionChoiceGroups");
+        Object pane = ReflectionHelpers.getField(visible, "sessionSettingsPane");
+        ReflectionHelpers.callInstanceMethod(pane, "buildSessionSettingsView");
+        java.util.Map<?, ?> groups = ReflectionHelpers.getField(pane, "sessionChoiceGroups");
         XrChoiceGroup gamma = (XrChoiceGroup) groups.get(SessionSettingsModel.Key.STREAM_GAMMA);
         assertEquals("2.4", gamma.getSelectedValue());
         for (int index = 0; index < gamma.getChildCount(); index++) {
@@ -169,7 +170,7 @@ public class GameXrSettingsAutoApplyTest {
         int request = ShadowMoonBridge.getLastStreamGammaRequest()[1];
         game.streamGammaAck(0, 2, 2, request, 2, 203);
         visible.setSessionSettingsModel(settings.getSessionModel());
-        ReflectionHelpers.callInstanceMethod(visible, "updateSessionSettingsView");
+        ReflectionHelpers.callInstanceMethod(pane, "updateSessionSettingsView");
         for (int index = 0; index < gamma.getChildCount(); index++) {
             if ("2.4".equals(gamma.getButtonAt(index).getTag())) gamma.getButtonAt(index).performClick();
         }

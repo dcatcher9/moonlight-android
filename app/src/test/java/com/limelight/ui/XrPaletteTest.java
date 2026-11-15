@@ -52,6 +52,7 @@ public class XrPaletteTest {
             "XrStatsFormat.java",
             "XrStatsPanel.java",
             "XrGlanceStrip.java",
+            "XrSessionSettingsPane.java",
     };
 
     /**
