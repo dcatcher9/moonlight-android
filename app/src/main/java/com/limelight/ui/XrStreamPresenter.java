@@ -12,7 +12,6 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
@@ -357,23 +356,10 @@ public class XrStreamPresenter {
     private boolean presenterDestroyed;
     /** Apollo-3D control messages are opt-in; regular Sunshine/Apollo must never receive them. */
     private boolean hostControlExtensionsSupported = true;
-    /** Small centered overlay shown in front of the video while the host prepares its engine or
-     *  initializes the stream-specific 3D pipeline
-     *  (driven by the host's 0x3006 depth-status push via {@link #onDepthStatus}). */
-    private PanelEntity depthStatusPanel;
-    private View depthStatusRoot;
-    private TextView depthStatusText;
-    private static final float DEPTH_STATUS_WIDTH_METERS = 0.9f;
-    private static final float DEPTH_STATUS_HEIGHT_METERS = 0.11f;
-
-    /** Centered in-headset replacement for platform toasts, whose gravity is ignored on API 30+. */
-    private PanelEntity transientMessagePanel;
-    private TextView transientMessageText;
-    private static final float TRANSIENT_MESSAGE_WIDTH_METERS = 1.2f;
-    private static final float TRANSIENT_MESSAGE_HEIGHT_METERS = 0.18f;
-    private final android.os.Handler transientMessageHandler =
-            new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable hideTransientMessageRunnable = this::hideTransientMessage;
+    /** Loading overlay and host depth phase, driven by the host's 0x3006 push via
+     *  {@link #onDepthStatus}. */
+    private final XrDepthStatusOverlay depthStatusOverlay;
+    private final XrTransientMessagePanel transientMessagePanel;
 
     /** Comfortable cinema-preset quad height in meters; mode switches keep this height and vary
      *  width. Shared by the initial placement and Cinema View so both land at the same size. Tune
@@ -529,6 +515,8 @@ public class XrStreamPresenter {
         this.panelRefreshRateState = new PanelRefreshRateState(prefConfig.fps);
         this.listener = listener;
         this.statsVisibilityListener = statsVisibilityListener;
+        this.depthStatusOverlay = new XrDepthStatusOverlay(activity, () -> presenterDestroyed);
+        this.transientMessagePanel = new XrTransientMessagePanel(activity);
         this.glanceStrip = new XrGlanceStrip(activity, devicePerformanceSampler,
                 new XrGlanceStrip.Host() {
                     @Override
@@ -695,7 +683,7 @@ public class XrStreamPresenter {
                                 streamPresentationReady, sessionControlsEnabled,
                                 controlUiState.getVisibleSurface(), controlUiState.isStatsVisible(),
                                 reconnectPending, modeSwitchInProgress || liveQualityTransactionBusy(),
-                                pendingDecoderTransitionMode != null, isDepthBusy(),
+                                pendingDecoderTransitionMode != null, depthStatusOverlay.isBusy(),
                                 dockHovered, dockFocused);
                     }
                 });
@@ -1563,8 +1551,8 @@ public class XrStreamPresenter {
         }
         createAuxiliaryPanel(videoHeightMeters);
         applyControlUiState(false, "initial");
-        createDepthStatusPanel(videoHeightMeters);
-        createTransientMessagePanel();
+        depthStatusOverlay.createPanel(session, surfaceEntity);
+        transientMessagePanel.createPanel(session, surfaceEntity);
         glanceStrip.createGlancePanel(videoHeightMeters);
         updateGlancePanel();
         dockController.updateDockVisibilityPolicy();
@@ -1636,7 +1624,7 @@ public class XrStreamPresenter {
         boolean liveStatus = streamPresentationReady && sessionControlsEnabled && !settingsTransactionPending
                 && !modeSwitchInProgress && !liveQualityTransactionBusy()
                 && pendingDecoderTransitionMode == null
-                && !isDepthBusy() && !reconnectPending;
+                && !depthStatusOverlay.isBusy() && !reconnectPending;
         int statusText;
         if (!streamPresentationReady) {
             statusText = R.string.xr_glance_starting;
@@ -1644,7 +1632,7 @@ public class XrStreamPresenter {
         else if (!sessionControlsEnabled) {
             statusText = R.string.xr_glance_reconnecting;
         }
-        else if (settingsTransactionPending || modeSwitchInProgress || pendingDecoderTransitionMode != null || isDepthBusy()) {
+        else if (settingsTransactionPending || modeSwitchInProgress || pendingDecoderTransitionMode != null || depthStatusOverlay.isBusy()) {
             statusText = R.string.xr_glance_switching;
         }
         else if (reconnectPending) {
@@ -1967,7 +1955,7 @@ public class XrStreamPresenter {
     }
 
     private String hostDepthStatusText() {
-        switch (depthStatusPhase) {
+        switch (depthStatusOverlay.phase()) {
             case 1:
                 return activity.getString(R.string.xr_mode_host_loading);
             case 2:
@@ -2023,163 +2011,25 @@ public class XrStreamPresenter {
         return activity.getString(R.string.xr_glance_frame_rate_capped, liveFrameRate, ceiling);
     }
 
-    /**
-     * Centered overlay that appears while the host prepares depth and disappears once depth is
-     * live. It distinguishes process-wide engine preparation from per-stream GPU setup and is
-     * driven entirely by the host's {@link #onDepthStatus} phase pushes.
-     */
-    private void createDepthStatusPanel(float videoHeightMeters) {
-        LinearLayout root = createDepthStatusView();
-        depthStatusPanel = PanelEntity.create(
-                session, root, new FloatSize2d(DEPTH_STATUS_WIDTH_METERS, DEPTH_STATUS_HEIGHT_METERS),
-                "xr-depth-status", depthStatusPose(), surfaceEntity);
-        XrPanelViews.configureSolidPanel(depthStatusPanel);
-        setDepthStatusVisible(false);
-    }
-
-    private LinearLayout createDepthStatusView() {
-        LinearLayout root = new LinearLayout(activity);
-        // Hide before attachment: SceneCore entity visibility does not stop Android animations.
-        // INVISIBLE preserves the hosted view's measured bounds for the next loading message.
-        root.setVisibility(View.INVISIBLE);
-        depthStatusRoot = root;
-        root.setOrientation(LinearLayout.HORIZONTAL);
-        root.setGravity(Gravity.CENTER);
-        setSolidPanelCanvas(root);
-        int p = dimen(R.dimen.xr_space_md);
-        root.setPadding(p, p, p, p);
-
-        ProgressBar spinner = new ProgressBar(activity);
-        spinner.setIndeterminate(true);
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(dp(28), dp(28));
-        sp.setMargins(0, 0, dimen(R.dimen.xr_space_md), 0);
-        root.addView(spinner, sp);
-
-        depthStatusText = new TextView(activity);
-        depthStatusText.setTextColor(paletteColor(R.color.xr_text_primary));
-        setTextSize(depthStatusText, R.dimen.xr_text_title);
-        root.addView(depthStatusText);
-
-        return root;
-    }
-
-    private void setDepthStatusVisible(boolean visible) {
-        boolean panelAvailable = depthStatusPanel != null && !depthStatusPanel.isDisposed();
-        boolean show = visible && panelAvailable && !presenterDestroyed;
-        if (depthStatusRoot != null) {
-            // ProgressBar receives aggregated visibility through this ancestor and stops its
-            // indeterminate drawable instead of repainting a hidden SceneCore panel every vsync.
-            depthStatusRoot.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
-        }
-        if (panelAvailable) {
-            depthStatusPanel.setEnabled(show);
-        }
-    }
-
-    /** Center the transient status on the video and nudge it toward the viewer as an overlay. */
-    private Pose depthStatusPose() {
-        return new Pose(new Vector3(0.0f, 0.0f, XrPanelPlacement.BAR_Z_METERS), Quaternion.Identity);
-    }
-
-    private void createTransientMessagePanel() {
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.HORIZONTAL);
-        root.setGravity(Gravity.CENTER);
-        setSolidPanelCanvas(root);
-        int padding = dimen(R.dimen.xr_space_md);
-        root.setPadding(padding, padding, padding, padding);
-
-        transientMessageText = new TextView(activity);
-        transientMessageText.setTextColor(paletteColor(R.color.xr_text_primary));
-        setTextSize(transientMessageText, R.dimen.xr_text_title);
-        transientMessageText.setGravity(Gravity.CENTER);
-        transientMessageText.setMaxLines(3);
-        root.addView(transientMessageText, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        transientMessagePanel = PanelEntity.create(
-                session, root,
-                new FloatSize2d(TRANSIENT_MESSAGE_WIDTH_METERS,
-                        TRANSIENT_MESSAGE_HEIGHT_METERS),
-                "xr-transient-message", depthStatusPose(), surfaceEntity);
-        XrPanelViews.configureSolidPanel(transientMessagePanel);
-        transientMessagePanel.setEnabled(false);
-    }
-
     /** Shows a message centered just in front of the video. Must be called on the UI thread. */
     public boolean showTransientMessage(CharSequence message, long durationMs) {
-        if (transientMessagePanel == null || transientMessagePanel.isDisposed()
-                || transientMessageText == null || message == null) {
-            return false;
-        }
-        transientMessageHandler.removeCallbacks(hideTransientMessageRunnable);
-        transientMessageText.setText(message);
-        transientMessagePanel.setEnabled(true);
-        transientMessageHandler.postDelayed(
-                hideTransientMessageRunnable, Math.max(1L, durationMs));
-        return true;
-    }
-
-    private void hideTransientMessage() {
-        if (transientMessagePanel != null && !transientMessagePanel.isDisposed()) {
-            transientMessagePanel.setEnabled(false);
-        }
-    }
-
-    private final android.os.Handler depthStatusHandler = new android.os.Handler(android.os.Looper.getMainLooper());
-    private int depthStatusPendingPhase;
-    private int depthStatusPhase;
-    // Method reference (not a field lambda) so the initializer doesn't read the not-yet-assigned
-    // final `activity` field; the body runs later, once everything is constructed.
-    private final Runnable showDepthStatusRunnable = this::showDepthStatusNow;
-
-    private void showDepthStatusNow() {
-        if (depthStatusPanel != null && !depthStatusPanel.isDisposed() && isDepthBusy()) {
-            if (depthStatusText != null) {
-                int message = depthStatusMessage(depthStatusPendingPhase);
-                depthStatusText.setText(activity.getString(message));
-            }
-            setDepthStatusVisible(true);
-        }
-    }
-
-    private boolean isDepthBusy() {
-        return depthStatusPhase == 1 || depthStatusPhase == 3;
+        return transientMessagePanel.show(message, durationMs);
     }
 
     private void resetHostDepthStatus() {
-        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
-        depthStatusPendingPhase = 0;
-        depthStatusPhase = 0;
-        setDepthStatusVisible(false);
+        depthStatusOverlay.reset();
         updateHostDebugDumpAvailability();
-    }
-
-    private static int depthStatusMessage(int phase) {
-        return phase == 3 ? R.string.xr_depth_initializing : R.string.xr_depth_loading;
     }
 
     /**
      * Host depth-engine phase push (Apollo 0x3006), on the UI thread: 0 = idle/failure,
-     * 1 = engine loading/building, 2 = ready, 3 = device-pipeline initialization. Show the
-     * matching progress indicator on phase 1/3 and hide it on ready/idle. The show is
-     * delayed ~600 ms so an already-cached model (which reports loading→ready almost instantly on
-     * every switch) doesn't flash the panel; only genuinely slow first-use loads surface it.
+     * 1 = engine loading/building, 2 = ready, 3 = device-pipeline initialization. The overlay
+     * records the phase and shows or hides its progress indicator; the controls that depend on
+     * the phase refresh here once the panel hierarchy exists.
      */
     public void onDepthStatus(int phase) {
-        // Preserve an early ready/failure push even if the panel hierarchy has not been created
-        // yet. Host AI dumps require an affirmative phase-2 signal, not merely "not busy".
-        depthStatusPhase = phase;
-        if (depthStatusPanel == null) {
+        if (!depthStatusOverlay.onPhase(phase)) {
             return;
-        }
-        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
-        if (phase == 1 || phase == 3) {
-            depthStatusPendingPhase = phase;
-            depthStatusHandler.postDelayed(showDepthStatusRunnable, 600);
-        } else {
-            setDepthStatusVisible(false);
         }
         if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.MODE_OPTIONS
                 && PresentationMode.HOST_SBS_AI.name().equals(controlUiState.getModeOptionsId())) {
@@ -2518,12 +2368,8 @@ public class XrStreamPresenter {
         }
         modeOptionsPane.reposition(videoHeightMeters);
         repositionStatsPanel();
-        if (depthStatusPanel != null) {
-            depthStatusPanel.setPose(depthStatusPose());
-        }
-        if (transientMessagePanel != null) {
-            transientMessagePanel.setPose(depthStatusPose());
-        }
+        depthStatusOverlay.reposition();
+        transientMessagePanel.reposition();
         glanceStrip.reposition(videoHeightMeters);
         updateGlancePanel();
     }
@@ -4355,7 +4201,7 @@ public class XrStreamPresenter {
         return controlTransportOpen() && hostControlExtensionsSupported
                 && isHostDebugDumpAvailable(
                 currentPresenterMode, streamPresentationReady, sessionControlsEnabled,
-                transitionInProgress, depthStatusPhase == 2, gameProviderV1Supported);
+                transitionInProgress, depthStatusOverlay.phase() == 2, gameProviderV1Supported);
     }
 
     private void updateHostDebugDumpAvailability() {
@@ -4917,8 +4763,7 @@ public class XrStreamPresenter {
         cinemaController.restoreCinemaBackground();
         presenterDestroyed = true;
         statsUi.cancelStatsPanelFit();
-        depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
-        setDepthStatusVisible(false);
+        depthStatusOverlay.cancelPendingShowAndHide();
         clientPanelRefreshRatePreference.apply(activity.getWindow(), null, false);
         onHostActivityStopped();
         dockController.closeGazeTracker();
@@ -4949,14 +4794,8 @@ public class XrStreamPresenter {
         disposePanel(auxiliaryPanel);
         auxiliaryPanel = null;
         glanceStrip.disposePanel();
-        disposePanel(depthStatusPanel);
-        depthStatusPanel = null;
-        depthStatusRoot = null;
-        depthStatusText = null;
-        transientMessageHandler.removeCallbacks(hideTransientMessageRunnable);
-        disposePanel(transientMessagePanel);
-        transientMessagePanel = null;
-        transientMessageText = null;
+        depthStatusOverlay.disposePanel();
+        transientMessagePanel.disposePanel();
         glanceStrip.releaseViews();
         dockController.releaseViews();
         videoSurface = null;

@@ -106,7 +106,9 @@ public class XrSolidPanelTest {
 
     @Test
     public void depthStatusCanvasIsOpaqueWhileTheRealLoadingViewStartsInvisible() {
-        LinearLayout root = ReflectionHelpers.callInstanceMethod(presenter, "createDepthStatusView");
+        XrDepthStatusOverlay overlay =
+                ReflectionHelpers.getField(presenter, "depthStatusOverlay");
+        LinearLayout root = overlay.createView();
         assertEquals(View.INVISIBLE, root.getVisibility());
         assertEquals(1f, root.getAlpha(), 0f);
         assertTrue(root.isOpaque());

@@ -64,16 +64,18 @@ public final class XrDepthStatusAnimationLifecycleTest {
         controller.create();
         presenter = new XrStreamPresenter(activity,
                 PreferenceConfiguration.readPreferences(activity), surface -> { }, visible -> { });
-        root = (LinearLayout) invoke("createDepthStatusView");
+        XrDepthStatusOverlay overlay =
+                ReflectionHelpers.getField(presenter, "depthStatusOverlay");
+        root = overlay.createView();
         assertEquals("must be hidden before SceneCore attaches the view",
                 View.INVISIBLE, root.getVisibility());
         spinner = (ProgressBar) root.getChildAt(0);
         animation = new CountingAnimation();
         spinner.setIndeterminateDrawable(animation);
         panel = mock(PanelEntity.class);
-        Field field = XrStreamPresenter.class.getDeclaredField("depthStatusPanel");
+        Field field = XrDepthStatusOverlay.class.getDeclaredField("panel");
         field.setAccessible(true);
-        field.set(presenter, panel);
+        field.set(overlay, panel);
         activity.setContentView(root);
         controller.start().resume().visible().windowFocusChanged(true);
         idle(0);
