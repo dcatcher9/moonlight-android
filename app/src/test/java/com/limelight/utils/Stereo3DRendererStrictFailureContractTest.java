@@ -94,8 +94,8 @@ public class Stereo3DRendererStrictFailureContractTest {
                 "near-reuse classifier unavailable; every frame "));
         assertTrue(initialization.contains("runs inference"));
         assertTrue(initialization.contains("if (modelInputTargetReady) {"));
-        assertFalse(actualCommit.contains("resetSourceFrameAgeTracking()"));
-        assertFalse(reuseDiscard.contains("resetSourceFrameAgeTracking()"));
+        assertFalse(actualCommit.contains("resetModelOwnerTracking()"));
+        assertFalse(reuseDiscard.contains("resetModelOwnerTracking()"));
     }
 
     @Test

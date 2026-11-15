@@ -5,8 +5,8 @@ import java.util.Arrays;
 /**
  * Source-neutral, immutable SBS depth-health sample used by the XR statistics presentation.
  *
- * <p>Client SBS populates this from its local GPU readback. Host SBS populates it from Apollo's
- * versioned network telemetry. {@link #effectivePop} is always the absolute effective strength;
+ * <p>Client SBS populates the fields it measures from its local GPU readback. Host SBS populates
+ * it from Apollo's versioned network telemetry. {@link #effectivePop} is always the absolute effective strength;
  * consumers must not normalize it again.</p>
  */
 public final class SbsDepthTelemetrySnapshot {
@@ -69,12 +69,7 @@ public final class SbsDepthTelemetrySnapshot {
     public final float effectiveRangeWidth;
     public final long sceneAge;
     public final long hardCutCount;
-    /** Client SBS appearance proposals; equal to {@link #externalCutRequests}. */
-    public final long appearanceProposalCount;
-    /**
-     * Host protocol external requests, or the source-compatible alias for client appearance
-     * proposals. Client UI and logs should use {@link #appearanceProposalCount}.
-     */
+    /** Host protocol external cut requests. Client SBS does not report them. */
     public final long externalCutRequests;
     public final long emptyDepthFrames;
     public final long collapsedDepthFrames;
@@ -222,7 +217,6 @@ public final class SbsDepthTelemetrySnapshot {
         this.effectiveRangeWidth = params.effectiveRangeWidth;
         this.sceneAge = params.sceneAge;
         this.hardCutCount = params.hardCutCount;
-        this.appearanceProposalCount = params.externalCutRequests;
         this.externalCutRequests = params.externalCutRequests;
         this.emptyDepthFrames = params.emptyDepthFrames;
         this.collapsedDepthFrames = params.collapsedDepthFrames;

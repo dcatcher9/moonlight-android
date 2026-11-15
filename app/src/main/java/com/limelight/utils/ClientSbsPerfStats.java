@@ -3,7 +3,6 @@ package com.limelight.utils;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuTimer;
 import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
-import com.limelight.sbs.SbsDepthTelemetryHistory;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -41,11 +40,6 @@ final class ClientSbsPerfStats {
     /** GL-thread cache preventing redundant sampling writes to the current processor. */
     ClientSbsGpuDepthProcessor healthFocusProcessor;
     boolean appliedHealthSamplingEnabled;
-    /**
-     * Recent history begins when Stats opens, keeping hidden Stats free of GPU-to-CPU health maps.
-     */
-    final SbsDepthTelemetryHistory depthTelemetryHistory =
-            new SbsDepthTelemetryHistory();
     volatile DepthHealthState depthHealthState = DepthHealthState.EMPTY;
 
     // Client-SBS performance counters are cumulative within one sampling window. Producers live
@@ -92,9 +86,8 @@ final class ClientSbsPerfStats {
     void resetDepthTelemetryEra() {
         depthHealthState = DepthHealthState.EMPTY;
         // A mode/profile, GL-context, HDR, or resize generation boundary starts a new telemetry
-        // era. Keeping the old ring bridges unrelated pipelines, while retaining a previous
-        // readback backoff can suppress every early sample from the replacement processor.
-        depthTelemetryHistory.clear();
+        // era. Retaining a previous readback backoff can suppress every early sample from the
+        // replacement processor.
         depthHealthRetryPollsRemaining = 0;
         depthHealthConsecutiveFailures = 0;
     }
@@ -231,10 +224,6 @@ final class ClientSbsPerfStats {
         int shift = Math.min(consecutiveFailures - 1, 30);
         long retryPolls = (long) HEALTH_TELEMETRY_RETRY_BASE_POLLS << shift;
         return (int) Math.min(HEALTH_TELEMETRY_RETRY_MAX_POLLS, retryPolls);
-    }
-
-    void clearDepthHealthMetricHistory() {
-        depthTelemetryHistory.clear();
     }
 
     static boolean shouldPollHealthTelemetry(int pollCounter) {

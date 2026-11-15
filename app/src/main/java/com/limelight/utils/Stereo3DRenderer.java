@@ -623,8 +623,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.averageGpuSbsComposeMs = averageGpuMs(composeGpu);
 
             DepthHealthState health = owner.perf.depthHealthState;
-            SbsDepthTelemetrySnapshot depthTelemetry = owner.perf.depthTelemetryHistory.attach(
-                    owner.toDepthTelemetry(health));
+            SbsDepthTelemetrySnapshot depthTelemetry = owner.toDepthTelemetry(health);
             this.depthHealthAvailable = depthTelemetry.isAvailable();
             this.depthHealthReadbackFailed =
                     depthTelemetry.availability
@@ -751,7 +750,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 // means only that no fence is ready, so it must not erase the visible failure state.
                 perf.depthHealthConsecutiveFailures = 0;
                 DepthHealthState updated = new DepthHealthState(health);
-                perf.depthTelemetryHistory.add(toDepthTelemetry(updated));
                 perf.depthHealthState = updated;
             }
         } catch (Throwable error) {
@@ -760,7 +758,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // mark health unavailable, then retry with bounded exponential backoff so a transient
             // map/query failure can recover without turning a persistent driver fault into log spam.
             perf.depthHealthState = DepthHealthState.READBACK_FAILED;
-            perf.clearDepthHealthMetricHistory();
             if (perf.depthHealthConsecutiveFailures < Integer.MAX_VALUE) {
                 perf.depthHealthConsecutiveFailures++;
             }
@@ -1665,7 +1662,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /**
      * Returns true only when newer decoded color has outlived the bounded matched presentation.
-     * This changes presentation only: it never releases a slot or mutates depth/temporal history.
+     * This changes presentation only: it never releases a slot or mutates depth or comparison
+     * history.
      */
     private boolean shouldPresentCurrentFlatForStaleDepth(long nowNs) {
         ClientSbsFrameSlots.Lease presented = activeColorFrameLease;
@@ -2919,7 +2917,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         final ClientSbsFrameSlots.Lease colorFrameLease;
         final int generation;
         final long inferenceClaimToken;
-        final boolean classifierAvailable;
+        /** Non-null when the classifier packed this capture and published its decision. */
         final ClientSbsGpuNearReuseClassifier nearReuseClassifier;
         final boolean nearIdenticalCandidate;
         final int modelInputTextureId;
@@ -2930,7 +2928,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         RenderResult(long inputReadyFence, long previousOutputConsumedFence, int bufferSlot,
                      ClientSbsFrameSlots.Lease colorFrameLease,
-                     long inferenceClaimToken, boolean classifierAvailable,
+                     long inferenceClaimToken,
                      ClientSbsGpuNearReuseClassifier nearReuseClassifier,
                      boolean nearIdenticalCandidate, int nearIdenticalDecisionBufferId,
                      int nearIdenticalDecisionByteOffset, long performanceEpoch,
@@ -2941,7 +2939,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.colorFrameLease = colorFrameLease;
             this.generation = colorFrameLease.getGeneration();
             this.inferenceClaimToken = inferenceClaimToken;
-            this.classifierAvailable = classifierAvailable;
             this.nearReuseClassifier = nearReuseClassifier;
             this.nearIdenticalCandidate = nearIdenticalCandidate;
             this.modelInputTextureId = modelInputTextureId;
@@ -2958,7 +2955,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.colorFrameLease = null;
             this.generation = -1;
             this.inferenceClaimToken = 0L;
-            this.classifierAvailable = false;
             this.nearReuseClassifier = null;
             this.nearIdenticalCandidate = false;
             this.modelInputTextureId = 0;
@@ -2979,7 +2975,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         final ClientSbsFrameSlots.Lease colorFrameLease;
         final int generation;
         final long inferenceClaimToken;
-        final boolean classifierAvailable;
         final ClientSbsGpuNearReuseClassifier nearReuseClassifier;
         final boolean reusedDepth;
         final long performanceEpoch;
@@ -2987,7 +2982,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         GpuInferenceResult(long outputReadyFence, int bufferSlot,
                            ClientSbsFrameSlots.Lease colorFrameLease,
                            int generation, long inferenceClaimToken,
-                           boolean classifierAvailable,
                            ClientSbsGpuNearReuseClassifier nearReuseClassifier,
                            boolean reusedDepth, long performanceEpoch) {
             this.outputReadyFence = outputReadyFence;
@@ -2995,7 +2989,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             this.colorFrameLease = colorFrameLease;
             this.generation = generation;
             this.inferenceClaimToken = inferenceClaimToken;
-            this.classifierAvailable = classifierAvailable;
             this.nearReuseClassifier = nearReuseClassifier;
             this.reusedDepth = reusedDepth;
             this.performanceEpoch = performanceEpoch;
@@ -3153,7 +3146,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
             long previousOutputFence = gpuOutputConsumedFences.getAndSet(bufferSlot, 0L);
             RenderResult task = new RenderResult(inputReadyFence, previousOutputFence, bufferSlot,
-                    colorFrameLease, inferenceClaimToken, tensorPackedByClassifier,
+                    colorFrameLease, inferenceClaimToken,
                     tensorPackedByClassifier ? nearReuseClassifier : null,
                     tensorPackedByClassifier && nearIdenticalCandidate,
                     tensorPackedByClassifier ? nearIdenticalDecisionBufferId : 0,
@@ -3488,10 +3481,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             clearInferenceClaim();
         }
         invalidateDepthDerivedState();
-        resetSourceFrameAgeTracking();
+        resetModelOwnerTracking();
     }
 
-    private void resetSourceFrameAgeTracking() {
+    private void resetModelOwnerTracking() {
         lastModelInferenceFrameSequence = 0L;
         lastModelInferenceCapturedAtNs = 0L;
     }
@@ -3766,7 +3759,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 // A failed N must remain flat; never expose its color with N-1's depth/profile.
                 invalidateDepthDerivedState();
             }
-            resetSourceFrameAgeTracking();
+            resetModelOwnerTracking();
             requestGpuShutdown(error.getMessage());
             return false;
         } finally {
@@ -3833,7 +3826,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             } else {
                 invalidateDepthDerivedState();
             }
-            resetSourceFrameAgeTracking();
+            resetModelOwnerTracking();
             requestGpuShutdown(error.getMessage());
             return false;
         } finally {
@@ -4465,7 +4458,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                 renderResult.nearIdenticalCandidate,
                                 renderResult.nearIdenticalDecisionBufferId,
                                 renderResult.nearIdenticalDecisionByteOffset,
-                                renderResult.classifierAvailable ? renderResult.inferenceClaimToken : 0L,
+                                renderResult.nearReuseClassifier != null
+                                        ? renderResult.inferenceClaimToken : 0L,
                                 renderResult.modelInputTextureId);
                         ClientSbsGpuInferenceEngine.RunDisposition disposition =
                                 gpuEngine.getLastRunDisposition(renderResult.bufferSlot);
@@ -4505,7 +4499,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                 renderResult.colorFrameLease,
                                 renderResult.generation,
                                 renderResult.inferenceClaimToken,
-                                renderResult.classifierAvailable,
                                 renderResult.nearReuseClassifier,
                                 disposition == ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
                                 renderResult.performanceEpoch);
