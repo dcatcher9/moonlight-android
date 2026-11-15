@@ -223,9 +223,9 @@ public class XrStreamPresenterTransitionTest {
 
     @Test
     public void cinemaPresetHeightIsNotTheDurableHeight() {
-        assertEquals(1.2f, XrStreamPresenter.durableHeightMeters(true, 1.2f, 2.0f), 0f);
-        assertEquals(2.0f, XrStreamPresenter.durableHeightMeters(false, 1.2f, 2.0f), 0f);
-        assertEquals(2.0f, XrStreamPresenter.durableHeightMeters(true, 0f, 2.0f), 0f);
+        assertEquals(1.2f, XrCinemaController.durableHeightMeters(true, 1.2f, 2.0f), 0f);
+        assertEquals(2.0f, XrCinemaController.durableHeightMeters(false, 1.2f, 2.0f), 0f);
+        assertEquals(2.0f, XrCinemaController.durableHeightMeters(true, 0f, 2.0f), 0f);
     }
 
     @Test

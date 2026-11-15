@@ -392,11 +392,15 @@ public class XrStreamPresenterCinemaEnvironmentTest {
     }
 
     private Object backgroundOwner() {
-        return ReflectionHelpers.getField(presenter, "cinemaBackgroundOverride");
+        return ReflectionHelpers.getField(cinemaController(), "cinemaBackgroundOverride");
     }
 
     private boolean cinemaSelected() {
-        return ReflectionHelpers.getField(presenter, "cinemaViewExpanded");
+        return ReflectionHelpers.getField(cinemaController(), "cinemaViewExpanded");
+    }
+
+    private Object cinemaController() {
+        return ReflectionHelpers.getField(presenter, "cinemaController");
     }
 
     private float height() {

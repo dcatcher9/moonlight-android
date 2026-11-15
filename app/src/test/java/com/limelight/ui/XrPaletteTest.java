@@ -53,6 +53,7 @@ public class XrPaletteTest {
             "XrStatsPanel.java",
             "XrGlanceStrip.java",
             "XrSessionSettingsPane.java",
+            "XrCinemaController.java",
     };
 
     /**

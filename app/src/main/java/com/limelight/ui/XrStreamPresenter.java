@@ -131,7 +131,6 @@ public class XrStreamPresenter {
     private static final float STATS_GAP_METERS = 0.10f;
     private static final float AUXILIARY_WIDTH_METERS = XrStatsPanel.STATS_WIDTH_METERS;
     private static final float AUXILIARY_HEIGHT_METERS = 1.16f;
-    private static final float CINEMA_PRESET_DISTANCE_METERS = 2.0f;
     private static final long DOCK_AUTO_HIDE_DELAY_MS = 8000L;
     private static final float DOCK_REVEAL_ATTENTION_SCALE = 2.0f;
     private static final long DOCK_REVEAL_EXPAND_DURATION_MS = 280L;
@@ -295,13 +294,9 @@ public class XrStreamPresenter {
     private BarItem statsItem;
     private BarItem dumpItem;
 
-    private boolean cinemaViewExpanded;
-    private XrCinemaEnvironmentOverride cinemaBackgroundOverride;
     private XrChoiceGroup cinemaEnvironmentChoiceGroup;
     private Button cinemaActionButton;
-    private Session cinemaBackgroundSession;
-    private float cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
-    private Pose cinemaRestorePose;
+    private final XrCinemaController cinemaController;
 
     /** Left-side PanelEntity for settings shared by every presentation mode in this session. */
     private PanelEntity auxiliaryPanel;
@@ -708,6 +703,68 @@ public class XrStreamPresenter {
                     @Override
                     public boolean settingsControlsEnabled() {
                         return XrStreamPresenter.this.settingsControlsEnabled();
+                    }
+                });
+        this.cinemaController = new XrCinemaController(prefConfig,
+                new XrCinemaController.Host() {
+                    @Override
+                    public Session session() {
+                        return session;
+                    }
+
+                    @Override
+                    public SurfaceEntity videoEntity() {
+                        return surfaceEntity;
+                    }
+
+                    @Override
+                    public boolean hostActivityStarted() {
+                        return hostActivityStarted;
+                    }
+
+                    @Override
+                    public boolean controlTransportOpen() {
+                        return XrStreamPresenter.this.controlTransportOpen();
+                    }
+
+                    @Override
+                    public PresentationMode currentPresenterMode() {
+                        return currentPresenterMode;
+                    }
+
+                    @Override
+                    public float aspectFor(PresentationMode mode) {
+                        return XrStreamPresenter.this.aspectFor(mode);
+                    }
+
+                    @Override
+                    public float panelHeightMeters() {
+                        return panelHeightMeters;
+                    }
+
+                    @Override
+                    public void setPanelHeightMeters(float heightMeters) {
+                        panelHeightMeters = heightMeters;
+                    }
+
+                    @Override
+                    public void applyResizeBounds(float aspect) {
+                        XrStreamPresenter.this.applyResizeBounds(aspect);
+                    }
+
+                    @Override
+                    public Pose currentHeadPose() {
+                        return XrStreamPresenter.this.currentHeadPose();
+                    }
+
+                    @Override
+                    public void repositionControlBar(float videoHeightMeters) {
+                        XrStreamPresenter.this.repositionControlBar(videoHeightMeters);
+                    }
+
+                    @Override
+                    public void saveHeight(float heightMeters) {
+                        viewStateStore.saveHeight(heightMeters);
                     }
                 });
         this.controlActionListener = controlActionListener != null
@@ -1294,7 +1351,7 @@ public class XrStreamPresenter {
                                 panelHeightMeters)));
                 // Keep the control bar glued beneath the (now resized) quad.
                 repositionControlBar(panelHeightMeters);
-                viewStateStore.saveHeight(durableHeightMeters());
+                viewStateStore.saveHeight(cinemaController.durableHeightMeters());
             }
         });
         resizable.setFixedAspectRatioEnabled(true);
@@ -1547,7 +1604,7 @@ public class XrStreamPresenter {
         }
         hostActivityStarted = true;
         updateDockGazeTracking();
-        applyCinemaBackground();
+        cinemaController.applyCinemaBackground();
         devicePerformanceSampler.resetCpuBaseline();
         glanceStrip.reconcileGlanceLoadTicker();
         reconcileClientOptionsStatusTicker();
@@ -1560,7 +1617,7 @@ public class XrStreamPresenter {
 
     /** Stop all passive load sampling while the streaming Activity is backgrounded. */
     public void onHostActivityStopped() {
-        restoreCinemaBackground();
+        cinemaController.restoreCinemaBackground();
         hostActivityStarted = false;
         updateDockGazeTracking();
         resetDockRevealAnimation();
@@ -2046,7 +2103,7 @@ public class XrStreamPresenter {
             return;
         }
         lastCinemaTileTapMs = now;
-        if (!cinemaViewExpanded) {
+        if (!cinemaController.isExpanded()) {
             onCinemaActionTapped();
             return;
         }
@@ -2064,10 +2121,8 @@ public class XrStreamPresenter {
         }
         lastCinemaActionTapMs = now;
         if (surfaceEntity == null || surfaceEntity.isDisposed()) {
-            restoreCinemaBackground();
-            cinemaViewExpanded = false;
-            cinemaRestorePose = null;
-            cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+            cinemaController.restoreCinemaBackground();
+            cinemaController.resetViewState();
             if (cinemaItem != null) {
                 cinemaItem.setSelected(false);
             }
@@ -2075,20 +2130,20 @@ public class XrStreamPresenter {
             return;
         }
         revealDockTemporarily();
-        if (cinemaViewExpanded) {
-            restoreCinemaBackground();
-            restoreCinemaView();
+        if (cinemaController.isExpanded()) {
+            cinemaController.restoreCinemaBackground();
+            cinemaController.restoreCinemaView();
             if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.CINEMA_OPTIONS) {
                 controlUiState.close();
                 applyControlUiState(true, "exit cinema");
             }
         }
         else {
-            applyCinemaViewPreset();
-            applyCinemaBackground();
+            cinemaController.applyCinemaViewPreset();
+            cinemaController.applyCinemaBackground();
         }
         if (cinemaItem != null) {
-            cinemaItem.setSelected(cinemaViewExpanded);
+            cinemaItem.setSelected(cinemaController.isExpanded());
         }
         updateCinemaOptionsView();
     }
@@ -2189,7 +2244,7 @@ public class XrStreamPresenter {
             settingsItem.setSelected(visible == XrControlUiState.Surface.SESSION_SETTINGS);
         }
         if (cinemaItem != null) {
-            cinemaItem.setSelected(cinemaViewExpanded);
+            cinemaItem.setSelected(cinemaController.isExpanded());
         }
         if (statsItem != null) {
             statsItem.setSelected(showStats);
@@ -2319,7 +2374,7 @@ public class XrStreamPresenter {
                 padding, dimen(R.dimen.xr_space_md));
         LinearLayout header = createContextualOptionsHeader();
         addContextualOptionsHeading(header, activity.getString(R.string.xr_bar_cinema_view),
-                cinemaViewExpanded);
+                cinemaController.isExpanded());
         root.addView(header);
 
         LinearLayout environmentCard = card(padding);
@@ -2351,7 +2406,7 @@ public class XrStreamPresenter {
         styleControlButton(cinemaActionButton);
         cinemaActionButton.setText(R.string.xr_cinema_exit);
         cinemaActionButton.setOnClickListener(ignored -> {
-            if (cinemaViewExpanded) {
+            if (cinemaController.isExpanded()) {
                 onCinemaActionTapped();
             }
         });
@@ -2365,7 +2420,7 @@ public class XrStreamPresenter {
     }
 
     private boolean onCinemaEnvironmentSelected(String value) {
-        if (!cinemaViewExpanded || !sessionControlsEnabled || !controlTransportOpen()
+        if (!cinemaController.isExpanded() || !sessionControlsEnabled || !controlTransportOpen()
                 || controlUiState.getVisibleSurface() != XrControlUiState.Surface.CINEMA_OPTIONS) {
             return false;
         }
@@ -2374,8 +2429,8 @@ public class XrStreamPresenter {
         if (selected != prefConfig.cinemaEnvironment) {
             prefConfig.cinemaEnvironment = selected;
             PreferenceConfiguration.setCinemaEnvironment(activity, selected);
-            restoreCinemaBackground();
-            applyCinemaBackground();
+            cinemaController.restoreCinemaBackground();
+            cinemaController.applyCinemaBackground();
         }
         return true;
     }
@@ -2387,7 +2442,7 @@ public class XrStreamPresenter {
                     prefConfig.cinemaEnvironment.preferenceValue);
         }
         if (cinemaActionButton != null) {
-            cinemaActionButton.setEnabled(cinemaViewExpanded
+            cinemaActionButton.setEnabled(cinemaController.isExpanded()
                     && sessionControlsEnabled && surfaceEntity != null
                     && !surfaceEntity.isDisposed());
         }
@@ -3292,7 +3347,7 @@ public class XrStreamPresenter {
      * Repeated calls are local no-ops and delayed UI/retry work cannot reopen the subscription.
      */
     public void onConnectionStopping() {
-        restoreCinemaBackground();
+        cinemaController.restoreCinemaBackground();
         if (controlTransportClosing || presenterDestroyed) {
             return;
         }
@@ -5333,146 +5388,8 @@ public class XrStreamPresenter {
         }
     }
 
-    /**
-     * Cinema preset helper that toggles between the large preset and the last transform/height.
-     * The enlarged preset keeps the panel at the tuned cinematic distance and orientation.
-     */
-    private void applyCinemaViewPreset() {
-        if (surfaceEntity == null || surfaceEntity.isDisposed()) {
-            return;
-        }
-        cinemaRestoreHeightMeters = panelHeightMeters;
-        try {
-            cinemaRestorePose = surfaceEntity.getPose(Space.REAL_WORLD);
-        } catch (Throwable error) {
-            LimeLog.warning("XR cinema view: current pose capture failed (" + error + ")");
-            cinemaRestorePose = null;
-        }
-        surfaceEntity.setScale(1.0f);
-        float aspect = aspectFor(currentPresenterMode);
-        float height = DEFAULT_PANEL_HEIGHT_METERS;
-        panelHeightMeters = height;
-        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(height * aspect, height)));
-        applyResizeBounds(aspect);
-
-        // Place the quad ~2 m in front of the user's CURRENT head pose (not the activity-space
-        // origin, which is fixed at session start — that's why a plain reset lands off to the side
-        // after you've turned). Fall back to activity-space-forward if the head pose isn't available.
-        Pose placed = null;
-        try {
-            Pose head = currentHeadPose();
-            if (head != null) {
-                // Level the placement: keep only the head's yaw (heading), discarding pitch and
-                // roll. Otherwise clicking Cinema View while looking down (e.g. at the control bar
-                // below the quad) tilts the panel up to face the eyes and drops it below eye level,
-                // so it reads as "looking down at a tilted screen". Round-tripping the Y (yaw) euler
-                // component zeroes pitch/roll regardless of angle units, and reusing the proven
-                // compose(-2 m forward) keeps the panel facing the user at eye height, 2 m ahead.
-                Vector3 euler = head.getRotation().getEulerAngles();
-                Pose level = new Pose(head.getTranslation(),
-                        Quaternion.fromEulerAngles(0.0f, euler.getY(), 0.0f));
-                Pose inFront = level.compose(
-                        new Pose(
-                                new Vector3(0.0f, 0.0f, -CINEMA_PRESET_DISTANCE_METERS),
-                                Quaternion.Identity));
-                surfaceEntity.setPose(inFront, Space.REAL_WORLD);
-                placed = inFront;
-            }
-        } catch (Throwable t) {
-            LimeLog.warning("XR cinema view: current head pose unavailable (" + t + ")");
-        }
-        if (placed == null) {
-            surfaceEntity.setPose(new Pose(
-                    new Vector3(0.0f, 0.0f, -CINEMA_PRESET_DISTANCE_METERS),
-                    Quaternion.Identity));
-        }
-        repositionControlBar(height);
-        cinemaViewExpanded = true;
-    }
-
-    /** Height written to the per-PC store: the pre-Cinema height while the preset is applied. */
-    static float durableHeightMeters(boolean cinemaViewExpanded,
-                                     float cinemaRestoreHeightMeters,
-                                     float panelHeightMeters) {
-        return cinemaViewExpanded && cinemaRestoreHeightMeters > 0.0f
-                ? cinemaRestoreHeightMeters : panelHeightMeters;
-    }
-
-    private float durableHeightMeters() {
-        return durableHeightMeters(cinemaViewExpanded, cinemaRestoreHeightMeters,
-                panelHeightMeters);
-    }
-
     private boolean surfaceEntityUsable() {
         return !presenterDestroyed && surfaceEntity != null && !surfaceEntity.isDisposed();
-    }
-
-    /** Cinema keeps its original size/pose behavior even if environment control is unavailable. */
-    private void applyCinemaBackground() {
-        if (!cinemaViewExpanded || !hostActivityStarted || !controlTransportOpen()
-                || session == null || cinemaBackgroundOverride != null) {
-            return;
-        }
-        try {
-            Session targetSession = session;
-            cinemaBackgroundSession = targetSession;
-            cinemaBackgroundOverride = new XrCinemaEnvironmentOverride(SessionExt.getScene(session),
-                    prefConfig.cinemaEnvironment,
-                    () -> cinemaViewExpanded && hostActivityStarted && controlTransportOpen()
-                            && session == targetSession && cinemaBackgroundOverride != null
-                            && cinemaBackgroundOverride.belongsTo(SessionExt.getScene(session)),
-                    this::restoreCinemaBackground);
-            if (!cinemaBackgroundOverride.begin()) {
-                restoreCinemaBackground();
-            }
-        } catch (RuntimeException | LinkageError e) {
-            LimeLog.warning("XR cinema background unavailable: " + e);
-            restoreCinemaBackground();
-        }
-    }
-
-    private void restoreCinemaBackground() {
-        XrCinemaEnvironmentOverride previous = cinemaBackgroundOverride;
-        if (previous == null) {
-            return;
-        }
-        cinemaBackgroundOverride = null;
-        boolean sameScene = false;
-        try {
-            sameScene = session != null && session == cinemaBackgroundSession
-                    && previous.belongsTo(SessionExt.getScene(session));
-        } catch (RuntimeException | LinkageError e) {
-            LimeLog.warning("XR cinema background identity unavailable: " + e);
-        }
-        cinemaBackgroundSession = null;
-        previous.restore(sameScene);
-    }
-
-    private void restoreCinemaView() {
-        if (surfaceEntity == null || surfaceEntity.isDisposed()) {
-            return;
-        }
-        surfaceEntity.setScale(1.0f);
-        float restoredHeight = cinemaRestoreHeightMeters > 0.0f
-                ? cinemaRestoreHeightMeters
-                : DEFAULT_PANEL_HEIGHT_METERS;
-        float aspect = aspectFor(currentPresenterMode);
-        panelHeightMeters = restoredHeight;
-        surfaceEntity.setShape(new SurfaceEntity.Shape.Quad(new FloatSize2d(
-                panelHeightMeters * aspect, panelHeightMeters)));
-        applyResizeBounds(aspect);
-        if (cinemaRestorePose != null) {
-            surfaceEntity.setPose(cinemaRestorePose, Space.REAL_WORLD);
-        } else {
-            surfaceEntity.setPose(new Pose(
-                    new Vector3(0.0f, 0.0f, -CINEMA_PRESET_DISTANCE_METERS),
-                    Quaternion.Identity), Space.REAL_WORLD);
-        }
-        repositionControlBar(panelHeightMeters);
-        viewStateStore.saveHeight(panelHeightMeters);
-        cinemaRestorePose = null;
-        cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
-        cinemaViewExpanded = false;
     }
 
     private void restoreViewState(PresentationMode authoritativeStartupMode) {
@@ -5507,7 +5424,7 @@ public class XrStreamPresenter {
         // The Game callback persists the mode through an app/session-guarded editor. This store
         // owns only per-PC geometry, so a finishing Game cannot overwrite a replacement app's
         // presentation mode.
-        viewStateStore.saveHeight(durableHeightMeters());
+        viewStateStore.saveHeight(cinemaController.durableHeightMeters());
     }
 
     /**
@@ -5545,7 +5462,7 @@ public class XrStreamPresenter {
 
         panelHeightMeters = XrReconnectViewState.effectiveHeight(
                 shapeHeight, realWorldScaleY, panelHeightMeters);
-        viewStateStore.saveHeight(durableHeightMeters());
+        viewStateStore.saveHeight(cinemaController.durableHeightMeters());
         new XrReconnectViewState(panelHeightMeters, realWorldPose)
                 .writeTo(reconnectIntent);
         LimeLog.info("XR: captured reconnect view at height "
@@ -6140,7 +6057,7 @@ public class XrStreamPresenter {
         if (presenterDestroyed) {
             return;
         }
-        restoreCinemaBackground();
+        cinemaController.restoreCinemaBackground();
         presenterDestroyed = true;
         statsUi.cancelStatsPanelFit();
         depthStatusHandler.removeCallbacks(showDepthStatusRunnable);
@@ -6165,7 +6082,7 @@ public class XrStreamPresenter {
         invalidateGameSourceProof();
         gameSourceState.leaveGame();
         resetVideoModeStateForTeardown();
-        viewStateStore.saveHeight(durableHeightMeters());
+        viewStateStore.saveHeight(cinemaController.durableHeightMeters());
         if (surfaceEntity != null) {
             if (!surfaceEntity.isDisposed()) {
                 surfaceEntity.dispose();
@@ -6201,9 +6118,7 @@ public class XrStreamPresenter {
         cinemaActionButton = null;
         statsItem = null;
         dumpItem = null;
-        cinemaViewExpanded = false;
-        cinemaRestorePose = null;
-        cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+        cinemaController.resetViewState();
         lastCinemaTileTapMs = 0L;
         lastCinemaActionTapMs = 0L;
         modeOptionsHost = null;
