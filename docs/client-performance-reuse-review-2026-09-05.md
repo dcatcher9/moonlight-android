@@ -4,8 +4,9 @@ This document records the earlier six-opportunity implementation and its histori
 The present-tense descriptions below describe that reviewed revision, not the current application.
 Measured evidence remains useful only with its original implementation, APK and workload context.
 
-The current implementation retains the model-file cache, sparse ordinal sampling, R32F conditioner
-and deferred tensor packing. It has removed the separate Exact equality/raw-output-cache tier,
+The current implementation retains the model-file cache, R32F conditioner
+and deferred tensor packing. Sparse ordinal sampling was removed with the client scene-cut
+pipeline on 2026-11-14, and the scene-cut classes named below were renamed or deleted. It has removed the separate Exact equality/raw-output-cache tier,
 its diagnostic counters and temporary classifier benchmark. Near reuse now has no 100 ms or
 four-callback expiry: it compares each candidate with the fixed retained real-inference input,
 keeps the existing pixel thresholds, and rejects nonmonotonic identity, invalid ownership and
@@ -136,8 +137,8 @@ in `ClientSbsGpuInferenceEngineInstrumentedTest`; they do not establish bitwise 
 determinism. Qualification requires real repeated-input runs and complete depth/cut trajectories,
 including alpha-only changes, one-code RGB changes, temporal settling, flashes, cuts, subtitles,
 scrolling, and moving video. Owner files are
-[SceneCutDetector](../app/src/main/java/com/limelight/sbs/ClientSbsGpuSceneCutDetector.java),
-[SceneCutShaders](../app/src/main/java/com/limelight/sbs/ClientSbsGpuSceneCutShaders.java),
+`ClientSbsGpuSceneCutDetector` (now `ClientSbsGpuNearReuseClassifier`),
+`ClientSbsGpuSceneCutShaders` (now `ClientSbsGpuNearReuseShaders`),
 [NearIdenticalPolicy](../app/src/main/java/com/limelight/sbs/ClientSbsNearIdenticalPolicy.java),
 the native bridge, and renderer. Classifier fixtures with supplied processor-state flags isolate
 ownership behavior; they are not substitutes for native cache-copy or full temporal integration.

@@ -332,16 +332,17 @@ Client SBS has one production inference path:
 MediaCodec
   -> external-OES SurfaceTexture
   -> SurfaceTexture crop/orientation transform
-       |-> GLES SDR exact-area RGBA8 model-input render + color-cut/reuse classification
+       |-> GLES SDR exact-area RGBA8 model-input render + near-reuse classification
        |    (one stream-selected static depth-model aspect bucket)
-       |    -> GPU color-cut flag + client-local integrity-checked near-reuse decision
+       |    -> client-local integrity-checked near-reuse decision
        |    -> input-ready fence -> native arbitration
        |         |-> infer: native Float32 pack -> LiteRT/OpenCL -> depth + raw-output memo
        |         `-> near: retain the committed depth/profile/warp without postprocessing
        `-> full-resolution matched color texture (same slot)
   -> adopt current color and retain its color-slot lease
-  -> infer: GLES raw mean + separate P05/P95 geometry and P2/P98 cut statistics
-  -> coherent cut-history commit + source-timed adaptive zero/inverse amplitude
+  -> infer: GLES raw validity, mean and P05/P95 geometry statistics
+  -> source-timed adaptive zero/inverse amplitude
+  -> infer: a V2-valid field commits its model input as the near-reuse reference
   -> near only: freeze every depth-derived and comparison-history field
   -> infer: source-aligned raw R32F ZipDepth -> per-graph coordinate
   -> linear relative-depth disparity + fixed pop 1.75
@@ -496,8 +497,8 @@ the source token. Once settled, valid static retention has no expiry and reads n
 Neither settling nor retention changes the real inference/comparison owner or Near thresholds.
 Retention also requires one successful GPU-authenticated Near adoption for the current depth owner.
 Every real inference or owner reset clears that confirmation. Allocated textures are insufficient:
-rejected raw depth and geometry-confirmation holds must continue ordinary GPU arbitration until
-valid comparison history exists. A missing or reset-pending detector disables this shortcut.
+rejected raw depth must continue ordinary GPU arbitration until valid comparison history exists.
+A missing or reset-pending classifier disables this shortcut.
 The Stats row `Host-proven repeats` counts this work avoidance separately from local Near decisions.
 Transport-token wrap is rejected when the unsigned frame distance cannot exclude a full token cycle.
 
@@ -551,7 +552,7 @@ Scheduling is readiness-driven rather than timer-driven:
   worker begin waiting on the same-slot decision while the renderer finishes capturing the matched
   color, without weakening their shared lease/generation identity.
 - The fused classifier compares clamped model RGB with the qualified near owner's Float32 input
-  history. Packing, color evidence and Near comparison share the same fetched and clamped RGB
+  history. Packing and Near comparison share the same fetched and clamped RGB
   values. The native lazy-pack path neither writes nor reads the current tensor slot. Apollo's near bounds are
   literal: `16 x 16` tiles, medium absolute channel
   delta `>= 1/64`, strong delta `>= 0.20`, at most 10% medium pixels globally, at most 2.5% strong
@@ -561,11 +562,13 @@ Scheduling is readiness-driven rather than timer-driven:
 - A near comparison is eligible only in the same renderer generation, with presentable depth,
   a positive real-owner source sequence, a strictly newer positive candidate sequence, and a
   candidate capture timestamp that does not precede the owner's. Neither elapsed age nor the
-  number of intervening callbacks forces inference. Reuse never commits new model-input history,
-  renews ownership, or advances the reliable scene/cut tuple.
-- Generation/model/input-contract reset, an invalid real raw field, a collapsed V2 field, or a
-  reliable-history hold invalidates the reuse owner. Only an accepted valid real-inference
-  transaction with advancing reliable history can restore it.
+  number of intervening callbacks forces inference. Reuse never commits new model-input history
+  or renews ownership.
+- A real inference whose raw field is valid for V2 (complete, finite, nonnegative, noncollapsed,
+  with a valid adaptive zero/scale) commits its model-input RGB as the comparison reference and
+  becomes the reuse owner. A real inference whose raw field is invalid or collapsed commits no
+  input history and invalidates the owner. Generation/model/input-contract reset clears both;
+  only the next V2-valid real inference restores them.
 - Java applies a negative-only owner-order check using the newest real-inference capture. It
   cannot authorize reuse or infer GPU owner validity from Java history presence. Native still
   authenticates a fresh decision for every candidate; an old token cannot authorize another input.
@@ -580,17 +583,17 @@ Scheduling is readiness-driven rather than timer-driven:
   CPU map is an Android implementation difference from Apollo's CUDA conditional graph and must be
   measured for stalls on Galaxy XR; no image or tensor is read back to CPU.
 - On near reuse, native skips LiteRT and returns a flushed fence through the normal per-slot ownership
-  protocol. The renderer activates the current color but freezes model-input history, scene-cut
-  history, normalization, temporal depth, profile, conditioned disparity, and cached warp at the last real
+  protocol. The renderer activates the current color but freezes model-input history, the
+  adaptive camera, profile, conditioned disparity, and cached warp at the last real
   inference.
 - Native compiles an optional pack shader once. When available with the classifier, it packs only
   on INFER, including malformed/stale decisions, map/unmap failure, content rejection, and invalid
   ownership. It clamps RGB to `[0,1]` and flips GL row `y` to tensor row `H-1-y`, exactly like the
   eager packer. If lazy packing or the classifier is unavailable, the renderer keeps eager packing.
   The shared model texture stays immutable through worker completion and history commit/discard.
-  Cut work remains eager; no extra CPU arbitration round trip was added.
+  No extra CPU arbitration round trip was added.
 - An inferred result is adopted only after its output fence is ordered,
-  depth/profile processing succeeds, and the authorized histories are committed. Only then is the
+  depth/profile processing succeeds, and the history commit is submitted. Only then is the
   single-flight claim released and the next callback-backed frame allowed to arbitrate. This makes
   the reuse owner unambiguous across renderer and inference contexts.
 - After an adoption, the renderer queues the next capture from a GL continuation validated against
@@ -608,7 +611,7 @@ Scheduling is readiness-driven rather than timer-driven:
   a changed source. The prior packed pair remains eligible through exactly 250 ms from its matched
   color capture; after that strict boundary a single deadline draw swaps current OES color duplicated
   flat, and later callbacks keep flat color live until a sufficiently fresh result is adopted. This
-  fallback does not release slots or change depth, profile, cut, normalization, or temporal history.
+  fallback does not release slots or change depth, profile, camera, or comparison history.
 - The active color-slot lease remains renderer-owned until the next adoption. The newer color takes
   ownership before the superseded lease is released; no offscreen SBS cache owns rendered pixels.
 
@@ -679,16 +682,14 @@ zero/scale behavior. Saved predictions without matched source clocks can audit r
 cannot qualify the source-time controller. Preserve the current values until such evidence
 supports a change.
 
-The amplitude prior and raw-unit collapse validity deserve model-specific checks. The existing
-normalized cut thresholds also require their own decoded-input/grid evaluation. Display-space
+The amplitude prior and raw-unit collapse validity deserve model-specific checks. Display-space
 parallax and slope limits, artistic pop, and time-domain controller rates are separate policies;
 a different model does not by itself justify copying new values into those controls.
 
 Each complete finite, noncollapsed field supplies the arithmetic mean of all raw output texels
 and separate geometry P05/P95 bounds. The geometry histogram has 256 bins over the same exact
 finite raw extrema; P05 is the lower crossing-bin edge and P95 the upper crossing-bin edge.
-These are histogram estimates, not sorted percentiles. Geometry statistics remain separate from
-the private P2/P98 cut-normalization histogram even where their traversals are shared.
+These are histogram estimates, not sorted percentiles.
 
 With graph calibration `s`, the targets are `zeroTarget = mean(raw)` and
 `DTarget = max((P95-P05)/2, s)`, with `kTarget = 1/DTarget`. The floor keeps small depth contrast
@@ -712,8 +713,8 @@ time. Zero, repeated or regressed timestamps cannot authorize adaptation. Invali
 interruption disarms timing while preserving established zero/scale; the next valid observation
 rearms without spending the missing interval. A source gap over 250 ms has the same rearm behavior.
 Near reuse dispatches no controller work and freezes the complete geometry tuple. Input-domain,
-model, renderer-generation and explicit temporal resets clear the controller. Accepted scene cuts
-continue to own cut/reliable-history decisions but never reset or relatch the adaptive camera.
+model, renderer-generation and explicit resets clear the controller. The client has no scene-cut
+detector: after an abrupt content change the same rate-limited controller follows the new field.
 
 For a finite raw sample `d` and the current zero/inverse amplitude, the pointwise mapping is:
 
@@ -730,9 +731,9 @@ model gauge changes. Relief, temporal pumping and foreground framing require mea
 The source-aligned `R32F` ZipDepth output feeds the raw V2 conditioner directly. Four GLES 3.1
 serial-line compute passes produce a linearly sampled `R32F` signed-parallax field. There is no
 client-only spatial prefilter or half-float staging target before subtraction against the `R32F`
-adaptive zero and coordinate conversion. Profile texel zero publishes that zero, current raw mean,
-active inverse amplitude and current readiness together; disparity never uses an unrelated fixed
-scale or a partially updated camera.
+adaptive zero and coordinate conversion. The one-texel profile publishes that zero, current raw
+mean, active inverse amplitude and current readiness together; disparity never uses an unrelated
+fixed scale or a partially updated camera.
 
 The vertical forward pass retains its RGBA32F upper/lower/raw envelope, and vertical finish writes
 the separate R32F vertical field. Horizontal forward writes the already allocated final R32F
@@ -777,191 +778,67 @@ must exceed Apollo's `1e-6` collapse floor, the adaptive zero/scale must be vali
 conditioner/seed/refinement/compose stage must succeed. A violation publishes current mono color
 duplicated flat and never applies the 1x seed alone, old geometry to the failed frame, or a legacy
 mapping. An invalid or collapsed result preserves the established adaptive zero/scale, disarms
-its clock and presents flat, including when a cut is accepted. The next usable field rearms timing;
-it initializes geometry only if no camera has yet been established. The private normalized cut
-history can still advance on a finite collapsed result, matching the host's independent cut bridge.
+its clock and presents flat. The next usable field rearms timing;
+it initializes geometry only if no camera has yet been established.
 Near-identical reuse is the
 whole-geometry freeze exception and remains subject to the fixed-owner content and validity checks
-above. A
-collapsed result may update that private cut/color history, but explicitly invalidates the cached
-geometry owner so the next accepted candidate must run real inference again.
+above. An invalid or collapsed result commits no model-input history and invalidates the cached
+geometry owner, so the next accepted candidate must run real inference again.
 
-Raw outer-edge P2/P98 bounds and their private normalized temporal field remain only for geometry
-change, cut analysis, and health diagnostics. They do not scale, center, stretch, or otherwise feed
-the V2 disparity field. The separate raw P05/P95 geometry statistics supply only the adaptive
-amplitude target. Subtitle and foreground-ROI plane conditioning are absent from the client
+The raw P05/P95 geometry statistics supply only the adaptive amplitude target. The client keeps
+no other normalization range, normalized depth field or temporal depth filter.
+Subtitle and foreground-ROI plane conditioning are absent from the client
 conditioner: Host uses OCR-derived temporal pixel masks, while Game uses native depth/UI resources.
 The client shares their linear bounded geometry and warp structure without claiming equivalent
 depth sources, native UI evidence, or direct per-output-pixel inversion. See the current
 [three-path audit](client-host-sbs-parity.md) for those remaining differences.
 
-## Scene cuts and depth health
+## Depth health
 
-Scene-cut detection is GPU-only and paired with the exact model-input frame. The existing model
-texture keeps area-resized, tone-mapped SDR RGB unchanged. Its private alpha channel carries
-`max(R,G,B)` from one fixed decoded source texel before area resizing or tone mapping, using a
-separate nearest/clamp sampler and the same SurfaceTexture transform. The ordinal remains in
-encoded SDR or PQ codes; it is never model input or presentation alpha. Only the nine consumed
-anchor positions in each 16x16 model tile perform the source lookup; other alpha texels are zero.
-The mask uses `floor(gl_FragCoord.xy)` and the actual model extent. Each clipped tile uses axis
-positions `{0, floor((validExtent-1)/2), validExtent-1}`, including repeated edge anchors. At
-`672x384`, this reduces logical ordinal-fetch opportunities from 258,048 to 9,072 without changing
-the nine inputs to each median, model RGB, or the number of GPU passes. Actual execution savings
-depend on the GPU/compiler. The model draw disables and restores
-GL dithering so the private ordinal uses deterministic RGBA8 quantization; area/tone RGB arithmetic
-is unchanged. The GLES regression compares both paths with dithering disabled, rather than claiming
-byte identity with an implementation-dependent former dither pattern.
+The client has no scene-cut detector. The companion host replaced its shot-latched camera with a
+continuously adapting zero plane and amplitude, and the client uses the same continuous camera, so
+no client decision depends on recognising an editorial cut. The model-input texture carries only
+area-resized, tone-mapped SDR RGB; its alpha is opaque and unused. The model draw disables and
+restores GL dithering so the RGBA8 reference that Near reuse compares is quantized
+deterministically.
 
-Each bounds-safe 16 x 16 workgroup stores average integer Rec.709 model-RGB luma for the broad
-raw-change gate, plus the median of a fixed 3 x 3 lattice of source-point ordinals. That order
-statistic commutes with a shared global monotone RGB exposure curve (gain, offset, gamma, clamp,
-and rounding). Spatial averaging before the ordinal would violate this property: regions with
-different texture distributions can reverse their averages under a nonlinear exposure change.
-On the small persistent block grid the comparison pass checks all ten pairwise
-orderings in a center/left/right/up/down stencil. A relation votes only if it differs by at least
-four codes in both frames; a changed site needs at least four common relations, two reversals, and
-a reversal majority. The comparison separately counts sites with at least four reliable current
-relations and sites with at least four relations reliable in both frames. A proposal requires at
-least 15% changed sites plus the existing spatially broad raw-change gates. Five percent support is
-enough to classify a frame-level relation; this stays below the measured support of the committed
-preserved-structure exposure fixtures.
+Each real inference runs six compute dispatches on the returned raw field: clear the scratch
+block; count admitted texels and reduce raw extrema and per-workgroup mean/M2 moments; bin the
+256-bin geometry histogram; resolve completeness, mean, collapse and P05/P95; write the
+source-aligned raw `R32F` field; and advance the adaptive camera and publish the profile texel.
+Near reuse dispatches none of them.
 
-A transition from supported history to a current frame without that support is suppressed for one
-update regardless of raw color distance; a flat value can match the preceding scene's dominant
-color, so raw delta cannot qualify structure loss. On commit, a GPU history bridge copies the last
-supported ordinal grid into the pending ping-pong texture and preserves its histogram. Two metadata
-bits in the block-count word encode normal, one-update hold, and accepted persistent-low history
-without growing the SSBO. The second accepted low-support update advances history and enters the
-persistent-low state; later low-support updates stay there without a timer or repeated event.
-Concretely, state 0 has no accepted history, state 1 advances normally, state 2 holds one update,
-and state 3 advances accepted persistent-low history.
-Only that first structureless update holds the reliable comparison tuple and geometry baseline.
-The live P2/P98 range and immediate temporal depth still update on every complete valid inference,
-matching the host's separate ownership domains. The second low-support update is classified as
-persistent-low, advances the reliable tuple, and cannot inherit a stale exposure classification.
+Validity has two levels, published as two bits of one GPU frame-state word:
 
-The first supported frame after a one-update hold is exposure-like only for a strict endpoint
-match: quiet ordinal change, at most two average luma codes per block, and fewer than 1% moderate
-block deltas. Thus `A -> saturated black/white -> A` cannot relatch on either edge, while a
-quiet-color but different-depth `B` retains standalone geometry authority. A different supported
-scene `B` is compared directly with `A`; structural replacement proposes a cut, while supported
-`B` with insufficient common ordering remains ambiguous and also leaves strong depth geometry
-authoritative.
-Startup flat history followed by supported content likewise leaves geometry authoritative. This
-preserves saturated-flash rejection without making a structureless frame the sole reference for the
-next real scene. Preserved-structure monotone exposure remains vetoed.
+- *Complete*: every expected output texel is finite and nonnegative. One NaN, infinite or negative
+  texel rejects the whole field.
+- *V2-valid*: the field is complete, its population standard deviation exceeds `1e-6`, its
+  P05/P95 bounds are valid, and the adaptive camera accepted this source observation.
 
-This scope deliberately excludes codec noise, color matrices, and local tone mapping. Histogram L1
-remains diagnostic, not cut authority: exposure can move a histogram, while real same-histogram
-edits exist. Historical multi-model fixtures established the current structural policy:
-`scene_cut` pairs measured 0.433–0.571, `flat_transition` measured 0.201–0.266, and the largest
-adjacent non-cut was 0.062. Those retired-family measurements remain regression evidence rather
-than a claim that their graphs ship. The nonlinear clipped-plaid adversary produces zero ordinal
-reversals.
-The old brightness-only `uniformHardTransition` path is absent. Its grids and GL resources are
-derived once from the selected stream shape. It writes one 32-byte structural-evidence record to an
-SSBO: the published proposal, block count, raw-change count/sum, structural-change count, current
-and common structural support, and detector reason bits. The following depth/profile dispatch
-consumes that record directly on the same GL queue. No per-frame flag crosses through Java or CPU
-memory.
+Only a V2-valid field marks the profile ready and feeds reprojection. Any other field publishes
+a not-ready profile and presents current color flat; it preserves the established adaptive
+zero/scale and disarms the camera clock. An incomplete or collapsed field is also written to the
+raw depth texture as zero. The same frame-state word is the authority for comparison history: the near-reuse
+classifier's commit pass reads it on the GPU, so a V2-valid real inference commits its model
+input and becomes the reuse owner, while any other real inference commits nothing and
+invalidates the owner. No per-frame flag crosses through Java or CPU memory.
 
-The detector is an optional cut-quality/reuse component, not a depth-pipeline readiness gate. If
-it cannot be created or fails at runtime, Client SBS continues full inference and reprojection,
-disables both reuse tiers and color-based appearance/exposure authority, and uses bounded
-two-valid-observation depth-only confirmation. The stats pane identifies pending, accepted, and
-rejected fallback decisions explicitly.
-
-The depth processor separately derives geometry evidence from its private P2/P98-normalized
-analysis field. Immediate temporal depth resets only on the first valid field after processor reset;
-cut proposals and accepted cuts do not reset it. The independent adaptive geometry controller
-observes complete usable depth regardless of cut acceptance or a reliable-history hold. A qualified appearance
-proposal may cut immediately when moderate depth evidence corroborates it (`change >= 0.18`, or
-`>= 0.10` with range shift `>= 0.06`). Standalone ordinary geometry evidence starts a confirmation
-on its first qualifying update (`change >= 0.58`, or `>= 0.42` with range shift `>= 0.10`) and is
-accepted only if the next valid update still qualifies. Matching Apollo, every ordinary geometry
-candidate also requires independent ordinal structural change of at least `0.005`; a persistent
-structureless transition or a structureless history reference waives that test because such a
-reference has no reliable ordinal relation to reverse. A pending confirmation additionally requires
-reliable current structure. On startup, both branches remain blocked through source-frame age 8,
-and arming happens after that update's decision.
-
-The first update of an ordinary geometry-only candidate freezes the geometry
-baseline, reliable normalized depth, reliable model-input reference, and scene-cut history as one coherent
-comparison tuple. Its live P2/P98 range and immediate temporal depth continue to update, and its
-finite noncollapsed current raw field still publishes geometry through the continuously adapting camera.
-Confirmation compares the second update with the unchanged reliable owner. A confirmed cut
-coherently advances the tuple without resetting geometry adaptation; a failed confirmation clears
-the pending state without mixing reliable histories. On Android, the scalar decision is published
-at this final resolver and the exact normalized-depth texture is promoted at the beginning of the
-next real raw observation, before its depth comparison. Near reuse dispatches nothing and cannot
-promote it. A held reliable comparison tuple invalidates Near ownership until a valid real
-inference advances the tuple. This preserves the dependency
-order without a seventh full-grid pass. Qualified
-appearance cuts remain immediate because the independent structural evidence already supplies the
-second authority.
-
-When color history enters accepted persistent-low state, a typed event sets the reserved
-`cutStateCounters.y` marker. The first later supported update gets exactly one absolute standalone
-geometry decision independent of normal arming and refractory state, then clears the marker whether
-or not it cuts. Persistent low-support updates do not retrigger it. The mailbox uses bit 0 for an
-appearance proposal, bit 1 for the exposure veto, bit 2 for persistent-low start, and bit 3 for
-supported return. Evidence belongs to the exact color/depth transaction; an invalid inference is
-counted for health telemetry but its classification is not applied to a later valid field.
-
-Every accepted cut latches both evidence sources, but they rearm independently: geometry needs two
-consecutive valid depth updates below `0.08`, while appearance needs two consecutive valid updates
-without a qualified structural proposal. Invalid results do not satisfy those counters. Ordinary
-preserved exposure and a strict same-scene return set a one-valid-update recovery bit; the next
-non-appearance update vetoes geometry and freezes only its novelty baseline, then clears the bit.
-A genuine appearance proposal bypasses that tail. Persistent evidence therefore cannot repeatedly
-move shot state, and persistent appearance cannot starve a later standalone geometry cut. While geometry
-remains latched, a genuinely new spike may start the same two-update confirmation on or after
-source-frame age 8:
-change must be at least `0.30` and exceed its per-update EMA by `0.20` or by `2x`. The EMA uses
-alpha `0.125` and resets to the current fraction on each accepted cut, so a sustained high fraction
-converges instead of pulsing repeatedly.
-
-Cut age follows the protected decoder callback/source-step delta attached to each complete valid
-postprocessed real-inference observation, not wall time and not merely
-one increment per sparse depth result. It resets on initialization or an accepted cut. Near reuse
-and invalid depth do not advance it. Reliable history is
-held only for the first structureless update and the first geometry-confirmation observation;
-ordinary exposure advances normally. This keeps source timing distinct from reliable
-model-input/scene-cut/depth ownership when callbacks coalesce while LiteRT is busy.
-
-These depth fractions are calibrated for the client's model grid; they intentionally differ from
-Apollo's capture-grid thresholds. ZipDepth's complete raw field is the cut-analysis validity unit:
-if any output texel is NaN, infinite, or negative, the transaction does not advance reliable
-history. Raw V2 renderer validity additionally requires population standard deviation above
-`1e-6`; a finite collapsed result remains available to private cut analysis but presents current
-color flat and cannot initialize the adaptive camera.
-
-An invalid depth transaction has no cut authority. Its exact color classification may be retained
-only in asynchronous diagnostics; it is never carried onto a later valid depth field. It cannot
-authorize a new reliable owner, though its opening min/max pass may finish the deferred texture copy
-already authorized by the preceding valid result. Range, immediate temporal value, adaptive zero/scale,
-cut baselines, recovery state, and cut FSM otherwise remain unchanged until a complete valid
-inference arrives.
+The classifier is an optional reuse component, not a depth-pipeline readiness gate. If it cannot
+be created or fails at runtime, Client SBS continues full inference and reprojection with eager
+tensor packing and no reuse.
 
 Each private depth/disparity processor uploads its immutable sampler bindings, tensor/output
-dimensions, packed FP32 stride, coordinate calibration, and spatial scale once when its programs
-are created. Per-frame uploads retain source offsets, current evidence, and time-dependent
-coefficients. Temporal resets preserve the immutable uniforms; context recreation creates and
-initializes new programs.
+dimensions, packed FP32 stride and coordinate calibration once when its programs are created.
+Per-frame uploads are the source offset and the source timestamp. Resets preserve the immutable
+uniforms; context recreation creates and initializes new programs.
 
 Depth-health Stats are observations, not geometry inputs. While Stats is visible, a tiny
-asynchronous GPU state copy runs every five postprocessed raw observations. When Stats is hidden,
-neither the copy nor its GPU-to-CPU map runs. Its enabled poll is
-nonblocking. Append-only state fields preserve the prior byte offsets while exposing appearance
-proposal count; exclusive accepted appearance, geometry, and structureless-return cut counts; the
-latest raw/structural/support evidence; depth change/range shift; and causal reason bits. This uses
-the existing state copy, fence, and poll—no extra readback, dispatch, or synchronization. A
+asynchronous copy of the 64-byte GPU state runs every five postprocessed raw observations. When
+Stats is hidden, neither the copy nor its GPU-to-CPU map runs. Its enabled poll is
+nonblocking. The state holds the frame-state word, cumulative counts of incomplete fields and of
+complete fields rejected as collapsed, the valid-sample count, the adaptive zero, current mean,
+active and target inverse amplitude, raw P05/P95 and the source clock. A
 temporarily missing health sample must not stall or disable depth.
-Accepted cuts, appearance proposals/vetoes, geometry triggers, and failed geometry confirmations
-retain their exact color/depth evidence plus a monotonic event sequence until a later notable
-decision replaces them. Ordinary frames do not erase this latch, so the sparse health-copy cadence
-cannot turn an intervening event into `reason=none`; repeated publications of the same sequence are
-the same event, not another cut.
 
 ## Surface and lifecycle ownership
 
@@ -1370,8 +1247,8 @@ already produced normalized RGB. Clear explicit Client SBS metadata before retur
 mode so SceneCore again follows the decoded `HardwareBuffer` metadata.
 
 Force presentation output alpha to one. External-OES video may sample with alpha zero, which
-otherwise makes the SceneCore quad transparent or black. The private model-input texture instead
-uses alpha for its independent source-point scene-cut ordinal; RGB tensor packing ignores alpha.
+otherwise makes the SceneCore quad transparent or black. The private model-input texture also
+writes alpha one; tensor packing and Near comparison read only RGB.
 
 ## In-headset controls and stats
 
@@ -1638,8 +1515,8 @@ On updated Apollo-3D hosts, host processing latency measures the current convers
 packet publication; retained encoder-input repeats carry no processing sample. Accurate source
 content age remains a separate host diagnostic measurement, not part of this processing average.
 
-The four GPU regions are model render + color-cut/classification, matched-color copy, raw-V2/cut
-state, and disparity conditioning + inverse maps + packed draw. Nonblocking
+The four GPU regions are model render + near-reuse classification, matched-color copy, raw-V2
+depth state, and disparity conditioning + inverse maps + packed draw. Nonblocking
 `GL_EXT_disjoint_timer_query` rings poll only ready results and discard clock-disjoint samples;
 unavailable measurements must not be represented as measured zero. The model-input region includes
 eager tensor packing; native deferred packing runs in the worker context outside that query.
@@ -1659,15 +1536,14 @@ inference owner and can continue indefinitely while content and ownership remain
 not renew its owner from the preceding reused frame. A static source need not produce identical
 lossy decoded pixels; reuse remains a thresholded content decision.
 
-The fault row retains occupied color slots, flat outputs, invalid raw transactions and collapsed
-cut ranges. Expected callback coalescing, latest-frame replacement and single-flight busy events
-are scheduling behavior rather than faults. A valid held depth field must show `ready yes` and
-`history hold`; holding the reliable comparison tuple does not itself make geometry unrenderable.
+The fault row retains occupied color slots, flat outputs, invalid raw transactions and complete
+raw fields rejected as collapsed. Expected callback coalescing, latest-frame replacement and
+single-flight busy events are scheduling behavior rather than faults.
 Client camera rows report sampled adaptive zero and mean target, active amplitude/inverse and
 target inverse, raw P05/P95 and the selected graph's amplitude floor, plus clock/current-valid
 state. Established geometry can be shown as held while an invalid current observation reports
-unavailable targets. Fixed client pop is separate from camera adaptation. Cut evidence, reliable
-history and accepted-cut counts remain separate rows; retired stretch/recenter/subject/Bestv2
+unavailable targets. Fixed client pop is separate from camera adaptation. The client pane has no
+cut, history or depth-change rows; retired stretch/recenter/subject/Bestv2
 and adaptive-pop fields are not live geometry.
 
 Host pop is the host's reported strength, not a promise of the client's fixed value. Host telemetry
@@ -1676,11 +1552,11 @@ revision. The pane must not infer those values from retired subject/anchor field
 legacy adaptive-pop flag as proof of the new camera policy. Host pipeline readiness and finite
 raw fraction also do not prove that the current frame has valid stereo geometry.
 
-Health copies contain the 256-byte depth state, including the append-only adaptive camera and
-source-clock tail; the retired Exact evidence tail is absent. Copies,
+Health copies contain the 64-byte depth state: validity bits, fault counters, the adaptive
+camera and the source clock. Copies,
 fences and maps remain asynchronous, failures back off without disabling valid depth, and recovery
-requires a fresh completed sample. Near reuse freezes postprocess health. Client history advances
-with visible five-observation sampling. Host trends retain their 120 samples at the visible
+requires a fresh completed sample. Near reuse freezes postprocess health. Client health is sampled
+every five visible observations and keeps no trend history. Host trends retain their 120 samples at the visible
 100 ms cadence. All plots use oldest-left/newest-right sample slots, not an invented
 fixed wall-clock axis; repeated host heartbeat publications do not duplicate event points.
 
@@ -1735,11 +1611,13 @@ when the debug build is minified. Release minification remains a separate unreso
 Use [client-sbs-evaluation.md](client-sbs-evaluation.md) for exact unit, assemble, native GPU smoke,
 update-install, log, and sustained-stream procedures.
 
-The October 24 physical SM-I610 gate passed 20 current GPU tests: all three fully delegated
-OpenCL models, native reuse/fences, adaptive depth and recovery, disparity conditioning, inverse
-seed/refinement/packed rendering, and source/cut/reliable-history behavior. Settings and pairings
+The October 24 physical SM-I610 gate passed the 20 GPU tests of that date: all three fully
+delegated OpenCL models, native reuse/fences, adaptive depth and recovery, disparity conditioning,
+inverse seed/refinement/packed rendering, and the source/cut/reliable-history behavior that was
+removed on 2026-11-14. Settings and pairings
 were hash-verified unchanged. This is Adreno/CL-GL correctness evidence; sustained decoder-to-XR
-streaming, calibration, comfort and thermal acceptance remain separate. The
+streaming, calibration, comfort and thermal acceptance remain separate. The device suite changed
+with that removal and has not been rerun on the headset. The
 [test record](client-sbs-evaluation.md#physical-galaxy-xr-gpu-gate-2026-10-24) owns artifacts and limits.
 
 On the user's physical Galaxy XR, never run Gradle's connected Android test task: it uninstalls the
@@ -1838,6 +1716,8 @@ For every mode/surface change, test:
   a regression. Before live
   qualification, run
   `com.limelight.sbs.ClientSbsGpuDepthProcessorInstrumentedTest`,
+  `com.limelight.sbs.ClientSbsGpuNearReuseDecisionInstrumentedTest`,
+  `com.limelight.utils.ClientSbsModelInputReuseInstrumentedTest`,
   `com.limelight.sbs.ClientSbsGpuDisparityProcessorInstrumentedTest` and
   `com.limelight.utils.ClientSbsContractiveRenderInstrumentedTest` on Galaxy XR; all conditioner
   shapes and both production fragment stages must execute without a GL error. Exercise moving silhouettes,
@@ -1846,12 +1726,11 @@ For every mode/surface change, test:
   status.
 - Validate that the graph-specific raw amplitude floors are exactly `0.04864449`, `0.04707071`, and
   `0.05421491`. The first usable timed field initializes mean zero and robust amplitude; ordinary
-  observations adapt them with bounded rates, and accepted cuts do not reset them. Repeated,
-  regressed, invalid and over-250-ms-gap observations must not spend missing time. Near reuse
-  freezes the controller, while a genuine input-domain reset clears it.
-  Ordinary geometry-only cuts require two qualifying updates with no intervening history advance,
-  while a qualified appearance cut is immediate. Inject one invalid raw texel and verify the
-  current frame is flat and every reliable history owner remains unchanged.
+  observations adapt them with bounded rates, and abrupt content changes do not reset them.
+  Repeated, regressed, invalid and over-250-ms-gap observations must not spend missing time. Near
+  reuse freezes the controller, while a genuine input-domain reset clears it.
+  Inject one invalid raw texel and verify the current frame is flat, the adaptive zero/scale is
+  held, and the next near candidate runs real inference.
 - At 1080p and 4K, compare the exact-area model input against an offline area reference on thin
   diagonals and one-pixel edges. Bilinear sampling is expected only when either source axis is
   genuinely upscaled into the selected model grid.
@@ -1860,8 +1739,9 @@ For every mode/surface change, test:
 - Left/right eyes are not swapped and the packed split is centered exactly.
 - HDR input shows either verified preserved HDR with a high-precision target or the explicit
   BT.709/sRGB tonemap path; SDR shows BT.709/SDR. Direct modes clear Client SBS metadata.
-- A hard edit advances only the authorized cut/reliable-history state without resetting immediate
-  temporal depth or the adaptive camera; ordinary motion does not continuously trigger cuts.
+- A hard edit does not reset the adaptive camera and does not present flat: zero and amplitude
+  move toward the new scene within their per-second rate bounds, and the changed content is
+  rejected by Near reuse so it runs real inference.
 - The four GL GPU averages receive non-disjoint samples without stalling and remain distinct from
   LiteRT call-wall latency.
 - The glance strip remains passive; the level dock does not move when the upward-pitched mode pane,

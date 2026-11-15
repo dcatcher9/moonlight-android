@@ -41,6 +41,9 @@ future work in the host roadmap.
 
 ### Client migration and intentional differences
 
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
+
 Client AI now follows the current Host AI coordinate structure: continuously observed raw mean
 and robust relative amplitude, linear displacement with a separate hard bound, shared vertical
 and horizontal slope constraints, and the strict contractive inverse. Its per-graph ZipDepth
@@ -227,6 +230,9 @@ The four audit defects, and why the closed changes matter, were:
 
 ## P1 — stretch band (historical geometry; now cut-only)
 
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
+
 The current client uses the host contract: **P2/P98**, the crossing bins' outer edges, and an
 attack-fast/release-slow envelope in `(lo, hi)` space. Expansion is immediate; contraction uses the
 wall-time-normalized form of α 0.18.
@@ -256,6 +262,9 @@ Why all three closed changes matter:
   `min`/`max`, because symmetric lag itself clips.
 
 ## P1 — raw normalization range (historical geometry; now cut-only)
+
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
 
 The current client also uses P2/P98 outer bounds for raw normalization and expands the range
 immediately while contracting it with the wall-time-normalized α 0.18 envelope. The audit had the
@@ -320,6 +329,9 @@ radius is still the historical over-wide bound, and probes still use an output-r
   hopeful.
 
 ## P2 — cut detection (historical baseline; current confirmation is above)
+
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
 
 | detail | host | client |
 |---|---|---|
@@ -421,6 +433,9 @@ per accepted cut, and the same relative-spike escape—while each grid keeps its
 and corroboration bands.
 
 ## P3 — host geometry constant (historical closure)
+
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
 
 `ClientSbsTemporalTuning.APOLLO_MAX_DEPTH_LONG_SIDE` is now **1036**, matching the host's
 2026-07-25 TensorRT profile bound. The audit found the stale value `1008`, which made the client

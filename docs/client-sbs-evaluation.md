@@ -22,8 +22,10 @@ pixel with the retained real-inference input using the existing medium/strong/lo
 Positive source identity must advance and capture time must not move backward relative to that
 owner; neither 100 ms nor four callbacks forces refresh. Reused frames never replace the reference,
 so cumulative change beyond the retained owner's thresholds still requires real inference.
-Generation, model/input-contract changes, invalid geometry and reliable-history holds retain their
-invalidation rules. The separate Exact equality/raw-model-cache tier has been removed.
+Generation and model/input-contract changes clear the owner, and a real inference whose raw field
+is invalid or collapsed invalidates it; only a V2-valid real inference commits its input and owns
+reuse. The client scene-cut pipeline and its reliable-history holds were removed on 2026-11-14.
+The separate Exact equality/raw-model-cache tier has been removed.
 
 Stats remains available, including its visible-only native wall timings, GL timer queries, device
 sampling and asynchronous depth health. The performance-logging switch, background typed
@@ -33,15 +35,20 @@ failure and playback-recovery logs remain. Existing offline evaluation, Dump3D a
 benchmark tooling is retained; retired experimental APIs must not be assumed available.
 
 Current correctness gates include `ClientSbsNearIdenticalPolicyTest`,
-`ClientSbsGpuSceneCutShadersTest`, `ClientSbsGpuSceneCutDetectorTest`, and the actual-GLES
-`ClientSbsGpuSceneCutDecisionReasonInstrumentedTest`. Its long-lived reuse case exercises more than
+`ClientSbsGpuNearReuseShadersTest`, `ClientSbsGpuNearReuseClassifierTest`,
+`ClientSbsComputeProgramConsistencyTest`, and the actual-GLES
+`ClientSbsGpuNearReuseDecisionInstrumentedTest`. Its long-lived reuse case exercises more than
 a day and a 64-bit source gap, unchanged/lazy inputs, cumulative change against a fixed owner,
-new real-owner replacement, reset invalidation and authenticated decision tokens. The native
+new real-owner replacement, reset invalidation and authenticated decision tokens; its history case
+checks that only a V2-valid real inference commits input and owns reuse. The native
 `nearReusePreservesSlotsAndLazyPackingHandlesEveryInferenceFallback` gate checks the corresponding
 slot/fence/fallback path. Build and device qualification for this latest cleanup must be recorded
 separately; the historical test totals and timings below are not results for the new implementation.
 
 ## Adaptive geometry migration, 2026-10-23
+
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
 
 Client AI now uses the current Host AI mean-zero/robust-amplitude controller and linear signed
 displacement, followed by the shared Host/Game slope and unique-inverse design. Per-graph
@@ -87,6 +94,9 @@ No device installation or instrumentation was run for the evidence above.
 
 ### Model calibration and Stats review
 
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
+
 The October 23 follow-up reproduced all three historical graph scales and audited 192 saved
 paired predictions from eight clips. `tools/calibrate-zipdepth-v2-scale.py --mode adaptive-audit`
 now reports native-grid raw statistics, robust amplitude targets, floor activation and collapse
@@ -131,6 +141,9 @@ are unavailable. Host telemetry v2 cannot supply the new camera numbers or ident
 policy, so the pane explicitly reports that limitation rather than interpreting legacy fields.
 
 ## Physical Galaxy XR GPU gate, 2026-10-24
+
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
 
 The current arm64 client passed 20 GPU instrumentation tests on the SM-I610 through ten manually
 selected invocations, with zero failures or ignored tests. The main APK already matched the
@@ -624,6 +637,9 @@ when checked. Dependency sources are retained under `app/build/xr-warning-review
 
 ## Historical client reuse and model-internal review, 2026-09-05
 
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
+
 The [six client reuse changes](client-performance-reuse-review-2026-09-05.md) were built on JDK 25
 and tested on the physical Galaxy XR SM-I610, Android 14/API 34. All 853 non-root debug JVM tests
 passed, both APKs assembled, and seven focused output-scatter tool tests passed. Host production
@@ -1042,6 +1058,9 @@ dimensions rather than DA-V2's 14-aligned dimensions.
 
 ### Production original ZipDepth Base short-384 family
 
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
+
 ZipDepth uses the original `base` checkpoint and learned convex upsampler, not the lower-edge-detail
 `base_npu` variant. All three static graphs keep the short side at 384; `896 x 384` exactly serves
 21:9, while `928 x 384` is the bounded-compute ultrawide bucket rather than a true 32:9 raster.
@@ -1076,6 +1095,9 @@ products out of Adreno's flush-to-zero range. Each final graph has 163 operation
 as one OpenCL partition, and preserves Float32 public I/O with FP16-stored weights.
 
 ### Retired DepthART S448 short-384 comparison
+
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
 
 The retired DepthART evaluation used one S448 checkpoint exported into two immutable, fixed-shape
 aspect graphs; these were not two independently trained models. There was no dedicated 32:9 graph,
@@ -1387,6 +1409,9 @@ the retained pair does not expire.
 
 ### Offline raw-coordinate calibration and whole-clip evaluation
 
+> **2026-11-14:** the client scene-cut pipeline was removed; scene-cut statements in this
+> section are historical. See [Depth health](android-xr-sbs.md#depth-health).
+
 The September 2026 calibration uses all 192 saved original-ZipDepth and host-hybrid predictions
 from eight clips. It does not normalize either producer per frame. For each clip it exact-area
 resizes host depth to the ZipDepth graph, computes each producer's arithmetic mean on frame zero,
@@ -1467,12 +1492,11 @@ coordinate-calibration and strict-failure guardrails in addition to the family-a
     --tests "com.limelight.sbs.ClientSbsGpuDepthShadersTest" `
     --tests "com.limelight.sbs.ClientSbsGpuDisparityShadersTest" `
     --tests "com.limelight.sbs.ClientSbsV2CoordinateContractTest" `
-    --tests "com.limelight.sbs.ClientSbsGpuSceneCutDetectorTest" `
-    --tests "com.limelight.sbs.ClientSbsGpuSceneCutShadersTest" `
+    --tests "com.limelight.sbs.ClientSbsGpuNearReuseClassifierTest" `
+    --tests "com.limelight.sbs.ClientSbsGpuNearReuseShadersTest" `
+    --tests "com.limelight.sbs.ClientSbsComputeProgramConsistencyTest" `
     --tests "com.limelight.sbs.ClientSbsNearIdenticalPolicyTest" `
-    --tests "com.limelight.sbs.ClientSbsShotCutPolicyTest" `
     --tests "com.limelight.sbs.ClientSbsGpuTimerTest" `
-    --tests "com.limelight.sbs.ClientSbsTemporalTuningTest" `
     --tests "com.limelight.binding.video.DecoderModeTransitionGateTest" `
     --tests "com.limelight.utils.ClientSbsGpuInferenceEngineTest" `
     --tests "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
@@ -1493,28 +1517,24 @@ The tests cover:
 
 - `ClientSbsFrameSlotsTest`: matched color-frame ownership and legal slot transitions.
 - `ClientSbsGpuDepthShadersTest`: packed Float32 depth reads, complete-field validity, exact raw
-  arithmetic-mean reduction, private cut-only P2/P98 analysis, two-update history gates, and
-  overflow-safe GPU histogram math.
+  arithmetic-mean reduction, the P05/P95 geometry histogram, the adaptive-camera controller text,
+  the one-texel profile, and the std430 state layout against its Java byte offsets.
 - `ClientSbsGpuDisparityShadersTest` and `ClientSbsV2CoordinateContractTest`: the graph-scaled raw
   camera coordinate, host far-exp/linear/near-log curve, fixed `1.75 * 0.00375` gain, odd `+/-0.04`
   fourth-root container, four serial-line compute passes, and CPU-reference contract bounds.
-- `ClientSbsGpuSceneCutDetectorTest`: real-inference commit/reuse-discard history, exact packed-input
-  ownership, authenticated two-slot decision records, and GPU transaction state.
-- `ClientSbsGpuSceneCutShadersTest`: rectangular model-input luma/median-max-RGB reduction,
-  numerical gain/offset/nonlinear-clipped-exposure rejection, reliable local ordinal structure,
-  same-histogram structural cuts, fused near-identical evidence, and GPU-only evidence-word
-  contracts.
+- `ClientSbsGpuNearReuseClassifierTest`: real-inference commit/reuse-discard transaction state,
+  tile-grid dispatch math, and two-slot decision record offsets.
+- `ClientSbsGpuNearReuseShadersTest`: fused packing and near-identical tile evidence, the
+  authenticated decision record, and the history rule that only a V2-valid real inference commits
+  its input and becomes the reuse owner.
+- `ClientSbsComputeProgramConsistencyTest`: for every compute program, the uniforms Java looks up
+  are declared and used, binding indices match, each dispatch covers its extent with the shader's
+  local size, and the barrier after each dispatch covers what the pass wrote.
 - `ClientSbsNearIdenticalPolicyTest`: Apollo's inclusive pixel/tile thresholds, rectangular partial
   tiles, finite/complete evidence validation, authenticated decision encoding, cumulative one-to-four
   callback-step limit, and strict sub-100-ms owner age.
-- `ClientSbsShotCutPolicyTest`: numerical model-grid cut boundaries, startup blocking, two-update
-  ordinary-geometry confirmation, immediate qualified appearance cuts, coherent reliable-history
-  ownership, one-update photometric recovery, independent geometry/appearance rearming, refractory
-  relative-spike escape, and rejection of invalid transaction evidence.
 - `ClientSbsGpuTimerTest`: nonblocking per-stage query rings, unsigned results, and disjoint-sample
   rejection.
-- `ClientSbsTemporalTuningTest`: Apollo-equivalent temporal response and spatial-scale mapping at
-  different client and negotiated host cadences.
 - `DecoderModeTransitionGateTest`: IDR/serial and presentation-timestamp gating around decoder
   output-surface transitions.
 - `ClientSbsDepthInputShapeTest` and its `ClientSbsDepthInputShape` helper were removed with the
@@ -1612,22 +1632,24 @@ On the physical headset:
 
 The connected-test task is acceptable only on a disposable emulator whose data may be erased.
 
-### Source-exposure and history regression
+### Model-input and near-reuse ownership regression
 
-`com.limelight.utils.ClientSbsSourceOrdinalInstrumentedTest` exercises a real 3840 x 2160
-SurfaceTexture/OES image through production model preprocessing, fused RGB/ordinal packing,
-scene-cut comparison, and GPU history commit. It applies gamma before resizing textured source
-regions. Its former max-of-area-RGB control must propose an appearance cut; the source-point
-ordinal must retain the exposure veto with zero reversed orderings. Both paths use deterministic
-undithered quantization and must produce identical model RGB. This verifies the composed shader
-path rather than treating a model-grid exposure transform as equivalent to source exposure.
+`com.limelight.utils.ClientSbsModelInputReuseInstrumentedTest` exercises a real 3840 x 2160
+SurfaceTexture/OES image through production model preprocessing, fused RGB packing and near-reuse
+classification, the real depth processor, and the GPU history commit. It checks that the
+model-input render is repeatable opaque RGB for both shader variants and partial tiles, that the
+eagerly packed tensor equals the rendered RGB top-first, and that decoded frames reuse only
+against a V2-valid real inference: a collapsed raw field invalidates the owner until the next
+usable field restores it.
 
 Run it with the manual procedure below by selecting that class in `$Classes`. It needs GLES 3.1
 and external-OES support, but does not initialize LiteRT. The companion
-`ClientSbsGpuSceneCutDecisionReasonInstrumentedTest` and
-`ClientSbsGpuReliableHistoryParityInstrumentedTest` classes in `com.limelight.sbs` check decision
-ownership and accepted-history behavior. An emulator pass establishes shader correctness only;
+`ClientSbsGpuNearReuseDecisionInstrumentedTest` class in `com.limelight.sbs` checks the decision
+record, long-lived ownership and the committed input/owner state directly. An emulator pass
+establishes shader correctness only;
 it does not establish Galaxy XR OpenCL interoperability, PQ decoder behavior, or live performance.
+The scene-cut decision, reliable-history parity and source-ordinal device tests were removed with
+the scene-cut pipeline on 2026-11-14.
 
 ### Data-preserving manual procedure
 
@@ -1646,9 +1668,8 @@ $Classes = @(
     "com.limelight.sbs.ClientSbsGpuDepthProcessorInstrumentedTest",
     "com.limelight.sbs.ClientSbsGpuDisparityProcessorInstrumentedTest",
     "com.limelight.utils.ClientSbsContractiveRenderInstrumentedTest",
-    "com.limelight.sbs.ClientSbsGpuSceneCutDecisionReasonInstrumentedTest",
-    "com.limelight.sbs.ClientSbsGpuReliableHistoryParityInstrumentedTest",
-    "com.limelight.utils.ClientSbsSourceOrdinalInstrumentedTest"
+    "com.limelight.sbs.ClientSbsGpuNearReuseDecisionInstrumentedTest",
+    "com.limelight.utils.ClientSbsModelInputReuseInstrumentedTest"
 )
 
 & $Adb -s $env:ANDROID_SERIAL get-state
@@ -1924,15 +1945,15 @@ Open the in-headset Stats panel and verify:
   result age avg / max` is the real inference pair's capture-to-adoption age. Near reuse has no
   age or callback-count expiry; it remains relative to the retained real-inference input.
 - The four true GL GPU averages populate without stalling: model-input pack, matched-color copy,
-  depth/cut state, and SBS compose.
-- The `Faults` row keeps `color_busy`, `flat`, invalid raw transactions, and collapsed diagnostic cut
-  ranges visible; they remain zero during ordinary content. Expected reuse, latest-frame replacement, callback coalescing, and
+  depth state, and SBS compose.
+- The `Faults` row keeps `color_busy`, `flat`, invalid raw transactions (`raw invalid`), and complete
+  raw fields rejected as collapsed (`raw collapsed`) visible; they remain zero during ordinary content. Expected reuse, latest-frame replacement, callback coalescing, and
   ordinary single-flight busy events are not fault counters.
-- `V2 state` distinguishes renderer readiness, complete current-field validity, and whether the
-  reliable comparison-history tuple advanced. A confirmation-held but valid field must report `ready yes | current
-  valid yes | history hold`; history hold alone is not a flat-output condition.
-- `V2 coordinate` reports fixed pop `1.75`, `shotMean`, and `currentMean`. The adjacent cut evidence,
-  decision, and count rows explain a relatch. Retired normalized stretch/recenter/subject/Bestv2
+- The sampled-geometry row distinguishes renderer readiness and complete current-field validity:
+  a usable field reports `ready yes | current valid yes`.
+- The camera rows report the adaptive zero and mean target, amplitude and its target inverse, raw
+  P05/P95 with the graph floor, and fixed pop `1.75` with the source clock. There are no cut
+  evidence, decision or count rows. Retired normalized stretch/recenter/subject/Bestv2
   anchor and adaptive-pop values must not appear as current production state.
 - For HDR input, `Client SBS HDR path` reports either preserved `RGB10_A2`/`RGBA16F` output or the
   explicit BT.709/sRGB tonemap. SDR reports BT.709/SDR. Switching back to a direct mode clears
@@ -1967,8 +1988,8 @@ submission timings. The retained latency fields are:
   bandwidth, and is zero/unavailable when no eligible candidate was sampled.
 - `Depth result age avg / max`, which measures the real inference pair's capture-to-adoption freshness
   rather than one isolated GPU stage. It does not average the retained-depth age of reuses.
-- Four GL GPU averages from nonblocking `GL_EXT_disjoint_timer_query`: model render + color cut +
-  pack, matched-color copy, depth/cut-state processing, and stereo raw-depth V2
+- Four GL GPU averages from nonblocking `GL_EXT_disjoint_timer_query`: model render + near-reuse
+  classification + pack, matched-color copy, raw-depth state processing, and stereo raw-depth V2
   conditioner/inverse-map/packed draw. These measure actual GLES completion but cannot include
   LiteRT's OpenCL execution.
 
@@ -2038,8 +2059,8 @@ stable for the entire capture. Collect at least 15 minutes after warm-up and rec
 - Each of the four GL GPU completion averages, kept separate from LiteRT call-wall latency.
 - Exceptional `color_busy` and `flat` counts; do not collect expected reuse/skip/coalescing behavior
   as counter noise.
-- Renderer readiness, complete current-depth validity, history advance/hold, private cut-range width,
-  fixed pop, shot/current raw means, and causal cut state.
+- Renderer readiness, complete current-depth validity, fixed pop, adaptive zero and current raw
+  mean, amplitude, and raw P05/P95.
 - App CPU core-equivalent load, GPU busy/clock, and Android thermal status.
 - HDR path and selected presentation target format for the run.
 - Visible depth quality, judder, black/flat frames, thermal warnings, and discomfort.
@@ -2075,20 +2096,20 @@ cadence.
 - **Finite but flat model output:** reproduce with the deterministic native smoke test before
   changing the fixed raw V2 coordinate.
 - **Any raw texel is NaN/Inf/negative:** the complete current geometry transaction must be rejected,
-  current color must be flat, and every reliable history owner must remain unchanged. Do not weaken
-  this to partial-pixel validity.
-- **Finite non-flat depth but flat stereo:** inspect current-depth/V2 validity, persistent-state and
-  shot-camera readiness, selected graph scale, conditioner, inverse-map target, and packed compose
-  logs. A valid `history hold` is renderable and must not by itself force flat output.
-- **Depth smears across hard edits:** inspect the GPU scene-cut path. The cut word must stay
-  GPU-resident and paired with the same tensor/color slot.
+  current color must be flat, the adaptive zero/scale must be held, and the near-reuse owner must
+  be invalidated. Do not weaken this to partial-pixel validity.
+- **Finite non-flat depth but flat stereo:** inspect current-depth/V2 validity, adaptive-camera
+  and source-clock readiness, selected graph scale, conditioner, inverse-map target, and packed
+  compose logs.
+- **Depth lags or pumps across hard edits:** there is no scene-cut detector; the adaptive camera
+  follows the new scene at its bounded per-second rates. Compare the adaptive zero and amplitude
+  rows with their targets before changing any controller constant.
 - **Near-identical reuse stays at zero on a static scene:** confirm one valid real inference has
   established the owner, the generation is stable, and no native decision-buffer/range/map or
   authentication warning forced inference. Check the candidate count before changing thresholds.
 - **Reuse persists through visible motion or a hard edit:** treat it as a correctness failure. Verify
   the exact packed-input comparison, finite/complete evidence gates, literal global/local bounds,
-  fixed retained reference, monotonic source identity/capture time, and decision token/cookies. Do not relax scene-cut
-  behavior to conceal it.
+  fixed retained reference, monotonic source identity/capture time, and decision token/cookies.
 - **Good depth with lag:** compare LiteRT wall, depth age, and latch/infer/reuse/output FPS; check
   the exceptional `color_busy` counter before changing model resolution.
 - **GPU remains high while output FPS is low:** compare the four GLES completion averages with
