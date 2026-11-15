@@ -21,6 +21,7 @@ import com.limelight.Game;
 import com.limelight.LimeLog;
 import com.limelight.binding.video.DecodedSourceIdentityTracker;
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.utils.ClientSbsPerformanceSnapshot;
 import com.limelight.utils.Stereo3DRenderer;
 
 import java.util.function.BooleanSupplier;
@@ -164,7 +165,7 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
     }
 
     /** Drain one coherent Client-SBS performance window for the XR stats panel. */
-    public Stereo3DRenderer.ClientSbsPerformanceSnapshot sampleClientSbsPerformance() {
+    public ClientSbsPerformanceSnapshot sampleClientSbsPerformance() {
         return mClientSbsStatsVisible
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs()
                 ? mStereoRenderer.sampleClientSbsPerformance() : null;

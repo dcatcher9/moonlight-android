@@ -68,6 +68,7 @@ import com.limelight.ui.xrcontrols.XrSparklineView;
 import com.limelight.ui.xrcontrols.XrControlPanelLayout;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrModeChevronView;
+import com.limelight.utils.ClientSbsPerformanceSnapshot;
 import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.ServerHelper;
 
@@ -2325,7 +2326,7 @@ public class XrStreamPresenter {
      * @param hdrActive whether the negotiated stream is actually HDR, rather than merely requested
      */
     public void setStats(StreamPerformanceSnapshot stream,
-                         Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbs,
+                         ClientSbsPerformanceSnapshot clientSbs,
                          boolean hdrActive) {
         statsUi.setStats(stream, clientSbs, hdrActive);
     }

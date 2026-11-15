@@ -24,7 +24,7 @@ import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.sbs.HostSbsTelemetryTracker;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 import com.limelight.ui.xrcontrols.XrSparklineView;
-import com.limelight.utils.Stereo3DRenderer;
+import com.limelight.utils.ClientSbsPerformanceSnapshot;
 
 import java.util.Locale;
 
@@ -190,7 +190,7 @@ final class XrStatsPanel {
      * @param hdrActive whether the negotiated stream is actually HDR, rather than merely requested
      */
     public void setStats(StreamPerformanceSnapshot stream,
-                         Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbs,
+                         ClientSbsPerformanceSnapshot clientSbs,
                          boolean hdrActive) {
         if (!host.statsVisible() || statsTable == null) {
             return;
@@ -405,7 +405,7 @@ final class XrStatsPanel {
     }
 
     private void addClientDepthTelemetryRows(
-            Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbs) {
+            ClientSbsPerformanceSnapshot clientSbs) {
         long faults = clientSbs.colorSlotBusySkips + clientSbs.flatSbsOutputs
                 + clientSbs.depthInvalidRawFrames
                 + clientSbs.depthCollapsedRawFrames;

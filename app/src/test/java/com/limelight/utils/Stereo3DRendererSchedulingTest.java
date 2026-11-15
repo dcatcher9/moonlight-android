@@ -131,7 +131,7 @@ public class Stereo3DRendererSchedulingTest {
         String source = rendererSource();
         String constructor = source.substring(
                 source.indexOf("public Stereo3DRenderer(ClientSbsRenderSurface view,"),
-                source.indexOf("Immutable one-window view of the Client-SBS pipeline."));
+                source.indexOf("Atomically drains all Client-SBS counters into one elapsed"));
         assertTrue(constructor.contains("new HandlerThread("));
         assertTrue(constructor.contains("Process.THREAD_PRIORITY_URGENT_DISPLAY"));
         assertTrue(constructor.contains("new Handler(frameCallbackThread.getLooper())"));

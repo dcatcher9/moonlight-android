@@ -51,6 +51,7 @@ try {
         "--tests" "com.limelight.utils.ClientSbsModelArchiveTest" `
         "--tests" "com.limelight.utils.ClientSbsPackagedModelArchiveTest" `
         "--tests" "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
+        "--tests" "com.limelight.utils.ClientSbsPerformanceSnapshotTest" `
         "--tests" "com.limelight.utils.ClientSbsSwapProofTest" `
         "--tests" "com.limelight.utils.ClientSbsModelManifestTest" `
         "--tests" "com.limelight.utils.Stereo3DRendererSchedulingTest" `

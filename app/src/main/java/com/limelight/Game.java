@@ -51,6 +51,7 @@ import com.limelight.ui.XrStreamPresenter;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
+import com.limelight.utils.ClientSbsPerformanceSnapshot;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
 import com.limelight.utils.MouseModeOption;
@@ -58,7 +59,6 @@ import com.limelight.utils.PanZoomHandler;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
-import com.limelight.utils.Stereo3DRenderer;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
@@ -4934,7 +4934,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Drain the SBS window on this same performance callback, before UI scheduling can skew
         // its boundary relative to the immutable stream snapshot.
         final StreamContainer sampledContainer = currentContainer;
-        final Stereo3DRenderer.ClientSbsPerformanceSnapshot clientSbsSnapshot =
+        final ClientSbsPerformanceSnapshot clientSbsSnapshot =
                 sampledContainer.sampleClientSbsPerformance();
         runOnUiThread(new Runnable() {
             @Override
