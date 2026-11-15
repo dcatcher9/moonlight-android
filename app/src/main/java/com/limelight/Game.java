@@ -4743,8 +4743,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Host SBS is normally switched live from the XR control bar. On a host-confirmed resume,
         // a saved Host SBS AI presentation preference is carried in the earlier HTTP request, so
-        // no duplicate control message is needed after the connection starts. Fresh launches
-        // always request the Normal presentation.
+        // no duplicate control message is needed after the connection starts. A fresh launch
+        // does the same when the observed host advertised the control extensions; otherwise it
+        // requests the Normal presentation.
     }
 
     @Override

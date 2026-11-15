@@ -113,7 +113,8 @@ public class ServerHelper {
                                            ComputerManagerService.ComputerManagerBinder managerBinder,
                                            boolean withVDisplay) {
         HostSessionLaunchRequest request = isResumeOfSameHostApp(computer, app)
-                ? HostSessionLaunchRequest.resume(computer) : HostSessionLaunchRequest.start();
+                ? HostSessionLaunchRequest.resume(computer)
+                : HostSessionLaunchRequest.start(computer);
         return createStartIntent(parent, app, computer, managerBinder, withVDisplay, request);
     }
 
@@ -180,7 +181,8 @@ public class ServerHelper {
             boolean withVDisplay
     ) {
         HostSessionLaunchRequest request = isResumeOfSameHostApp(computer, app)
-                ? HostSessionLaunchRequest.resume(computer) : HostSessionLaunchRequest.start();
+                ? HostSessionLaunchRequest.resume(computer)
+                : HostSessionLaunchRequest.start(computer);
         doStart(parent, app, computer, managerBinder, withVDisplay, request);
     }
 

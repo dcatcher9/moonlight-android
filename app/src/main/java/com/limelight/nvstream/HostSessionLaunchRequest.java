@@ -31,6 +31,16 @@ public final class HostSessionLaunchRequest implements Serializable {
         return new HostSessionLaunchRequest(Kind.START, 0, null, false, null);
     }
 
+    /**
+     * A fresh launch has no session to match, so it carries no app or token. It still records
+     * whether the observed host advertised the session-token control extensions, which the
+     * client uses as the host capability until the launch response confirms it.
+     */
+    public static HostSessionLaunchRequest start(ComputerDetails host) {
+        return new HostSessionLaunchRequest(Kind.START, 0, null,
+                host != null && host.hostSessionIdSupported, null);
+    }
+
     public static HostSessionLaunchRequest resume(int appId, String appUuid,
                                                  boolean tokenSupported, String token) {
         return new HostSessionLaunchRequest(Kind.RESUME, appId, appUuid, tokenSupported, token);

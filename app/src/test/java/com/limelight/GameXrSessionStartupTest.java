@@ -159,6 +159,30 @@ public final class GameXrSessionStartupTest {
         assertEquals("new-session", store.getCurrentSession(pc).getResumeMetadata().getHostSessionId());
     }
 
+    @Test
+    public void freshLaunchKeepsSavedHostAiOnlyWhenTheObservedHostAdvertisedControlExtensions() {
+        SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
+        assertTrue(store.edit(pc, app, record.getLocalSessionId())
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_AI)
+                .commit());
+        com.limelight.nvstream.http.ComputerDetails host =
+                new com.limelight.nvstream.http.ComputerDetails();
+        host.hostSessionIdSupported = true;
+
+        Game supported = Robolectric.buildActivity(Game.class, launchIntent(false)
+                .putExtra(Game.EXTRA_LAUNCH_REQUEST, HostSessionLaunchRequest.start(host))).get();
+        prepareCurrentSessionPreferences(supported);
+        assertEquals(PresentationMode.HOST_SBS_AI, supported.getXrStartupPresenterMode());
+        assertEquals(PresentationMode.HOST_SBS_AI,
+                store.getCurrentSession(pc).getLastSuccessfulMode());
+
+        Game standard = Robolectric.buildActivity(Game.class, launchIntent(false)).get();
+        prepareCurrentSessionPreferences(standard);
+        assertEquals(PresentationMode.NORMAL, standard.getXrStartupPresenterMode());
+        assertEquals(PresentationMode.NORMAL,
+                store.getCurrentSession(pc).getLastSuccessfulMode());
+    }
+
     private static SharedPreferences prepareCurrentSessionPreferences(
             Game game) {
         return ReflectionHelpers.callInstanceMethod(game,
