@@ -1667,6 +1667,19 @@ public class XrStreamPresenter {
                 XrStatsFormat.formatFrameRate(prefConfig.fps), prefConfig.bitrate);
     }
 
+    /**
+     * The live tuple with the user's durable FPS ceiling in place of a lower panel-follow rate.
+     * Geometry and the requested wire bitrate are the ones the stream carries now.
+     */
+    private StreamQualityTuple durableLiveQualityTuple() {
+        StreamQualityTuple live = currentQualityTuple();
+        int ceilingHz = panelRefreshRateState.getUserCeilingHz();
+        return ceilingHz > Math.round(prefConfig.fps)
+                ? new StreamQualityTuple(live.resolution, String.valueOf(ceilingHz),
+                        live.bitrateKbps)
+                : live;
+    }
+
     private void onModeTileTapped(BarItem item) {
         dockController.revealDockTemporarily();
         if (!settingsControlsEnabled() || !streamPresentationReady || modeSwitchInProgress || item.selectsMode == null) {
@@ -2454,11 +2467,12 @@ public class XrStreamPresenter {
         pendingAckFirstModeItem = item;
         pendingAckFirstPreviousMode = previousMode;
         PresentationMode nextMode = item.selectsMode;
-        StreamQualityTuple durableTarget = applyTargetQuality && targetQuality != null
-                ? targetQuality.pendingQuality : null;
-        StreamQualityTuple requestedTarget = durableTarget != null
-                ? durableTarget
-                : currentQualityTuple();
+        // Without a target-mode delta the switch carries the live tuple at the user's durable FPS
+        // ceiling: a panel-follow rate below that ceiling is effective-only and must not become
+        // the target mode's saved FPS.
+        StreamQualityTuple requestedTarget = applyTargetQuality && targetQuality != null
+                ? targetQuality.pendingQuality
+                : durableLiveQualityTuple();
         float requestedCeiling = XrPresentationPolicy.parseFrameRate(requestedTarget.frameRate, prefConfig.fps);
         int effectiveFps = panelRefreshRateState.capUserTarget(
                 Math.max(1, Math.round(requestedCeiling)));
@@ -2498,7 +2512,7 @@ public class XrStreamPresenter {
         acknowledgedLiveQuality = null;
         pendingLiveQualityMode = nextMode;
         pendingLiveQualityOrigin = LiveQualityRequestOrigin.USER;
-        pendingDurableUserQuality = durableTarget;
+        pendingDurableUserQuality = requestedTarget;
         // The mode crossing supplies the one post-ACK decoder/presentation proof even if the
         // quality delta itself is only FPS or bitrate.
         liveQualityChangeInProgress = true;
