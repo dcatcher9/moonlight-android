@@ -113,9 +113,12 @@ public class ClientSbsGpuDisparityShadersTest {
                 * ClientSbsV2CoordinateContract.PARALLAX_PER_POP;
         for (int y = 0; y < first.length; y++) {
             for (int x = 0; x < first[y].length; x++) {
+                // Unit amplitude and every value inside the +/-0.04 container: the linear V2
+                // mapping is gain * (raw - zero).
                 float raw = 1.0f + x * 0.25f;
-                first[y][x] = ClientSbsV2CoordinateContract.parallax(raw, 1.0f, 1.0f);
-                shifted[y][x] = ClientSbsV2CoordinateContract.parallax(raw, 1.5f, 1.0f);
+                first[y][x] = gain * (raw - 1.0f);
+                shifted[y][x] = gain * (raw - 1.5f);
+                assertTrue(Math.abs(first[y][x]) < ClientSbsV2CoordinateContract.CONTAINER_LIMIT);
             }
         }
         float[][] conditioned = condition(first);
