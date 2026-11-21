@@ -994,7 +994,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         String fallbackHost = details.activeAddress != null
                 ? details.activeAddress.address : null;
         try {
-            new SessionSettingsStore(this).clearCurrentSession(
+            new SessionSettingsStore(this).removeAllForPc(
                     new SessionSettingsStore.PcIdentity(details.uuid, fallbackHost));
         }
         catch (IllegalArgumentException ignored) {

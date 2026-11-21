@@ -773,6 +773,25 @@ public final class SessionSettingsStore {
         }
     }
 
+    /**
+     * Forgets a PC that the user removed: deletes its current-session record and every app
+     * profile saved under its identity, so pairing the same PC again starts from the global
+     * defaults. Other PCs are untouched.
+     */
+    public boolean removeAllForPc(PcIdentity pc) {
+        Objects.requireNonNull(pc, "pc");
+        synchronized (WRITE_LOCK) {
+            SharedPreferences.Editor editor = preferences.edit().remove(recordKey(pc));
+            String profilePrefix = settingsPrefix(pc);
+            for (String key : preferences.getAll().keySet()) {
+                if (key.startsWith(profilePrefix)) {
+                    editor.remove(key);
+                }
+            }
+            return editor.commit();
+        }
+    }
+
     public Editor edit(PcIdentity pc, AppIdentity expectedCurrentApp) {
         return new Editor(pc, Objects.requireNonNull(expectedCurrentApp, "expectedCurrentApp"),
                 null, true);

@@ -508,6 +508,49 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
+    public void removingAPcDeletesItsRecordAndEveryAppProfileButNoOtherPc() {
+        PcIdentity otherPc = new PcIdentity("6e5f46ab-c7db-47b5-a6ce-cc834170a808",
+                "192.168.1.3");
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, secondApp, "first", 1L));
+        assertTrue(store.edit(pc, secondApp).setSharedValue(HDR, false, true).commit());
+        assertTrue(store.clearCurrentSession(pc));
+        assertTrue(store.startNewSession(pc, firstApp, "second", 2L));
+        assertTrue(store.edit(pc, firstApp)
+                .setModeValue(PresentationMode.NORMAL, FPS, "120", "60")
+                .setLastSuccessfulMode(PresentationMode.MOVIE_3D)
+                .commit());
+        assertTrue(store.startNewSession(otherPc, firstApp, "other", 3L));
+        assertTrue(store.edit(otherPc, firstApp)
+                .setModeValue(PresentationMode.NORMAL, FPS, "90", "60").commit());
+        assertTrue(store.clearCurrentSession(otherPc));
+
+        assertTrue(store.removeAllForPc(pc));
+
+        assertNull(store.getCurrentSession(pc));
+        for (String key : storage.getAll().keySet()) {
+            assertFalse(key, key.contains(pc.getStorageId()));
+        }
+        // Pairing the same PC again restores nothing for either app.
+        assertTrue(store.startNewSession(pc, firstApp, "re-paired", 4L));
+        SessionRecord fresh = store.getCurrentSession(pc);
+        assertTrue(fresh.getModeOverrides(PresentationMode.NORMAL).isEmpty());
+        assertEquals(PresentationMode.NORMAL, fresh.getLastSuccessfulMode());
+        assertTrue(store.startNewSession(pc, secondApp, "re-paired-2", 5L));
+        assertTrue(store.getCurrentSession(pc).getSharedOverrides().isEmpty());
+        // The other PC keeps its saved profile.
+        assertTrue(store.startNewSession(otherPc, firstApp, "other-2", 6L));
+        assertEquals("90", store.getCurrentSession(otherPc)
+                .getModeOverrides(PresentationMode.NORMAL).get(FPS));
+    }
+
+    @Test
+    public void removingAPcWithNoStoredStateSucceeds() {
+        assertTrue(store.removeAllForPc(pc));
+        assertTrue(storage.getAll().isEmpty());
+    }
+
+    @Test
     public void streamingResetWithNothingToClearCommitsNothing() {
         assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
         String before = storage.getString("session." + pc.getStorageId(), null);
