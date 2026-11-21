@@ -557,9 +557,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-    private boolean decoderCanMeetPerformancePoint(MediaCodecInfo.VideoCapabilities caps, PreferenceConfiguration prefs) {
+    private static boolean decoderCanMeetPerformancePoint(MediaCodecInfo.VideoCapabilities caps,
+                                                          int width, int height,
+                                                          PreferenceConfiguration prefs) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaCodecInfo.VideoCapabilities.PerformancePoint targetPerfPoint = new MediaCodecInfo.VideoCapabilities.PerformancePoint(initialWidth, initialHeight, Math.round(prefs.fps));
+            MediaCodecInfo.VideoCapabilities.PerformancePoint targetPerfPoint = new MediaCodecInfo.VideoCapabilities.PerformancePoint(width, height, Math.round(prefs.fps));
             List<MediaCodecInfo.VideoCapabilities.PerformancePoint> perfPoints = caps.getSupportedPerformancePoints();
             if (perfPoints != null) {
                 for (MediaCodecInfo.VideoCapabilities.PerformancePoint perfPoint : perfPoints) {
@@ -580,7 +582,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             try {
                 // We'll ask the decoder what it can do for us at this resolution and see if our
                 // requested frame rate falls below or inside the range of achievable frame rates.
-                Range<Double> fpsRange = caps.getAchievableFrameRatesFor(initialWidth, initialHeight);
+                Range<Double> fpsRange = caps.getAchievableFrameRatesFor(width, height);
                 if (fpsRange != null) {
                     return prefs.fps <= fpsRange.getUpper();
                 }
@@ -595,15 +597,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // As a last resort, we will use areSizeAndRateSupported() which is explicitly NOT a
         // performance metric, but it can work at least for the purpose of determining if
         // the codec is going to die when given a stream with the specified settings.
-        return caps.areSizeAndRateSupported(initialWidth, initialHeight, prefs.fps);
+        return caps.areSizeAndRateSupported(width, height, prefs.fps);
     }
 
-    private boolean decoderCanMeetPerformancePointWithHevcAndNotAvc(MediaCodecInfo hevcDecoderInfo, MediaCodecInfo avcDecoderInfo, PreferenceConfiguration prefs) {
+    private static boolean decoderCanMeetPerformancePointWithHevcAndNotAvc(
+            MediaCodecInfo hevcDecoderInfo, MediaCodecInfo avcDecoderInfo,
+            int width, int height, PreferenceConfiguration prefs) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
             MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
 
-            return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(hevcCaps, prefs);
+            return !decoderCanMeetPerformancePoint(avcCaps, width, height, prefs)
+                    && decoderCanMeetPerformancePoint(hevcCaps, width, height, prefs);
         }
         else {
             // No performance data
@@ -611,7 +616,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    private MediaCodecInfo findHevcDecoder(PreferenceConfiguration prefs, boolean requestedHdr) {
+    /**
+     * @param width the requested stream width; setup() has not supplied the negotiated size yet
+     * @param height the requested stream height
+     */
+    private MediaCodecInfo findHevcDecoder(PreferenceConfiguration prefs, boolean requestedHdr,
+                                           int width, int height) {
         // Don't return anything if H.264 is forced
         if (prefs.videoFormat == PreferenceConfiguration.FormatOption.FORCE_H264) {
             return null;
@@ -640,11 +650,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     LimeLog.info("Forcing HEVC enabled for HDR streaming");
                 }
                 // > 4K streaming also requires HEVC, so force it on there too.
-                else if (initialWidth > 4096 || initialHeight > 4096) {
+                else if (width > 4096 || height > 4096) {
                     LimeLog.info("Forcing HEVC enabled for over 4K streaming");
                 }
                 // Use HEVC if the H.264 decoder is unable to meet the performance point
-                else if (avcDecoder != null && decoderCanMeetPerformancePointWithHevcAndNotAvc(hevcDecoderInfo, avcDecoder, prefs)) {
+                else if (avcDecoder != null && decoderCanMeetPerformancePointWithHevcAndNotAvc(
+                        hevcDecoderInfo, avcDecoder, width, height, prefs)) {
                     LimeLog.info("Using non-whitelisted HEVC decoder to meet performance point");
                 }
                 else {
@@ -942,6 +953,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.activeWindowVideoStats = new VideoStats();
         this.globalVideoStats = new VideoStats();
 
+        // Decoders are chosen here, before setup() delivers the negotiated stream size, because
+        // getCapabilities() can run first. Select against the requested size in the same
+        // orientation that setup() will use.
+        int requestedWidth = invertResolution ? prefs.height : prefs.width;
+        int requestedHeight = invertResolution ? prefs.width : prefs.height;
+
         avcDecoder = findAvcDecoder();
         if (avcDecoder != null) {
             LimeLog.info("Selected AVC decoder: "+avcDecoder.getName());
@@ -950,7 +967,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             LimeLog.warning("No AVC decoder found");
         }
 
-        hevcDecoder = findHevcDecoder(prefs, requestedHdr);
+        hevcDecoder = findHevcDecoder(prefs, requestedHdr, requestedWidth, requestedHeight);
         if (hevcDecoder != null) {
             LimeLog.info("Selected HEVC decoder: "+hevcDecoder.getName());
         }
@@ -974,7 +991,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (avcDecoder != null) {
             directSubmit = shouldUseDirectSubmit(
                     MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName()));
-            refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), initialHeight);
+            refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), requestedHeight);
             avcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(avcDecoder.getName());
 
             if (directSubmit) {
