@@ -1635,11 +1635,14 @@ public class XrStreamPresenter {
         glanceStrip.setMode(modeLabel(currentPresenterMode));
 
         // PreferenceConfiguration is the effective on-wire tuple. The settings model intentionally
-        // retains the user's durable FPS ceiling while panel-follow is temporarily below it.
+        // retains the user's durable FPS ceiling while panel-follow is temporarily below it. The
+        // dynamic range is the negotiated stream state, not the HDR preference.
         StreamQualityTuple live = currentQualityTuple();
+        com.limelight.Game game = hostGame();
+        boolean hdrActive = game != null && game.isStreamHdrActive();
         glanceStrip.setStream(XrStatsFormat.formatGlanceStream(activity,
                 live.resolution, glanceFrameRateText(live.frameRate), live.bitrateKbps,
-                prefConfig.enableHdr ? activity.getString(R.string.xr_glance_hdr)
+                hdrActive ? activity.getString(R.string.xr_glance_hdr)
                         : activity.getString(R.string.xr_glance_sdr)));
 
         boolean liveStatus = streamPresentationReady && sessionControlsEnabled && !settingsTransactionPending
@@ -4390,6 +4393,7 @@ public class XrStreamPresenter {
             return;
         }
         applyContentColorMetadata();
+        updateGlancePanel();
     }
 
     /** Reconcile SceneCore metadata after EGL context creation or replacement. Main thread only. */

@@ -229,6 +229,20 @@ public final class XrLiveQualityIntegrationTest {
                 ReflectionHelpers.getField(presenter, "currentPresenterMode"));
     }
 
+    @Test
+    public void glanceStripLabelsTheNegotiatedDynamicRange() throws Exception {
+        TextView stream = attachGlanceViews();
+        prefs.enableHdr = true;
+        doReturn(false).when(game).isStreamHdrActive();
+        invoke("updateGlancePanel", new Class<?>[0]);
+        assertTrue(stream.getText().toString().endsWith(game.getString(R.string.xr_glance_sdr)));
+
+        prefs.enableHdr = false;
+        doReturn(true).when(game).isStreamHdrActive();
+        presenter.onHdrModeChanged();
+        assertTrue(stream.getText().toString().endsWith(game.getString(R.string.xr_glance_hdr)));
+    }
+
     private void startSameGeometryClientProof() {
         assertTrue(presenter.applyLiveStreamQuality(
                 new StreamQualityTuple("1920x1080", "60", 100000)));
@@ -237,6 +251,18 @@ public final class XrLiveQualityIntegrationTest {
         frame(1920, 1080);
         verify(container).completeClientSbsModeSwitchAfterSwap(any());
         assertTrue(presenter.isStreamQualityTransactionBusy());
+    }
+
+    private TextView attachGlanceViews() {
+        Object glance = ReflectionHelpers.getField(presenter, "glanceStrip");
+        ReflectionHelpers.setField(glance, "glancePanel", mock(PanelEntity.class));
+        for (String name : new String[] {"glanceIdentityView", "glanceModeView",
+                "glanceStatusView"}) {
+            ReflectionHelpers.setField(glance, name, new TextView(game));
+        }
+        TextView stream = new TextView(game);
+        ReflectionHelpers.setField(glance, "glanceStreamView", stream);
+        return stream;
     }
 
     private DecoderTransitionGenerationGate generations() {
