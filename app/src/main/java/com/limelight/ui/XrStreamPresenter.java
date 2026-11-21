@@ -4,16 +4,12 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Build;
-import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.TableLayout;
-import android.widget.TableRow;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
@@ -58,10 +54,8 @@ import com.limelight.ui.xrcontrols.GameStereoSourceState;
 import com.limelight.ui.xrcontrols.AuthoredStereoModeState.MoviePictureFormat;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
-import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.sbs.HostSbsTelemetryTracker;
-import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 import com.limelight.ui.xrcontrols.XrControlPanelLayout;
 import com.limelight.ui.xrcontrols.XrControlUiState;
 import com.limelight.ui.xrcontrols.XrModeChevronView;
@@ -371,25 +365,6 @@ public class XrStreamPresenter {
     private static final float DEFAULT_PANEL_HEIGHT_METERS =
             XrViewStateStore.DEFAULT_HEIGHT_METERS;
     private float panelHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
-
-    /**
-     * Closes the sole ACK-first decoder gate before publishing any host-authoritative geometry.
-     * Keeping this sequence in one helper makes it impossible for a concurrent codec recovery to
-     * replay the replacement format onto the producer that is still presenting the old picture.
-     */
-    static int beginAckFirstClientDecoderTransitionBeforeGeometry(
-            DecoderTransitionGenerationGate generations,
-            IntSupplier beginTransition,
-            BooleanSupplier stageGeometry) {
-        if (generations == null || beginTransition == null || stageGeometry == null) {
-            return 0;
-        }
-        int generation = beginTransition.getAsInt();
-        if (!generations.beginMode(generation)) {
-            return 0;
-        }
-        return stageGeometry.getAsBoolean() ? generation : 0;
-    }
 
     /** Reuses the ACK-first gate at surface handoff; ordinary switches start their gate here. */
     static int reuseOrBeginModeDecoderTransition(
@@ -1072,15 +1047,9 @@ public class XrStreamPresenter {
         }
     }
 
-    /** Atomically replace all settings snapshots and update each open control tree only once. */
-    public void setSettingsModels(SessionSettingsModel sessionModel,
-                                  Map<PresentationMode, ModeStreamQualityModel> qualityModels,
-                                  ClientSbsModeSettingsModel clientModel,
-                                  boolean applyPending) {
-        setSettingsModels(sessionModel, qualityModels, clientModel, applyPending, true);
-    }
-
     /**
+     * Atomically replaces all settings snapshots and updates each open control tree only once.
+     *
      * @param applyPending          anything staged differs from the live connection
      * @param applyRequiresReconnect applying it must tear down and re-establish the stream
      */
@@ -2011,10 +1980,6 @@ public class XrStreamPresenter {
         View content = sessionSettingsPane.buildSessionSettingsView();
         auxiliaryContentHost.addView(content, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-    }
-
-    private TextView controlText(CharSequence text, int textSizeResource, int color) {
-        return XrPanelViews.controlText(activity, text, textSizeResource, color);
     }
 
     private String modeLabel(PresentationMode mode) {
@@ -3452,7 +3417,6 @@ public class XrStreamPresenter {
         LiveQualityRequestOrigin origin = pendingLiveQualityOrigin;
         StreamQualityTuple durableRequested = pendingDurableUserQuality;
         StreamQualityTuple durableApplied = XrPresentationPolicy.durableUserQuality(applied, durableRequested);
-        commitGameTransport(requestMode);
 
         if (pendingExactEncodedWidth > 0 && pendingExactEncodedHeight > 0) {
             currentExactEncodedWidth = pendingExactEncodedWidth;
@@ -3866,15 +3830,6 @@ public class XrStreamPresenter {
         updateModeSelection();
     }
 
-    private String labelForPresenterMode(PresentationMode mode) {
-        for (BarItem item : barItems) {
-            if (item.selectsMode == mode) {
-                return item.label;
-            }
-        }
-        return mode.name();
-    }
-
     /** Decoder callback: the fresh transition IDR is now being released to the target Surface. */
     public void onDecoderPresentationModeTransitionOpened(int transitionGeneration) {
         if (!controlTransportOpen()) {
@@ -3940,15 +3895,10 @@ public class XrStreamPresenter {
             return;
         }
 
-        // A failed host control send can still complete the decoder flush on the unchanged
-        // Surface. Consume only the matching transaction and do not let it affect a later switch.
-        if (decoderTransitionGenerations.dispatchModeIfCurrent(
-                transitionGeneration, decoderTransitionGenerations::clearMode)) {
-            LimeLog.info("XR: completed decoder recovery for an aborted mode switch");
-        } else {
-            LimeLog.warning("XR: ignoring stale decoder completion generation "
-                    + transitionGeneration);
-        }
+        // Every path that abandons a transition clears its mode generation, so no transaction
+        // owns this completion.
+        LimeLog.warning("XR: ignoring stale decoder completion generation "
+                + transitionGeneration);
     }
 
     private boolean armClientSbsModeSwap(int transitionGeneration, PresentationMode pendingMode) {
@@ -4030,7 +3980,7 @@ public class XrStreamPresenter {
                 XrPresentationPolicy.requiresClientPackedSwapProof(previousMode, pendingMode);
         if (previousMode != pendingMode) {
             applyPresenterModeInterpretation(
-                    previousMode, pendingMode, labelForPresenterMode(pendingMode));
+                    previousMode, pendingMode, modeLabel(pendingMode));
         }
         pendingDecoderTransitionMode = null;
         decoderTransitionGenerations.clearMode();
@@ -4575,10 +4525,6 @@ public class XrStreamPresenter {
 
     private void setTextSize(TextView view, int textSizeResource) {
         XrPanelViews.setTextSize(activity, view, textSizeResource);
-    }
-
-    private void setScaledTextSize(TextView view, int textSizeResource, float scale) {
-        XrPanelViews.setScaledTextSize(activity, view, textSizeResource, scale);
     }
 
     private android.graphics.drawable.GradientDrawable controlSurfaceBackground(

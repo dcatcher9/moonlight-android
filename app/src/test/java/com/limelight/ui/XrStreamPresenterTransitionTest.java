@@ -13,9 +13,6 @@ import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
 import org.junit.Test;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class XrStreamPresenterTransitionTest {
@@ -318,46 +315,25 @@ public class XrStreamPresenterTransitionTest {
     }
 
     @Test
-    public void ackFirstClientGatePrecedesGeometryAndIsReusedBySurfaceHandoff() {
+    public void ackFirstGateIsReusedBySurfaceHandoff() {
         DecoderTransitionGenerationGate gate =
                 new DecoderTransitionGenerationGate();
         AtomicInteger decoderBegins = new AtomicInteger();
-        List<String> order = new ArrayList<>();
+        // The ACK-first mode start opened generation 320 before its request.
+        assertTrue(gate.beginMode(320));
 
-        int ackGeneration =
-                XrStreamPresenter.beginAckFirstClientDecoderTransitionBeforeGeometry(
-                        gate,
-                        () -> {
-                            decoderBegins.incrementAndGet();
-                            order.add("decoder-gate");
-                            return 320;
-                        },
-                        () -> {
-                            order.add("geometry");
-                            return true;
-                        });
         int surfaceGeneration = XrStreamPresenter.reuseOrBeginModeDecoderTransition(
                 gate, true,
                 () -> {
                     decoderBegins.incrementAndGet();
-                    order.add("second-decoder-gate");
                     return 321;
                 });
 
-        assertEquals(Arrays.asList("decoder-gate", "geometry"), order);
-        assertEquals(1, decoderBegins.get());
-        assertEquals(320, ackGeneration);
-        assertEquals(ackGeneration, surfaceGeneration);
-    }
-
-    @Test
-    public void failedAckFirstGeometryStillLeavesGateOwnedForReconnectCleanup() {
-        DecoderTransitionGenerationGate gate =
-                new DecoderTransitionGenerationGate();
-
-        assertEquals(0, XrStreamPresenter.beginAckFirstClientDecoderTransitionBeforeGeometry(
-                gate, () -> 77, () -> false));
-        assertEquals(77, gate.currentModeGeneration());
+        assertEquals(0, decoderBegins.get());
+        assertEquals(320, surfaceGeneration);
+        assertEquals(321, XrStreamPresenter.reuseOrBeginModeDecoderTransition(
+                gate, false, () -> 321));
+        assertEquals(321, gate.currentModeGeneration());
     }
 
     private static ModeStreamQualityModel targetQuality(boolean reconnectRequired) {
