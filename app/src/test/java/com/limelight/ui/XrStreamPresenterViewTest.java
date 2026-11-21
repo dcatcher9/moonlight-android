@@ -210,6 +210,37 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
+    public void moviePictureFormatsRenderDisabledDuringATransaction() throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, PreferenceConfiguration.readPreferences(activity),
+                surface -> { }, visible -> { });
+        setField(presenter, "currentPresenterMode", PresentationMode.MOVIE_3D);
+        setField(presenter, "streamPresentationReady", true);
+        setField(presenter, "modeSwitchInProgress", true);
+        setField(modeOptions(presenter), "modeOptionsHost", new FrameLayout(activity));
+        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
+        state.toggleModeOptions(PresentationMode.MOVIE_3D.name());
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+
+        render.invoke(modeOptions(presenter));
+        XrChoiceGroup group = (XrChoiceGroup) getField(
+                modeOptions(presenter), "moviePictureFormatChoiceGroup");
+        assertFalse(group.isEnabled());
+
+        setField(presenter, "modeSwitchInProgress", false);
+        render.invoke(modeOptions(presenter));
+        group = (XrChoiceGroup) getField(modeOptions(presenter), "moviePictureFormatChoiceGroup");
+        assertTrue(group.isEnabled());
+        presenter.onDestroy();
+        controller.destroy();
+    }
+
+    @Test
     public void gameModePaneDescribesCompatibleSourcesWithoutInventingDetection()
             throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);

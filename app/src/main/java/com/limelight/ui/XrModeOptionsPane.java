@@ -204,8 +204,7 @@ final class XrModeOptionsPane {
     /** The pane's share of the presenter's control-availability pass, in its original order. */
     void setModeControlsEnabled(boolean enabled) {
         if (moviePictureFormatChoiceGroup != null) {
-            moviePictureFormatChoiceGroup.setEnabled(enabled && host.streamPresentationReady()
-                    && !host.modeSwitchInProgress() && !host.liveQualityTransactionBusy());
+            moviePictureFormatChoiceGroup.setEnabled(moviePictureFormatEnabled(enabled));
         }
         if (modeResolutionSelector != null) {
             modeResolutionSelector.setEnabled(enabled);
@@ -655,8 +654,15 @@ final class XrModeOptionsPane {
                 new SessionSettingsModel.Choice("half_sbs", activity.getString(R.string.xr_movie_format_half_sbs)),
                 new SessionSettingsModel.Choice("full_sbs", activity.getString(R.string.xr_movie_format_full_sbs))),
                 host.moviePictureFormatId(), "", host::onMoviePictureFormatSelected);
-        moviePictureFormatChoiceGroup.setEnabled(host.settingsControlsEnabled() && host.streamPresentationReady());
+        moviePictureFormatChoiceGroup.setEnabled(
+                moviePictureFormatEnabled(host.settingsControlsEnabled()));
         card.addView(moviePictureFormatChoiceGroup);
+    }
+
+    /** Movie interpretation changes need a ready stream and no transaction in flight. */
+    private boolean moviePictureFormatEnabled(boolean controlsEnabled) {
+        return controlsEnabled && host.streamPresentationReady()
+                && !host.modeSwitchInProgress() && !host.liveQualityTransactionBusy();
     }
 
     private void clearModeOptionsReferences() {
@@ -719,8 +725,8 @@ final class XrModeOptionsPane {
         modeDefaultsButton.setEnabled(host.settingsControlsEnabled());
         if (moviePictureFormatChoiceGroup != null) {
             moviePictureFormatChoiceGroup.setSelectedValue(host.moviePictureFormatId());
-            moviePictureFormatChoiceGroup.setEnabled(host.settingsControlsEnabled() && host.streamPresentationReady()
-                    && !host.modeSwitchInProgress() && !host.liveQualityTransactionBusy());
+            moviePictureFormatChoiceGroup.setEnabled(
+                    moviePictureFormatEnabled(host.settingsControlsEnabled()));
         }
         if (mode == PresentationMode.CLIENT_SBS_AI) {
             updateClientSbsOptionsView();
