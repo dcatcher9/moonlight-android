@@ -1437,16 +1437,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                 .onDecoderPresentationModeTransitionOpened(generation);
                     }
                 }),
-                generation -> runOnUiThread(() -> {
-                    boolean currentTransition = true;
-                    if (streamContainer != null && streamContainer.getXrPresenter() != null) {
-                        currentTransition = streamContainer.getXrPresenter()
-                                .onDecoderPresentationModeTransitionTimedOut(generation);
-                    }
-                    if (currentTransition) {
-                        handleDecoderSurfaceSwitchFailure();
-                    }
-                }));
+                generation -> runOnUiThread(
+                        () -> onDecoderPresentationModeTransitionTimedOut(generation)));
         decoderRenderer.setActiveVideoFormatListener(videoFormat -> {
             // setup() invokes this before MediaCodec is configured. Complete SceneCore's
             // codec-dependent Host-SBS resize synchronously, then replace the renderer's initial
@@ -4782,6 +4774,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void cancelDecoderPresentationModeTransition() {
         if (decoderRenderer != null) {
             decoderRenderer.cancelPresentationModeTransition();
+        }
+    }
+
+    /**
+     * The decoder's presentation-transition deadline expired. Main thread. The presenter owns
+     * every transition; once it is gone (released for a reconnect) the timeout has no current
+     * transition and must not end the stream.
+     */
+    void onDecoderPresentationModeTransitionTimedOut(int generation) {
+        XrStreamPresenter presenter = presenterOrNull();
+        if (presenter == null) {
+            LimeLog.warning("XR: ignoring decoder transition timeout " + generation
+                    + " without a presenter");
+            return;
+        }
+        if (presenter.onDecoderPresentationModeTransitionTimedOut(generation)) {
+            handleDecoderSurfaceSwitchFailure();
         }
     }
 
