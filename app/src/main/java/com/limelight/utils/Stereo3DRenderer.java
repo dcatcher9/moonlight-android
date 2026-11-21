@@ -309,8 +309,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean contractiveDisparityValid;
     private boolean gpuDepthActive;
     private volatile String activeInferenceBackend = "Initializing";
-    /** Observable compose implementation: cheap precomputed warp or full-resolution fallback. */
-    private volatile String activeReprojectionPath = "Initializing";
     // Non-zero from matched capture through native infer/reuse arbitration and renderer adoption.
     // A unique token prevents a stale generation from releasing a newer claim. Keeping the claim
     // through history commit ensures N+1 cannot compare against an owner older than N.
@@ -547,11 +545,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (!ClientSbsPerfStats.shouldPollHealthTelemetry(perf.performanceSamplingEnabled, pollCounter)) {
             return;
         }
-        if (ClientSbsPerfStats.shouldPollHealthTelemetry(perf.performanceSamplingEnabled, pollCounter)) {
-            ClientSbsGpuTimer timer = perf.gpuTimer;
-            if (timer != null) {
-                timer.poll();
-            }
+        ClientSbsGpuTimer timer = perf.gpuTimer;
+        if (timer != null) {
+            timer.poll();
         }
         if (processor == null) {
             return;
@@ -724,7 +720,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         prefConfig = null;
         activeInferenceBackend = "Unavailable";
-        activeReprojectionPath = "Unavailable";
         surfaceLifecycleReady = false;
         outputSurfaceValidated = false;
         rejectedOutputSurfaceGeneration = 0;
@@ -1964,7 +1959,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         pendingGpuInferenceEngine = null;
         gpuInferenceEngine = null;
         activeInferenceBackend = "Initializing";
-        activeReprojectionPath = "Flat (strict V2 initializing)";
         hasFrameForActiveGeneration = false;
         releaseDecoderSurface();
         shuttingDown.set(false);
@@ -2299,8 +2293,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 return false;
             }
             warpedComposeValidated = true;
-            activeReprojectionPath = warpMapReprojectionPath();
-            LimeLog.info("Client SBS reprojection path: " + activeReprojectionPath);
+            LimeLog.info("Client SBS reprojection path: " + warpMapReprojectionPath());
         }
         return true;
     }
@@ -2597,7 +2590,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         contractiveWarpMapDrawValidated = false;
         contractiveWarpMapRefinementDrawValidated = false;
         warpedComposeValidated = false;
-        activeReprojectionPath = "Flat (strict V2 unavailable)";
         closeDetachedDisparityProcessor(processor,
                 "Client SBS contractive disparity cleanup failed: ");
         LimeLog.warning("Client SBS contractive disparity disabled; presenting flat output: "
@@ -3554,10 +3546,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             } finally {
                 perf.endGpuTimer(depthGpuTimerStarted);
             }
-            if (!processed.isValidFrame()) {
-                throw new IllegalStateException("GPU depth processor rejected the frame");
-            }
-
             gpuDepthTextureId = processed.getDepthTextureId();
             gpuProfileTextureId = processed.getProfileTextureId();
             gpuDepthActive = gpuDepthTextureId != 0 && gpuProfileTextureId != 0;
@@ -3589,9 +3577,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         "Output-consumed fence collision for slot " + result.bufferSlot);
             }
 
-            if (samplePerformance && ClientSbsPerfStats.isPerformanceSamplingEpochCurrent(
-                    perf.performanceSamplingEnabled, result.performanceEpoch,
-                    perf.performanceSamplingEpoch.get())) {
+            if (samplePerformance) {
+                // recordDepthAdopt() re-checks the epoch, so a Stats boundary since adoption
+                // started still drops this sample.
                 long adoptedAtNs = System.nanoTime();
                 long pairAgeNs = Math.max(0L, adoptedAtNs
                         - result.colorFrameLease.getCapturedAtNs());
@@ -4202,7 +4190,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 "Client SBS disparity cleanup after warp-map failure failed: ");
         releaseWarpMapTarget();
         warpMapAvailable = false;
-        activeReprojectionPath = "Flat (strict V2 unavailable)";
         requestGpuShutdown("strict V2 warp-map pipeline unavailable");
     }
 

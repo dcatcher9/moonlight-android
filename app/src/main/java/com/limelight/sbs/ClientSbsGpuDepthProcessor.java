@@ -262,7 +262,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             result.depthTexture = rawDepthTexture;
             result.profileTexture = profileTexture;
             result.frameSequence = frameSequence;
-            result.validFrame = true;
             scheduleHealthReadbackIfDue();
             return result;
         } finally {
@@ -292,7 +291,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
             result.depthTexture = 0;
             result.profileTexture = profileTexture;
             result.frameSequence = 0L;
-            result.validFrame = false;
             healthGeneration = healthGeneration == Integer.MAX_VALUE ? 1 : healthGeneration + 1;
             healthSampleRequested = true;
             pendingHealthReadbackFailure = null;
@@ -759,7 +757,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         }
         rawDepthTexture = 0;
         profileTexture = 0;
-        result.validFrame = false;
     }
 
     private static final class RawUniforms {
@@ -791,7 +788,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
         private int depthTexture;
         private int profileTexture;
         private long frameSequence;
-        private boolean validFrame;
 
         public int getDepthTextureId() {
             return depthTexture;
@@ -803,10 +799,6 @@ public final class ClientSbsGpuDepthProcessor implements AutoCloseable {
 
         public long getFrameSequence() {
             return frameSequence;
-        }
-
-        public boolean isValidFrame() {
-            return validFrame;
         }
     }
 

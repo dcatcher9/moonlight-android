@@ -210,11 +210,10 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
 
                 ClientSbsGpuDepthProcessor.Result first =
                         processReferenceStep(processor, rawBuffer);
-                assertTrue(first.isValidFrame());
                 assertTrue(first.getDepthTextureId() != 0);
                 assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
                 // While the error awaits polling, subsequent depth work must also continue.
-                assertTrue(processReferenceStep(processor, rawBuffer).isValidFrame());
+                assertTrue(processReferenceStep(processor, rawBuffer).getDepthTextureId() != 0);
                 assertThrows(IllegalStateException.class, processor::pollHealthSnapshot);
                 assertEquals(GLES20.GL_NO_ERROR, GLES20.glGetError());
 
@@ -225,7 +224,7 @@ public final class ClientSbsGpuDepthProcessorInstrumentedTest {
                 GLES30.glBindBuffer(GLES30.GL_COPY_WRITE_BUFFER, 0);
                 ClientSbsGpuDepthProcessor.Result recovered =
                         processReferenceStep(processor, rawBuffer);
-                assertTrue(recovered.isValidFrame());
+                assertTrue(recovered.getDepthTextureId() != 0);
                 GLES20.glFinish();
                 ClientSbsGpuDepthProcessor.HealthSnapshot health = processor.pollHealthSnapshot();
                 assertNotNull(health);
