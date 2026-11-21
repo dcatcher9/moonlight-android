@@ -61,6 +61,13 @@ final class XrSettingsApplyCoordinator {
         forcedReconnect = false;
     }
 
+    /** A live quality request failed; another gesture can retry, so no queued step survives. */
+    void onLiveStreamQualityFailed() {
+        liveQualityPending = false;
+        autoApplyQueued = false;
+        gammaChangeQueued = false;
+    }
+
     void cancelGammaTimeout() {
         if (gammaTimeoutRunnable != null) {
             handler.removeCallbacks(gammaTimeoutRunnable);
@@ -100,6 +107,11 @@ final class XrSettingsApplyCoordinator {
         autoApplyQueued = false;
         if (!forcedReconnect && !host.settingsController().hasPendingChanges()) return;
         if (!host.canAutoRestartPendingSettings()) {
+            // The refused restart must not force a reconnect onto a later, live-applicable edit.
+            if (forcedReconnect) {
+                forcedReconnect = false;
+                host.refreshSettingsModels();
+            }
             host.showStaleSettingsMessage();
             return;
         }

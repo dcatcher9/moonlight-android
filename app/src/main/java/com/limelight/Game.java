@@ -660,8 +660,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void onLiveStreamQualityFailed() {
                 // Keep the requested tuple and last confirmed output; another gesture can retry.
-                xrSettingsApply.liveQualityPending = false;
-                xrSettingsApply.autoApplyQueued = false;
+                xrSettingsApply.onLiveStreamQualityFailed();
                 refreshXrSessionSettingsModels();
             }
 
