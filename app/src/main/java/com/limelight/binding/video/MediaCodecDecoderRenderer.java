@@ -3441,13 +3441,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         decoderQueueTimeMs, pendingDecoderFrames);
             }
 
-            if (!FRAME_RENDER_TIME_ONLY) {
+            // The decode half of the pipeline time is measured only while performance telemetry
+            // is enabled, so the receive half is counted under the same condition. A session
+            // average then covers measured frames only, rather than mixing complete samples with
+            // receive-only ones.
+            if (!FRAME_RENDER_TIME_ONLY && performanceTelemetryEnabled) {
                 // Count time from first packet received to enqueue time as receive time. We count
                 // DU queue time as part of decoding because it is caused by a slow decoder.
                 activeWindowVideoStats.totalTimeMs += enqueueTimeMs - receiveTimeMs;
                 if (decoderQueueTimeMs >= 0) {
                     activeWindowVideoStats.totalTimeMs += decoderQueueTimeMs;
                 }
+                activeWindowVideoStats.pipelineLatencySamples++;
             }
         }
 
@@ -3570,25 +3575,34 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     /**
      * Packet assembly through MediaCodec output dequeue. This excludes Surface release,
-     * SceneCore composition, display vsync, and panel scanout.
+     * SceneCore composition, display vsync, and panel scanout. Averaged over the frames measured
+     * while performance telemetry (the visible Stats panel) was enabled; 0 when none were.
      */
     public int getAverageFrameDecodePipelineLatency() {
         synchronized (videoStatsLock) {
-            if (globalVideoStats.totalFramesReceived == 0) {
-                return 0;
-            }
-            return (int)(globalVideoStats.totalTimeMs / globalVideoStats.totalFramesReceived);
+            return averagePipelineLatencyMs(globalVideoStats);
         }
     }
 
+    /** Hardware decode time, measured under the same telemetry condition; 0 without samples. */
     public int getAverageDecoderLatency() {
         synchronized (videoStatsLock) {
-            if (globalVideoStats.decoderLatencySamples == 0) {
-                return 0;
-            }
-            return (int)(globalVideoStats.decoderTimeNs
-                    / globalVideoStats.decoderLatencySamples / 1_000_000L);
+            return averageDecoderLatencyMs(globalVideoStats);
         }
+    }
+
+    static int averagePipelineLatencyMs(VideoStats stats) {
+        if (stats.pipelineLatencySamples == 0) {
+            return 0;
+        }
+        return (int) (stats.totalTimeMs / stats.pipelineLatencySamples);
+    }
+
+    static int averageDecoderLatencyMs(VideoStats stats) {
+        if (stats.decoderLatencySamples == 0) {
+            return 0;
+        }
+        return (int) (stats.decoderTimeNs / stats.decoderLatencySamples / 1_000_000L);
     }
 
     static class DecoderHungException extends IllegalStateException {

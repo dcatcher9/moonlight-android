@@ -15,6 +15,8 @@ class VideoStats {
     final int[] decoderQueueLatencyHistogram =
             new int[DECODER_QUEUE_HISTOGRAM_OVERFLOW_MS + 1];
     long totalTimeMs;
+    /** Received frames whose pipeline time is included in totalTimeMs. */
+    int pipelineLatencySamples;
     int totalFrames;
     int totalFramesReceived;
     int totalFramesDecoded;
@@ -42,6 +44,7 @@ class VideoStats {
             this.decoderQueueLatencyHistogram[i] += other.decoderQueueLatencyHistogram[i];
         }
         this.totalTimeMs += other.totalTimeMs;
+        this.pipelineLatencySamples += other.pipelineLatencySamples;
         this.totalFrames += other.totalFrames;
         this.totalFramesReceived += other.totalFramesReceived;
         this.totalFramesDecoded += other.totalFramesDecoded;
@@ -78,6 +81,7 @@ class VideoStats {
                 this.decoderQueueLatencyHistogram, 0,
                 this.decoderQueueLatencyHistogram.length);
         this.totalTimeMs = other.totalTimeMs;
+        this.pipelineLatencySamples = other.pipelineLatencySamples;
         this.totalFrames = other.totalFrames;
         this.totalFramesReceived = other.totalFramesReceived;
         this.totalFramesDecoded = other.totalFramesDecoded;
@@ -102,6 +106,7 @@ class VideoStats {
         this.maxPendingDecoderFrames = 0;
         Arrays.fill(this.decoderQueueLatencyHistogram, 0);
         this.totalTimeMs = 0;
+        this.pipelineLatencySamples = 0;
         this.totalFrames = 0;
         this.totalFramesReceived = 0;
         this.totalFramesDecoded = 0;
