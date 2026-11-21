@@ -1,6 +1,8 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -9,11 +11,14 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.os.Looper;
 import android.view.Surface;
+import android.widget.TextView;
 
+import androidx.xr.scenecore.PanelEntity;
 import androidx.xr.scenecore.SurfaceEntity;
 
 import com.limelight.Game;
@@ -21,12 +26,14 @@ import com.limelight.R;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.shadows.ShadowMoonBridge;
+import com.limelight.ui.xrcontrols.GameStereoSourceState;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
@@ -36,6 +43,7 @@ import org.robolectric.util.ReflectionHelpers;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -133,6 +141,34 @@ public final class XrLiveQualityIntegrationTest {
         assertEquals("1920x1080", persisted.get(0).resolution);
         assertEquals(90, panelState().getUserCeilingHz());
         assertEquals(0, resyncs);
+    }
+
+    @Test
+    public void unsentResolutionRequestReleasesItsDecoderGateForTheNextRequest() {
+        ShadowMoonBridge.setVideoModeV2Result(0);
+        assertFalse(presenter.applyLiveStreamQuality(
+                new StreamQualityTuple("1280x720", "90", 100000)));
+        assertEquals(1, decoderGeneration);
+        assertEquals(0, generations().currentModeGeneration());
+
+        // An FPS-only request whose ACK raster differs from the decoder output needs the
+        // post-ACK decoder confirmation. It must own a fresh decoder transition.
+        ShadowMoonBridge.setVideoModeV2Result(1);
+        assertTrue(presenter.applyLiveStreamQuality(
+                new StreamQualityTuple("1920x1080", "60", 100000)));
+        decoderDimensions = new int[] {1280, 720};
+        ack(MoonBridge.SBS_MODE_OFF, 10, 1920, 1080, 1920, 1080, 6000);
+        assertEquals(2, decoderGeneration);
+        frame(1920, 1080);
+
+        assertFalse(presenter.isStreamQualityTransactionBusy());
+        assertEquals(60f, prefs.fps, 0f);
+        assertEquals(1, persisted.size());
+        assertEquals(0, resyncs);
+    }
+
+    private DecoderTransitionGenerationGate generations() {
+        return ReflectionHelpers.getField(presenter, "decoderTransitionGenerations");
     }
 
     private void followPanelDownTo72() {

@@ -2838,6 +2838,9 @@ public class XrStreamPresenter {
         if (sendResult <= 0) {
             if (preSendDecoderGate) {
                 game.cancelDecoderPresentationModeTransition();
+                // The cancelled transition never reports output. A later request must open its
+                // own decoder transition rather than wait on this generation.
+                decoderTransitionGenerations.clearMode();
             }
             clearLiveQualityChange();
             reportLiveQualityStartFailure(
