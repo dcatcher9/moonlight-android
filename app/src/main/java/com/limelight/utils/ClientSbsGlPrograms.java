@@ -1,9 +1,9 @@
 package com.limelight.utils;
 
 import android.opengl.GLES20;
-import android.opengl.GLES31;
 
 import com.limelight.LimeLog;
+import com.limelight.sbs.ClientSbsGlCompute;
 
 /**
  * Shader program construction and cached attribute/uniform locations for
@@ -63,28 +63,14 @@ final class ClientSbsGlPrograms {
         return program;
     }
 
-    static int createComputeProgram(String source) {
-        int computeShader = loadShader(GLES31.GL_COMPUTE_SHADER, source);
-        if (computeShader == 0) {
+    /** Compiles and links one compute shader, or logs the failure and returns 0. */
+    static int createComputeProgram(String label, String source) {
+        try {
+            return ClientSbsGlCompute.createComputeProgram(label, source);
+        } catch (IllegalStateException error) {
+            LimeLog.severe("Could not create client SBS compute program: " + error.getMessage());
             return 0;
         }
-        int program = GLES20.glCreateProgram();
-        if (program == 0) {
-            GLES20.glDeleteShader(computeShader);
-            return 0;
-        }
-        GLES20.glAttachShader(program, computeShader);
-        GLES20.glLinkProgram(program);
-        GLES20.glDeleteShader(computeShader);
-        int[] linkStatus = new int[1];
-        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
-        if (linkStatus[0] != GLES20.GL_TRUE) {
-            LimeLog.severe("Could not link client SBS compute program: "
-                    + GLES20.glGetProgramInfoLog(program));
-            GLES20.glDeleteProgram(program);
-            return 0;
-        }
-        return program;
     }
 
     /** Program locations are context-local and immutable after link. Cache them once rather than

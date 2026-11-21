@@ -1910,7 +1910,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 ShaderUtils.VERTEX_SHADER,
                 ClientSbsShaders.createModelInputFragment(
                         pipelineContract.usesDirectFullFrameResize()));
-        modelInputPackProgram = createComputeProgram(
+        modelInputPackProgram = createComputeProgram("model-input pack",
                 ClientSbsShaders.createModelInputPackCompute(
                         modelInputWidth, modelInputHeight));
         contractiveWarpMapProgram = createProgram(

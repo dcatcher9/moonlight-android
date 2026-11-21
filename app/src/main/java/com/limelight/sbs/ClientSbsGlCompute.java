@@ -48,7 +48,11 @@ public final class ClientSbsGlCompute {
         }
     }
 
-    static int createComputeProgram(String label, String source) {
+    /**
+     * Compiles and links one compute shader. Throws, with {@code label} leading the message and
+     * every intermediate object deleted, when compilation, program creation or linking fails.
+     */
+    public static int createComputeProgram(String label, String source) {
         int shader = GLES20.glCreateShader(GLES31.GL_COMPUTE_SHADER);
         GLES20.glShaderSource(shader, source);
         GLES20.glCompileShader(shader);
