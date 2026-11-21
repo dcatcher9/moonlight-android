@@ -365,12 +365,32 @@ public class NvHTTP {
         return getXmlArray(new StringReader(str), tagname, throwIfMissing);
     }
     
-    private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException {
+    /** A malformed numeric host field is a malformed response, not an unchecked exception. */
+    private static long parseLongField(String value, String field) throws XmlPullParserException {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            throw new XmlPullParserException("Malformed numeric field in host response: "
+                    + field + "=" + value);
+        }
+    }
+
+    private static int parseIntField(String value, String field) throws XmlPullParserException {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new XmlPullParserException("Malformed numeric field in host response: "
+                    + field + "=" + value);
+        }
+    }
+
+    private static void verifyResponseStatus(XmlPullParser xpp)
+            throws HostHttpResponseException, XmlPullParserException {
         // We use Long.parseLong() because in rare cases GFE can send back a status code of
         // 0xFFFFFFFF, which will cause Integer.parseInt() to throw a NumberFormatException due
         // to exceeding Integer.MAX_VALUE. We'll get the desired error code of -1 by just casting
         // the resulting long into an int.
-        int statusCode = (int)Long.parseLong(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"));
+        int statusCode = (int) parseLongField(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"), "status_code");
         if (statusCode != 200) {
             String statusMsg = xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_message");
             if (statusCode == -1 && "Invalid".equals(statusMsg)) {
@@ -731,7 +751,7 @@ public class NvHTTP {
         // ServerCodecModeSupport wasn't present on old GFE versions
         String str = getXmlString(serverInfo, "ServerCodecModeSupport", false);
         if (str != null) {
-            return Long.parseLong(str);
+            return parseLongField(str, "ServerCodecModeSupport");
         } else {
             return 0;
         }
@@ -762,7 +782,7 @@ public class NvHTTP {
         // has the semantics that its name would indicate. To contain the effects of this change as much
         // as possible, we'll force the current game to zero if the server isn't in a streaming session.
         if (getXmlString(serverInfo, "state", true).endsWith("_SERVER_BUSY")) {
-            return Integer.parseInt(getXmlString(serverInfo, "currentgame", true));
+            return parseIntField(getXmlString(serverInfo, "currentgame", true), "currentgame");
         }
         else {
             return 0;
@@ -771,7 +791,7 @@ public class NvHTTP {
 
     public int getHttpsPort(String serverInfo) {
         try {
-            return Integer.parseInt(getXmlString(serverInfo, "HttpsPort", true));
+            return parseIntField(getXmlString(serverInfo, "HttpsPort", true), "HttpsPort");
         } catch (XmlPullParserException e) {
             e.printStackTrace();
             return DEFAULT_HTTPS_PORT;
@@ -785,7 +805,7 @@ public class NvHTTP {
         // This is an extension which is not present in GFE. It is present for Sunshine to be able
         // to support dynamic HTTP WAN ports without requiring the user to manually enter the port.
         try {
-            return Integer.parseInt(getXmlString(serverInfo, "ExternalPort", true));
+            return parseIntField(getXmlString(serverInfo, "ExternalPort", true), "ExternalPort");
         } catch (XmlPullParserException e) {
             // Expected on non-Sunshine servers
             return baseUrlHttp.port();
@@ -863,13 +883,17 @@ public class NvHTTP {
                 }
                 break;
             case (XmlPullParser.TEXT):
+                if (appList.isEmpty() || currentTag.isEmpty()) {
+                    // Text outside any App element, such as whitespace between tags.
+                    break;
+                }
                 NvApp app = appList.getLast();
                 if (currentTag.peek().equals("AppTitle")) {
                     app.setAppName(xpp.getText());
                 } else if (currentTag.peek().equals("UUID")) {
                     app.setAppUUID(xpp.getText());
                 } else if (currentTag.peek().equals("IDX")) {
-                    app.setAppIndex(Integer.parseInt(xpp.getText()));
+                    app.setAppIndex(parseIntField(xpp.getText(), "IDX"));
                 } else if (currentTag.peek().equals("ID")) {
                     app.setAppId(xpp.getText());
                 } else if (currentTag.peek().equals("IsHdrSupported")) {
