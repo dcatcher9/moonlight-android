@@ -803,14 +803,14 @@ Java_com_limelight_utils_ClientSbsGpuInferenceEngine_nativeInitialize(
         return JNI_FALSE;
     }
 
+    // A failed GetStringUTFChars leaves OutOfMemoryError pending, and only the release calls are
+    // legal JNI calls until the caller returns to Java. Do not request the second string then.
     const char* native_dir_chars = (*env)->GetStringUTFChars(env, native_library_dir, NULL);
-    const char* cache_dir_chars = (*env)->GetStringUTFChars(env, cache_dir, NULL);
+    const char* cache_dir_chars = native_dir_chars != NULL
+            ? (*env)->GetStringUTFChars(env, cache_dir, NULL) : NULL;
     if (native_dir_chars == NULL || cache_dir_chars == NULL) {
         if (native_dir_chars != NULL) {
             (*env)->ReleaseStringUTFChars(env, native_library_dir, native_dir_chars);
-        }
-        if (cache_dir_chars != NULL) {
-            (*env)->ReleaseStringUTFChars(env, cache_dir, cache_dir_chars);
         }
         set_error(engine, "Unable to read native library/cache paths");
         return JNI_FALSE;
