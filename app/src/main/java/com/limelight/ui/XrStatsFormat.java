@@ -45,6 +45,39 @@ final class XrStatsFormat {
         return "Live | configuration unavailable";
     }
 
+    static final String NOT_SAMPLED = "Not sampled";
+
+    /**
+     * "avg / max ms" for a window that completed at least one sample. A non-finite average is a
+     * window without samples and reads as not sampled, never as a measured zero.
+     *
+     * @param detail appended after a separator, or null for none
+     */
+    static String formatSampledAverageMaxMs(float averageMs, float maxMs, int decimalPlaces,
+                                            String detail) {
+        String value = Float.isFinite(averageMs)
+                ? formatStatsFloat(averageMs, decimalPlaces) + " / "
+                        + formatStatsFloat(maxMs, decimalPlaces) + " ms"
+                : NOT_SAMPLED;
+        return detail == null ? value : value + " | " + detail;
+    }
+
+    /**
+     * The depth-result age average divides by the depth adoptions of the same window, which the
+     * adoption rate reports; a window without adoptions has no age sample.
+     */
+    static String formatClientDepthResultAge(float depthAdoptFps, float averageMs, float maxMs) {
+        return formatSampledAverageMaxMs(depthAdoptFps > 0.0f ? averageMs : Float.NaN,
+                maxMs, 2, null);
+    }
+
+    /** A non-finite ratio is a window without any near-identical candidate decision. */
+    static String formatClientReuseRatio(float reuseRatio) {
+        return Float.isFinite(reuseRatio)
+                ? String.format(Locale.US, "%.1f%% of eligible decisions", reuseRatio * 100.0f)
+                : "No eligible decisions";
+    }
+
     static String formatClientReuseRejects(long content, long invalid) {
         return String.format(Locale.US, "content %d | invalid %d", content, invalid);
     }

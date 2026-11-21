@@ -311,9 +311,8 @@ final class XrStatsPanel {
                                 clientSbs.glOutputSubmitFps),
                         paletteColor(R.color.xr_text_primary));
                 addStatsRow("Near-identical reuse",
-                        String.format(Locale.US, "%.1f%% of eligible decisions",
-                                clientSbs.depthReuseRatio * 100.0f),
-                        paletteColor(R.color.xr_text_primary));
+                        XrStatsFormat.formatClientReuseRatio(clientSbs.depthReuseRatio),
+                        sampledColor(Float.isFinite(clientSbs.depthReuseRatio)));
                 addStatsRow(activity.getString(R.string.xr_stats_host_source_repeats),
                         activity.getString(R.string.xr_stats_host_source_repeats_value,
                                 clientSbs.hostSourceRepeatFps),
@@ -324,20 +323,22 @@ final class XrStatsPanel {
                                 clientSbs.nearIdenticalInvalidRejects),
                         paletteColor(R.color.xr_text_primary));
                 addStatsRow("Decision read avg / max",
-                        String.format(Locale.US, "%.3f / %.3f ms | 32 B map",
+                        XrStatsFormat.formatSampledAverageMaxMs(
                                 clientSbs.averageNearIdenticalDecisionReadWallMs,
-                                clientSbs.maxNearIdenticalDecisionReadWallMs),
-                        paletteColor(R.color.xr_text_primary));
+                                clientSbs.maxNearIdenticalDecisionReadWallMs, 3, "32 B map"),
+                        sampledColor(Float.isFinite(
+                                clientSbs.averageNearIdenticalDecisionReadWallMs)));
                 addStatsRow("LiteRT wall avg / max",
-                        String.format(Locale.US, "%.2f / %.2f ms | not pure GPU",
+                        XrStatsFormat.formatSampledAverageMaxMs(
                                 clientSbs.averageNativeLiteRtRunWallMs,
-                                clientSbs.maxNativeLiteRtRunWallMs),
-                        paletteColor(R.color.xr_text_primary));
+                                clientSbs.maxNativeLiteRtRunWallMs, 2, "not pure GPU"),
+                        sampledColor(Float.isFinite(clientSbs.averageNativeLiteRtRunWallMs)));
                 addStatsRow("Depth result age avg / max",
-                        String.format(Locale.US, "%.2f / %.2f ms",
+                        XrStatsFormat.formatClientDepthResultAge(clientSbs.depthAdoptFps,
                                 clientSbs.averageDepthResultAgeMs,
                                 clientSbs.maxDepthResultAgeMs),
-                        paletteColor(R.color.xr_text_primary));
+                        sampledColor(clientSbs.depthAdoptFps > 0.0f
+                                && Float.isFinite(clientSbs.averageDepthResultAgeMs)));
 
                 addClientGpuStageRows(clientSbs.gpuTimersAvailable,
                         new float[] {
@@ -535,7 +536,12 @@ final class XrStatsPanel {
     }
 
     private int gpuStageColor(long samples) {
-        return samples > 0L ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled);
+        return sampledColor(samples > 0L);
+    }
+
+    private int sampledColor(boolean sampled) {
+        return sampled ? paletteColor(R.color.xr_text_primary)
+                : paletteColor(R.color.xr_text_disabled);
     }
 
     private int utilizationColor(double percent) {
