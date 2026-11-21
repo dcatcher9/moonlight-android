@@ -540,13 +540,17 @@ public class MediaCodecHelper {
         boolean setNewOption = false;
 
 //derflacco
-        // NVIDIA Tegra extra low-latency toggles
+        // NVIDIA Tegra extra low-latency toggles. They stay on every try, so they are a new option
+        // only on the first one; otherwise every try reports a new format and a decoder that
+        // never configures is retried forever.
         if (isNvidiaDecoder(decoderInfo.getName())) {
             safeSet(videoFormat, "media.low-latency.enable", 1);
             safeSet(videoFormat, "vendor.low-latency.enable", 1);
             safeSet(videoFormat, "disable-output-reorder", 1);
             safeSet(videoFormat, "vendor.nvidia.disable-output-reorder", 1);
-            setNewOption = true;
+            if (tryNumber < 1) {
+                setNewOption = true;
+            }
         }
         if (tryNumber < 1) {
             // Official Android 11+ low latency option (KEY_LOW_LATENCY).
@@ -671,8 +675,8 @@ public class MediaCodecHelper {
                     // Standard Android hints
                     safeSet(videoFormat, MediaFormat.KEY_OPERATING_RATE, (int) Short.MAX_VALUE);
                     safeSet(videoFormat, MediaFormat.KEY_PRIORITY, 0);
+                    setNewOption = true;
                 }
-                setNewOption = true;
             }
 
             else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
