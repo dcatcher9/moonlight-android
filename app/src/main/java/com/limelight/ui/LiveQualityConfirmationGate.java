@@ -18,8 +18,6 @@ final class LiveQualityConfirmationGate {
     private boolean postAckDecoderConfirmationStarted;
     private boolean decoderOutputReceived;
     private boolean matchingDecoderOutputReceived;
-    private int decoderOutputWidth;
-    private int decoderOutputHeight;
 
     void begin(boolean decoderConfirmationRequired) {
         begin(decoderConfirmationRequired, false);
@@ -34,8 +32,6 @@ final class LiveQualityConfirmationGate {
         postAckDecoderConfirmationStarted = false;
         decoderOutputReceived = false;
         matchingDecoderOutputReceived = false;
-        decoderOutputWidth = 0;
-        decoderOutputHeight = 0;
     }
 
     boolean onAppliedAck() {
@@ -57,8 +53,6 @@ final class LiveQualityConfirmationGate {
     boolean onDecoderOutput(int actualWidth, int actualHeight,
                             int expectedWidth, int expectedHeight) {
         decoderOutputReceived = true;
-        decoderOutputWidth = actualWidth;
-        decoderOutputHeight = actualHeight;
         matchingDecoderOutputReceived = actualWidth > 0 && actualHeight > 0
                 && actualWidth == expectedWidth && actualHeight == expectedHeight;
         return canSettle();
@@ -77,8 +71,6 @@ final class LiveQualityConfirmationGate {
         postAckDecoderConfirmationStarted = true;
         decoderOutputReceived = false;
         matchingDecoderOutputReceived = false;
-        decoderOutputWidth = 0;
-        decoderOutputHeight = 0;
         return true;
     }
 
@@ -92,10 +84,6 @@ final class LiveQualityConfirmationGate {
 
     boolean hasAppliedAck() {
         return appliedAckReceived;
-    }
-
-    boolean isPresentationReady() {
-        return presentationReady;
     }
 
     boolean hasDecoderOutput() {
@@ -126,7 +114,5 @@ final class LiveQualityConfirmationGate {
         postAckDecoderConfirmationStarted = false;
         decoderOutputReceived = false;
         matchingDecoderOutputReceived = false;
-        decoderOutputWidth = 0;
-        decoderOutputHeight = 0;
     }
 }

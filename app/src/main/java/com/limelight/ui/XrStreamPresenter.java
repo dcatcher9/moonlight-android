@@ -3427,13 +3427,9 @@ public class XrStreamPresenter {
             panelRefreshRateState.automaticRequestSucceeded(
                     Math.round(XrPresentationPolicy.parseFrameRate(
                             applied != null ? applied.frameRate : "0", prefConfig.fps)));
-        } else if (origin == LiveQualityRequestOrigin.GAME_SOURCE) {
-            panelRefreshRateState.otherTransactionSettled();
-        } else if (durableApplied != null) {
+        } else if (origin != LiveQualityRequestOrigin.GAME_SOURCE && durableApplied != null) {
             panelRefreshRateState.userRequestSucceeded(
                     XrPresentationPolicy.parseFrameRate(durableApplied.frameRate, prefConfig.fps));
-        } else {
-            panelRefreshRateState.otherTransactionSettled();
         }
 
         // The decoder target is an offscreen SurfaceTexture while Client SBS is active. Reapply

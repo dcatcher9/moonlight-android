@@ -163,7 +163,6 @@ public class XrStreamPresenterVideoModeAckTest {
         assertTrue(gate.beginPostAckDecoderConfirmation());
         assertFalse(gate.onDecoderOutput(1920, 1080, 1920, 1080));
         assertFalse(gate.canSettle());
-        assertFalse(gate.isPresentationReady());
         assertTrue(gate.isWaitingForPresentationAfterMatchingPostAckOutput());
 
         assertTrue(gate.onPresentationReady());
@@ -173,14 +172,20 @@ public class XrStreamPresenterVideoModeAckTest {
 
     @Test
     public void clientSbsRetainsEarlyPresentationReadyAndRearmsForHostClamp() {
+        LiveQualityConfirmationGate retained =
+                new LiveQualityConfirmationGate();
+        retained.begin(true, true);
+        assertFalse(retained.onPresentationReady());
+        assertFalse(retained.onAppliedAck());
+        assertTrue(retained.beginPostAckDecoderConfirmation());
+        // The early presentation proof is retained until the matching output settles.
+        assertTrue(retained.onDecoderOutput(1920, 1080, 1920, 1080));
+
         LiveQualityConfirmationGate gate =
                 new LiveQualityConfirmationGate();
         gate.begin(true, true);
-
         assertFalse(gate.onPresentationReady());
-        assertTrue(gate.isPresentationReady());
         gate.expectPresentationConfirmation();
-        assertFalse(gate.isPresentationReady());
 
         assertFalse(gate.onAppliedAck());
         assertTrue(gate.beginPostAckDecoderConfirmation());
@@ -536,12 +541,12 @@ public class XrStreamPresenterVideoModeAckTest {
 
         state.observe(72);
         assertEquals(-1, state.nextTarget(90, true));
-        assertTrue(state.isReconcilePending());
 
         // The intermediate 72 Hz event is superseded rather than marked handled.
         state.observe(60);
         assertEquals(60, state.nextTarget(90, false));
-        assertEquals(60, state.getInFlightTargetHz());
+        // The in-flight 60 Hz request blocks another target until it settles.
+        assertEquals(-1, state.nextTarget(90, false));
     }
 
     @Test
@@ -630,8 +635,9 @@ public class XrStreamPresenterVideoModeAckTest {
         state.automaticRequestSucceeded(72);
 
         assertEquals(-1, state.nextTarget(72, false));
-        assertEquals(-1, state.getInFlightTargetHz());
-        assertFalse(state.isReconcilePending());
+        // The settled request no longer blocks a genuinely new panel mode.
+        state.observe(60);
+        assertEquals(60, state.nextTarget(72, false));
     }
 
     @Test
@@ -657,8 +663,6 @@ public class XrStreamPresenterVideoModeAckTest {
                 new PanelRefreshRateState(90);
 
         // Merely considering/queuing a 60 FPS user request has no state-machine mutation.
-        assertEquals(90, state.getUserCeilingHz());
-        state.otherTransactionSettled();
         assertEquals(90, state.getUserCeilingHz());
 
         state.userRequestSucceeded(60);

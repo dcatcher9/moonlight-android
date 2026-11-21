@@ -15,7 +15,6 @@ final class PanelRefreshRateState {
     private int inFlightTargetHz = -1;
     private int blockedTargetHz = -1;
     private int retriesRemaining = 1;
-    private boolean reconcilePending;
 
     PanelRefreshRateState(float initialUserCeilingFps) {
         userCeilingHz = Math.max(1, Math.round(initialUserCeilingFps));
@@ -30,27 +29,20 @@ final class PanelRefreshRateState {
             observedPanelHz = panelHz;
             blockedTargetHz = -1;
             retriesRemaining = 1;
-            reconcilePending = true;
         }
     }
 
+    /**
+     * The panel-follow target to request now, or -1. A blocked transaction leaves the newest
+     * observation to a later call; the caller reschedules when its transaction settles.
+     */
     int nextTarget(int effectiveStreamHz, boolean transactionBlocked) {
         int desired = desiredTargetHz();
-        if (desired <= 0 || desired == effectiveStreamHz) {
-            if (!transactionBlocked) {
-                reconcilePending = false;
-            }
-            return -1;
-        }
-        if (transactionBlocked) {
-            reconcilePending = true;
-            return -1;
-        }
-        if (desired == blockedTargetHz || inFlightTargetHz > 0) {
+        if (desired <= 0 || desired == effectiveStreamHz || transactionBlocked
+                || desired == blockedTargetHz || inFlightTargetHz > 0) {
             return -1;
         }
         inFlightTargetHz = desired;
-        reconcilePending = false;
         return desired;
     }
 
@@ -68,7 +60,6 @@ final class PanelRefreshRateState {
         if (requested > 0 && appliedHz != requested) {
             // The host accepted but clamped this target. Do not spin trying the same value.
             blockedTargetHz = requested;
-            reconcilePending = false;
         }
     }
 
@@ -77,10 +68,8 @@ final class PanelRefreshRateState {
         inFlightTargetHz = -1;
         if (retryable && retriesRemaining > 0) {
             retriesRemaining--;
-            reconcilePending = true;
         } else {
             blockedTargetHz = failed;
-            reconcilePending = false;
         }
     }
 
@@ -91,11 +80,6 @@ final class PanelRefreshRateState {
             blockedTargetHz = -1;
             retriesRemaining = 1;
         }
-        reconcilePending = true;
-    }
-
-    void otherTransactionSettled() {
-        reconcilePending = true;
     }
 
     /**
@@ -106,7 +90,6 @@ final class PanelRefreshRateState {
     void requestAbandonedForReconnect() {
         inFlightTargetHz = -1;
         retriesRemaining = 1;
-        reconcilePending = true;
     }
 
     int desiredTargetHz() {
@@ -122,14 +105,6 @@ final class PanelRefreshRateState {
 
     int getUserCeilingHz() {
         return userCeilingHz;
-    }
-
-    int getInFlightTargetHz() {
-        return inFlightTargetHz;
-    }
-
-    boolean isReconcilePending() {
-        return reconcilePending;
     }
 
     /**
