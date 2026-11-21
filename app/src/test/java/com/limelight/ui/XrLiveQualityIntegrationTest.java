@@ -167,6 +167,48 @@ public final class XrLiveQualityIntegrationTest {
         assertEquals(0, resyncs);
     }
 
+    @Test
+    public void sameGeometryClientPackedProofThatNeverSwapsFailsClosed() {
+        ReflectionHelpers.setField(presenter, "currentPresenterMode",
+                PresentationMode.CLIENT_SBS_AI);
+        when(container.completeClientSbsModeSwitchAfterSwap(any())).thenReturn(true);
+        startSameGeometryClientProof();
+
+        assertEquals(0, resyncs);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(2100));
+
+        assertEquals(1, resyncs);
+        assertFalse(presenter.isStreamQualityTransactionBusy());
+        verify(container).cancelClientSbsModeSwitchCompletion();
+    }
+
+    @Test
+    public void sameGeometryClientPackedProofThatSwapsSettlesWithoutLaterTimeout() {
+        ReflectionHelpers.setField(presenter, "currentPresenterMode",
+                PresentationMode.CLIENT_SBS_AI);
+        ArgumentCaptor<Runnable> completion = ArgumentCaptor.forClass(Runnable.class);
+        when(container.completeClientSbsModeSwitchAfterSwap(completion.capture()))
+                .thenReturn(true);
+        startSameGeometryClientProof();
+
+        completion.getValue().run();
+        assertFalse(presenter.isStreamQualityTransactionBusy());
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(2100));
+
+        assertEquals(0, resyncs);
+        assertEquals(1, persisted.size());
+    }
+
+    private void startSameGeometryClientProof() {
+        assertTrue(presenter.applyLiveStreamQuality(
+                new StreamQualityTuple("1920x1080", "60", 100000)));
+        decoderDimensions = new int[] {1280, 720};
+        ack(MoonBridge.SBS_MODE_OFF, 10, 1920, 1080, 1920, 1080, 6000);
+        frame(1920, 1080);
+        verify(container).completeClientSbsModeSwitchAfterSwap(any());
+        assertTrue(presenter.isStreamQualityTransactionBusy());
+    }
+
     private DecoderTransitionGenerationGate generations() {
         return ReflectionHelpers.getField(presenter, "decoderTransitionGenerations");
     }

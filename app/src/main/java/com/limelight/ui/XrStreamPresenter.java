@@ -301,6 +301,12 @@ public class XrStreamPresenter {
     private static final String EXTRA_GAME_WIDEN_FAILURE = "xr_game_widen_failure";
     private static final String EXTRA_GAME_WIDEN_QUALITY = "xr_game_widen_quality";
     private boolean pendingClientPackedSwapProofArmed;
+    /** Mode generation that owns the armed same-geometry Client SBS packed-swap proof. */
+    private int pendingClientPackedSwapProofGeneration;
+    /** Same budget as the Client SBS mode-entry packed-swap proof. */
+    private static final long CLIENT_PACKED_SWAP_PROOF_TIMEOUT_MS = 2000L;
+    private final Runnable clientPackedSwapProofTimeoutRunnable =
+            this::onClientPackedSwapProofTimeout;
     private static final long LIVE_QUALITY_ACK_TIMEOUT_MS = 4000L;
     private final android.os.Handler liveQualityHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
@@ -2165,6 +2171,7 @@ public class XrStreamPresenter {
         sessionControlsEnabled = false;
         streamPresentationReady = false;
         liveQualityHandler.removeCallbacks(liveQualityAckTimeoutRunnable);
+        liveQualityHandler.removeCallbacks(clientPackedSwapProofTimeoutRunnable);
         liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
         panelRateReconcilePosted = false;
         liveQualityHandler.removeCallbacks(gameSourceReconcileRunnable);
@@ -3343,10 +3350,26 @@ public class XrStreamPresenter {
                                         pendingLiveQualityOrigin), false);
                         return;
                     }
+                    // No resize transaction, and so no resize watchdog, owns this proof.
+                    pendingClientPackedSwapProofGeneration = packedProofGeneration;
+                    liveQualityHandler.postDelayed(clientPackedSwapProofTimeoutRunnable,
+                            CLIENT_PACKED_SWAP_PROOF_TIMEOUT_MS);
                 }
             }
         }
         finishConfirmedLiveQualityChange(game);
+    }
+
+    /** The armed same-geometry packed proof never swapped: the presentation is unproven. */
+    private void onClientPackedSwapProofTimeout() {
+        if (!pendingClientPackedSwapProofArmed || !liveQualityChangeInProgress
+                || decoderTransitionGenerations.currentModeGeneration()
+                != pendingClientPackedSwapProofGeneration) {
+            return;
+        }
+        LimeLog.severe("XR: Client SBS post-ACK packed proof timed out; forcing reconnect");
+        requireMandatoryLiveQualityResync(
+                shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin), false);
     }
 
     private int[] expectedLiveQualityDecoderDimensions() {
@@ -3594,6 +3617,7 @@ public class XrStreamPresenter {
         if (pendingClientPackedSwapProofArmed) {
             cancelClientSbsModeSwap();
         }
+        liveQualityHandler.removeCallbacks(clientPackedSwapProofTimeoutRunnable);
         cancelLiveQualityAckTimeout();
         resetPendingVideoModeRequest();
         abortPendingModeStart();
@@ -4817,6 +4841,7 @@ public class XrStreamPresenter {
         modeOptionsPane.stopClientOptionsStatusTicker();
         dockController.cancelCollapseTimer();
         cancelLiveQualityAckTimeout();
+        liveQualityHandler.removeCallbacks(clientPackedSwapProofTimeoutRunnable);
         liveQualityHandler.removeCallbacks(panelRateReconcileRunnable);
         panelRateReconcilePosted = false;
         liveQualityHandler.removeCallbacks(gameSourceReconcileRunnable);
