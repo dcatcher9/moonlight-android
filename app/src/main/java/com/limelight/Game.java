@@ -2487,7 +2487,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             runAfterConnectionStop(streamContainer::onDestroy);
         }
 
-        instance = null;
+        // A quick Resume creates the replacement Game before this one's deferred onDestroy.
+        if (instance == this) {
+            instance = null;
+        }
         timerHandler.removeCallbacksAndMessages(null);
 
         if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
