@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
@@ -17,11 +18,29 @@ import android.view.View;
 public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptureProvider implements InputManager.InputDeviceListener {
     private final InputManager inputManager;
     private final View targetView;
+    // Main thread only, like every other entry point of this provider.
+    private final Handler recaptureHandler = new Handler(Looper.getMainLooper());
 
     public AndroidNativePointerCaptureProvider(Activity activity, View targetView) {
+        this(activity, targetView, activity.getSystemService(InputManager.class));
+    }
+
+    AndroidNativePointerCaptureProvider(Activity activity, View targetView,
+                                        InputManager inputManager) {
         super(activity, targetView);
-        this.inputManager = activity.getSystemService(InputManager.class);
+        this.inputManager = inputManager;
         this.targetView = targetView;
+    }
+
+    /**
+     * InputManager keeps a registered device listener, and through it this provider, its view and
+     * the Activity, until it is unregistered. Capture usually ends with showCursor(), but the
+     * Activity can be destroyed while the cursor is still hidden.
+     */
+    @Override
+    public void destroy() {
+        recaptureHandler.removeCallbacksAndMessages(null);
+        inputManager.unregisterInputDeviceListener(this);
     }
 
     public static boolean isCaptureProviderSupported() {
@@ -32,7 +51,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
     // present. This is a workaround for an Android 12 regression causing
     // incorrect mouse input when using the SPen.
     // https://github.com/moonlight-stream/moonlight-android/issues/1030
-    private boolean hasCaptureCompatibleInputDevice() {
+    boolean hasCaptureCompatibleInputDevice() {
         for (int id : InputDevice.getDeviceIds()) {
             InputDevice device = InputDevice.getDevice(id);
             if (device == null) {
