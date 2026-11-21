@@ -216,8 +216,9 @@ public class ComputerDetails {
 //                " - Upload Files: " + ((permission & 0x00040000) != 0) + "\n" +
 //                " - Download Files: " + ((permission & 0x00080000) != 0) + "\n" +
                 " - List Apps: " + ((permission & 0x01000000) != 0) + "\n" +
-                " - View Streams: " + ((permission & (0x02000000 | 0x01000000)) != 0) + "\n" +
-                " - Launch Apps: " + ((permission & (0x04000000 | 0x02000000 | 0x01000000)) != 0) + "\n";
+                // _allow_view: launch implies view; list does not.
+                " - View Streams: " + ((permission & (0x02000000 | 0x04000000)) != 0) + "\n" +
+                " - Launch Apps: " + ((permission & 0x04000000) != 0) + "\n";
 
         return "Name: " + name + "\n" +
                 "State: " + state + "\n" +
