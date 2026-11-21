@@ -77,7 +77,7 @@ public class XrControlUiStateTest {
     }
 
     @Test
-    public void statsCanBeToggledAndExplicitlyHidden() {
+    public void statsCanBeToggledAndExplicitlyShown() {
         XrControlUiState state = new XrControlUiState();
 
         state.toggleStats();
@@ -87,8 +87,7 @@ public class XrControlUiStateTest {
         assertFalse(state.isStatsVisible());
 
         state.showStats();
-        state.hideStats();
-        assertFalse(state.isStatsVisible());
+        assertTrue(state.isStatsVisible());
     }
 
     @Test

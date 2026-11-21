@@ -4,14 +4,12 @@ package com.limelight.ui.xrcontrols;
 public final class XrControlPanelLayout {
     public final float widthMeters;
     public final float heightMeters;
-    public final float panelCenterY;
     public final float primaryRowCenterY;
 
     private XrControlPanelLayout(float widthMeters, float heightMeters,
-                                 float panelCenterY, float primaryRowCenterY) {
+                                 float primaryRowCenterY) {
         this.widthMeters = widthMeters;
         this.heightMeters = heightMeters;
-        this.panelCenterY = panelCenterY;
         this.primaryRowCenterY = primaryRowCenterY;
     }
 
@@ -29,6 +27,6 @@ public final class XrControlPanelLayout {
         float height = tileSizeMeters;
         float primaryRowCenter = -(videoHeightMeters / 2.0f)
                 - videoToPrimaryRowCenterGapMeters;
-        return new XrControlPanelLayout(width, height, primaryRowCenter, primaryRowCenter);
+        return new XrControlPanelLayout(width, height, primaryRowCenter);
     }
 }

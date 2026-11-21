@@ -12,7 +12,7 @@ public class XrControlPanelLayoutTest {
         XrControlPanelLayout layout = XrControlPanelLayout.calculate(
                 9, 1, 0.21f, 0.05f, 2.0f, 0.24f);
 
-        assertEquals(layout.primaryRowCenterY, layout.panelCenterY, EPSILON);
+        assertEquals(-(2.0f / 2.0f) - 0.24f, layout.primaryRowCenterY, EPSILON);
         assertEquals(0.21f, layout.heightMeters, EPSILON);
     }
 

@@ -78,10 +78,6 @@ public final class XrModeChevronView extends View {
         invalidate();
     }
 
-    public boolean isExpanded() {
-        return expanded;
-    }
-
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         setMeasuredDimension(resolveSize(preferredWidth, widthMeasureSpec),

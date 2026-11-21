@@ -58,7 +58,6 @@ public final class XrModeChevronViewTest {
     public void collapsedIsCompactDownwardChevron() {
         XrModeChevronView chevron = laidOutChevron(40, 18);
 
-        assertFalse(chevron.isExpanded());
         assertTrue(chevron.geometryAt(0) >= chevron.getWidth() * 0.14f);
         assertTrue(chevron.geometryAt(4) <= chevron.getWidth() * 0.86f);
         assertEquals(chevron.getWidth() * 0.5f, chevron.geometryAt(2), 0.0001f);
@@ -78,7 +77,6 @@ public final class XrModeChevronViewTest {
         chevron.setExpanded(true);
         float centerY = chevron.geometryAt(3);
 
-        assertTrue(chevron.isExpanded());
         assertTrue(centerY < chevron.geometryAt(1));
         assertTrue(collapsedColor != chevron.resolvedColor());
 

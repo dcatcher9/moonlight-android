@@ -41,7 +41,10 @@ public final class XrStreamPresenterHostTelemetrySubscriptionTest {
         ActivityController<Activity> controller = createActivity();
         XrStreamPresenter presenter = createReadyHostSbsPresenter(controller.get());
         setField(presenter, "statsVisible", false);
-        ((XrControlUiState) getField(presenter, "controlUiState")).hideStats();
+        XrControlUiState controls = (XrControlUiState) getField(presenter, "controlUiState");
+        if (controls.isStatsVisible()) {
+            controls.toggleStats();
+        }
         ShadowMoonBridge.setHostSbsTelemetryResults(1);
 
         invoke(subscription(presenter), "reconcile");

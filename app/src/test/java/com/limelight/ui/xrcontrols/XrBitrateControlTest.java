@@ -128,10 +128,11 @@ public class XrBitrateControlTest {
             return true;
         });
 
-        assertTrue(control.setSelectedChoiceId("100000"));
+        XrSegmentedLadder ladder = (XrSegmentedLadder) control.getChildAt(0);
+        assertTrue(ladder.setSelectedChoiceId("100000"));
         assertEquals("100000", control.getSelectedChoiceId());
         assertNull("a host-driven update must not call back", selected.get());
-        assertFalse(control.setSelectedChoiceId("999999"));
+        assertFalse(ladder.setSelectedChoiceId("999999"));
     }
 
     @Test
@@ -177,7 +178,7 @@ public class XrBitrateControlTest {
                 ladder.captionView().getCurrentTextColor());
 
         // Selecting another rung re-applies the selection and must keep the warning.
-        assertTrue(control.setSelectedChoiceId("70000"));
+        assertTrue(ladder.setSelectedChoiceId("70000"));
         assertEquals(View.VISIBLE, ladder.captionView().getVisibility());
         assertEquals("codec too slow", ladder.captionView().getText().toString());
 
@@ -200,7 +201,7 @@ public class XrBitrateControlTest {
                 ContextCompat.getColor(context, R.color.xr_on_accent),
                 ladder.recommendationMarker().getImageTintList().getDefaultColor());
 
-        assertTrue(control.setSelectedChoiceId("50000"));
+        assertTrue(ladder.setSelectedChoiceId("50000"));
         assertEquals(
                 ContextCompat.getColor(context, R.color.xr_accent),
                 ladder.recommendationMarker().getImageTintList().getDefaultColor());

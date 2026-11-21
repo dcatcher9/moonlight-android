@@ -74,16 +74,6 @@ public final class XrBitrateControl extends LinearLayout {
                 listener == null ? null : listener::onBitrateSelected);
     }
 
-    public boolean setSelectedChoiceId(@NonNull String choiceId) {
-        for (SessionSettingsModel.Choice choice : choices) {
-            if (choice.id.equals(choiceId)) {
-                ladder.setSelectedChoiceId(choiceId);
-                return true;
-            }
-        }
-        return false;
-    }
-
     @Nullable
     public String getSelectedChoiceId() {
         int index = ladder.getSelectedIndex();

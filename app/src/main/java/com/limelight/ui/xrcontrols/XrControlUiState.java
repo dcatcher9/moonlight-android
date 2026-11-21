@@ -95,11 +95,6 @@ public final class XrControlUiState {
         statsVisible = !statsVisible;
     }
 
-    /** Hide Stats without changing the currently open contextual surface. */
-    public void hideStats() {
-        statsVisible = false;
-    }
-
     public void close() {
         visibleSurface = Surface.NONE;
         modeOptionsId = null;
