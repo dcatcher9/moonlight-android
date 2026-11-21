@@ -291,28 +291,28 @@ public final class SessionSettingsStore {
      */
     public static final class Snapshot {
         private final SessionRecord record;
-        private final ReadOnlyPreferences globalDefaults;
-        private final ReadOnlyPreferences sharedPreferences;
-        private final Map<PresentationMode, ReadOnlyPreferences> modePreferences;
+        private final SnapshotPreferences globalDefaults;
+        private final SnapshotPreferences sharedPreferences;
+        private final Map<PresentationMode, SnapshotPreferences> modePreferences;
 
         private Snapshot(SessionRecord record, Map<String, ?> globalValues) {
             this.record = record;
             Map<String, Object> globals = immutablePreferenceMap(globalValues);
-            globalDefaults = new ReadOnlyPreferences(globals);
+            globalDefaults = new SnapshotPreferences(globals);
 
             Map<String, Object> shared = new LinkedHashMap<>(globals);
             if (record != null) {
                 shared.putAll(record.sharedOverrides);
             }
-            sharedPreferences = new ReadOnlyPreferences(shared);
+            sharedPreferences = new SnapshotPreferences(shared);
 
-            Map<PresentationMode, ReadOnlyPreferences> resolved = new HashMap<>();
+            Map<PresentationMode, SnapshotPreferences> resolved = new HashMap<>();
             for (PresentationMode mode : PresentationMode.values()) {
                 Map<String, Object> values = new LinkedHashMap<>(shared);
                 if (record != null) {
                     values.putAll(record.getModeOverrides(mode));
                 }
-                resolved.put(mode, new ReadOnlyPreferences(values));
+                resolved.put(mode, new SnapshotPreferences(values));
             }
             modePreferences = Collections.unmodifiableMap(resolved);
         }
@@ -351,7 +351,7 @@ public final class SessionSettingsStore {
             Objects.requireNonNull(overrides, "overrides");
             Map<String, Object> values = new LinkedHashMap<>(modePreferences.get(mode).getAll());
             values.putAll(immutablePreferenceMap(overrides));
-            return new ReadOnlyPreferences(values);
+            return new SnapshotPreferences(values);
         }
 
         public boolean isSharedOverridden(String key) {
@@ -1000,7 +1000,7 @@ public final class SessionSettingsStore {
                 + (value != null ? value.getClass().getName() : "null"));
     }
 
-    private static Map<String, Object> immutablePreferenceMap(Map<String, ?> source) {
+    static Map<String, Object> immutablePreferenceMap(Map<String, ?> source) {
         Map<String, Object> copy = new LinkedHashMap<>();
         if (source != null) {
             for (Map.Entry<String, ?> entry : source.entrySet()) {
@@ -1089,170 +1089,6 @@ public final class SessionSettingsStore {
         SessionRecord toImmutable() {
             return new SessionRecord(localSessionId, currentApp, sharedOverrides, modeOverrides,
                     lastSuccessfulMode, resumeMetadata);
-        }
-    }
-
-    /** Immutable SharedPreferences implementation used only as a parser-friendly value snapshot. */
-    private static final class ReadOnlyPreferences implements SharedPreferences {
-        private final Map<String, Object> values;
-
-        ReadOnlyPreferences(Map<String, ?> values) {
-            this.values = immutablePreferenceMap(values);
-        }
-
-        @Override
-        public Map<String, ?> getAll() {
-            return values;
-        }
-
-        @Override
-        public String getString(String key, String defaultValue) {
-            Object value = values.get(key);
-            if (value == null && !values.containsKey(key)) {
-                return defaultValue;
-            }
-            if (!(value instanceof String)) {
-                throw new ClassCastException(key + " is not a String");
-            }
-            return (String) value;
-        }
-
-        @SuppressWarnings("unchecked")
-        @Override
-        public Set<String> getStringSet(String key, Set<String> defaultValues) {
-            Object value = values.get(key);
-            if (value == null && !values.containsKey(key)) {
-                return defaultValues;
-            }
-            if (!(value instanceof Set<?>)) {
-                throw new ClassCastException(key + " is not a String set");
-            }
-            return (Set<String>) value;
-        }
-
-        @Override
-        public int getInt(String key, int defaultValue) {
-            Object value = values.get(key);
-            if (value == null && !values.containsKey(key)) {
-                return defaultValue;
-            }
-            if (!(value instanceof Integer)) {
-                throw new ClassCastException(key + " is not an int");
-            }
-            return (Integer) value;
-        }
-
-        @Override
-        public long getLong(String key, long defaultValue) {
-            Object value = values.get(key);
-            if (value == null && !values.containsKey(key)) {
-                return defaultValue;
-            }
-            if (!(value instanceof Long)) {
-                throw new ClassCastException(key + " is not a long");
-            }
-            return (Long) value;
-        }
-
-        @Override
-        public float getFloat(String key, float defaultValue) {
-            Object value = values.get(key);
-            if (value == null && !values.containsKey(key)) {
-                return defaultValue;
-            }
-            if (!(value instanceof Float)) {
-                throw new ClassCastException(key + " is not a float");
-            }
-            return (Float) value;
-        }
-
-        @Override
-        public boolean getBoolean(String key, boolean defaultValue) {
-            Object value = values.get(key);
-            if (value == null && !values.containsKey(key)) {
-                return defaultValue;
-            }
-            if (!(value instanceof Boolean)) {
-                throw new ClassCastException(key + " is not a boolean");
-            }
-            return (Boolean) value;
-        }
-
-        @Override
-        public boolean contains(String key) {
-            return values.containsKey(key);
-        }
-
-        @Override
-        public SharedPreferences.Editor edit() {
-            // PreferenceConfiguration performs best-effort legacy migrations while parsing. A
-            // snapshot must remain immutable, but returning a successful no-op editor keeps that
-            // parser path safe. Durable migrations still belong to the real global preferences.
-            return new NoOpEditor();
-        }
-
-        @Override
-        public void registerOnSharedPreferenceChangeListener(
-                OnSharedPreferenceChangeListener listener) {
-            // Immutable snapshots never change.
-        }
-
-        @Override
-        public void unregisterOnSharedPreferenceChangeListener(
-                OnSharedPreferenceChangeListener listener) {
-            // Immutable snapshots never change.
-        }
-    }
-
-    private static final class NoOpEditor implements SharedPreferences.Editor {
-        @Override
-        public SharedPreferences.Editor putString(String key, String value) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor putStringSet(String key, Set<String> values) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor putInt(String key, int value) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor putLong(String key, long value) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor putFloat(String key, float value) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor putBoolean(String key, boolean value) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor remove(String key) {
-            return this;
-        }
-
-        @Override
-        public SharedPreferences.Editor clear() {
-            return this;
-        }
-
-        @Override
-        public boolean commit() {
-            return true;
-        }
-
-        @Override
-        public void apply() {
-            // Intentionally ignored. This editor exists only for parser compatibility.
         }
     }
 
