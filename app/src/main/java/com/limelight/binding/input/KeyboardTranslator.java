@@ -52,7 +52,8 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_SEMICOLON = 59;
     public static final int VK_SLASH = 47;
     public static final int VK_SPACE = 32;
-    public static final int VK_PRINTSCREEN = 154;
+    // Windows VK_SNAPSHOT
+    public static final int VK_PRINTSCREEN = 0x2C;
     public static final int VK_TAB = 9;
     public static final int VK_LEFT = 37;
     public static final int VK_RIGHT = 39;
@@ -255,6 +256,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
                 
             case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
                 translated = 0x0d;
                 break;
 

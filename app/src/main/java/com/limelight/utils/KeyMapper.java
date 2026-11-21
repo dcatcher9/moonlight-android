@@ -1030,7 +1030,7 @@ public class KeyMapper {
         linuxToWindowsKeyMap[KEY_F22] = VK_F22;
         linuxToWindowsKeyMap[KEY_F23] = VK_F23;
         linuxToWindowsKeyMap[KEY_F24] = VK_F24;
-        linuxToWindowsKeyMap[KEY_SYSRQ] = VK_PRINT;
+        linuxToWindowsKeyMap[KEY_SYSRQ] = VK_SNAPSHOT;
         linuxToWindowsKeyMap[KEY_SCROLLLOCK] = VK_SCROLL;
         linuxToWindowsKeyMap[KEY_PAUSE] = VK_PAUSE;
         linuxToWindowsKeyMap[KEY_INSERT] = VK_INSERT;
@@ -1057,8 +1057,11 @@ public class KeyMapper {
         linuxToWindowsKeyMap[KEY_KP3] = VK_NUMPAD3;
         linuxToWindowsKeyMap[KEY_KP0] = VK_NUMPAD0;
         linuxToWindowsKeyMap[KEY_KPDOT] = VK_DECIMAL;
+        linuxToWindowsKeyMap[KEY_KPENTER] = VK_RETURN;
+        linuxToWindowsKeyMap[KEY_KPSLASH] = VK_DIVIDE;
         linuxToWindowsKeyMap[KEY_102ND] = VK_OEM_102;
-        linuxToWindowsKeyMap[KEY_COMPOSE] = VK_PROCESSKEY;
+        // KEY_COMPOSE is the context-menu key next to the right Windows key.
+        linuxToWindowsKeyMap[KEY_COMPOSE] = VK_APPS;
     }
 
     public static int getWindowsKeyCode(int linuxKeyCode) {
