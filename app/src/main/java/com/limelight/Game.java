@@ -2925,8 +2925,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     // NB: We need to be sure this happens before the getRepeatCount() check because
                     // UTF-8 events don't auto-repeat on the host side.
                     int unicodeChar = event.getUnicodeChar();
-                    if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0) {
-                        conn.sendUtf8Text(""+(char)unicodeChar);
+                    if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0
+                            && Character.isValidCodePoint(unicodeChar)) {
+                        // A (char) cast would split a supplementary code point into a lone surrogate.
+                        conn.sendUtf8Text(new String(Character.toChars(unicodeChar)));
                         return true;
                     }
 

@@ -18,6 +18,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
@@ -809,8 +810,10 @@ public class NvConnection {
     }
 
     public void sendUtf8Text(final String text) {
-        if (!isMonkey) {
-            MoonBridge.sendUtf8Text(text);
+        if (!isMonkey && text != null && !text.isEmpty()) {
+            // JNI string conversion yields modified UTF-8, which encodes a supplementary
+            // character such as an emoji as two 3-byte surrogates. The host expects UTF-8.
+            MoonBridge.sendUtf8Text(text.getBytes(StandardCharsets.UTF_8));
         }
     }
 

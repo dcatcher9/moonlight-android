@@ -561,7 +561,8 @@ public class MoonBridge {
 
     public static native void sendMouseHighResHScroll(short scrollAmount);
 
-    public static native void sendUtf8Text(String text);
+    /** Sends standard UTF-8 bytes, not JNI's modified UTF-8, as one text event. */
+    public static native void sendUtf8Text(byte[] utf8Text);
 
     public static native String getStageName(int stage);
 

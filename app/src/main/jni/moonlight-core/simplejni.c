@@ -180,10 +180,26 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendMouseHighResHScroll(JNIEnv *env, 
 }
 
 JNIEXPORT void JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_sendUtf8Text(JNIEnv *env, jclass clazz, jstring text) {
-    const char* utf8Text = (*env)->GetStringUTFChars(env, text, NULL);
-    LiSendUtf8TextEvent(utf8Text, strlen(utf8Text));
-    (*env)->ReleaseStringUTFChars(env, text, utf8Text);
+Java_com_limelight_nvstream_jni_MoonBridge_sendUtf8Text(JNIEnv *env, jclass clazz, jbyteArray utf8Text) {
+    // Java encodes the text with String.getBytes(UTF_8). GetStringUTFChars() would produce
+    // modified UTF-8, which sends a supplementary character as two 3-byte surrogates.
+    if (utf8Text == NULL) {
+        return;
+    }
+
+    jsize length = (*env)->GetArrayLength(env, utf8Text);
+    if (length <= 0) {
+        return;
+    }
+
+    jbyte* bytes = (*env)->GetByteArrayElements(env, utf8Text, NULL);
+    if (bytes == NULL) {
+        // OutOfMemoryError is pending for the caller.
+        return;
+    }
+
+    LiSendUtf8TextEvent((const char*)bytes, (unsigned int)length);
+    (*env)->ReleaseByteArrayElements(env, utf8Text, bytes, JNI_ABORT);
 }
 
 JNIEXPORT void JNICALL
