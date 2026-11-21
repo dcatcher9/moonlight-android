@@ -121,9 +121,14 @@ public final class CodecRecoveryCoordinatorTest {
 
         // prepareForStop() publishes the token without the monitor and without a notify.
         stopping.set(true);
+        long stoppedAtNs = System.nanoTime();
         coordinator.markStopped();
 
         assertFinished(render);
+        // A waiter parked in the barrier must not hold up the teardown join for a full second.
+        long releaseMs = (System.nanoTime() - stoppedAtNs) / 1_000_000L;
+        assertTrue("Waiter took " + releaseMs + " ms to observe the terminal token",
+                releaseMs < 500L);
         assertFalse(coordinator.awaitOrRecover(CR_FLAG_INPUT_THREAD, completingRecovery));
         assertEquals(0, recoveries.get());
         assertEquals(CR_RECOVERY_TYPE_STOPPED, coordinator.type());

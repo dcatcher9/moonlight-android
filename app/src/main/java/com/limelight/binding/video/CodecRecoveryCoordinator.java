@@ -39,6 +39,11 @@ final class CodecRecoveryCoordinator {
 
     static final int CR_MAX_TRIES = 10;
 
+    // markStopped() cannot notify without the monitor, so waiters poll for the terminal token at
+    // this interval; it bounds the extra teardown latency of a thread parked in the barrier.
+    private static final long BARRIER_WAIT_SLICE_MS = 50L;
+    private static final long BARRIER_WAIT_LOG_INTERVAL_NS = 1_000_000_000L;
+
     static final int CR_RECOVERY_TYPE_NONE = 0;
     static final int CR_RECOVERY_TYPE_FLUSH = 1;
     static final int CR_RECOVERY_TYPE_RESTART = 2;
@@ -284,11 +289,18 @@ final class CodecRecoveryCoordinator {
 
             // If we haven't quiesced all threads yet, wait to be signalled after recovery.
             // The final thread to be quiesced will handle the codec recovery.
+            long lastWaitLogNs = 0L;
+            boolean waitLogged = false;
             while (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE
                     && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
                 try {
-                    LimeLog.info("Waiting to quiesce decoder threads: "+codecRecoveryThreadQuiescedFlags);
-                    monitor.wait(1000);
+                    long nowNs = System.nanoTime();
+                    if (!waitLogged || nowNs - lastWaitLogNs >= BARRIER_WAIT_LOG_INTERVAL_NS) {
+                        LimeLog.info("Waiting to quiesce decoder threads: "+codecRecoveryThreadQuiescedFlags);
+                        lastWaitLogNs = nowNs;
+                        waitLogged = true;
+                    }
+                    monitor.wait(BARRIER_WAIT_SLICE_MS);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
 

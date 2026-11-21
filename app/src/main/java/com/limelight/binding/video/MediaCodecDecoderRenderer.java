@@ -2855,9 +2855,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Publish recovery cancellation without entering codecRecoveryMonitor. A vendor
         // setOutputSurface() may be uninterruptibly blocked while holding it; prepareForStop() is
-        // called from UI surface/failure paths and must remain nonblocking. Every monitor wait is
-        // bounded (50 ms for handoff, 1 s for recovery), and cleanup later takes this monitor before
-        // releasing the codec, so teardown still serializes with an in-flight native call.
+        // called from UI surface/failure paths and must remain nonblocking. Every monitor wait
+        // polls the token at least every 50 ms (handoff and recovery barrier), and cleanup later
+        // takes this monitor before releasing the codec, so teardown still serializes with an
+        // in-flight native call.
         codecRecovery.markStopped();
 
         // Native codec events can still arrive until cleanup unregisters the listener and releases
