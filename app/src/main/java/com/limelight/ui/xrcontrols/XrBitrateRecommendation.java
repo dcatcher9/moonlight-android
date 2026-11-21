@@ -21,12 +21,7 @@ import java.util.List;
  * doubling the rate halves the bits available per frame, which is why fps appears here at all.</p>
  */
 public final class XrBitrateRecommendation {
-    /**
-     * Ladder in kbps. Derived by scoring candidate ladders against every
-     * resolution x frame rate x codec x packed/flat combination the picker can produce: this set
-     * lands within 8.4% of the ideal on average and 19.8% at worst, and beats a seven-rung ladder
-     * that included 20 and 30 — rungs no configuration on a local link ever wants.
-     */
+    /** The six rungs the XR bitrate controls offer, in kbps: 50 / 70 / 100 / 140 / 200 / 300 Mbps. */
     public static final List<Integer> LADDER_KBPS = Arrays.asList(
             50000, 70000, 100000, 140000, 200000, 300000);
 

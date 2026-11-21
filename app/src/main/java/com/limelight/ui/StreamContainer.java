@@ -401,10 +401,9 @@ public class StreamContainer extends FrameLayout {
             callback.onComplete(false);
             return;
         }
-        // Available in any host-SBS presentation (Raw or AI). The presentations
-        // (Normal / Host SBS / Client SBS AI) are mutually exclusive: entering Client SBS runs
-        // on-device depth on the host's plain 2D frame; selectMode drives the host to SBS_MODE_OFF
-        // at the same time (so host SBS stops when you switch to Client SBS).
+        // Every crossing into or out of Client SBS uses this handoff. Client SBS runs on-device
+        // depth on the host's ordinary 2D frame; when the previous mode used a packed host wire
+        // mode, the presenter's acknowledged request has already returned the host to 2D.
         if (mStereoRenderer == null || mDestroyed || mDummySurface == null
                 || !mDummySurface.isValid() || mClientSbsResize.pendingCallback != null) {
             callback.onComplete(false);
@@ -728,8 +727,8 @@ public class StreamContainer extends FrameLayout {
                 || detachGeneration != mPendingClientSbsSwitchEglGeneration) {
             return;
         }
-        // Client -> Normal or Raw Half goes directly to W x H; Client -> Host SBS AI goes directly
-        // to its packed target. Only a Raw Full transport boundary reconnects before this path.
+        // Leaving Client SBS binds the decoder straight to the target mode's SceneCore size: the
+        // packed target when mPendingHostSbsTarget is set, otherwise W x H.
         int switchGeneration = mClientSbsSwitch.generation;
         if (SystemClock.uptimeMillis() >= mClientSbsSwitch.deadlineMs) {
             completeClientSbsSwitch(switchGeneration, false);

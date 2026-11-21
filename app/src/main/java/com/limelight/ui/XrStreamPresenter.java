@@ -72,29 +72,26 @@ import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 
 /**
- * Presentation owner for the single XR route ({@code MODE_XR}). Fresh host connections start in
- * Normal; only a host-confirmed resume of the same app restores its last successful per-machine/app
- * presentation preference. The user switches presentation modes from the in-headset control
- * bar.
+ * Presentation owner for the single XR route. Every presentation mode shows the stream on one
+ * SceneCore {@link SurfaceEntity}: 2D, Host AI 3D, Game 3D and Movie 3D decode straight into its
+ * {@link Surface}, while Client AI 3D decodes into {@link StreamContainer}'s GL renderer, which
+ * draws its packed side-by-side output into that Surface. A new host session starts in 2D; only
+ * a host-confirmed resume restores the last successful presentation intent of that app on that
+ * PC.
  *
- * <p>Unlike the on-device AI 2D&rarr;3D path ({@code Stereo3DRenderer}), here the PC already
- * produced a side-by-side stereo frame; the device does no inference. We create a Jetpack XR
- * (SceneCore) {@link SurfaceEntity} in {@link SurfaceEntity.StereoMode#SIDE_BY_SIDE} and hand
- * the decoder that entity's {@link Surface}. The XR compositor splits the left/right halves to
- * each eye — the decoder renders straight into the surface exactly like the plain 2D path.
+ * <p>The video {@link Surface} is published through {@link OnSurfaceReadyListener}, so
+ * {@code StreamContainer} supplies the initial decoder target through
+ * {@code setRenderTarget(...)} and every live replacement through its guarded asynchronous
+ * output-surface handoff.</p>
  *
- * <p>Mirrors the contract {@code Stereo3DRenderer} exposes to {@link StreamContainer}: it
- * obtains a video {@link Surface} and notifies via {@link OnSurfaceReadyListener}, so
- * {@code StreamContainer} can supply the initial target through
- * {@code decoderRenderer.setRenderTarget(...)} and guarded live replacements through
- * {@code decoderRenderer.setOutputSurface(...)}.
- *
- * <p>The quad is placed ~2 m in front, sized to one eye's aspect, and the user can move/resize it
- * (with a minimum distance clamp). A floating control panel beneath it offers four single-select
- * presentation modes, one reusable mode-options row, session settings, and stream actions.
- * Switching presentations re-pins the surface and, in the host AI depth mode, drives
- * the host's SBS pipeline on/off. See docs/android-xr-sbs.md. Session teardown and durable mode
- * persistence are handled in {@link #onDestroy()}.
+ * <p>The quad starts 2 m in front of the viewer at the per-PC height, keeps the selected
+ * resolution's aspect, and can be moved (with a minimum distance clamp) and resized. One dock
+ * panel beneath it holds the five single-select presentation modes and the Settings, Cinema, Stats
+ * and Disconnect actions; one contextual panel below the dock shows a mode's or Cinema's options;
+ * App Settings and Stats open beside the video. Mode switches and live stream-quality changes run
+ * through the atomic presentation ACK and the decoder transition gate. See
+ * docs/android-xr-sbs.md. {@link #onDestroy()} tears the session down and saves the per-PC
+ * height.</p>
  */
 @SuppressLint({"RestrictedApi", "UnsafeOptInUsageError"})
 public class XrStreamPresenter {
@@ -827,8 +824,8 @@ public class XrStreamPresenter {
                     + (reconnectViewState.cinemaViewExpanded ? " in Cinema View" : ""));
         }
         // On a host-confirmed resume, restore direct Host AI/Game/Movie intent immediately. Client SBS
-        // is deferred until after frame 1 because it requires a live decoder-to-GL handoff. A
-        // fresh connection's state store returns Normal regardless of any older saved mode.
+        // is deferred until after frame 1 because it requires a live decoder-to-GL handoff. A new
+        // host session's startup mode is Normal.
     }
 
     /** Install or replace the settings/session bridge after StreamContainer creates the presenter. */
@@ -1237,10 +1234,10 @@ public class XrStreamPresenter {
         }
 
         // Stereo SurfaceEntity content only renders when the activity has the SPATIAL_3D_CONTENT
-        // capability, which requires Full Space mode. scenecore alpha13 has no runtime request
-        // for it; the Game activity opts in via PROPERTY_XR_ACTIVITY_START_MODE =
-        // XR_ACTIVITY_START_MODE_FULL_SPACE_MANAGED in AndroidManifest.xml. Log the capability
-        // so a Full-Space misconfiguration is diagnosable on-device.
+        // capability, which requires Full Space mode. The Game activity starts in Full Space
+        // through PROPERTY_XR_ACTIVITY_START_MODE = XR_ACTIVITY_START_MODE_FULL_SPACE_MANAGED in
+        // AndroidManifest.xml. Log the capability so a Full Space misconfiguration is
+        // diagnosable on-device.
         Scene scene = SessionExt.getScene(session);
         boolean has3d = scene.getSpatialCapabilities().contains(SpatialCapability.SPATIAL_3D_CONTENT);
         LimeLog.info("XR: SPATIAL_3D_CONTENT capability = " + has3d);
@@ -3250,12 +3247,11 @@ public class XrStreamPresenter {
     }
 
     /**
-     * Decoder callback path for either the provisional pre-ACK transition or the authoritative
-     * post-ACK transition.
-     *
-     * <p>The ACK rides reliable ENet while video rides RTP, so provisional output may arrive on
-     * either side of it. A resolution transaction settles only when output from the generation
-     * explicitly started after the ACK matches the host-acknowledged geometry.</p>
+     * Decoder callback for the transaction's one decoder transition. A geometry change closes
+     * that transition's gate before the request is sent; every other transaction begins it after
+     * the APPLIED ACK. Either way the gate opens only once the acknowledged geometry has been
+     * adopted, and the transaction settles only on output that matches the host-acknowledged
+     * raster (plus, for Client SBS, its packed-swap proof).
      */
     private void finishPendingLiveQualityChange() {
         com.limelight.Game game = hostGame();
@@ -3266,9 +3262,8 @@ public class XrStreamPresenter {
             return;
         }
 
-        // A decoder callback may precede the ACK. Retain its exact dimensions for diagnostics, but
-        // never let it settle the request: APPLIED clears this evidence and supersedes the decoder
-        // transition before asking for the authoritative confirmation.
+        // Only output recorded after beginPostAckDecoderConfirmation() can settle the request;
+        // that call discards anything recorded earlier.
         int[] expected = expectedLiveQualityDecoderDimensions();
         int[] actual = game.getDecoderOutputDimensions();
         int actualWidth = actual != null ? actual[0] : 0;
@@ -3530,9 +3525,9 @@ public class XrStreamPresenter {
         }
         if (pendingLiveQualityOrigin == LiveQualityRequestOrigin.GAME_SOURCE
                 && isGameSourceWidening(pendingDesiredWireMode)) {
-            // A failed same-mode reconfirmation can be caused by a transient host display
-            // rebuild. Reconnect still clears all source proof, but must not prevent a fresh
-            // mono-to-stereo attempt after the replacement connection becomes ready.
+            // Only a failed mono-to-stereo widening latches the attempt. A failed same-mode
+            // reconfirmation can come from a transient host display rebuild, so the reconnect
+            // clears source proof without blocking a fresh widening attempt afterwards.
             gameSourceState.recordWidenFailure();
         }
         if (commitStagedSettings && isAckFirstModeTransitionPending()) {
@@ -4535,8 +4530,8 @@ public class XrStreamPresenter {
 
     /**
      * One tile on the {@link #buildControlBar control bar}. Carries its icon+label, the tap action,
-     * and — for the mode group — which {@link SurfaceEntity.StereoMode} it selects (null for actions
-     * like Disconnect).
+     * and — for the mode group — which {@link PresentationMode} it selects (null for actions like
+     * Disconnect).
      */
     private final class BarItem {
         final String label;

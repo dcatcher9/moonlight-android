@@ -3,12 +3,11 @@ package com.limelight.ui;
 /**
  * Completion gate for a live video-mode request.
  *
- * <p>A fast bitrate/frame-rate request needs only its correlated APPLIED ACK. A resolution
- * request additionally needs MediaCodec to release a fresh IDR at the acknowledged geometry.
- * A decoder event that arrives before the APPLIED ACK is retained only for diagnostics. The
- * ACK invalidates that provisional evidence and arms exactly one post-ACK decoder transition,
- * which supplies the only decoder output allowed to settle the request. Client SBS resolution
- * changes additionally wait for exact validation of the replacement packed EGL output.</p>
+ * <p>A fast bitrate/frame-rate request needs only its correlated APPLIED ACK. Any other request
+ * additionally needs MediaCodec to release a fresh IDR at the acknowledged raster from the one
+ * decoder confirmation armed after the ACK; {@link #beginPostAckDecoderConfirmation()} discards
+ * any decoder output recorded before it, which the presenter reads only for timeout diagnostics.
+ * Client SBS additionally waits for its packed EGL presentation proof.</p>
  */
 final class LiveQualityConfirmationGate {
     private boolean decoderConfirmationRequired;
