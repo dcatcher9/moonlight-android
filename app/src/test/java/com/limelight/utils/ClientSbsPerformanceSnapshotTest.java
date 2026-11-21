@@ -73,9 +73,31 @@ public final class ClientSbsPerformanceSnapshotTest {
 
         ClientSbsPerformanceSnapshot next = snapshot(perf, ONE_SECOND_NS);
         assertEquals(0.0f, next.glLatchFps, 0.0f);
-        // No candidate in the window reports a zero ratio rather than dividing by zero.
-        assertEquals(0.0f, next.depthReuseRatio, 0.0f);
-        assertEquals(0.0f, next.averageNativeLiteRtRunWallMs, 0.0f);
+        // A window without samples reports "not sampled", never a measured zero.
+        assertTrue(Float.isNaN(next.depthReuseRatio));
+        assertTrue(Float.isNaN(next.averageNativeLiteRtRunWallMs));
+    }
+
+    @Test
+    public void eachUnsampledStatisticIsNaNEvenWhenAStaleMaximumRemains() {
+        ClientSbsPerfStats perf = new ClientSbsPerfStats();
+        // Maxima without a matching sample count, as a window boundary can leave them.
+        perf.perfNativeLiteRtRunWallMaxNs.set(15_000_000L);
+        perf.perfNearIdenticalDecisionReadWallMaxNs.set(2_000_000L);
+        perf.perfDepthResultAgeMaxNs.set(30_000_000L);
+        perf.perfNearIdenticalReuses.set(3L);
+
+        ClientSbsPerformanceSnapshot empty = snapshot(perf, ONE_SECOND_NS);
+
+        assertTrue(Float.isNaN(empty.averageNativeLiteRtRunWallMs));
+        assertTrue(Float.isNaN(empty.maxNativeLiteRtRunWallMs));
+        assertTrue(Float.isNaN(empty.averageNearIdenticalDecisionReadWallMs));
+        assertTrue(Float.isNaN(empty.maxNearIdenticalDecisionReadWallMs));
+        assertTrue(Float.isNaN(empty.averageDepthResultAgeMs));
+        assertTrue(Float.isNaN(empty.maxDepthResultAgeMs));
+        assertTrue(Float.isNaN(empty.depthReuseRatio));
+        // Rates are throughput over the window and stay a measured zero.
+        assertEquals(0.0f, empty.depthAdoptFps, 0.0f);
     }
 
     @Test

@@ -15,6 +15,9 @@ import java.util.function.Function;
  * EGL swap after {@code onDrawFrame()} returns and SceneCore exposes no per-frame compositor
  * callback, so this snapshot deliberately does not claim to measure headset presentation.</p>
  *
+ * <p>An average, maximum or ratio with no sample in the window is {@code Float.NaN}, never a
+ * measured zero.</p>
+ *
  * <p>Constructing a snapshot drains the window counters of the {@link ClientSbsPerfStats} it is
  * given. {@link Stereo3DRenderer#sampleClientSbsPerformance()} builds one per sampling window
  * while holding the stats' sample lock.</p>
@@ -33,7 +36,7 @@ public final class ClientSbsPerformanceSnapshot {
     public final float depthReuseFps;
     /** Negotiated exact encoder-input repeats retained without another GPU transaction. */
     public final float hostSourceRepeatFps;
-    /** Reuses divided by all GPU near-identical candidate decisions in this window. */
+    /** Reuses divided by all GPU near-identical candidate decisions; NaN with no candidate. */
     public final float depthReuseRatio;
     /** Candidate fallbacks classified by the already-mapped GPU decision record. */
     public final long nearIdenticalContentRejects;
@@ -124,20 +127,20 @@ public final class ClientSbsPerformanceSnapshot {
         this.depthReuseFps = rate(depthReuses, elapsedNs);
         this.hostSourceRepeatFps = rate(perf.perfHostSourceRepeats.getAndSet(0L), elapsedNs);
         this.depthReuseRatio = reuseCandidates == 0L
-                ? 0.0f : (float) depthReuses / reuseCandidates;
+                ? Float.NaN : (float) depthReuses / reuseCandidates;
         this.glOutputSubmitFps = rate(glOutputSubmits, elapsedNs);
         this.averageNativeLiteRtRunWallMs = averageMs(
                 perf.perfNativeLiteRtRunWallNs.getAndSet(0L), inferenceCompletes);
-        this.maxNativeLiteRtRunWallMs = nsToMs(
-                perf.perfNativeLiteRtRunWallMaxNs.getAndSet(0L));
+        this.maxNativeLiteRtRunWallMs = maxMs(
+                perf.perfNativeLiteRtRunWallMaxNs.getAndSet(0L), inferenceCompletes);
         this.averageNearIdenticalDecisionReadWallMs = averageMs(
                 perf.perfNearIdenticalDecisionReadWallNs.getAndSet(0L), decisionReads);
-        this.maxNearIdenticalDecisionReadWallMs = nsToMs(
-                perf.perfNearIdenticalDecisionReadWallMaxNs.getAndSet(0L));
+        this.maxNearIdenticalDecisionReadWallMs = maxMs(
+                perf.perfNearIdenticalDecisionReadWallMaxNs.getAndSet(0L), decisionReads);
         this.averageDepthResultAgeMs = averageMs(
                 perf.perfDepthResultAgeNs.getAndSet(0L), depthAdopts);
-        this.maxDepthResultAgeMs = nsToMs(
-                perf.perfDepthResultAgeMaxNs.getAndSet(0L));
+        this.maxDepthResultAgeMs = maxMs(
+                perf.perfDepthResultAgeMaxNs.getAndSet(0L), depthAdopts);
 
         ClientSbsGpuTimer timer = perf.gpuTimer;
         ClientSbsGpuTimer.Snapshot modelInputGpu = timer == null ? null
@@ -186,11 +189,11 @@ public final class ClientSbsPerformanceSnapshot {
     }
 
     private static float averageMs(long totalNs, long count) {
-        return count <= 0L ? 0.0f : totalNs / (count * 1_000_000.0f);
+        return count <= 0L ? Float.NaN : totalNs / (count * 1_000_000.0f);
     }
 
-    private static float nsToMs(long ns) {
-        return ns / 1_000_000.0f;
+    private static float maxMs(long maxNs, long count) {
+        return count <= 0L ? Float.NaN : maxNs / 1_000_000.0f;
     }
 
     private static float averageGpuMs(ClientSbsGpuTimer.Snapshot snapshot) {
