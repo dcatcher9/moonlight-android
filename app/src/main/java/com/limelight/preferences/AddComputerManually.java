@@ -389,7 +389,8 @@ public class AddComputerManually extends AppCompatActivity {
 
             builder.setPositiveButton(getString(R.string.proceed), (dialog, which) -> {
                 dialog.dismiss();
-                finish();
+                // Stay open while the add runs: onDestroy() interrupts the add thread. A
+                // successful add starts pairing and then finishes this activity.
                 computersToAdd.add(server + '?' + query);
             });
 
