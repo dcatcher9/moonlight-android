@@ -427,6 +427,10 @@ public class TrackpadContext implements TouchContext {
         if (confirmedDrag) {
             conn.sendMouseButtonUp(heldButton);
         }
+        // The released drag and its double-tap state must not carry into the next gesture,
+        // which would otherwise turn its first tap into a double click.
+        confirmedDrag = false;
+        isDblClickPending = false;
     }
 
     @Override
