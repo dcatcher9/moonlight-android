@@ -1095,16 +1095,18 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         }
 
         if (existingEntry != null) {
+            // The entry holds this Activity's own snapshot. ComputerManagerService reports the
+            // same mutable object on every poll, so that object already shows the idle state.
             ComputerDetails endedSession = existingEntry.details;
             // Replace the information in the existing entry
-            existingEntry.details = details;
+            existingEntry.details = new ComputerDetails(details);
             if (inForeground && isAuthoritativelyIdle(details)) {
                 clearPersistedSessionAfterAuthoritativeEnd(details, endedSession);
             }
         }
         else {
             // Add a new entry
-            pcGridAdapter.addComputer(new ComputerObject(details));
+            pcGridAdapter.addComputer(new ComputerObject(new ComputerDetails(details)));
             if (inForeground && isAuthoritativelyIdle(details)) {
                 clearPersistedSessionAfterAuthoritativeEnd(details, details);
             }
