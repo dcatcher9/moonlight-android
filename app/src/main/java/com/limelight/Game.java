@@ -450,19 +450,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         sessionSettingsStore = new SessionSettingsStore(this);
-        boolean resume = launchRequest.kind == HostSessionLaunchRequest.Kind.RESUME;
-        if (resume) {
+        // Only a resume that matches this PC's local session record continues its mode.
+        boolean resume = false;
+        if (launchRequest.kind == HostSessionLaunchRequest.Kind.RESUME) {
             SessionSettingsStore.SessionRecord restored = hostSessionIdSupported
                     ? sessionSettingsStore.confirmHostResume(sessionPc, sessionApp,
                             publishedHostSessionId, System.currentTimeMillis())
                     : sessionSettingsStore.confirmLegacyHostResume(
                             sessionPc, sessionApp, System.currentTimeMillis());
+            resume = restored != null;
             if (restored == null && (!hostSessionIdSupported
                     || SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
                             publishedHostSessionId))) {
                 // The user explicitly selected Resume from a fresh serverinfo snapshot. A new
                 // token generation (or a standard host with no saved local record) may be
-                // resumed with fresh ownership and this app's saved settings.
+                // resumed with fresh ownership and this app's saved settings. No local record
+                // proves its presentation, so it starts in 2D like any new session.
                 sessionSettingsStore.startNewSession(sessionPc, sessionApp,
                         hostSessionIdSupported ? publishedHostSessionId : null,
                         System.currentTimeMillis());
@@ -481,8 +484,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         PresentationMode startupModeOverride = null;
         PresentationMode savedMode = snapshot.getRecord() != null
                 ? snapshot.getRecord().getLastSuccessfulMode() : PresentationMode.NORMAL;
-        // Only a resume continues the previous presentation mode. A new host session starts in
-        // 2D whatever the app's profile last used; its saved per-mode quality is kept.
+        // Only a confirmed resume continues the previous presentation mode. A new host session,
+        // including an unconfirmed Resume, starts in 2D whatever the app's profile last used;
+        // its saved per-mode quality is kept.
         boolean freshSessionStartsNormal = !resume && savedMode != PresentationMode.NORMAL;
         boolean hostAiUnavailable = savedMode == PresentationMode.HOST_SBS_AI
                 && !hostSessionIdSupported;

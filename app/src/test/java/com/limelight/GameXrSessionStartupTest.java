@@ -120,6 +120,55 @@ public final class GameXrSessionStartupTest {
     }
 
     @Test
+    public void unconfirmedResumeOfAnotherTokenStartsIn2dAsANewSession() {
+        SessionSettingsStore.SessionRecord staleRecord = store.getCurrentSession(pc);
+        assertTrue(store.edit(pc, app, staleRecord.getLocalSessionId())
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING,
+                        "1920x1080", "3840x2160")
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+
+        // Fresh serverinfo reports a newer generation than the local record knows, so
+        // confirmHostResume() has no matching record to continue.
+        Game game = Robolectric.buildActivity(Game.class, launchIntent(true)
+                .putExtra(Game.EXTRA_LAUNCH_REQUEST, HostSessionLaunchRequest.resume(
+                        7, APP_UUID, true, "host-session-2"))).get();
+        SharedPreferences startup = prepareCurrentSessionPreferences(game);
+        PreferenceConfiguration configuration =
+                PreferenceConfiguration.readPreferences(game, startup);
+
+        assertEquals(PresentationMode.NORMAL, game.getXrStartupPresenterMode());
+        assertEquals(3840, configuration.width);
+        SessionSettingsStore.SessionRecord replacement = store.getCurrentSession(pc);
+        assertNotEquals(staleRecord.getLocalSessionId(), replacement.getLocalSessionId());
+        assertEquals(PresentationMode.NORMAL, replacement.getLastSuccessfulMode());
+        assertEquals("host-session-2", replacement.getResumeMetadata().getHostSessionId());
+        assertTrue(store.snapshot(pc, PreferenceManager.getDefaultSharedPreferences(context))
+                .isModeOverridden(PresentationMode.CLIENT_SBS_AI,
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING));
+    }
+
+    @Test
+    public void unconfirmedLegacyResumeWithoutALocalRecordStartsIn2d() {
+        SessionSettingsStore.SessionRecord record = store.getCurrentSession(pc);
+        assertTrue(store.edit(pc, app, record.getLocalSessionId())
+                .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
+                .commit());
+        // Ending the session keeps the app profile but leaves no active record to confirm.
+        assertTrue(store.clearCurrentSession(pc));
+
+        Game game = Robolectric.buildActivity(Game.class, launchIntent(true)
+                .putExtra(Game.EXTRA_LAUNCH_REQUEST, HostSessionLaunchRequest.resume(
+                        7, APP_UUID, false, null))).get();
+        prepareCurrentSessionPreferences(game);
+
+        assertEquals(PresentationMode.NORMAL, game.getXrStartupPresenterMode());
+        assertEquals(PresentationMode.NORMAL,
+                store.getCurrentSession(pc).getLastSuccessfulMode());
+    }
+
+    @Test
     public void activityRecreationRetainsClientModeAndItsSavedQuality() {
         SessionSettingsStore.SessionRecord existingRecord = store.getCurrentSession(pc);
         assertTrue(store.edit(pc, app, existingRecord.getLocalSessionId())
