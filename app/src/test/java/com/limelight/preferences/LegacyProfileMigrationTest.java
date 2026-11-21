@@ -22,6 +22,8 @@ import org.robolectric.annotation.Config;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {33}, shadows = {
@@ -155,6 +157,47 @@ public final class LegacyProfileMigrationTest {
         LegacyProfileMigration.retireClientSbsModelSelection(context);
         assertEquals("host-1", store.getCurrentSession(firstPc)
                 .getResumeMetadata().getHostSessionId());
+    }
+
+    @Test
+    public void flattenedValuesKeepTheStoredTypeOfAnExistingPreference() throws IOException {
+        try (FileWriter writer = new FileWriter(profileFile)) {
+            writer.write("{\"activeProfileId\":\"active\",\"profiles\":["
+                    + "{\"uuid\":\"active\",\"options\":{"
+                    + "\"seekbar_bitrate_kbps\":150000,"
+                    + "\"seekbar_deadzone\":12,"
+                    + "\"checkbox_enable_rumble\":1.5,"
+                    + "\"list_audio_config\":\"51\","
+                    + "\"checkbox_host_audio\":true,"
+                    + "\"list_languages\":[\"en\",\"fr\"],"
+                    + "\"checkbox_mouse_emulation\":[\"ok\",3],"
+                    + "\"frame_pacing\":null,"
+                    + "\"video_format\":{\"nested\":true},"
+                    + "\"checkbox_show_onscreen_controls\":true}}]}");
+        }
+        assertTrue(preferences.edit()
+                .putLong("seekbar_deadzone", 1L)
+                .putFloat("checkbox_enable_rumble", 0.5f)
+                .putString("frame_pacing", "balanced")
+                .putString("video_format", "auto")
+                .commit());
+
+        LegacyProfileMigration.migrateActiveProfile(context);
+
+        // Unknown or int-typed numbers stay ints; an existing long or float keeps its type.
+        assertEquals(150000, preferences.getInt("seekbar_bitrate_kbps", 0));
+        assertEquals(12L, preferences.getLong("seekbar_deadzone", 0L));
+        assertEquals(1.5f, preferences.getFloat("checkbox_enable_rumble", 0f), 0f);
+        assertEquals("51", preferences.getString("list_audio_config", null));
+        assertTrue(preferences.getBoolean("checkbox_host_audio", false));
+        assertEquals(new HashSet<>(Arrays.asList("en", "fr")),
+                preferences.getStringSet("list_languages", null));
+        // Mixed arrays, nulls and objects are skipped, keeping the existing value.
+        assertFalse(preferences.contains("checkbox_mouse_emulation"));
+        assertEquals("balanced", preferences.getString("frame_pacing", null));
+        assertEquals("auto", preferences.getString("video_format", null));
+        // Only XR-retained keys are flattened.
+        assertFalse(preferences.contains("checkbox_show_onscreen_controls"));
     }
 
     @Test
