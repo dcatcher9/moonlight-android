@@ -60,6 +60,11 @@ public final class ClientSbsGlCompute {
             throw new IllegalStateException(label + " shader compilation failed: " + log);
         }
         int program = GLES20.glCreateProgram();
+        if (program == 0) {
+            // Name 0 is no program; linking it would fail without writing the reused status.
+            GLES20.glDeleteShader(shader);
+            throw new IllegalStateException(label + " program creation failed");
+        }
         GLES20.glAttachShader(program, shader);
         GLES20.glLinkProgram(program);
         GLES20.glDeleteShader(shader);
