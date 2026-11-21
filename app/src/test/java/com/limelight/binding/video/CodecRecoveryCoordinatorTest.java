@@ -76,6 +76,31 @@ public final class CodecRecoveryCoordinatorTest {
     }
 
     @Test
+    public void waitersRejoinARecoveryScheduledBeforeTheyReacquireTheMonitor() throws Exception {
+        assertTrue(coordinator.schedulePresentationModeFlush());
+        Thread render = participant(CR_FLAG_RENDER_THREAD);
+        Thread choreographerThread = participant(CR_FLAG_CHOREOGRAPHER);
+        awaitRegistered(CR_FLAG_RENDER_THREAD | CR_FLAG_CHOREOGRAPHER);
+
+        // The input thread completes recovery A and notifies the waiters. Holding the monitor
+        // across that and the next schedule call reproduces a UI setter (a presentation
+        // transition or an HDR change) that wins the monitor before the notified waiters do.
+        synchronized (monitor) {
+            assertTrue(coordinator.awaitOrRecover(CR_FLAG_INPUT_THREAD, completingRecovery));
+            assertEquals(1, recoveries.get());
+            assertEquals(0, coordinator.quiescedFlags());
+            assertTrue(coordinator.schedulePresentationModeFlush());
+        }
+
+        // The input thread reaches its next barrier check with recovery B pending.
+        Thread input = participant(CR_FLAG_INPUT_THREAD);
+
+        assertFinished(render, choreographerThread, input);
+        assertEquals(2, recoveries.get());
+        assertEquals(CR_RECOVERY_TYPE_NONE, coordinator.type());
+    }
+
+    @Test
     public void missingChoreographerCountsAsQuiesced() {
         choreographer.set(false);
         assertTrue(coordinator.schedulePresentationModeFlush());

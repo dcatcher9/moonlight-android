@@ -269,44 +269,69 @@ final class CodecRecoveryCoordinator {
                 return true;
             }
 
-            if (!choreographerParticipates.getAsBoolean()) {
-                // If we have no choreographer thread, we can just mark that as quiesced right now.
-                codecRecoveryThreadQuiescedFlags |= CR_FLAG_CHOREOGRAPHER;
-            }
-
-            codecRecoveryThreadQuiescedFlags |= quiescenceFlag;
-
             // This is the final thread to quiesce, so let's perform the codec recovery now.
-            if (codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL) {
-                if (recovery.recoverLocked()) {
-                    // Wake all quiesced threads and allow them to begin work again
-                    codecRecoveryThreadQuiescedFlags = 0;
-                    monitor.notifyAll();
-                }
+            if (registerQuiescedLocked(quiescenceFlag)) {
+                runRecoveryLocked(recovery);
+                return true;
             }
-            else {
-                // If we haven't quiesced all threads yet, wait to be signalled after recovery.
-                // The final thread to be quiesced will handle the codec recovery.
-                while (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE
+
+            // If we haven't quiesced all threads yet, wait to be signalled after recovery.
+            // The final thread to be quiesced will handle the codec recovery.
+            while (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE
+                    && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
+                try {
+                    LimeLog.info("Waiting to quiesce decoder threads: "+codecRecoveryThreadQuiescedFlags);
+                    monitor.wait(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+
+                    // InterruptedException clears the thread's interrupt status. Since we can't
+                    // handle that here, we will re-interrupt the thread to set the interrupt
+                    // status back to true.
+                    Thread.currentThread().interrupt();
+
+                    break;
+                }
+
+                // The recovery this thread registered for clears every flag when it completes.
+                // A setter can take the monitor before the notified waiters and schedule another
+                // recovery; this thread must then register for it exactly as a new arrival
+                // would, or no participant can ever complete the barrier.
+                if ((codecRecoveryThreadQuiescedFlags & quiescenceFlag) == 0
+                        && codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE
                         && codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED) {
-                    try {
-                        LimeLog.info("Waiting to quiesce decoder threads: "+codecRecoveryThreadQuiescedFlags);
-                        monitor.wait(1000);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-
-                        // InterruptedException clears the thread's interrupt status. Since we can't
-                        // handle that here, we will re-interrupt the thread to set the interrupt
-                        // status back to true.
-                        Thread.currentThread().interrupt();
-
-                        break;
+                    if (finishCancellationIfStopping()) {
+                        return true;
+                    }
+                    if (registerQuiescedLocked(quiescenceFlag)) {
+                        runRecoveryLocked(recovery);
+                        return true;
                     }
                 }
             }
         }
 
         return true;
+    }
+
+    /** Must be called with the monitor held. Returns true when the caller is the final thread. */
+    private boolean registerQuiescedLocked(int quiescenceFlag) {
+        if (!choreographerParticipates.getAsBoolean()) {
+            // If we have no choreographer thread, we can just mark that as quiesced right now.
+            codecRecoveryThreadQuiescedFlags |= CR_FLAG_CHOREOGRAPHER;
+        }
+
+        codecRecoveryThreadQuiescedFlags |= quiescenceFlag;
+        return codecRecoveryThreadQuiescedFlags == CR_FLAG_ALL;
+    }
+
+    /** Must be called with the monitor held, by the final quiesced thread. */
+    private void runRecoveryLocked(Recovery recovery) {
+        if (recovery.recoverLocked()) {
+            // Wake all quiesced threads and allow them to begin work again
+            codecRecoveryThreadQuiescedFlags = 0;
+            monitor.notifyAll();
+        }
     }
 
     /** Visible for tests: the participants registered for the pending recovery. */
