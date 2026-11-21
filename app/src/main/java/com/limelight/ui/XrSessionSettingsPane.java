@@ -394,10 +394,6 @@ final class XrSessionSettingsPane {
     /** Icon shown beside a settings row title, or 0 where the row has no icon of its own. */
     private int sessionSettingIconRes(SessionSettingsModel.Key key) {
         switch (key) {
-            case RESOLUTION:
-                return R.drawable.ic_xr_resolution;
-            case FRAME_RATE:
-                return R.drawable.ic_xr_frame_rate;
             case BITRATE:
                 return R.drawable.ic_xr_bitrate;
             case CODEC:
@@ -420,10 +416,6 @@ final class XrSessionSettingsPane {
 
     private String sessionSettingLabel(SessionSettingsModel.Key key) {
         switch (key) {
-            case RESOLUTION:
-                return activity.getString(R.string.title_resolution_list);
-            case FRAME_RATE:
-                return activity.getString(R.string.title_fps_ceiling);
             case BITRATE:
                 return activity.getString(R.string.title_bitrate_ceiling);
             case HDR:

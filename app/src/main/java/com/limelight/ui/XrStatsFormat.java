@@ -235,16 +235,6 @@ final class XrStatsFormat {
         return String.format(Locale.US, "%.2f ms | %s", averageMs, detail);
     }
 
-    /** Distinguishes an absent result from a zero or sub-microsecond driver timer result. */
-    static String formatGpuStageForLog(float averageMs, long samples) {
-        if (samples <= 0L || !Float.isFinite(averageMs) || averageMs < 0.0f) {
-            return "n/a";
-        }
-        // Milliseconds with nanosecond precision avoid rounding a short compute-only query to
-        // 0.00. Per-stage counts in the same log record still identify the sampled window.
-        return String.format(Locale.US, "%.6f", averageMs);
-    }
-
     static String thermalStatusName(int status) {
         switch (status) {
             case 0:

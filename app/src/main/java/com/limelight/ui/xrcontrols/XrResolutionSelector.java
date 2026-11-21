@@ -38,27 +38,6 @@ import java.util.Objects;
  * the next row. Either group can wrap further on a narrow panel.</p>
  */
 public final class XrResolutionSelector extends ViewGroup {
-    public static final String RESOLUTION_1080P = XrResolutionOptions.RESOLUTION_1080P;
-    public static final String RESOLUTION_1440P = XrResolutionOptions.RESOLUTION_1440P;
-    public static final String RESOLUTION_4K = XrResolutionOptions.RESOLUTION_4K;
-    public static final String RESOLUTION_UW_1080P = XrResolutionOptions.RESOLUTION_UW_1080P;
-    public static final String RESOLUTION_UW_1440P =
-            XrResolutionOptions.RESOLUTION_UW_1440P;
-    public static final String RESOLUTION_5K2K = XrResolutionOptions.RESOLUTION_5K2K;
-
-    public static final String RESOLUTION_1080P_PORTRAIT =
-            XrResolutionOptions.RESOLUTION_1080P_PORTRAIT;
-    public static final String RESOLUTION_1440P_PORTRAIT =
-            XrResolutionOptions.RESOLUTION_1440P_PORTRAIT;
-    public static final String RESOLUTION_4K_PORTRAIT =
-            XrResolutionOptions.RESOLUTION_4K_PORTRAIT;
-    public static final String RESOLUTION_UW_1080P_PORTRAIT =
-            XrResolutionOptions.RESOLUTION_UW_1080P_PORTRAIT;
-    public static final String RESOLUTION_UW_1440P_PORTRAIT =
-            XrResolutionOptions.RESOLUTION_UW_1440P_PORTRAIT;
-    public static final String RESOLUTION_5K2K_PORTRAIT =
-            XrResolutionOptions.RESOLUTION_5K2K_PORTRAIT;
-
     public interface OnResolutionSelectedListener {
         /** Returns true when the explicit resolution ID is accepted. */
         boolean onResolutionSelected(@NonNull String resolutionId);
@@ -290,10 +269,6 @@ public final class XrResolutionSelector extends ViewGroup {
             }
         }
         return new int[] {16, 9};
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     @Override

@@ -120,7 +120,7 @@ final class XrStatsPanel {
     private int statsRasterHeightPixels = STATS_RASTER_HEIGHT;
     private TextView statsTitle;
     private TableLayout statsTable;
-    private boolean reuseStatsRows;
+    /** Next table index setStats() fills; rows past it are trimmed when the pass finishes. */
     private int primaryStatsRowCursor;
 
     /** Compact single-column performance panel beside the video. */
@@ -563,13 +563,11 @@ final class XrStatsPanel {
     }
 
     private void beginStatsRows() {
-        reuseStatsRows = true;
         primaryStatsRowCursor = 0;
     }
 
     private void finishStatsRows() {
         trimStatsTable(statsTable, primaryStatsRowCursor);
-        reuseStatsRows = false;
         scheduleStatsPanelFit();
     }
 
@@ -646,14 +644,8 @@ final class XrStatsPanel {
         return obtainStatsRow(section ? STATS_ROW_SECTION : STATS_ROW_METRIC);
     }
 
+    /** Reuses the row at the cursor when it has the expected kind, replacing it otherwise. */
     private TableRow obtainStatsRow(String expectedTag) {
-        boolean section = STATS_ROW_SECTION.equals(expectedTag);
-        if (!reuseStatsRows) {
-            TableRow row = createStatsRow(expectedTag);
-            statsTable.addView(row);
-            return row;
-        }
-
         int index = primaryStatsRowCursor++;
         View existing = index < statsTable.getChildCount()
                 ? statsTable.getChildAt(index) : null;

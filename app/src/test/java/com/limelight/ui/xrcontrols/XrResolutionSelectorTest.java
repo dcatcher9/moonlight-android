@@ -97,10 +97,10 @@ public final class XrResolutionSelectorTest {
             selectedByListener.set(id);
             return true;
         });
-        selector.setSelectedResolutionId(XrResolutionSelector.RESOLUTION_1080P);
+        selector.setSelectedResolutionId(XrResolutionOptions.RESOLUTION_1080P);
 
         AppCompatButton ultraHd = selector.findCardByResolutionId(
-                XrResolutionSelector.RESOLUTION_4K);
+                XrResolutionOptions.RESOLUTION_4K);
         assertFalse(ultraHd.isFocused());
         assertTrue(ultraHd.isFocusable());
         assertFalse(ultraHd.isFocusableInTouchMode());
@@ -121,8 +121,8 @@ public final class XrResolutionSelectorTest {
         shadowOf(Looper.getMainLooper()).idle();
 
         assertEquals(1, listenerCalls.get());
-        assertEquals(XrResolutionSelector.RESOLUTION_4K, selectedByListener.get());
-        assertEquals(XrResolutionSelector.RESOLUTION_4K,
+        assertEquals(XrResolutionOptions.RESOLUTION_4K, selectedByListener.get());
+        assertEquals(XrResolutionOptions.RESOLUTION_4K,
                 selector.getSelectedResolutionId());
         assertTrue(ultraHd.isActivated());
     }
@@ -158,16 +158,16 @@ public final class XrResolutionSelectorTest {
     public void sameHeightAcrossFamiliesSharesADensityTier() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
         // 1080p and UW 1080p are the same vertical class; only the glyph aspect separates them.
-        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_1080P),
-                densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1080P));
-        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_1440P),
-                densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P));
-        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_4K),
-                densityOf(selector, XrResolutionSelector.RESOLUTION_5K2K));
-        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_1080P),
-                densityOf(selector, XrResolutionSelector.RESOLUTION_1080P_PORTRAIT));
-        assertEquals(densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P),
-                densityOf(selector, XrResolutionSelector.RESOLUTION_UW_1440P_PORTRAIT));
+        assertEquals(densityOf(selector, XrResolutionOptions.RESOLUTION_1080P),
+                densityOf(selector, XrResolutionOptions.RESOLUTION_UW_1080P));
+        assertEquals(densityOf(selector, XrResolutionOptions.RESOLUTION_1440P),
+                densityOf(selector, XrResolutionOptions.RESOLUTION_UW_1440P));
+        assertEquals(densityOf(selector, XrResolutionOptions.RESOLUTION_4K),
+                densityOf(selector, XrResolutionOptions.RESOLUTION_5K2K));
+        assertEquals(densityOf(selector, XrResolutionOptions.RESOLUTION_1080P),
+                densityOf(selector, XrResolutionOptions.RESOLUTION_1080P_PORTRAIT));
+        assertEquals(densityOf(selector, XrResolutionOptions.RESOLUTION_UW_1440P),
+                densityOf(selector, XrResolutionOptions.RESOLUTION_UW_1440P_PORTRAIT));
     }
 
     private static int densityOf(XrResolutionSelector selector, String resolutionId) {
@@ -184,20 +184,20 @@ public final class XrResolutionSelectorTest {
             selectedByListener.set(id);
             return true;
         });
-        selector.setSelectedResolutionId(XrResolutionSelector.RESOLUTION_1080P);
+        selector.setSelectedResolutionId(XrResolutionOptions.RESOLUTION_1080P);
 
         AppCompatButton fullHd = selector.findCardByResolutionId(
-                XrResolutionSelector.RESOLUTION_1080P);
+                XrResolutionOptions.RESOLUTION_1080P);
         AppCompatButton ultraHd = selector.findCardByResolutionId(
-                XrResolutionSelector.RESOLUTION_4K);
+                XrResolutionOptions.RESOLUTION_4K);
         assertTrue(fullHd.isActivated());
         assertTrue(fullHd.isSelected());
         assertFalse(ultraHd.isActivated());
 
         ultraHd.performClick();
 
-        assertEquals(XrResolutionSelector.RESOLUTION_4K, selectedByListener.get());
-        assertEquals(XrResolutionSelector.RESOLUTION_4K,
+        assertEquals(XrResolutionOptions.RESOLUTION_4K, selectedByListener.get());
+        assertEquals(XrResolutionOptions.RESOLUTION_4K,
                 selector.getSelectedResolutionId());
         assertFalse(fullHd.isActivated());
         assertTrue(ultraHd.isActivated());
@@ -338,11 +338,11 @@ public final class XrResolutionSelectorTest {
         assertTrue(inherited.getText().toString().startsWith("Custom"));
         assertTrue(inherited.getText().toString().contains("2400 \u00d7 1080"));
 
-        selector.findCardByResolutionId(XrResolutionSelector.RESOLUTION_4K).performClick();
+        selector.findCardByResolutionId(XrResolutionOptions.RESOLUTION_4K).performClick();
 
         assertEquals(XrResolutionOptions.modeSubpaneOptions().size(), selector.getCardCount());
         assertNull(selector.findCardByResolutionId(XrResolutionOptions.RESOLUTION_PHONE_20_9));
-        assertEquals(XrResolutionSelector.RESOLUTION_4K, selector.getSelectedResolutionId());
+        assertEquals(XrResolutionOptions.RESOLUTION_4K, selector.getSelectedResolutionId());
     }
 
     @Test
@@ -435,14 +435,14 @@ public final class XrResolutionSelectorTest {
         RectF screen = customCard.glyph.getScreenBounds();
         assertEquals(3840f / 1600f, screen.width() / screen.height(), 0.0001f);
 
-        selector.findCardByResolutionId(XrResolutionSelector.RESOLUTION_1440P).performClick();
+        selector.findCardByResolutionId(XrResolutionOptions.RESOLUTION_1440P).performClick();
 
-        assertEquals(XrResolutionSelector.RESOLUTION_1440P,
+        assertEquals(XrResolutionOptions.RESOLUTION_1440P,
                 selector.getSelectedResolutionId());
         assertEquals(XrResolutionOptions.standardOptions().size(), selector.getCardCount());
         assertNull(selector.findCardByResolutionId(customId));
         assertTrue(selector.findCardByResolutionId(
-                XrResolutionSelector.RESOLUTION_1440P).isActivated());
+                XrResolutionOptions.RESOLUTION_1440P).isActivated());
     }
 
     private int dp(int value) {

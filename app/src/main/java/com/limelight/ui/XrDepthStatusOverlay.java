@@ -46,7 +46,6 @@ final class XrDepthStatusOverlay {
     private PanelEntity panel;
     private View root;
     private TextView text;
-    private int pendingPhase;
     private int phase;
     private final Runnable showRunnable = this::showNow;
 
@@ -112,8 +111,9 @@ final class XrDepthStatusOverlay {
     private void showNow() {
         if (panel != null && !panel.isDisposed() && isBusy()) {
             if (text != null) {
-                int message = message(pendingPhase);
-                text.setText(activity.getString(message));
+                // isBusy() holds only for the phase that posted this show: any later push
+                // cancels it first.
+                text.setText(activity.getString(message(phase)));
             }
             setVisible(true);
         }
@@ -131,7 +131,6 @@ final class XrDepthStatusOverlay {
     /** Cancels a pending show, forgets the host phase and hides the overlay. */
     void reset() {
         handler.removeCallbacks(showRunnable);
-        pendingPhase = 0;
         phase = 0;
         setVisible(false);
     }
@@ -155,7 +154,6 @@ final class XrDepthStatusOverlay {
         }
         handler.removeCallbacks(showRunnable);
         if (phase == 1 || phase == 3) {
-            pendingPhase = phase;
             handler.postDelayed(showRunnable, SHOW_DELAY_MS);
         } else {
             setVisible(false);
