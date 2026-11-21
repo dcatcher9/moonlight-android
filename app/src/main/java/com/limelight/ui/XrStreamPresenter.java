@@ -824,9 +824,16 @@ public class XrStreamPresenter {
         this.reconnectViewState = XrReconnectViewState.consumeFrom(activity.getIntent());
         if (reconnectViewState != null) {
             panelHeightMeters = reconnectViewState.panelHeightMeters;
+            if (reconnectViewState.cinemaViewExpanded) {
+                // The handed-over quad is the Cinema preset. Resume it so Exit Cinema and the
+                // durable per-PC height both use the pre-Cinema screen.
+                cinemaController.resumeExpanded(reconnectViewState.cinemaRestoreHeightMeters,
+                        reconnectViewState.cinemaRestorePose);
+            }
             LimeLog.info("XR: applying reconnect view handoff at height "
                     + panelHeightMeters + " m"
-                    + (reconnectViewState.realWorldPose != null ? " with pose" : ""));
+                    + (reconnectViewState.realWorldPose != null ? " with pose" : "")
+                    + (reconnectViewState.cinemaViewExpanded ? " in Cinema View" : ""));
         }
         // On a host-confirmed resume, restore direct Host AI/Game/Movie intent immediately. Client SBS
         // is deferred until after frame 1 because it requires a live decoder-to-GL handoff. A
@@ -2340,6 +2347,9 @@ public class XrStreamPresenter {
 
         streamPresentationReady = true;
         hostTelemetrySubscription.reconcile();
+        // A Cinema View resumed from a settings restart applies its background once the control
+        // transport is open; an already applied override makes this a no-op.
+        cinemaController.applyCinemaBackground();
         for (BarItem item : barItems) {
             if (item.selectsMode != null) {
                 item.setEnabled(settingsControlsEnabled() && XrPresentationPolicy.isPresentationModeSupported(
@@ -4149,7 +4159,9 @@ public class XrStreamPresenter {
     /**
      * Snapshots the live rendered geometry before a settings restart tears down SceneCore. The replacement
      * Activity consumes this transient Intent state, preserving both physical size and apparent
-     * size from the screen's real-world distance.
+     * size from the screen's real-world distance. An applied Cinema View preset travels with its
+     * restore target, so the replacement resumes Cinema instead of adopting its height as the
+     * durable per-PC height.
      */
     public void captureReconnectViewState(Intent reconnectIntent) {
         reconnectIntent.putExtra(EXTRA_GAME_WIDEN_FAILURE,
@@ -4182,11 +4194,17 @@ public class XrStreamPresenter {
         panelHeightMeters = XrReconnectViewState.effectiveHeight(
                 shapeHeight, realWorldScaleY, panelHeightMeters);
         viewStateStore.saveHeight(cinemaController.durableHeightMeters());
-        new XrReconnectViewState(panelHeightMeters, realWorldPose)
-                .writeTo(reconnectIntent);
+        XrReconnectViewState handoff = new XrReconnectViewState(panelHeightMeters, realWorldPose);
+        boolean cinemaViewExpanded = cinemaController.isExpanded();
+        if (cinemaViewExpanded) {
+            handoff = handoff.withCinemaRestore(cinemaController.restoreHeightMeters(),
+                    cinemaController.restorePose());
+        }
+        handoff.writeTo(reconnectIntent);
         LimeLog.info("XR: captured reconnect view at height "
                 + panelHeightMeters + " m"
-                + (realWorldPose != null ? " with real-world pose" : ""));
+                + (realWorldPose != null ? " with real-world pose" : "")
+                + (cinemaViewExpanded ? " in Cinema View" : ""));
     }
 
     /** Host mode that must be part of launch/resume so decoder frame 1 matches the XR surface. */

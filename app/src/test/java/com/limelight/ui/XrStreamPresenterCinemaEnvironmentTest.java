@@ -18,6 +18,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Looper;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -367,6 +368,50 @@ public class XrStreamPresenterCinemaEnvironmentTest {
         verify(environment, times(1)).setPreferredPassthroughOpacity(
                 SpatialEnvironment.NO_PASSTHROUGH_OPACITY_PREFERENCE);
         verify(surface).dispose();
+    }
+
+    @Test
+    public void settingsRestartResumesCinemaAndKeepsThePreCinemaDurableHeight() {
+        tapCinema();
+        acknowledgeApplied();
+        when(surface.getPose(Space.REAL_WORLD)).thenReturn(
+                new Pose(new Vector3(0f, 1.5f, -2f), Quaternion.Identity));
+        Intent reconnect = new Intent();
+        presenter.captureReconnectViewState(reconnect);
+        Activity activity = activityController.get();
+        XrViewStateStore store = new XrViewStateStore(activity, reconnect);
+        assertEquals(1.1f, store.restoreHeight(), 0f);
+
+        activity.setIntent(reconnect);
+        XrStreamPresenter replacement = new XrStreamPresenter(activity,
+                PreferenceConfiguration.readPreferences(activity),
+                ignored -> { }, ignored -> { });
+        try {
+            Object replacementCinema = ReflectionHelpers.getField(
+                    replacement, "cinemaController");
+            assertTrue(ReflectionHelpers.<Boolean>getField(
+                    replacementCinema, "cinemaViewExpanded"));
+            assertEquals(2f, ReflectionHelpers.<Float>getField(
+                    replacement, "panelHeightMeters"), 0f);
+            // The replacement's first durable write keeps the pre-Cinema height.
+            ReflectionHelpers.callInstanceMethod(replacement, "persistPresentationState");
+            assertEquals(1.1f, store.restoreHeight(), 0f);
+
+            SurfaceEntity replacementSurface = mock(SurfaceEntity.class);
+            ReflectionHelpers.setField(replacement, "surfaceEntity", replacementSurface);
+            ReflectionHelpers.setField(replacement, "fullAspect", 16f / 9f);
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(500, TimeUnit.MILLISECONDS);
+            ReflectionHelpers.callInstanceMethod(replacement, "onCinemaActionTapped");
+
+            assertFalse(ReflectionHelpers.<Boolean>getField(
+                    replacementCinema, "cinemaViewExpanded"));
+            assertEquals(1.1f, ReflectionHelpers.<Float>getField(
+                    replacement, "panelHeightMeters"), 0f);
+            verify(replacementSurface).setPose(originalPose, Space.REAL_WORLD);
+            assertEquals(1.1f, store.restoreHeight(), 0f);
+        } finally {
+            replacement.onDestroy();
+        }
     }
 
     private void tapCinema() {

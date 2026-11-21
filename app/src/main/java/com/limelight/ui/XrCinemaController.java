@@ -16,7 +16,8 @@ import com.limelight.preferences.PreferenceConfiguration;
  * Cinema View state: whether the enlarged preset is applied, the pose and height to restore on
  * exit, and the environment override that accompanies it. {@link XrStreamPresenter} keeps the
  * video quad, its height and the Cinema tile and options controls; this class reaches the quad
- * through {@link Host}.
+ * through {@link Host}. A settings restart hands the applied preset and its restore target to
+ * the replacement presenter through {@link XrReconnectViewState}.
  */
 final class XrCinemaController {
     /** The quad and session state the preset reads and writes through its owner. */
@@ -73,6 +74,26 @@ final class XrCinemaController {
         cinemaViewExpanded = false;
         cinemaRestorePose = null;
         cinemaRestoreHeightMeters = DEFAULT_PANEL_HEIGHT_METERS;
+    }
+
+    /** Height Exit Cinema restores; the current quad height while the preset is not applied. */
+    float restoreHeightMeters() {
+        return durableHeightMeters();
+    }
+
+    /** Real-world pose Exit Cinema restores, or null when it was unavailable or not applied. */
+    Pose restorePose() {
+        return cinemaViewExpanded ? cinemaRestorePose : null;
+    }
+
+    /**
+     * Marks the preset as applied with the restore target a settings restart handed over. The
+     * replacement quad already carries the Cinema size and pose, so the quad is not touched.
+     */
+    void resumeExpanded(float restoreHeightMeters, Pose restorePose) {
+        cinemaRestoreHeightMeters = XrViewStateStore.clampHeight(restoreHeightMeters);
+        cinemaRestorePose = restorePose;
+        cinemaViewExpanded = true;
     }
 
     /**
