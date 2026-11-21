@@ -1,6 +1,6 @@
 package com.limelight.ui;
 
-/** Pure lifecycle policy for superseding and recovering a Client-SBS packed-output resize. */
+/** Pure lifecycle policy for starting and recovering a Client-SBS packed-output resize. */
 final class ClientSbsResizePolicy {
     static final long EGL_STAGE_TIMEOUT_MS = 2_000L;
     static final long SWAP_FALLBACK_TIMEOUT_MS = 8_000L;
@@ -26,11 +26,13 @@ final class ClientSbsResizePolicy {
     }
 
     /**
-     * An attach has no guaranteed EGL surface to detach yet. A swap-wait has one, but its
-     * acknowledgement must be cancelled before applying the newer geometry.
+     * A new request may start from idle, or replace the geometry of a resize that still waits
+     * for its acknowledged detach; that detach then attaches the newest geometry. An attach or
+     * swap wait owns an EGL surface whose transaction has to finish first, so a request there
+     * is refused. The presenter starts at most one resize per live-quality transaction.
      */
-    static boolean queueSupersedingRequest(Stage stage) {
-        return stage == Stage.WAITING_FOR_ATTACH || stage == Stage.WAITING_FOR_SWAP;
+    static boolean acceptsNewRequest(Stage stage) {
+        return stage == Stage.IDLE || stage == Stage.WAITING_FOR_DETACH;
     }
 
     /** Context recovery may repeat exact validation while either attachment or swap is pending. */

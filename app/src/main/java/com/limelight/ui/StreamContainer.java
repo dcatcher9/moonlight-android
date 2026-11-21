@@ -625,10 +625,6 @@ public class StreamContainer extends FrameLayout {
         } else if (pendingResize) {
             if (!success) {
                 completeClientSbsResize(eglAttachGeneration, false);
-            } else if (mClientSbsResize.queuedCallback != null) {
-                // The host has already superseded this geometry. EGL now owns an exact surface,
-                // so detach it immediately without exposing or waiting for a retired-size frame.
-                advanceToQueuedClientSbsResize();
             } else {
                 int resizeGeneration = eglAttachGeneration;
                 mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP;
@@ -834,6 +830,7 @@ public class StreamContainer extends FrameLayout {
         if (callback == null || packed == null || mXrPresenter == null || mDestroyed
                 || mStereoRenderer == null || !mStereoRenderer.isClientSbs()
                 || mClientSbsSwitch.callback != null
+                || !ClientSbsResizePolicy.acceptsNewRequest(mClientSbsResize.stage)
                 || !mStereoRenderer.suspendPresentationForLiveStreamResize(width, height)) {
             return false;
         }
@@ -842,26 +839,12 @@ public class StreamContainer extends FrameLayout {
         if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.IDLE) {
             mClientSbsResize.clearPostAckBoundary();
         }
-        if (ClientSbsResizePolicy.queueSupersedingRequest(mClientSbsResize.stage)) {
-            // requestResume() does not prove that EGL has created a window surface yet. Pausing again
-            // in that gap can produce no destroySurface callback and strand the clamp. Retain only
-            // the newest clamp, let the current exact attachment finish while hidden, then detach
-            // that known surface and apply the queued geometry.
-            mClientSbsResize.queuedCallback = callback;
-            mClientSbsResize.queuedGeneration = resizeGeneration;
-            mClientSbsResize.queuedWidth = width;
-            mClientSbsResize.queuedHeight = height;
-            if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP) {
-                advanceToQueuedClientSbsResize();
-            }
-        } else {
-            // While a detach is already acknowledged-in-flight, coalescing is safe: its factory
-            // callback will attach these latest values regardless of the older operation token.
-            mClientSbsResize.pendingCallback = callback;
-            mClientSbsResize.pendingGeneration = resizeGeneration;
-            mClientSbsResize.pendingWidth = width;
-            mClientSbsResize.pendingHeight = height;
-        }
+        // While a detach is already acknowledged-in-flight, coalescing is safe: its factory
+        // callback will attach these latest values regardless of the older operation token.
+        mClientSbsResize.pendingCallback = callback;
+        mClientSbsResize.pendingGeneration = resizeGeneration;
+        mClientSbsResize.pendingWidth = width;
+        mClientSbsResize.pendingHeight = height;
 
         if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.IDLE) {
             mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
@@ -916,25 +899,16 @@ public class StreamContainer extends FrameLayout {
         if (generation != mClientSbsResize.pendingGeneration) {
             return;
         }
-        if (success && mClientSbsResize.queuedCallback != null) {
-            advanceToQueuedClientSbsResize();
-            return;
-        }
-
-        // On failure, report through the newest queued request because it owns the presenter's
-        // currently armed confirmation boundary.
         if (!success) {
             mDecoderHandoff.cancelAfterFailure();
         }
-        SurfaceSwitchCallback callback = mClientSbsResize.queuedCallback != null
-                ? mClientSbsResize.queuedCallback : mClientSbsResize.pendingCallback;
+        SurfaceSwitchCallback callback = mClientSbsResize.pendingCallback;
         mClientSbsResize.timeoutToken++;
         if (!success) {
             abandonClientSbsPresentation();
         }
         mClientSbsResize.clearPending();
         mClientSbsResize.stageDeadlineMs = 0L;
-        mClientSbsResize.clearQueued();
         mClientSbsResize.clearPostAckBoundary();
         mClientSbsResize.stage = ClientSbsResizePolicy.Stage.IDLE;
         if (callback != null) {
@@ -942,37 +916,14 @@ public class StreamContainer extends FrameLayout {
         }
     }
 
-    private void advanceToQueuedClientSbsResize() {
-        if (mClientSbsResize.queuedCallback == null || mStereoRenderer == null) {
-            return;
-        }
-        // The authoritative clamp arrived while another replacement was attaching/presenting.
-        // Its exact EGL surface now exists, so it is safe to detach. Never report the superseded
-        // geometry as ready, even if its after-swap acknowledgement was already queued.
-        mStereoRenderer.cancelLiveStreamResizeCompletion();
-        mClientSbsResize.promoteQueued();
-        mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
-        mRequestedEglDetachGeneration = mClientSbsResize.pendingGeneration;
-        armClientSbsResizeTimeoutForActiveStage();
-        ((ClientSbsRenderSurface) mSurfaceView).requestPause();
-    }
-
     private void failClientSbsResizeChain() {
         if (mClientSbsResize.pendingCallback != null) {
             completeClientSbsResize(mClientSbsResize.pendingGeneration, false);
-        } else if (mClientSbsResize.queuedCallback != null) {
-            SurfaceSwitchCallback callback = mClientSbsResize.queuedCallback;
-            mClientSbsResize.timeoutToken++;
-            mClientSbsResize.clearQueued();
-            mClientSbsResize.clearPostAckBoundary();
-            mClientSbsResize.stageDeadlineMs = 0L;
-            mClientSbsResize.stage = ClientSbsResizePolicy.Stage.IDLE;
-            callback.onComplete(false);
         }
     }
 
     /**
-     * Marks the exact active/queued Client-SBS resize reached by the current post-ACK decoder
+     * Marks the exact active Client-SBS resize reached by the current post-ACK decoder
      * generation. XrStreamPresenter rejects stale decoder generations before invoking this method;
      * retaining the resize generation here also prevents an A -> B -> A geometry cycle from
      * borrowing an older boundary.
@@ -983,12 +934,7 @@ public class StreamContainer extends FrameLayout {
         }
 
         int matchedGeneration = 0;
-        if (mClientSbsResize.queuedCallback != null
-                && ClientSbsResizePolicy.sameGeometry(
-                        width, height,
-                        mClientSbsResize.queuedWidth, mClientSbsResize.queuedHeight)) {
-            matchedGeneration = mClientSbsResize.queuedGeneration;
-        } else if (mClientSbsResize.pendingCallback != null
+        if (mClientSbsResize.pendingCallback != null
                 && ClientSbsResizePolicy.sameGeometry(
                         width, height,
                         mClientSbsResize.pendingWidth, mClientSbsResize.pendingHeight)) {

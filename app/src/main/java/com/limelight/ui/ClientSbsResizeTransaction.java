@@ -1,8 +1,8 @@
 package com.limelight.ui;
 
 /**
- * State of the live Client SBS resize: the active request, the newest request queued behind it,
- * the current stage with its watchdog, and the post-ACK/cold-backend proof boundary.
+ * State of the live Client SBS resize: the active request, the current stage with its watchdog,
+ * and the post-ACK/cold-backend proof boundary.
  * StreamContainer drives every transition on the main thread; this type only groups the fields
  * and the resets that touch nothing else.
  */
@@ -13,12 +13,6 @@ final class ClientSbsResizeTransaction {
     int pendingGeneration;
     int pendingWidth;
     int pendingHeight;
-
-    /** Latest host clamp received while the current replacement EGL surface is still attaching. */
-    StreamContainer.SurfaceSwitchCallback queuedCallback;
-    int queuedGeneration;
-    int queuedWidth;
-    int queuedHeight;
 
     ClientSbsResizePolicy.Stage stage = ClientSbsResizePolicy.Stage.IDLE;
     /** Incremented to invalidate every previously posted stage watchdog. */
@@ -44,22 +38,6 @@ final class ClientSbsResizeTransaction {
         pendingHeight = 0;
     }
 
-    void clearQueued() {
-        queuedCallback = null;
-        queuedGeneration = 0;
-        queuedWidth = 0;
-        queuedHeight = 0;
-    }
-
-    /** Makes the queued request the active one. */
-    void promoteQueued() {
-        pendingCallback = queuedCallback;
-        pendingGeneration = queuedGeneration;
-        pendingWidth = queuedWidth;
-        pendingHeight = queuedHeight;
-        clearQueued();
-    }
-
     boolean hasPostAckBoundaryForActiveResize() {
         return postAckGeneration > 0
                 && postAckGeneration == pendingGeneration
@@ -78,11 +56,10 @@ final class ClientSbsResizeTransaction {
         coldBackendWaitLogged = false;
     }
 
-    /** Teardown: drops both requests without invoking them and invalidates posted watchdogs. */
+    /** Teardown: drops the request without invoking it and invalidates posted watchdogs. */
     void cancel() {
         clearPending();
         stageDeadlineMs = 0L;
-        clearQueued();
         timeoutToken++;
         clearPostAckBoundary();
         stage = ClientSbsResizePolicy.Stage.IDLE;

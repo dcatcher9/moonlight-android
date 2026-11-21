@@ -8,11 +8,15 @@ import org.junit.Test;
 
 public final class ClientSbsResizePolicyTest {
     @Test
-    public void clampBeforeEglCreationQueuesInsteadOfWaitingForImpossibleDetach() {
-        assertTrue(ClientSbsResizePolicy.queueSupersedingRequest(
-                ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH));
-        assertFalse(ClientSbsResizePolicy.queueSupersedingRequest(
+    public void onlyAnIdleOrDetachingResizeAcceptsANewRequest() {
+        assertTrue(ClientSbsResizePolicy.acceptsNewRequest(
+                ClientSbsResizePolicy.Stage.IDLE));
+        assertTrue(ClientSbsResizePolicy.acceptsNewRequest(
                 ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH));
+        assertFalse(ClientSbsResizePolicy.acceptsNewRequest(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH));
+        assertFalse(ClientSbsResizePolicy.acceptsNewRequest(
+                ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP));
     }
 
     @Test
