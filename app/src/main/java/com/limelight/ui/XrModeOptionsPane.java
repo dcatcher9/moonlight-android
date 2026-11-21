@@ -157,6 +157,8 @@ final class XrModeOptionsPane {
     private TextView clientModelNameView;
     private TextView clientAspectBucketView;
     private TextView clientRuntimeStatusView;
+    /** Client header status; refreshed with the GPU status card. */
+    private TextView clientHeaderStatusView;
     private XrChoiceGroup moviePictureFormatChoiceGroup;
     private TextView gameSourceStatusView;
     private TextView gameSourceDetailView;
@@ -279,7 +281,8 @@ final class XrModeOptionsPane {
                         host.hostDepthStatusText());
                 break;
             case CLIENT_SBS_AI:
-                addModeStatus(header, activity.getString(R.string.xr_mode_client_ai_description),
+                clientHeaderStatusView = addModeStatus(header,
+                        activity.getString(R.string.xr_mode_client_ai_description),
                         host.clientSbsRuntimeStatus(host.clientSbsModeSettingsModel()));
                 break;
             default:
@@ -596,13 +599,12 @@ final class XrModeOptionsPane {
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1.25f));
     }
 
-    private void addModeStatus(LinearLayout row, String label, String value) {
-        LinearLayout status = labeledValue(label, value,
-                value.toLowerCase(Locale.US).contains("unavailable")
-                        ? paletteColor(R.color.xr_danger)
-                        : paletteColor(R.color.xr_text_primary));
+    /** Adds a header status column and returns its value view. */
+    private TextView addModeStatus(LinearLayout row, String label, String value) {
+        LinearLayout status = labeledValue(label, value, statusColor(value));
         row.addView(status, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 2.0f));
+        return (TextView) status.getChildAt(1);
     }
 
     private void addClientSbsModeOptions(LinearLayout row) {
@@ -625,7 +627,7 @@ final class XrModeOptionsPane {
         String runtimeStatus = host.clientSbsRuntimeStatus(model);
         LinearLayout runtime = labeledValue(
                 activity.getString(R.string.xr_client_gpu_status), runtimeStatus,
-                clientRuntimeStatusColor(runtimeStatus));
+                statusColor(runtimeStatus));
         clientRuntimeStatusView = (TextView) runtime.getChildAt(1);
         row.addView(runtime,
                 new LinearLayout.LayoutParams(0,
@@ -672,6 +674,7 @@ final class XrModeOptionsPane {
         clientModelNameView = null;
         clientAspectBucketView = null;
         clientRuntimeStatusView = null;
+        clientHeaderStatusView = null;
         modeOptionsContentRoot = null;
         modeOptionsFitScheduled = false;
         modeOptionsStatusHandler.removeCallbacks(modeOptionsFitRunnable);
@@ -736,16 +739,23 @@ final class XrModeOptionsPane {
         updateClientSbsRuntimeStatusView();
     }
 
+    /** Refreshes both the header status and the GPU status card from the live backend. */
     private void updateClientSbsRuntimeStatusView() {
-        if (clientRuntimeStatusView == null) {
+        if (clientRuntimeStatusView == null && clientHeaderStatusView == null) {
             return;
         }
         String status = host.clientSbsRuntimeStatus(host.clientSbsModeSettingsModel());
-        clientRuntimeStatusView.setText(status);
-        clientRuntimeStatusView.setTextColor(clientRuntimeStatusColor(status));
+        int color = statusColor(status);
+        for (TextView view : new TextView[] {clientHeaderStatusView, clientRuntimeStatusView}) {
+            if (view != null) {
+                view.setText(status);
+                view.setTextColor(color);
+            }
+        }
     }
 
-    private int clientRuntimeStatusColor(String status) {
+    /** Status text that names an unavailable backend or source uses the danger colour. */
+    private int statusColor(String status) {
         return status.toLowerCase(Locale.US).contains("unavailable")
                 ? paletteColor(R.color.xr_danger)
                 : paletteColor(R.color.xr_text_primary);

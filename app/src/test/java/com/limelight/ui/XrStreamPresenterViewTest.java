@@ -317,6 +317,41 @@ public final class XrStreamPresenterViewTest {
     }
 
     @Test
+    public void clientOptionsHeaderStatusFollowsTheLiveBackendWithTheGpuCard()
+            throws Exception {
+        ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
+        Activity activity = controller.get();
+        activity.setTheme(R.style.AppTheme);
+        controller.setup();
+        XrStreamPresenter presenter = new XrStreamPresenter(
+                activity, PreferenceConfiguration.readPreferences(activity),
+                surface -> { }, visible -> { });
+        FrameLayout host = new FrameLayout(activity);
+        setField(modeOptions(presenter), "modeOptionsHost", host);
+        XrControlUiState state = (XrControlUiState) getField(presenter, "controlUiState");
+        state.toggleModeOptions(PresentationMode.CLIENT_SBS_AI.name());
+        Method render = XrModeOptionsPane.class.getDeclaredMethod("renderModeOptions");
+        render.setAccessible(true);
+        render.invoke(modeOptions(presenter));
+        String initial = ((ClientSbsModeSettingsModel) getField(
+                presenter, "clientSbsModeSettingsModel")).status;
+        assertEquals(2, java.util.Collections.frequency(visibleTexts(host), initial));
+
+        // The open pane refreshes in place; the header must not keep the rendered status.
+        setField(presenter, "clientSbsModeSettingsModel",
+                new ClientSbsModeSettingsModel("640 x 384", "Unavailable"));
+        Method update = XrModeOptionsPane.class.getDeclaredMethod("updateModeOptionsView");
+        update.setAccessible(true);
+        update.invoke(modeOptions(presenter));
+
+        List<String> texts = visibleTexts(host);
+        assertFalse(texts.contains(initial));
+        assertEquals(2, java.util.Collections.frequency(texts, "Unavailable"));
+        presenter.onDestroy();
+        controller.destroy();
+    }
+
+    @Test
     public void automaticSettingsHaveOnlyDefaultsInTheFooter() throws Exception {
         ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class);
         Activity activity = controller.get();
