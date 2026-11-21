@@ -25,7 +25,16 @@ public class NsdManagerDiscoveryAgent extends MdnsDiscoveryAgent {
     private NsdManager.DiscoveryListener pendingListener;
     private NsdManager.DiscoveryListener activeListener;
     private final HashMap<String, NsdManager.ServiceInfoCallback> serviceCallbacks = new HashMap<>();
-    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+    // NsdManager may deliver a resolve callback after stopDiscovery(), so the executor is never
+    // shut down; its one thread exits when idle instead of outliving the agent.
+    private final ThreadPoolExecutor executor = createCallbackExecutor();
+
+    static ThreadPoolExecutor createCallbackExecutor() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 10, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
 
     private NsdManager.DiscoveryListener createDiscoveryListener() {
         return new NsdManager.DiscoveryListener() {
