@@ -29,7 +29,7 @@ import java.util.function.BooleanSupplier;
 import javax.microedition.khronos.egl.EGL10;
 
 /** Owns the single XR presentation route, guarded decoder/GL surface handoffs, and input bridge. */
-public class StreamContainer extends FrameLayout implements SurfaceHolder.Callback {
+public class StreamContainer extends FrameLayout {
     public interface SurfaceSwitchCallback {
         void onComplete(boolean success);
     }
@@ -1430,20 +1430,6 @@ public class StreamContainer extends FrameLayout implements SurfaceHolder.Callba
         if (onSurfaceAvailable != null) {
             onSurfaceAvailable.run();
         }
-    }
-
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-        // The unused Android holder has no presentation or lifecycle authority.
-    }
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        // Input bounds follow View layout; video is delivered through SceneCore.
-    }
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-        // Holder visibility is always intentional. Actual View detach and Activity lifecycle
-        // still stop streaming independently of this unused surface.
     }
 
     private boolean destroyStereoRenderer() {

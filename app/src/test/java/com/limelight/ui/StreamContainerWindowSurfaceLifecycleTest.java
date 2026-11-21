@@ -123,9 +123,7 @@ public final class StreamContainerWindowSurfaceLifecycleTest {
         assertTrue(container.isFocusableInTouchMode());
         assertSame(window, container.getSurfaceView());
 
-        container.surfaceCreated(window.getHolder());
-        container.surfaceChanged(window.getHolder(), 1, 1000, 1000);
-        container.surfaceDestroyed(window.getHolder());
+        // The container registers no holder callback; only its own lifecycle reaches Game.
         assertEquals(0, game.created);
         assertEquals(0, game.changed);
         assertEquals(0, game.destroyed);
@@ -208,7 +206,6 @@ public final class StreamContainerWindowSurfaceLifecycleTest {
         assertEquals(1, game.created);
         assertEquals(1, game.changed);
         completeSwitch(false, true);
-        container.surfaceDestroyed(window.getHolder());
         assertEquals(View.INVISIBLE, window.getVisibility());
         assertEquals(0, game.destroyed);
         assertEquals(0, game.cleanupRequests);
