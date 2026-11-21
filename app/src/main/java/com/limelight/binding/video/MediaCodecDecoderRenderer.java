@@ -1746,7 +1746,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             LimeLog.severe("Decoder setup aborted because its prepared output surface is invalid");
             return -4;
         }
-        this.refreshRate = redrawRate;
+        // KEY_FRAME_RATE, the SPS patch and Choreographer pacing all divide by or encode this
+        // value, so it takes the same positive fallback as the effective stream rate above.
+        this.refreshRate = streamFrameRateState.getEffectiveStreamFps();
 
         return initializeDecoder(false);
     }
