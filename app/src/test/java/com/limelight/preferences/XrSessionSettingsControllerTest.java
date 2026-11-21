@@ -1455,6 +1455,65 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void game3dResolutionDeltaIsCheckedAgainstTheExactPackedWidth() {
+        // Packed Game SBS is exactly 2W x H: 2 x 2560 = 5120 fits; 2 x 3840 = 7680 does not.
+        XrSessionSettingsController controller = controller();
+        controller.setLiveResolutionEnvelope(5120, 2160);
+        controller.selectPresentationMode(PresentationMode.GAME_3D);
+        controller.selectModeQualitySetting(PresentationMode.GAME_3D,
+                SessionSettingsModel.Key.RESOLUTION, "2560x1440");
+        assertTrue(controller.selectedModeHasLiveApplicableChange());
+        assertFalse(controller.selectedModeRequiresReconnect());
+
+        controller.selectModeQualitySetting(PresentationMode.GAME_3D,
+                SessionSettingsModel.Key.RESOLUTION, "3840x2160");
+        assertTrue(controller.selectedModeRequiresReconnect());
+        assertFalse(controller.selectedModeHasLiveApplicableChange());
+
+        // Movie 3D never widens the stream, so the same size stays a plain W x H check.
+        XrSessionSettingsController movie = controller();
+        movie.setLiveResolutionEnvelope(5120, 2160);
+        movie.selectPresentationMode(PresentationMode.MOVIE_3D);
+        movie.selectModeQualitySetting(PresentationMode.MOVIE_3D,
+                SessionSettingsModel.Key.RESOLUTION, "3840x2160");
+        assertFalse(movie.selectedModeRequiresReconnect());
+    }
+
+    @Test
+    public void game3dWithForcedH264ReconnectsWhenThePackedRasterExceedsTheEnvelope() {
+        // An H.264 decoder envelope is capped at 4096 wide; 2560x1440 packs to 5120.
+        assertTrue(globals.edit()
+                .putString(PreferenceConfiguration.VIDEO_FORMAT_PREF_STRING, "neverh265")
+                .commit());
+        XrSessionSettingsController controller = controller();
+        controller.setLiveResolutionEnvelope(4096, 2160);
+        controller.selectPresentationMode(PresentationMode.GAME_3D);
+        controller.selectModeQualitySetting(PresentationMode.GAME_3D,
+                SessionSettingsModel.Key.RESOLUTION, "2560x1440");
+
+        assertTrue(controller.selectedModeRequiresReconnect());
+        assertFalse(controller.selectedModeHasLiveApplicableChange());
+    }
+
+    @Test
+    public void game3dPackedRasterIsNotCodecFittedLikeHostSbsAi() {
+        // Host AI fits 2 x 5120 into 8192 x 1728; authored Game stereo stays 10240 x 2160.
+        XrSessionSettingsController hostAi = controller();
+        hostAi.setLiveResolutionEnvelope(8192, 2160);
+        hostAi.selectPresentationMode(PresentationMode.HOST_SBS_AI);
+        hostAi.selectModeQualitySetting(PresentationMode.HOST_SBS_AI,
+                SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_5K2K);
+        assertFalse(hostAi.selectedModeRequiresReconnect());
+
+        XrSessionSettingsController game = controller();
+        game.setLiveResolutionEnvelope(8192, 2160);
+        game.selectPresentationMode(PresentationMode.GAME_3D);
+        game.selectModeQualitySetting(PresentationMode.GAME_3D,
+                SessionSettingsModel.Key.RESOLUTION, PreferenceConfiguration.RES_5K2K);
+        assertTrue(game.selectedModeRequiresReconnect());
+    }
+
+    @Test
     public void clientSbsSameBucketResolutionDeltaAppliesLive() {
         // Every standard preset is 16:9, so a preset-to-preset change keeps the depth bucket and
         // needs no model change or shader regeneration — only the color targets are resized.

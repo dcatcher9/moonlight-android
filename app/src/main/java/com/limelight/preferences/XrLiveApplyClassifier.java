@@ -66,14 +66,27 @@ final class XrLiveApplyClassifier {
             return false;
         }
         // Host SBS AI packs two eyes into one encoded frame, so the decoder sees the 2W x H raster
-        // after the host's codec fit. Client SBS decodes a plain W x H — its 2W x H packing is
-        // produced on-device for SceneCore and is not decoder-constrained.
-        int[] decoded = mode == PresentationMode.HOST_SBS_AI
-                ? PreferenceConfiguration.hostSbsPackedDimensions(
-                        dimensions[0], dimensions[1], hostSbsFitVideoFormat(appliedCodec))
-                : dimensions;
-        return decoded[0] <= liveResolutionMaxWidth
-                && decoded[1] <= liveResolutionMaxHeight;
+        // after the host's codec fit. Packed Game 3D (SBS_MODE_GAME_SBS) encodes exactly 2W x H
+        // with no codec fit. The settings controller is not told the Game wire mode, so Game 3D
+        // is always checked against that packed raster: a mono Game stream widens later at the
+        // same W x H. Client SBS decodes a plain W x H — its 2W x H packing is produced
+        // on-device for SceneCore and is not decoder-constrained. 2D and Movie 3D decode W x H.
+        long decodedWidth;
+        long decodedHeight;
+        if (mode == PresentationMode.HOST_SBS_AI) {
+            int[] packed = PreferenceConfiguration.hostSbsPackedDimensions(
+                    dimensions[0], dimensions[1], hostSbsFitVideoFormat(appliedCodec));
+            decodedWidth = packed[0];
+            decodedHeight = packed[1];
+        } else if (mode == PresentationMode.GAME_3D) {
+            decodedWidth = 2L * dimensions[0];
+            decodedHeight = dimensions[1];
+        } else {
+            decodedWidth = dimensions[0];
+            decodedHeight = dimensions[1];
+        }
+        return decodedWidth <= liveResolutionMaxWidth
+                && decodedHeight <= liveResolutionMaxHeight;
     }
 
     /**
