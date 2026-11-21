@@ -639,7 +639,7 @@ public class XrStreamPresenter {
                         viewStateStore.saveHeight(heightMeters);
                     }
                 });
-        this.dockController = new XrDockController(activity, glanceStrip,
+        this.dockController = new XrDockController(activity,
                 new XrDockController.Host() {
                     @Override
                     public Session session() {

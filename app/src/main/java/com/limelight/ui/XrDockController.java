@@ -53,12 +53,10 @@ final class XrDockController {
     }
 
     private final Activity activity;
-    private final XrGlanceStrip glanceStrip;
     private final Host host;
 
-    XrDockController(Activity activity, XrGlanceStrip glanceStrip, Host host) {
+    XrDockController(Activity activity, Host host) {
         this.activity = activity;
-        this.glanceStrip = glanceStrip;
         this.host = host;
     }
 
@@ -438,7 +436,6 @@ final class XrDockController {
         if (dockRevealPill != null) {
             dockRevealPill.setVisibility(collapsed ? View.VISIBLE : View.GONE);
         }
-        glanceStrip.resetAlpha();
         applyDockPanelBounds();
         updateDockGazeTracking();
     }

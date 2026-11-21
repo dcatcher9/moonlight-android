@@ -141,19 +141,14 @@ public class XrSolidPanelTest {
         pill.setMinHeight(0);
         pill.setPadding(20, 8, 20, 8);
         pill.setVisibility(View.GONE);
-        LinearLayout glance = new LinearLayout(controller.get());
-        glance.setAlpha(0.42f);
         ReflectionHelpers.setField(dock(), "barPanel", panel);
         ReflectionHelpers.setField(dock(), "controlBarRow", row);
         ReflectionHelpers.setField(dock(), "dockRevealPill", pill);
-        ReflectionHelpers.setField(
-                ReflectionHelpers.getField(presenter, "glanceStrip"), "glanceRoot", glance);
         ReflectionHelpers.setField(presenter, "panelHeightMeters", 1.5f);
 
         setCollapsed(true);
         assertEquals(View.GONE, row.getVisibility());
         assertEquals(View.VISIBLE, pill.getVisibility());
-        assertEquals(1f, glance.getAlpha(), 0f);
         setCollapsed(true); // Repeated state must not resize the same surface again.
         ArgumentCaptor<IntSize2d> pixels = ArgumentCaptor.forClass(IntSize2d.class);
         verify(panel).setSizeInPixels(pixels.capture());
@@ -166,7 +161,6 @@ public class XrSolidPanelTest {
         setCollapsed(false);
         assertEquals(View.VISIBLE, row.getVisibility());
         assertEquals(View.GONE, pill.getVisibility());
-        assertEquals(1f, glance.getAlpha(), 0f);
         verify(panel, times(2)).setSizeInPixels(pixels.capture());
         assertEquals(2000, pixels.getValue().getWidth());
         assertEquals(200, pixels.getValue().getHeight());

@@ -53,7 +53,6 @@ final class XrGlanceStrip {
 
     /** Passive glance strip above the video; it never intercepts input. */
     private PanelEntity glancePanel;
-    private View glanceRoot;
     private TextView glanceIdentityView;
     private TextView glanceModeView;
     private TextView glanceStreamView;
@@ -85,7 +84,6 @@ final class XrGlanceStrip {
         setSolidPanelCanvas(root);
         root.setClickable(false);
         root.setFocusable(false);
-        glanceRoot = root;
 
         glanceIdentityView = glanceText(paletteColor(R.color.xr_text_primary));
         glanceModeView = glanceText(paletteColor(R.color.xr_accent_bright));
@@ -181,12 +179,6 @@ final class XrGlanceStrip {
         glanceStatusView.setTextColor(color);
     }
 
-    void resetAlpha() {
-        if (glanceRoot != null) {
-            glanceRoot.setAlpha(1.0f);
-        }
-    }
-
     void reposition(float videoHeightMeters) {
         if (glancePanel != null && !glancePanel.isDisposed()) {
             glancePanel.setPose(glancePose(videoHeightMeters));
@@ -205,7 +197,6 @@ final class XrGlanceStrip {
     }
 
     void releaseViews() {
-        glanceRoot = null;
         glanceIdentityView = null;
         glanceModeView = null;
         glanceStreamView = null;
