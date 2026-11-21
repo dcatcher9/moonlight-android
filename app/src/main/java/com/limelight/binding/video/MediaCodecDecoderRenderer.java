@@ -2763,12 +2763,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // If we don't have an input buffer index yet, fetch one now
-            while (nextInputBufferIndex < 0 && !stopping
+            // If we don't have an input buffer index yet, fetch one now. A pending recovery ends
+            // the wait: the quiesced output threads release no buffers until this thread joins
+            // the barrier in the finally block below.
+            while (nextInputBufferIndex < 0 && !stopping && !codecRecovery.isRecoveryPending()
                     && !inputDequeueHangExpired(startTime, SystemClock.uptimeMillis())) {
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
             }
-            if (nextInputBufferIndex < 0 && !stopping
+            if (nextInputBufferIndex < 0 && !stopping && !codecRecovery.isRecoveryPending()
                     && inputDequeueHangExpired(startTime, SystemClock.uptimeMillis())) {
                 handleDecoderException(new DecoderHungException(
                         (int) (SystemClock.uptimeMillis() - startTime)));
