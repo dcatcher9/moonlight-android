@@ -140,6 +140,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private volatile boolean terminalSurfaceDestroyRequested;
     /** Exact context whose renderer writes the inference owner may need to drain on failure. */
     private volatile android.opengl.EGLContext rendererOwnerContext = EGL14.EGL_NO_CONTEXT;
+    /**
+     * True after context-loss recovery found {@link #rendererOwnerContext} destroyed and before a
+     * replacement owner is installed. No command on a destroyed context can still access the
+     * shared tensor buffers, so its destruction stands in for the renderer-finish acknowledgement.
+     */
+    private volatile boolean rendererOwnerContextDestroyed;
     /** Serializes bounded terminal-teardown attempts after the lifecycle terminal bit is set. */
     private final Object terminalTeardownLock = new Object();
     /** Exactly one background coordinator owns terminal worker joining and native-close retries. */
@@ -1888,6 +1894,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         surfaceLifecycleReady = false;
         outputSurfaceValidated = false;
         cancelStaleDepthWatchdog();
+        // Release a worker waiting for the lost context's renderer finish before any early return
+        // below and before stopAiWorkers() joins that worker on this thread.
+        retireDestroyedRendererOwnerContext();
         Surface decoderSurfaceBeforeContextLoss = videoSurface;
         int decoderGenerationBeforeContextLoss = decoderSurfaceGeneration;
         if (clientSbs && decoderSurfaceBeforeContextLoss != null
@@ -1913,6 +1922,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             return;
         }
         rendererOwnerContext = EGL14.eglGetCurrentContext();
+        rendererOwnerContextDestroyed = false;
         // onSurfaceCreated() denotes a replacement context. Old names must never be deleted
         // through the new context because GLES may already have reused their integer values.
         abandonGpuProcessorsAfterContextLoss();
@@ -3057,6 +3067,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (rendererFinishConfirmed.get()) {
             return true;
         }
+        if (rendererOwnerContextDestroyed) {
+            // A queued glFinish could only run on the replacement context, and the GL thread may
+            // be joining this worker inside onSurfaceCreated().
+            acknowledgeRendererFinishForDestroyedContext();
+            return true;
+        }
         RendererFinishRequest requested = new RendererFinishRequest();
         RendererFinishRequest pending = rendererFinishRequest.get();
         while (pending == null && !rendererFinishRequest.compareAndSet(null, requested)) {
@@ -3084,6 +3100,50 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             return false;
         }
         return acknowledged.succeeded && rendererFinishConfirmed.get();
+    }
+
+    /**
+     * Runs on the GL thread when the EGL owner has created a replacement context. The owner
+     * replaces its context only after EGL_CONTEXT_LOST and destroys the old one first; when EGL no
+     * longer accepts the previous owner context, a renderer-finish request (pending, or raised by
+     * a later inference failure) is acknowledged without the glFinish that the new, unshared
+     * context cannot perform for the old one.
+     */
+    private void retireDestroyedRendererOwnerContext() {
+        android.opengl.EGLContext previous = rendererOwnerContext;
+        if (previous == null || previous.equals(EGL14.EGL_NO_CONTEXT)
+                || previous.equals(EGL14.eglGetCurrentContext())
+                || isEglContextValid(previous)) {
+            return;
+        }
+        rendererOwnerContextDestroyed = true;
+        if (gpuFailureNeedsRendererFinish.get()) {
+            acknowledgeRendererFinishForDestroyedContext();
+        }
+    }
+
+    private static boolean isEglContextValid(android.opengl.EGLContext context) {
+        EGLDisplay display = EGL14.eglGetCurrentDisplay();
+        if (display == null || display.equals(EGL14.EGL_NO_DISPLAY)) {
+            // Without a display the context cannot be proven destroyed.
+            return true;
+        }
+        int[] clientType = new int[1];
+        return EGL14.eglQueryContext(display, context, EGL14.EGL_CONTEXT_CLIENT_TYPE,
+                clientType, 0);
+    }
+
+    /** The destroyed-context counterpart of a successful {@link #serviceRendererFinishRequest}. */
+    private void acknowledgeRendererFinishForDestroyedContext() {
+        synchronized (gpuBufferOwnershipLock) {
+            // These fences belong to the destroyed context; no current context may delete them.
+            gpuSlotFences.clear(false);
+            rendererFinishConfirmed.set(true);
+        }
+        RendererFinishRequest pending = rendererFinishRequest.getAndSet(null);
+        if (pending != null) {
+            pending.complete(true);
+        }
     }
 
     /**
