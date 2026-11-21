@@ -25,8 +25,6 @@ import java.util.Objects;
  * the sole authority for turning those values into a StreamConfiguration.
  */
 public final class XrSessionSettingsController {
-    private static final String CLIENT_SBS_DEFAULT_RESOLUTION = "1920x1080";
-    private static final String CLIENT_SBS_DEFAULT_FPS = "30";
     /**
      * Modes that {@link #commitPending()} writes and {@link #useGlobalDefaults()} resets. The
      * retired Raw mode is excluded, so its stored overrides are not rewritten by this class.
@@ -767,11 +765,7 @@ public final class XrSessionSettingsController {
     private Object inheritedModeValue(PresentationMode mode, SessionSettingsModel.Key key) {
         // Compare against the same per-mode baseline that readModeValues() restores. An explicit
         // Client SBS 60 FPS choice must not disappear merely because Global Settings also say 60.
-        if (mode == PresentationMode.CLIENT_SBS_AI) {
-            if (key == SessionSettingsModel.Key.RESOLUTION) return CLIENT_SBS_DEFAULT_RESOLUTION;
-            if (key == SessionSettingsModel.Key.FRAME_RATE) return CLIENT_SBS_DEFAULT_FPS;
-        }
-        return globalValues.get(key);
+        return ModeQualityBaseline.inheritedValue(mode, key, globalValues.get(key));
     }
 
     private SessionSettingsModel.Source sourceFor(
@@ -799,10 +793,7 @@ public final class XrSessionSettingsController {
             EnumMap<SessionSettingsModel.Key, Object> target,
             PresentationMode mode) {
         copyValuesForScope(source, target, true);
-        if (mode == PresentationMode.CLIENT_SBS_AI) {
-            target.put(SessionSettingsModel.Key.RESOLUTION, CLIENT_SBS_DEFAULT_RESOLUTION);
-            target.put(SessionSettingsModel.Key.FRAME_RATE, CLIENT_SBS_DEFAULT_FPS);
-        }
+        ModeQualityBaseline.applyOwnBaselines(mode, target);
     }
 
     private static StreamQualityTuple qualityTuple(
@@ -823,13 +814,12 @@ public final class XrSessionSettingsController {
                                        PresentationMode mode,
                                        SharedPreferences preferences,
                                        EnumMap<SessionSettingsModel.Key, Object> output) {
-        boolean clientSbsMode = mode == PresentationMode.CLIENT_SBS_AI;
-        boolean usesClientSbsDefaults = clientSbsMode
-                && !snapshot.isModeOverridden(mode, PreferenceConfiguration.RESOLUTION_PREF_STRING)
-                && !snapshot.isSharedOverridden(PreferenceConfiguration.RESOLUTION_PREF_STRING);
-        boolean usesClientFpsDefaults = clientSbsMode
-                && !snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
-                && !snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
+        boolean resolutionSaved =
+                snapshot.isModeOverridden(mode, PreferenceConfiguration.RESOLUTION_PREF_STRING)
+                || snapshot.isSharedOverridden(PreferenceConfiguration.RESOLUTION_PREF_STRING);
+        boolean fpsSaved =
+                snapshot.isModeOverridden(mode, PreferenceConfiguration.FPS_PREF_STRING)
+                || snapshot.isSharedOverridden(PreferenceConfiguration.FPS_PREF_STRING);
         // A per-machine/app session record can still hold a retired 720p; land it on the floor.
         String resolution = PreferenceConfiguration.migrateRetiredResolution(
                 preferences.getString(
@@ -837,11 +827,15 @@ public final class XrSessionSettingsController {
                         PreferenceConfiguration.DEFAULT_RESOLUTION));
         String fps = preferences.getString(PreferenceConfiguration.FPS_PREF_STRING,
                 PreferenceConfiguration.DEFAULT_FPS);
-        if (usesClientSbsDefaults) {
-            resolution = CLIENT_SBS_DEFAULT_RESOLUTION;
+        // Without a saved value the effective one is the global value, which the mode's own
+        // baseline replaces where it has one.
+        if (!resolutionSaved) {
+            resolution = (String) ModeQualityBaseline.inheritedValue(
+                    mode, SessionSettingsModel.Key.RESOLUTION, resolution);
         }
-        if (usesClientFpsDefaults) {
-            fps = CLIENT_SBS_DEFAULT_FPS;
+        if (!fpsSaved) {
+            fps = (String) ModeQualityBaseline.inheritedValue(
+                    mode, SessionSettingsModel.Key.FRAME_RATE, fps);
         }
         output.put(SessionSettingsModel.Key.RESOLUTION, resolution);
         output.put(SessionSettingsModel.Key.FRAME_RATE, fps);
