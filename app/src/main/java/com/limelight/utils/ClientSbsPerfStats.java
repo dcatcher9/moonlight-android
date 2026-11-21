@@ -11,11 +11,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * Performance counters, sampling epoch, GPU-timer stride and depth-health polling state of one
  * {@link Stereo3DRenderer}.
  *
- * <p>The members keep the threading contract they had inside the renderer. Counters and the
- * sampling epoch are atomics written by the GL, inference and stats threads;
+ * <p>Counters and the sampling epoch are atomics written by the GL, inference and stats threads;
  * {@link #performanceSampleLock} serializes only window drains and enable/disable edges. The GPU
- * timer stride, telemetry poll counter and health-sampling focus are GL-thread state, and
- * {@link #gpuTimer} and {@link #depthHealthState} are volatile for the stats reader.</p>
+ * timer stride, telemetry poll counter, health-sampling focus and depth-health readback backoff
+ * are GL-thread state; other threads reach the backoff only through
+ * {@link #resetDepthTelemetryEra}'s request flag. {@link #gpuTimer} and {@link #depthHealthState}
+ * are volatile for the stats reader.</p>
  */
 final class ClientSbsPerfStats {
     /** Optional, nonblocking EXT timer-query ring owned by the renderer context. */
@@ -35,8 +36,11 @@ final class ClientSbsPerfStats {
     final AtomicLong performanceSamplingEpoch = new AtomicLong(1L);
     /** Applies timer-query and GL-thread-only diagnostic resets at the next current-context draw. */
     final AtomicBoolean performanceGlStateResetRequested = new AtomicBoolean(true);
+    /** GL-thread readback backoff; other threads request a clear through the flag below. */
     int depthHealthRetryPollsRemaining;
     int depthHealthConsecutiveFailures;
+    /** Set by {@link #resetDepthTelemetryEra}; the GL thread clears the backoff at its next poll. */
+    final AtomicBoolean depthTelemetryEraResetRequested = new AtomicBoolean(false);
     /** GL-thread cache preventing redundant sampling writes to the current processor. */
     ClientSbsGpuDepthProcessor healthFocusProcessor;
     boolean appliedHealthSamplingEnabled;
@@ -83,13 +87,25 @@ final class ClientSbsPerfStats {
             perfDepthResultAgeMaxNs,
     };
 
+    /**
+     * Starts a new depth-telemetry era; callable from any thread. The volatile published state
+     * is cleared here, and the GL-confined readback backoff is cleared by
+     * {@link #applyDepthTelemetryEraResetOnGlThread} before the GL thread next reads it.
+     */
     void resetDepthTelemetryEra() {
         depthHealthState = DepthHealthState.EMPTY;
-        // A mode/profile, GL-context, HDR, or resize generation boundary starts a new telemetry
-        // era. Retaining a previous readback backoff can suppress every early sample from the
-        // replacement processor.
-        depthHealthRetryPollsRemaining = 0;
-        depthHealthConsecutiveFailures = 0;
+        depthTelemetryEraResetRequested.set(true);
+    }
+
+    /** GL thread only; runs before every read of the readback backoff. */
+    void applyDepthTelemetryEraResetOnGlThread() {
+        if (depthTelemetryEraResetRequested.getAndSet(false)) {
+            // A mode/profile, GL-context, HDR, or resize generation boundary starts a new
+            // telemetry era. Retaining a previous readback backoff can suppress every early
+            // sample from the replacement processor.
+            depthHealthRetryPollsRemaining = 0;
+            depthHealthConsecutiveFailures = 0;
+        }
     }
 
     void resetPerformanceCountersLocked(long startedNs) {

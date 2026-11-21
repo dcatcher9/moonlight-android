@@ -534,6 +534,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // Both timer queries and the GPU-to-CPU health/evidence ring are diagnostics. Normal
         // streaming does neither; with performance sampling enabled both are polled once every
         // GPU_TELEMETRY_POLL_STRIDE calls.
+        perf.applyDepthTelemetryEraResetOnGlThread();
         int pollCounter = perf.gpuTelemetryPollCounter++;
         ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
         perf.applyHealthSamplingStateOnGlThread(processor);
