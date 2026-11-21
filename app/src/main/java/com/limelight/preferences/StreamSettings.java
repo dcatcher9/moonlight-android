@@ -104,8 +104,10 @@ public class StreamSettings extends AppCompatActivity {
                 !newPrefs.language.equals(previousPrefs.language);
         super.finish();
 
-        if (localeChanged && android.os.Build.VERSION.SDK_INT <
-                android.os.Build.VERSION_CODES.TIRAMISU) {
+        // The app applies its own language preference with UiHelper.setLocale() when each
+        // activity is created; it does not hand the choice to Android's per-app locale API.
+        // Recreate the task so activities already on the back stack pick up the new language.
+        if (localeChanged) {
             Intent intent = new Intent(this, PcView.class);
             intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
