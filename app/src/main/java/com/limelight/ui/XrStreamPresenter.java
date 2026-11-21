@@ -2770,56 +2770,49 @@ public class XrStreamPresenter {
         cancelLiveQualityAckTimeout();
         pendingVideoModeRequestId = -1;
 
-        boolean validBody = XrPresentationPolicy.isKnownVideoModeAckStatus(status)
-                && XrPresentationPolicy.isValidAtomicPresentationAckBody(
-                        flags, appliedMode, stateGeneration,
+        XrPresentationPolicy.AtomicAckOutcome outcome =
+                XrPresentationPolicy.classifyAtomicPresentationAck(
+                        status, appliedMode, flags, stateGeneration,
                         appliedSourceWidth, appliedSourceHeight,
                         exactEncodedWidth, exactEncodedHeight,
-                        appliedFramerateX100, effectiveBitrateKbps);
-        if (!validBody) {
-            LimeLog.severe("XR: malformed atomic presentation ack; forcing reconnect");
-            requireMandatoryLiveQualityResync(
-                    shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin), false);
-            return;
-        }
-
-        boolean recoveredGameWidenRefusal = status != MoonBridge.VIDEO_MODE_ACK_APPLIED
-                && status != MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
-                && pendingLiveQualityOrigin == LiveQualityRequestOrigin.GAME_SOURCE
-                && pendingDesiredWireMode == MoonBridge.SBS_MODE_GAME_SBS
-                && gameWireMode == MoonBridge.SBS_MODE_GAME_MONO
-                && appliedMode == MoonBridge.SBS_MODE_GAME_MONO
-                && appliedSourceWidth == pendingRequestedSourceWidth
-                && appliedSourceHeight == pendingRequestedSourceHeight
-                && (stateGeneration == lastPresentationStateGeneration
-                || XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(lastPresentationStateGeneration, stateGeneration));
-        if (recoveredGameWidenRefusal) {
-            // The ACK explicitly proves the retained mono layout. Re-open only after its fresh
-            // decoder boundary and latch this attempt across provider/encoder rebuilds.
-            gameSourceState.recordWidenFailure();
-            pendingDesiredWireMode = MoonBridge.SBS_MODE_GAME_MONO;
-            LimeLog.warning("XR: Game 3D widening refused; retaining proven mono until a deliberate retry");
-        } else if (status != MoonBridge.VIDEO_MODE_ACK_APPLIED) {
-            boolean commitRequestedTarget =
-                    status == MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
-                    && shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin);
-            LimeLog.severe("XR: atomic presentation request was rejected with status "
-                    + status + "; reconnecting without a rollback packet");
-            requireMandatoryLiveQualityResync(commitRequestedTarget, false);
-            return;
-        }
-
-        boolean matchesRequest = appliedMode == pendingDesiredWireMode
-                && appliedSourceWidth == pendingRequestedSourceWidth
-                && appliedSourceHeight == pendingRequestedSourceHeight
-                && (recoveredGameWidenRefusal || XrPresentationPolicy.isStrictlyNewerUnsignedGeneration(
-                        lastPresentationStateGeneration, stateGeneration));
-        if (!matchesRequest) {
-            LimeLog.severe("XR: atomic presentation ack does not match the requested mode/source "
-                    + "or advance generation; forcing reconnect");
-            requireMandatoryLiveQualityResync(
-                    shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin), false);
-            return;
+                        appliedFramerateX100, effectiveBitrateKbps,
+                        pendingDesiredWireMode,
+                        pendingRequestedSourceWidth, pendingRequestedSourceHeight,
+                        lastPresentationStateGeneration,
+                        pendingLiveQualityOrigin == LiveQualityRequestOrigin.GAME_SOURCE
+                                && gameWireMode == MoonBridge.SBS_MODE_GAME_MONO);
+        switch (outcome) {
+            case MALFORMED:
+                LimeLog.severe("XR: malformed atomic presentation ack; forcing reconnect");
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin), false);
+                return;
+            case REJECTED:
+            case REJECTED_NEEDS_RECONNECT:
+                LimeLog.severe("XR: atomic presentation request was rejected with status "
+                        + status + "; reconnecting without a rollback packet");
+                requireMandatoryLiveQualityResync(
+                        outcome == XrPresentationPolicy.AtomicAckOutcome.REJECTED_NEEDS_RECONNECT
+                                && shouldCommitStagedSettingsForResync(
+                                        pendingLiveQualityOrigin), false);
+                return;
+            case MISMATCHED:
+                LimeLog.severe("XR: atomic presentation ack does not match the requested "
+                        + "mode/source or advance generation; forcing reconnect");
+                requireMandatoryLiveQualityResync(
+                        shouldCommitStagedSettingsForResync(pendingLiveQualityOrigin), false);
+                return;
+            case REFUSED_WIDENING_KEPT_MONO:
+                // The ACK explicitly proves the retained mono layout. Re-open only after its
+                // fresh decoder boundary and latch this attempt across provider/encoder rebuilds.
+                gameSourceState.recordWidenFailure();
+                pendingDesiredWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+                LimeLog.warning("XR: Game 3D widening refused; retaining proven mono until a "
+                        + "deliberate retry");
+                break;
+            case APPLIED:
+            default:
+                break;
         }
 
         AcknowledgedVideoMode acknowledged = AcknowledgedVideoMode.acknowledgedVideoMode(

@@ -207,6 +207,70 @@ final class XrPresentationPolicy {
         return crossProductError <= evenRoundingTolerance;
     }
 
+    /** How a correlated atomic presentation ACK settles its outstanding request. */
+    enum AtomicAckOutcome {
+        /** Unknown status or an unusable body: the host tuple is unknowable. */
+        MALFORMED,
+        /** The host refused the request and keeps another tuple on the wire. */
+        REJECTED,
+        /** The host refused the request because it is reachable only by reconnecting. */
+        REJECTED_NEEDS_RECONNECT,
+        /** APPLIED, but not at the requested wire mode and source, or not a newer generation. */
+        MISMATCHED,
+        /** APPLIED at the requested wire mode and source with a newer generation. */
+        APPLIED,
+        /**
+         * An automatic Game widening was refused while the ACK proves the retained mono layout
+         * at the requested source; the request settles as that mono presentation.
+         */
+        REFUSED_WIDENING_KEPT_MONO,
+    }
+
+    /**
+     * Classifies a correlated 0x3008 ACK against the outstanding request. Pure: the presenter
+     * applies the outcome.
+     *
+     * @param automaticGameWidening the request is a Game source request issued while the
+     *                              confirmed Game wire mode is mono
+     */
+    static AtomicAckOutcome classifyAtomicPresentationAck(
+            int status, int appliedMode, int flags, int stateGeneration,
+            int appliedSourceWidth, int appliedSourceHeight,
+            int exactEncodedWidth, int exactEncodedHeight,
+            int appliedFramerateX100, int effectiveEncoderBitrateKbps,
+            int requestedWireMode, int requestedSourceWidth, int requestedSourceHeight,
+            int lastStateGeneration, boolean automaticGameWidening) {
+        if (!isKnownVideoModeAckStatus(status)
+                || !isValidAtomicPresentationAckBody(
+                        flags, appliedMode, stateGeneration,
+                        appliedSourceWidth, appliedSourceHeight,
+                        exactEncodedWidth, exactEncodedHeight,
+                        appliedFramerateX100, effectiveEncoderBitrateKbps)) {
+            return AtomicAckOutcome.MALFORMED;
+        }
+        boolean requestedSource = appliedSourceWidth == requestedSourceWidth
+                && appliedSourceHeight == requestedSourceHeight;
+        if (status != MoonBridge.VIDEO_MODE_ACK_APPLIED
+                && status != MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT
+                && automaticGameWidening
+                && requestedWireMode == MoonBridge.SBS_MODE_GAME_SBS
+                && appliedMode == MoonBridge.SBS_MODE_GAME_MONO
+                && requestedSource
+                && (stateGeneration == lastStateGeneration
+                || isStrictlyNewerUnsignedGeneration(lastStateGeneration, stateGeneration))) {
+            return AtomicAckOutcome.REFUSED_WIDENING_KEPT_MONO;
+        }
+        if (status == MoonBridge.VIDEO_MODE_ACK_REJECTED_NEEDS_RECONNECT) {
+            return AtomicAckOutcome.REJECTED_NEEDS_RECONNECT;
+        }
+        if (status != MoonBridge.VIDEO_MODE_ACK_APPLIED) {
+            return AtomicAckOutcome.REJECTED;
+        }
+        return appliedMode == requestedWireMode && requestedSource
+                && isStrictlyNewerUnsignedGeneration(lastStateGeneration, stateGeneration)
+                ? AtomicAckOutcome.APPLIED : AtomicAckOutcome.MISMATCHED;
+    }
+
     static boolean isStrictlyNewerUnsignedGeneration(
             int previousGeneration, int candidateGeneration) {
         if (candidateGeneration == 0) {
