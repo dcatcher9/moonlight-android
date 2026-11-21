@@ -1608,21 +1608,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // The connection will be started when the surface gets created
         //streamContainer.getHolder().addCallback(this);
 
-        streamContainer.setOnSurfaceAvailable(() -> {
-            if (!attemptedConnection) {
-                LimeLog.info("Surface is available, starting connection...");
-                attemptedConnection = true;
-                connecting = true;
-
-                // Der Decoder erhält die jeweils aktive Oberfläche vom Container
-                decoderRenderer.setRenderTarget(streamContainer.getSurface());
-
-                // Starten Sie die NvConnection
-                conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx,
-                                prefConfig.audioBoostDb),
-                        decoderRenderer, Game.this);
-            }
-        });
+        streamContainer.setOnSurfaceAvailable(this::onStreamSurfaceAvailable);
 
         gameMenuCallbacks = new GameMenu(this);
 
@@ -1648,6 +1634,27 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 try { streamSurfaceView.setZOrderMediaOverlay(false); } catch (Throwable ignored) {}
             }
         } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Starts the connection on the first presentation Surface. SceneCore can report it after the
+     * user already left; a finishing Activity must not send {@code /launch} or {@code /resume}.
+     */
+    void onStreamSurfaceAvailable() {
+        if (attemptedConnection || isFinishing() || isDestroyed()) {
+            return;
+        }
+        LimeLog.info("Surface is available, starting connection...");
+        attemptedConnection = true;
+        connecting = true;
+
+        // Der Decoder erhält die jeweils aktive Oberfläche vom Container
+        decoderRenderer.setRenderTarget(streamContainer.getSurface());
+
+        // Starten Sie die NvConnection
+        conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx,
+                        prefConfig.audioBoostDb),
+                decoderRenderer, Game.this);
     }
 
     @SuppressLint("ClickableViewAccessibility")
