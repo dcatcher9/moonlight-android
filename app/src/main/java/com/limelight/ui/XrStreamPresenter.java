@@ -26,7 +26,6 @@ import androidx.xr.runtime.math.Pose;
 import androidx.xr.runtime.math.Quaternion;
 import androidx.xr.runtime.math.Ray;
 import androidx.xr.runtime.math.Vector3;
-import androidx.xr.arcore.RenderViewpoint;
 import androidx.xr.scenecore.Entity;
 import androidx.xr.scenecore.EntityMoveListener;
 import androidx.xr.scenecore.MovableComponent;
@@ -34,7 +33,6 @@ import androidx.xr.scenecore.PanelEntity;
 import androidx.xr.scenecore.ResizableComponent;
 import androidx.xr.scenecore.ResizeEvent;
 import androidx.xr.scenecore.Scene;
-import androidx.xr.scenecore.ScenePose;
 import androidx.xr.scenecore.SessionExt;
 import androidx.xr.scenecore.Space;
 import androidx.xr.scenecore.SpatialCapability;
@@ -95,16 +93,6 @@ import java.util.function.IntSupplier;
  */
 @SuppressLint({"RestrictedApi", "UnsafeOptInUsageError"})
 public class XrStreamPresenter {
-
-    // Control-bar tile geometry (meters). Shared by build + reposition so the bar stays glued
-    // beneath the quad as it changes size on a mode switch or a user resize.
-    private static final float BAR_HEIGHT_METERS = 0.21f;     // also the per-tile size (square tiles)
-    private static final float BAR_DIVIDER_METERS = 0.05f;    // extra width for the group divider
-    private static final float BAR_GAP_METERS = 0.24f;        // quad bottom -> bar center
-    private static final float MODE_OPTIONS_GAP_METERS = 0.02f;
-    private static final float STATS_GAP_METERS = 0.10f;
-    private static final float AUXILIARY_WIDTH_METERS = XrStatsPanel.STATS_WIDTH_METERS;
-    private static final float AUXILIARY_HEIGHT_METERS = 1.16f;
 
     public interface OnSurfaceReadyListener {
         void onSurfaceReady(Surface surface);
@@ -316,6 +304,33 @@ public class XrStreamPresenter {
 
     private final XrDockController dockController;
     private final XrModeOptionsPane modeOptionsPane;
+    private final XrPanelPoseSolver poseSolver = new XrPanelPoseSolver(
+            new XrPanelPoseSolver.Host() {
+                @Override
+                public Session session() {
+                    return session;
+                }
+
+                @Override
+                public SurfaceEntity videoEntity() {
+                    return surfaceEntity;
+                }
+
+                @Override
+                public float videoWidthMeters(float videoHeightMeters) {
+                    return videoHeightMeters * aspectFor(currentPresenterMode);
+                }
+
+                @Override
+                public int dockTileCount() {
+                    return barItems.size();
+                }
+
+                @Override
+                public float modeOptionsHeightMeters() {
+                    return modeOptionsPane.heightMeters();
+                }
+            });
     private final XrStatsPanel statsUi;
     private final XrGlanceStrip glanceStrip;
     private final XrSessionSettingsPane sessionSettingsPane;
@@ -539,7 +554,7 @@ public class XrStreamPresenter {
 
                     @Override
                     public Pose statsPose(float videoHeightMeters) {
-                        return XrStreamPresenter.this.statsPose(videoHeightMeters);
+                        return poseSolver.statsPose(videoHeightMeters);
                     }
 
                     @Override
@@ -623,7 +638,7 @@ public class XrStreamPresenter {
 
                     @Override
                     public Pose currentHeadPose() {
-                        return XrStreamPresenter.this.currentHeadPose();
+                        return poseSolver.currentHeadPose();
                     }
 
                     @Override
@@ -792,12 +807,12 @@ public class XrStreamPresenter {
 
                     @Override
                     public Pose modeOptionsPose(float videoHeightMeters) {
-                        return XrStreamPresenter.this.modeOptionsPose(videoHeightMeters);
+                        return poseSolver.modeOptionsPose(videoHeightMeters);
                     }
 
                     @Override
                     public XrControlPanelLayout controlBarLayout(float videoHeightMeters) {
-                        return XrStreamPresenter.this.controlBarLayout(videoHeightMeters);
+                        return poseSolver.controlBarLayout(videoHeightMeters);
                     }
                 });
         this.controlActionListener = controlActionListener != null
@@ -1526,8 +1541,8 @@ public class XrStreamPresenter {
 
         // Width scales with the tile count so each tile stays square (tile size = bar height),
         // plus a little for the divider — adding tiles widens the bar instead of squeezing them.
-        XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
-        dockController.createBarPanel(panelRoot, layout, barPose(videoHeightMeters));
+        XrControlPanelLayout layout = poseSolver.controlBarLayout(videoHeightMeters);
+        dockController.createBarPanel(panelRoot, layout, poseSolver.barPose(videoHeightMeters));
 
         // The contextual row is a single panel, not one entity per control. It can therefore tilt
         // toward the face independently while its ordinary child Views retain native gaze taps.
@@ -1551,8 +1566,9 @@ public class XrStreamPresenter {
         setSolidPanelCanvas(auxiliaryContentHost);
         auxiliaryPanel = PanelEntity.create(
                 session, auxiliaryContentHost,
-                new FloatSize2d(AUXILIARY_WIDTH_METERS, AUXILIARY_HEIGHT_METERS),
-                "xr-session-controls", statsPose(videoHeightMeters), surfaceEntity);
+                new FloatSize2d(XrPanelPoseSolver.AUXILIARY_WIDTH_METERS,
+                        XrPanelPoseSolver.AUXILIARY_HEIGHT_METERS),
+                "xr-session-controls", poseSolver.statsPose(videoHeightMeters), surfaceEntity);
         XrPanelViews.configureSolidPanel(auxiliaryPanel);
         auxiliaryPanel.setEnabled(false);
     }
@@ -1859,7 +1875,8 @@ public class XrStreamPresenter {
         }
         if (auxiliaryPanel != null && !auxiliaryPanel.isDisposed()) {
             if (showAuxiliary) {
-                updatePanelPose(auxiliaryPanel, sessionSettingsPose(panelHeightMeters));
+                XrPanelPoseSolver.updatePanelPose(auxiliaryPanel,
+                        poseSolver.sessionSettingsPose(panelHeightMeters));
             }
             auxiliaryPanel.setEnabled(showAuxiliary);
         }
@@ -2211,114 +2228,18 @@ public class XrStreamPresenter {
         dockController.revealDockTemporarily();
     }
 
-    /** Local pose of the unchanged, level mode-button panel. */
-    private Pose barPose(float videoHeightMeters) {
-        XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
-        return new Pose(new Vector3(0.0f, layout.primaryRowCenterY, XrPanelPlacement.BAR_Z_METERS),
-                Quaternion.Identity);
-    }
-
-    /** Local pose of the independently pitched contextual subpanel. */
-    private Pose modeOptionsPose(float videoHeightMeters) {
-        XrControlPanelLayout layout = controlBarLayout(videoHeightMeters);
-        Vector3 viewer = statsViewerPositionLocal();
-        XrPanelPlacement.ModeOptionsPanelPlacement placement = XrPanelPlacement.calculateModeOptionsPanelPlacement(
-                layout.primaryRowCenterY, BAR_HEIGHT_METERS, modeOptionsPane.heightMeters(),
-                MODE_OPTIONS_GAP_METERS, XrPanelPlacement.BAR_Z_METERS, viewer.getY(), viewer.getZ());
-        Quaternion rotation = Quaternion.fromAxisAngle(
-                new Vector3(1.0f, 0.0f, 0.0f), placement.pitchDegrees);
-        return new Pose(new Vector3(0.0f, placement.centerY, placement.centerZ), rotation);
-    }
-
-    /** Current head position expressed in the video entity's local coordinate system. */
-    private Vector3 statsViewerPositionLocal() {
-        if (session != null && surfaceEntity != null) {
-            try {
-                Pose headPose = currentHeadPose();
-                if (headPose != null) {
-                    Scene scene = SessionExt.getScene(session);
-                    ScenePose headScenePose = scene.getPerceptionSpace()
-                            .getScenePoseFromPerceptionPose(headPose);
-                    Vector3 local = headScenePose.transformPositionTo(
-                            new Vector3(0.0f, 0.0f, 0.0f), surfaceEntity);
-                    if (Float.isFinite(local.getX()) && Float.isFinite(local.getZ())
-                            && local.getZ() > 0.05f) {
-                        return local;
-                    }
-                }
-            } catch (Throwable ignored) {
-                // Use the stable activity-space fallback below until tracking is ready again.
-            }
-        }
-
-        float fallbackDistance = 2.0f;
-        if (surfaceEntity != null) {
-            try {
-                Vector3 t = surfaceEntity.getPose(Space.REAL_WORLD).getTranslation();
-                float distance = (float) Math.sqrt(t.getX() * t.getX()
-                        + t.getY() * t.getY() + t.getZ() * t.getZ());
-                if (Float.isFinite(distance) && distance > 0.2f) {
-                    fallbackDistance = distance;
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        return new Vector3(0.0f, 0.0f, fallbackDistance);
-    }
-
-    /** Local pose of the right-side stats panel, dynamically yawed toward the viewer. */
-    private Pose statsPose(float videoHeightMeters) {
-        Vector3 viewer = statsViewerPositionLocal();
-        XrPanelPlacement.StatsPanelPlacement placement = XrPanelPlacement.calculateStatsPanelPlacement(
-                videoHeightMeters * aspectFor(currentPresenterMode),
-                XrStatsPanel.STATS_WIDTH_METERS, STATS_GAP_METERS, viewer.getX(), viewer.getZ());
-        Quaternion rotation = Quaternion.fromAxisAngle(
-                new Vector3(0.0f, 1.0f, 0.0f), placement.yawDegrees);
-        return new Pose(new Vector3(placement.centerX, placement.centerY, placement.centerZ),
-                rotation);
-    }
-
-    /** App Settings sits to the video's left and tilts inward toward the viewer. */
-    private Pose sessionSettingsPose(float videoHeightMeters) {
-        Vector3 viewer = statsViewerPositionLocal();
-        XrPanelPlacement.StatsPanelPlacement placement = XrPanelPlacement.calculateLeftPanelPlacement(
-                videoHeightMeters * aspectFor(currentPresenterMode),
-                AUXILIARY_WIDTH_METERS, STATS_GAP_METERS, viewer.getX(), viewer.getZ());
-        Quaternion rotation = Quaternion.fromAxisAngle(
-                new Vector3(0.0f, 1.0f, 0.0f), placement.yawDegrees);
-        return new Pose(new Vector3(placement.centerX, placement.centerY, placement.centerZ),
-                rotation);
-    }
-
     private void repositionStatsPanel() {
         if (statsVisible && statsUi.panel() != null && !statsUi.panel().isDisposed()) {
-            updatePanelPose(statsUi.panel(), statsPose(panelHeightMeters));
+            XrPanelPoseSolver.updatePanelPose(statsUi.panel(),
+                    poseSolver.statsPose(panelHeightMeters));
         }
         XrControlUiState.Surface visible = controlUiState.getVisibleSurface();
         if (auxiliaryPanel != null && !auxiliaryPanel.isDisposed()) {
             if (visible == XrControlUiState.Surface.SESSION_SETTINGS) {
-                updatePanelPose(auxiliaryPanel, sessionSettingsPose(panelHeightMeters));
+                XrPanelPoseSolver.updatePanelPose(auxiliaryPanel,
+                        poseSolver.sessionSettingsPose(panelHeightMeters));
             }
         }
-    }
-
-    /** Avoid identical native node transactions during the slow stats/position refresh. */
-    static void updatePanelPose(PanelEntity panel, Pose pose) {
-        if (panel == null || panel.isDisposed()) {
-            return;
-        }
-        // SceneCore 1.0.0's PARENT pose is its cached local value; it does not query native
-        // tracking. Read it instead of keeping another cache so reanchors or other callers
-        // cannot leave this comparison stale. Preserve every actual pose change.
-        if (!pose.equals(panel.getPose(Space.PARENT))) {
-            panel.setPose(pose);
-        }
-    }
-
-    private XrControlPanelLayout controlBarLayout(float videoHeightMeters) {
-        return XrControlPanelLayout.calculate(
-                barItems.size(), 1,
-                BAR_HEIGHT_METERS, BAR_DIVIDER_METERS, videoHeightMeters, BAR_GAP_METERS);
     }
 
     /** Enable presentation switching after MediaCodec has rendered the stream's first frame. */
@@ -2367,7 +2288,7 @@ public class XrStreamPresenter {
     /** Move the bar and stats panels when the quad height changes (mode switch). */
     private void repositionControlBar(float videoHeightMeters) {
         if (dockController.hasBarPanel()) {
-            dockController.setBarPose(barPose(videoHeightMeters));
+            dockController.setBarPose(poseSolver.barPose(videoHeightMeters));
         }
         modeOptionsPane.reposition(videoHeightMeters);
         repositionStatsPanel();
@@ -4234,32 +4155,6 @@ public class XrStreamPresenter {
         }
         LimeLog.info("XR: requesting 3D debug frame dump for " + currentPresenterMode);
         sendHostDebugDumpControl();
-    }
-
-    /** Current pose of a render viewpoint (eye), or null if unavailable. */
-    private static Pose poseOf(RenderViewpoint vp) {
-        if (vp == null || vp.getState() == null) {
-            return null;
-        }
-        RenderViewpoint.State s = vp.getState().getValue();
-        return s != null ? s.getPose() : null;
-    }
-
-    /** Midpoint head pose in perception space; stereo headsets generally expose no mono view. */
-    private Pose currentHeadPose() {
-        Pose left = poseOf(RenderViewpoint.left(session));
-        Pose right = poseOf(RenderViewpoint.right(session));
-        if (left == null) {
-            return right;
-        }
-        if (right == null) {
-            return left;
-        }
-        Vector3 lt = left.getTranslation();
-        Vector3 rt = right.getTranslation();
-        return new Pose(new Vector3((lt.getX() + rt.getX()) / 2.0f,
-                (lt.getY() + rt.getY()) / 2.0f,
-                (lt.getZ() + rt.getZ()) / 2.0f), left.getRotation());
     }
 
     /** Quad aspect (width/height); Game and Movie apply their authored-stereo interpretation. */

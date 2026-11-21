@@ -89,7 +89,8 @@ public class XrStreamPresenterEntityLifecycleTest {
         float previousHeight = ReflectionHelpers.getField(presenter, "panelHeightMeters");
         float changedHeight = previousHeight + 0.5f;
         ReflectionHelpers.setField(presenter, "panelHeightMeters", changedHeight);
-        Pose changedPose = ReflectionHelpers.callInstanceMethod(presenter, "statsPose",
+        Pose changedPose = ReflectionHelpers.callInstanceMethod(
+                ReflectionHelpers.getField(presenter, "poseSolver"), "statsPose",
                 ClassParameter.from(float.class, changedHeight));
         assertNotEquals("Initialized geometry must produce a different desired pose",
                 previousPose, changedPose);
@@ -101,14 +102,14 @@ public class XrStreamPresenterEntityLifecycleTest {
     @Test
     public void comparisonUsesCurrentEntityPoseAfterAnotherCallerMovesIt() {
         Pose desired = new Pose(new Vector3(1.0f, 0.0f, 0.1f), Quaternion.Identity);
-        XrStreamPresenter.updatePanelPose(statsPanel, desired);
+        XrPanelPoseSolver.updatePanelPose(statsPanel, desired);
         // Equal values from a fresh calculation must also be skipped.
-        XrStreamPresenter.updatePanelPose(statsPanel,
+        XrPanelPoseSolver.updatePanelPose(statsPanel,
                 new Pose(new Vector3(1.0f, 0.0f, 0.1f), Quaternion.Identity));
         verify(statsPanel, times(1)).setPose(any(Pose.class));
 
         appliedStatsPose.set(Pose.Identity);
-        XrStreamPresenter.updatePanelPose(statsPanel, desired);
+        XrPanelPoseSolver.updatePanelPose(statsPanel, desired);
         verify(statsPanel, times(2)).setPose(any(Pose.class));
         assertEquals(desired, appliedStatsPose.get());
     }
@@ -151,7 +152,7 @@ public class XrStreamPresenterEntityLifecycleTest {
     @Test
     public void disposedPanelIsNotReadOrMoved() {
         when(statsPanel.isDisposed()).thenReturn(true);
-        XrStreamPresenter.updatePanelPose(statsPanel, Pose.Identity);
+        XrPanelPoseSolver.updatePanelPose(statsPanel, Pose.Identity);
         verify(statsPanel, never()).getPose(any(Space.class));
         verify(statsPanel, never()).setPose(any(Pose.class));
     }
