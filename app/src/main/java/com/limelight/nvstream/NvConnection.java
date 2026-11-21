@@ -46,6 +46,12 @@ import com.limelight.nvstream.jni.MoonBridge;
 
 public class NvConnection {
     public interface StopCompletion {
+        /**
+         * Runs after native teardown. {@code heldSessionTransaction} is true while this connection
+         * still holds the host-session transaction permit. It does not say whether a host session
+         * was established: a native start that fails after a successful HTTP launch releases the
+         * permit before stop() runs.
+         */
         void beforePermitRelease(boolean heldSessionTransaction);
     }
     // Context parameters

@@ -288,6 +288,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean connectionNativeStopped;
     // Set by whichever path sends the user's Quit: the stop thread or quitStoppedHostSession().
     private final AtomicBoolean hostSessionQuitClaimed = new AtomicBoolean();
+    // This connection's HTTP launch or resume succeeded; written on the connection thread.
+    private volatile boolean ownsEstablishedHostSession;
     private boolean autoEnterPip = false;
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
@@ -3790,6 +3792,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             LimeLog.warning("Ignoring invalid or stale host session establishment callback");
             return;
         }
+        ownsEstablishedHostSession = true;
         // Without a session identity/record only the durable write is skipped; the live
         // capability and the presenter are still updated below.
         boolean canPersist = sessionSettingsStore != null && sessionPc != null
@@ -3899,6 +3902,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // during the process of stopping this one.
             connectionNativeStopped = false;
             final String expectedLocalSessionId = sessionLocalSessionId;
+            final boolean resumeAuthority = getHostSessionLaunchRequest(getIntent()).kind
+                    == HostSessionLaunchRequest.Kind.RESUME;
             connectionStopThread = new Thread("Artemis connection stop") {
                 public void run() {
                     try {
@@ -3907,8 +3912,19 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             // immediately, while the global permit still blocks a replacement host
                             // session through the optional HTTP quit below.
                             publishNativeStopComplete();
-                            if (heldSessionTransaction && quitOnStop) {
+                            if (!quitOnStop) {
+                                return;
+                            }
+                            if (heldSessionTransaction) {
                                 quitHostSessionOnce(expectedLocalSessionId);
+                            } else if (resumeAuthority || ownsEstablishedHostSession) {
+                                // The permit says nothing about host-session ownership: a native
+                                // start that failed after a successful HTTP launch released it.
+                                if (!NvConnection.runOutsideActiveConnection(
+                                        () -> quitHostSessionOnce(expectedLocalSessionId))) {
+                                    LimeLog.warning("Another connection owns the host session; "
+                                            + "not sending Quit");
+                                }
                             }
                         });
                     } finally {

@@ -124,6 +124,27 @@ public final class GameHostSessionQuitTest {
         verify(http, after(500).times(1)).quitApp("exact-token", true);
     }
 
+    @Test public void quitAfterAFailedNativeStartCancelsTheLaunchedSession() throws Exception {
+        // A fresh Start whose HTTP launch succeeded; the native start then failed and released
+        // the host-session transaction permit before the stop.
+        game.setIntent(new Intent(game.getIntent())
+                .putExtra(Game.EXTRA_LAUNCH_REQUEST, HostSessionLaunchRequest.start()));
+        game.connected = false;
+        ReflectionHelpers.setField(game, "connecting", true);
+        game.hostSessionEstablished("launched-token", false, true);
+        doAnswer(invocation -> {
+            NvConnection.StopCompletion completion = invocation.getArgument(0);
+            completion.beforePermitRelease(false);
+            return null;
+        }).when(game.conn).stop(any());
+
+        ReflectionHelpers.callInstanceMethod(game, "finishAndQuitSession");
+        game.onStop();
+        joinStopThread();
+
+        verify(http, timeout(5000)).quitApp("launched-token", true);
+    }
+
     @Test public void quitWhileAnotherConnectionOwnsTheHostSendsNothing() throws Exception {
         game.connectionTerminated(-1);
         shadowOf(Looper.getMainLooper()).idle();
