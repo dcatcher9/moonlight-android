@@ -83,6 +83,8 @@ public class AndroidAudioRenderer implements AudioRenderer {
     };
 
     private AudioFocusRequest audioFocusRequest;
+    // Guarded by stateLock. True while this renderer holds focus or waits for a delayed grant;
+    // false before the first request, after a refused request, and after a permanent loss.
     private boolean audioFocusRequested;
     private boolean audioFxSessionOpen;
 
@@ -371,13 +373,51 @@ public class AndroidAudioRenderer implements AudioRenderer {
             started = true;
         }
 
-        int focusResult = requestAudioFocus();
+        requestAudioFocusIfNotHeld();
+
         synchronized (stateLock) {
-            audioFocusRequested = focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-                    || focusResult == AudioManager.AUDIOFOCUS_REQUEST_DELAYED;
+            openAudioEffectSessionLocked();
+        }
+    }
+
+    /**
+     * Requests audio focus again after a permanent loss or a refused request. Android removes a
+     * permanently displaced listener from its focus stack, so the stream stays silent until the
+     * user returns to it and the owner calls this. Transient losses are restored by the framework
+     * and need no call; this is a no-op while focus is held or a delayed grant is pending.
+     * Safe to call from any thread.
+     */
+    public void reacquireAudioFocus() {
+        requestAudioFocusIfNotHeld();
+    }
+
+    private void requestAudioFocusIfNotHeld() {
+        synchronized (stateLock) {
+            if (!started || audioFocusRequested) {
+                return;
+            }
+            // Claim the request so a concurrent caller does not issue a second one.
+            audioFocusRequested = true;
         }
 
-        if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+        int focusResult = requestAudioFocus();
+        boolean requestHeld = focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+                || focusResult == AudioManager.AUDIOFOCUS_REQUEST_DELAYED;
+        boolean stoppedDuringRequest;
+        synchronized (stateLock) {
+            stoppedDuringRequest = !started;
+            if (!requestHeld && !stoppedDuringRequest) {
+                audioFocusRequested = false;
+            }
+        }
+
+        if (stoppedDuringRequest) {
+            // stop() may have abandoned focus before this request reached AudioManager.
+            if (requestHeld) {
+                abandonAudioFocus();
+            }
+        }
+        else if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             handleAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN);
         }
         else if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
@@ -385,10 +425,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
         else {
             LimeLog.severe("Unable to acquire audio focus; local playback remains paused");
-        }
-
-        synchronized (stateLock) {
-            openAudioEffectSessionLocked();
         }
     }
 
@@ -457,6 +493,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
             hasAudioFocus = gainedFocus;
             if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+                // A permanent loss ends this request; reacquireAudioFocus() issues a new one.
                 audioFocusRequested = false;
             }
             if (track == null) {

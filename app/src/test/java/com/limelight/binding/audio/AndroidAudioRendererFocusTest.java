@@ -1,8 +1,12 @@
 package com.limelight.binding.audio;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.media.AudioAttributes;
@@ -89,5 +93,106 @@ public final class AndroidAudioRendererFocusTest {
         renderer.stop();
         assertSame(focusRequest.listener, shadowManager.getLastAbandonedAudioFocusListener());
         renderer.cleanup();
+    }
+
+    @Test
+    public void permanentLossIsReacquiredWhenTheOwnerAsksAgain() {
+        Fixture fixture = new Fixture(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        ShadowAudioManager.AudioFocusRequest first = fixture.lastRequest();
+        assertTrue(fixture.hasFocus());
+
+        // Another app took AUDIOFOCUS_GAIN; Android drops this listener from its focus stack.
+        fixture.dispatch(first, AudioManager.AUDIOFOCUS_LOSS);
+        assertFalse(fixture.hasFocus());
+
+        fixture.shadowManager.setNextFocusRequestResponse(
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        fixture.renderer.reacquireAudioFocus();
+
+        assertNotSame(first, fixture.lastRequest());
+        assertTrue(fixture.hasFocus());
+        fixture.renderer.stop();
+        assertSame(fixture.lastRequest().audioFocusRequest,
+                fixture.shadowManager.getLastAbandonedAudioFocusRequest());
+        fixture.renderer.cleanup();
+    }
+
+    @Test
+    public void refusedFirstRequestIsRetriedWhenTheOwnerAsksAgain() {
+        Fixture fixture = new Fixture(AudioManager.AUDIOFOCUS_REQUEST_FAILED);
+        ShadowAudioManager.AudioFocusRequest refused = fixture.lastRequest();
+        assertFalse(fixture.hasFocus());
+
+        fixture.shadowManager.setNextFocusRequestResponse(
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        fixture.renderer.reacquireAudioFocus();
+
+        assertNotSame(refused, fixture.lastRequest());
+        assertTrue(fixture.hasFocus());
+        fixture.renderer.cleanup();
+    }
+
+    @Test
+    public void heldOrTransientlyLostFocusIsNotRequestedAgain() {
+        Fixture fixture = new Fixture(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        ShadowAudioManager.AudioFocusRequest first = fixture.lastRequest();
+
+        fixture.renderer.reacquireAudioFocus();
+        assertSame(first, fixture.lastRequest());
+
+        // The framework returns focus after a transient loss without a new request.
+        fixture.dispatch(first, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT);
+        fixture.renderer.reacquireAudioFocus();
+        assertSame(first, fixture.lastRequest());
+        assertFalse(fixture.hasFocus());
+
+        fixture.dispatch(first, AudioManager.AUDIOFOCUS_GAIN);
+        assertTrue(fixture.hasFocus());
+        fixture.renderer.cleanup();
+    }
+
+    @Test
+    public void stoppedRendererNeverRequestsFocus() {
+        Fixture fixture = new Fixture(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        fixture.dispatch(fixture.lastRequest(), AudioManager.AUDIOFOCUS_LOSS);
+        fixture.renderer.stop();
+        ShadowAudioManager.AudioFocusRequest last = fixture.lastRequest();
+
+        fixture.renderer.reacquireAudioFocus();
+
+        assertSame(last, fixture.lastRequest());
+        assertFalse(fixture.hasFocus());
+        fixture.renderer.cleanup();
+    }
+
+    private static final class Fixture {
+        final ShadowAudioManager shadowManager;
+        final AndroidAudioRenderer renderer;
+
+        Fixture(int firstResponse) {
+            Context context = ApplicationProvider.getApplicationContext();
+            AudioManager manager =
+                    (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+            shadowManager = Shadows.shadowOf(manager);
+            assertNull(shadowManager.getLastAudioFocusRequest());
+            shadowManager.setNextFocusRequestResponse(firstResponse);
+            renderer = new AndroidAudioRenderer(context, false, 0);
+            assertEquals(0, renderer.setup(new MoonBridge.AudioConfiguration(2, 0x3),
+                    48_000, 240));
+            renderer.start();
+            assertNotNull(lastRequest());
+        }
+
+        ShadowAudioManager.AudioFocusRequest lastRequest() {
+            return shadowManager.getLastAudioFocusRequest();
+        }
+
+        void dispatch(ShadowAudioManager.AudioFocusRequest request, int focusChange) {
+            request.listener.onAudioFocusChange(focusChange);
+        }
+
+        boolean hasFocus() {
+            return ReflectionHelpers.<Boolean>getField(renderer, "hasAudioFocus");
+        }
     }
 }
