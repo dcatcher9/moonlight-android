@@ -196,19 +196,29 @@ public class XboxOneController extends AbstractXboxController {
     }
 
     private void sendRumblePacket() {
-        byte[] data = {
-                0x09, 0x00, seqNum++, 0x09, 0x00,
-                0x0F,
-                (byte)(leftTriggerMotor >> 9),
-                (byte)(rightTriggerMotor >> 9),
-                (byte)(lowFreqMotor >> 9),
-                (byte)(highFreqMotor >> 9),
-                (byte)0xFF, 0x00, (byte)0xFF
-        };
+        byte[] data = rumblePacket(seqNum++, leftTriggerMotor, rightTriggerMotor,
+                lowFreqMotor, highFreqMotor);
         int res = connection.bulkTransfer(outEndpt, data, data.length, 100);
         if (res != data.length) {
             LimeLog.warning("Rumble transfer failed: "+res);
         }
+    }
+
+    /**
+     * Builds the GIP rumble command. Motor strengths are unsigned 16-bit values carried in Java
+     * shorts; each is scaled to the 0-127 range the controller accepts.
+     */
+    static byte[] rumblePacket(byte sequence, short leftTriggerMotor, short rightTriggerMotor,
+                               short lowFreqMotor, short highFreqMotor) {
+        return new byte[] {
+                0x09, 0x00, sequence, 0x09, 0x00,
+                0x0F,
+                (byte)((leftTriggerMotor & 0xFFFF) >> 9),
+                (byte)((rightTriggerMotor & 0xFFFF) >> 9),
+                (byte)((lowFreqMotor & 0xFFFF) >> 9),
+                (byte)((highFreqMotor & 0xFFFF) >> 9),
+                (byte)0xFF, 0x00, (byte)0xFF
+        };
     }
 
     @Override

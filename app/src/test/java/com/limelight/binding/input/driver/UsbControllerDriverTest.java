@@ -41,6 +41,18 @@ public final class UsbControllerDriverTest {
     }
 
     @Test
+    public void xboxOneRumbleScalesUnsignedStrengthsToSevenBits() {
+        byte[] packet = XboxOneController.rumblePacket((byte) 3,
+                (short) 0xFFFF, (short) 0x8000, (short) 0x7FFF, (short) 0);
+        assertEquals(3, packet[2]);
+        assertEquals(127, packet[6]);
+        // A strength of 0x8000 or more is negative as a short; it must not sign-extend.
+        assertEquals(64, packet[7]);
+        assertEquals(63, packet[8]);
+        assertEquals(0, packet[9]);
+    }
+
+    @Test
     public void proControllerLowFrequencyAmplitudeUsesTheTopNibble() {
         byte[] half = new byte[10];
         ProConController.encodeRumbleAmplitudes(half, (short) 0x8000, (short) 0);
