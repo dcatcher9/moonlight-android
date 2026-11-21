@@ -110,6 +110,7 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
                 source, "public boolean cancelAtDeadline()");
         String prepareForStop = methodBody(source, "public void prepareForStop()");
         String cleanup = methodBody(source, "public void cleanup()");
+        String markStopped = methodBody(readCoordinatorSource(), "void markStopped()");
 
         assertTrue(ensure.contains("\"Video - Surface Handoff\""));
         assertTrue(ensure.contains("Process.THREAD_PRIORITY_DISPLAY"));
@@ -121,8 +122,9 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
         assertTrue(prepareForStop.indexOf("stopping = true")
                 < prepareForStop.indexOf("shutdownOutputSurfaceSwitchThread()"));
         assertFalse(prepareForStop.contains("synchronized (codecRecoveryMonitor)"));
-        assertTrue(prepareForStop.contains(
-                "codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED)"));
+        assertTrue(prepareForStop.contains("codecRecovery.markStopped()"));
+        assertTrue(markStopped.contains("codecRecoveryType.set(CR_RECOVERY_TYPE_STOPPED)"));
+        assertFalse(markStopped.contains("synchronized"));
         assertTrue(cleanup.indexOf("stopping = true")
                 < cleanup.indexOf("synchronized (codecRecoveryMonitor)"));
 
@@ -161,17 +163,24 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
     @Test
     public void terminalStopTokenCannotBeOverwrittenByLateRecoveryCompletion() throws Exception {
         String source = readRendererSource();
+        String coordinator = readCoordinatorSource();
+        String barrier = methodBody(
+                coordinator, "boolean awaitOrRecover(int quiescenceFlag, Recovery recovery)");
         String recovery = methodBody(
-                source, "private boolean doCodecRecoveryIfRequired(int quiescenceFlag)");
+                source, "private boolean performCodecRecoveryLocked()");
         String cancel = methodBody(
-                source, "private boolean finishCodecRecoveryCancellationIfStopping()");
+                coordinator, "boolean finishCancellationIfStopping()");
 
         assertTrue(cancel.contains("CR_RECOVERY_TYPE_STOPPED"));
-        assertTrue(cancel.contains("codecRecoveryMonitor.notifyAll()"));
-        assertTrue(recovery.contains("finishCodecRecoveryCancellationIfStopping()"));
-        assertTrue(recovery.contains("codecRecoveryType.compareAndSet("));
-        assertFalse(recovery.contains("codecRecoveryType.set(CR_RECOVERY_TYPE_NONE)"));
-        assertTrue(recovery.contains("codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED"));
+        assertTrue(cancel.contains("monitor.notifyAll()"));
+        assertTrue(barrier.contains("finishCancellationIfStopping()"));
+        assertTrue(recovery.contains("codecRecovery.finishCancellationIfStopping()"));
+        assertTrue(recovery.contains("codecRecovery.compareAndSetType("));
+        // The renderer reaches the token only through the coordinator, which never clears it
+        // unconditionally.
+        assertFalse(source.contains("codecRecoveryType"));
+        assertFalse(coordinator.contains("codecRecoveryType.set(CR_RECOVERY_TYPE_NONE)"));
+        assertTrue(barrier.contains("codecRecoveryType.get() != CR_RECOVERY_TYPE_STOPPED"));
     }
 
     @Test
@@ -234,9 +243,16 @@ public final class MediaCodecDecoderRendererCallbackThreadContractTest {
     }
 
     private static String readRendererSource() throws IOException {
-        File file = new File(
-                "src/main/java/com/limelight/binding/video/MediaCodecDecoderRenderer.java");
-        assertTrue("MediaCodecDecoderRenderer source is missing", file.isFile());
+        return readVideoSource("MediaCodecDecoderRenderer.java");
+    }
+
+    private static String readCoordinatorSource() throws IOException {
+        return readVideoSource("CodecRecoveryCoordinator.java");
+    }
+
+    private static String readVideoSource(String name) throws IOException {
+        File file = new File("src/main/java/com/limelight/binding/video/" + name);
+        assertTrue(name + " source is missing", file.isFile());
         return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
     }
 

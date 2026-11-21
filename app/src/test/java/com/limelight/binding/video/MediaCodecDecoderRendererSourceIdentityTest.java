@@ -31,7 +31,6 @@ import org.robolectric.util.ReflectionHelpers;
 import org.robolectric.util.ReflectionHelpers.ClassParameter;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, shadows = {
@@ -150,21 +149,19 @@ public final class MediaCodecDecoderRendererSourceIdentityTest {
             fixture.tracker.recordInput(101, 7, 19);
             fixture.tracker.recordOutput(101, 101000);
             DecodedSourceIdentityTracker.Sample previous = fixture.read(101000);
-            AtomicInteger recovery = ReflectionHelpers.getField(
-                    fixture.renderer, "codecRecoveryType");
-            recovery.set(ReflectionHelpers.getStaticField(
-                    MediaCodecDecoderRenderer.class, "CR_RECOVERY_TYPE_FLUSH"));
-            ReflectionHelpers.setField(fixture.renderer, "codecRecoveryThreadQuiescedFlags",
-                    ReflectionHelpers.<Integer>getStaticField(
-                            MediaCodecDecoderRenderer.class, "CR_FLAG_RENDER_THREAD"));
+            CodecRecoveryCoordinator recovery = ReflectionHelpers.getField(
+                    fixture.renderer, "codecRecovery");
+            assertTrue(recovery.compareAndSetType(CodecRecoveryCoordinator.CR_RECOVERY_TYPE_NONE,
+                    CodecRecoveryCoordinator.CR_RECOVERY_TYPE_FLUSH));
+            ReflectionHelpers.setField(recovery, "codecRecoveryThreadQuiescedFlags",
+                    CodecRecoveryCoordinator.CR_FLAG_RENDER_THREAD);
             doAnswer(call -> {
                 assertEquals(0, fixture.read(101000).sourceId);
                 return null;
             }).when(fixture.codec).flush();
             assertTrue(ReflectionHelpers.callInstanceMethod(
                     fixture.renderer, "doCodecRecoveryIfRequired", ClassParameter.from(int.class,
-                            ReflectionHelpers.<Integer>getStaticField(
-                                    MediaCodecDecoderRenderer.class, "CR_FLAG_INPUT_THREAD"))));
+                            CodecRecoveryCoordinator.CR_FLAG_INPUT_THREAD)));
             verify(fixture.codec).flush();
             fixture.tracker.recordInput(102, 8, 19);
             fixture.tracker.recordOutput(102, 102000);
