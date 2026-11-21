@@ -339,6 +339,9 @@ void BridgeArDecodeAndPlaySample(char* sampleData, int sampleLength) {
 
     jshort* decodedData = (*env)->GetPrimitiveArrayCritical(env, DecodedAudioBuffer, NULL);
     if (decodedData == NULL) {
+        // Drop this sample. Do not leave OutOfMemoryError pending on the attached audio thread,
+        // where the next sample's JNI calls would run with it still raised.
+        (*env)->ExceptionClear(env);
         return;
     }
 
@@ -436,6 +439,9 @@ void BridgeClSetHdrMode(bool enabled) {
     // enclosing LiStartConnection() native frame. This array is owned by this callback, unlike
     // borrowed object arguments supplied by a Java-to-native transition.
     if ((*env)->PushLocalFrame(env, 1) < 0) {
+        // The failed frame push leaves OutOfMemoryError pending; clear it so this control thread's
+        // later callbacks do not call Java with it still raised.
+        (*env)->ExceptionClear(env);
         return;
     }
 
