@@ -345,58 +345,91 @@ public class ComputerManagerService extends Service {
         return false;
     }
 
+    /** The network operations used to discover this network's external address. */
+    interface ExternalAddressProbe {
+        /** Binds the process to an underlying network that is neither cellular nor a VPN. */
+        boolean bindToUnderlyingNetwork();
+
+        void unbindNetwork();
+
+        /** Returns the external IPv4 address reported by STUN, or null. */
+        String findExternalAddress();
+    }
+
     private void populateExternalAddress(ComputerDetails details) {
+        final ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        populateExternalAddress(details, NetHelper.isActiveNetworkVpn(this), defaultNetworkLock,
+                new ExternalAddressProbe() {
+                    @Override
+                    public boolean bindToUnderlyingNetwork() {
+                        // On Lollipop or later, we can bind our process to the underlying interface
+                        // to ensure our STUN request goes out on that interface or not at all (which is
+                        // preferable to getting a VPN endpoint address back).
+                        Network[] networks = connMgr.getAllNetworks();
+                        for (Network net : networks) {
+                            NetworkCapabilities netCaps = connMgr.getNetworkCapabilities(net);
+                            if (netCaps != null) {
+                                if (!netCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                                        !netCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                                    // This network looks like an underlying multicast-capable transport,
+                                    // so let's guess that it's probably where our mDNS response came from.
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        if (connMgr.bindProcessToNetwork(net)) {
+                                            return true;
+                                        }
+                                    } else if (ConnectivityManager.setProcessDefaultNetwork(net)) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public void unbindNetwork() {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            connMgr.bindProcessToNetwork(null);
+                        } else {
+                            ConnectivityManager.setProcessDefaultNetwork(null);
+                        }
+                    }
+
+                    @Override
+                    public String findExternalAddress() {
+                        return NvConnection.findExternalAddressForMdns("stun.moonlight-stream.org", 3478);
+                    }
+                });
+    }
+
+    static void populateExternalAddress(ComputerDetails details, boolean activeNetworkIsVpn,
+                                        Lock defaultNetworkLock, ExternalAddressProbe probe) {
         boolean boundToNetwork = false;
-        boolean activeNetworkIsVpn = NetHelper.isActiveNetworkVpn(this);
-        ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
 
         // Check if we're currently connected to a VPN which may send our
         // STUN request from an unexpected interface
         if (activeNetworkIsVpn) {
             // Acquire the default network lock since we could be changing global process state
             defaultNetworkLock.lock();
-
-            // On Lollipop or later, we can bind our process to the underlying interface
-            // to ensure our STUN request goes out on that interface or not at all (which is
-            // preferable to getting a VPN endpoint address back).
-            Network[] networks = connMgr.getAllNetworks();
-            for (Network net : networks) {
-                NetworkCapabilities netCaps = connMgr.getNetworkCapabilities(net);
-                if (netCaps != null) {
-                    if (!netCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-                            !netCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                        // This network looks like an underlying multicast-capable transport,
-                        // so let's guess that it's probably where our mDNS response came from.
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            if (connMgr.bindProcessToNetwork(net)) {
-                                boundToNetwork = true;
-                                break;
-                            }
-                        } else if (ConnectivityManager.setProcessDefaultNetwork(net)) {
-                            boundToNetwork = true;
-                            break;
-                        }
-                    }
-                }
+        }
+        try {
+            if (activeNetworkIsVpn) {
+                boundToNetwork = probe.bindToUnderlyingNetwork();
             }
 
             // Perform the STUN request if we're not on a VPN or if we bound to a network
             if (!activeNetworkIsVpn || boundToNetwork) {
-                String stunResolvedAddress = NvConnection.findExternalAddressForMdns("stun.moonlight-stream.org", 3478);
+                String stunResolvedAddress = probe.findExternalAddress();
                 if (stunResolvedAddress != null) {
                     // We don't know for sure what the external port is, so we will have to guess.
                     // When we contact the PC (if we haven't already), it will update the port.
                     details.remoteAddress = new ComputerDetails.AddressTuple(stunResolvedAddress, details.guessExternalPort());
                 }
             }
-
+        } finally {
             // Unbind from the network
             if (boundToNetwork) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    connMgr.bindProcessToNetwork(null);
-                } else {
-                    ConnectivityManager.setProcessDefaultNetwork(null);
-                }
+                probe.unbindNetwork();
             }
 
             // Unlock the network state
