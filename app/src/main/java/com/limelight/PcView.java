@@ -606,41 +606,62 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                 final String stageMessage = message != null || success
                         ? message : getString(R.string.pair_fail);
                 final boolean toastSuccess = success;
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (isFinishing() || isDestroyed() || !inForeground) {
-                            pairingInProgress = false;
-                            return;
-                        }
-                        if (stageMessage != null) {
-                            showPairingStage(getString(R.string.xr_pairing_failed_title),
-                                    stageMessage, false, true);
-                        }
-
-                        if (toastSuccess) {
-                            showPairingStage(getString(R.string.xr_pairing_connected_title),
-                                    getString(R.string.xr_pairing_connected_detail),
-                                    false, false);
-                            View stage = findViewById(R.id.homeConnectionStage);
-                            stage.postDelayed(() -> {
-                                pairingInProgress = false;
-                                if (isFinishing() || isDestroyed() || !inForeground) {
-                                    return;
-                                }
-                                stage.setVisibility(View.GONE);
-                                doAppList(computer, true, false);
-                            }, 650L);
-                        }
-                        else {
-                            pairingInProgress = false;
-                            // Start polling again if we're still in the foreground
-                            startComputerUpdates();
-                        }
-                    }
-                });
+                runOnUiThread(() -> onPairingFinished(computer, stageMessage, toastSuccess));
             }
         }).start();
+    }
+
+    /**
+     * Main thread. Shows the pairing outcome. A result that arrives while this Activity is
+     * paused still settles the stage card instead of leaving it busy.
+     */
+    void onPairingFinished(ComputerDetails computer, String stageMessage, boolean success) {
+        if (isFinishing() || isDestroyed()) {
+            pairingInProgress = false;
+            return;
+        }
+        if (stageMessage != null) {
+            showPairingStage(getString(R.string.xr_pairing_failed_title),
+                    stageMessage, false, true);
+        }
+        if (!inForeground) {
+            // onResume() restarts polling. A failure stays visible with its dismiss button; a
+            // success needs no card, because the grid shows the paired PC.
+            pairingInProgress = false;
+            if (success) {
+                hidePairingStage();
+            }
+            return;
+        }
+
+        if (success) {
+            showPairingStage(getString(R.string.xr_pairing_connected_title),
+                    getString(R.string.xr_pairing_connected_detail),
+                    false, false);
+            View stage = findViewById(R.id.homeConnectionStage);
+            stage.postDelayed(() -> {
+                pairingInProgress = false;
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                stage.setVisibility(View.GONE);
+                if (inForeground) {
+                    doAppList(computer, true, false);
+                }
+            }, 650L);
+        }
+        else {
+            pairingInProgress = false;
+            // Start polling again if we're still in the foreground
+            startComputerUpdates();
+        }
+    }
+
+    private void hidePairingStage() {
+        View panel = findViewById(R.id.homeConnectionStage);
+        if (panel != null) {
+            panel.setVisibility(View.GONE);
+        }
     }
 
     private void showPairingStage(CharSequence title, CharSequence detail,
