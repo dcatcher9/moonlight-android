@@ -49,7 +49,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.microedition.khronos.egl.EGLConfig;
@@ -296,8 +295,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private final AtomicReference<GpuInferenceResult> latestGpuInferenceResult =
             new AtomicReference<>(null);
     /** Renderer-consumed fences are tracked per native tensor slot and transferred on reuse. */
-    private final AtomicLongArray gpuOutputConsumedFences =
-            new AtomicLongArray(ClientSbsGpuInferenceEngine.BUFFER_SLOT_COUNT);
+    private final ClientSbsSlotFenceLedger gpuSlotFences = new ClientSbsSlotFenceLedger(
+            ClientSbsGpuInferenceEngine.BUFFER_SLOT_COUNT, GLES30::glDeleteSync);
     private int gpuDepthTextureId;
     private int gpuProfileTextureId;
     private int gpuParallaxTextureId;
@@ -2956,7 +2955,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 return false;
             }
 
-            long previousOutputFence = gpuOutputConsumedFences.getAndSet(bufferSlot, 0L);
+            long previousOutputFence = gpuSlotFences.takeFenceForRun(bufferSlot);
             RenderResult task = new RenderResult(inputReadyFence, previousOutputFence, bufferSlot,
                     colorFrameLease, inferenceClaimToken,
                     tensorPackedByClassifier ? nearReuseClassifier : null,
@@ -2967,10 +2966,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             if (!inferenceInputQueue.offer(task)) {
                 // inputReadyFence was submitted after previousOutputFence on this context, so it
                 // alone covers the slot.
-                replaceGpuFinalFence(bufferSlot, inputReadyFence);
-                if (previousOutputFence != 0L) {
-                    GLES30.glDeleteSync(previousOutputFence);
-                }
+                gpuSlotFences.retainUnsubmittedRun(
+                        bufferSlot, inputReadyFence, previousOutputFence);
                 colorFrameSlots.release(colorFrameLease,
                         ClientSbsFrameSlots.State.INFERENCE);
                 markLastCaptureForRetry();
@@ -3190,17 +3187,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      */
     private void replaceGpuFinalFence(int slot, long newerFence) {
         synchronized (gpuBufferOwnershipLock) {
-            replaceGpuFinalFenceLocked(slot, newerFence);
-        }
-    }
-
-    private void replaceGpuFinalFenceLocked(int slot, long newerFence) {
-        if (newerFence == 0L || slot < 0 || slot >= gpuOutputConsumedFences.length()) {
-            return;
-        }
-        long olderFence = gpuOutputConsumedFences.getAndSet(slot, newerFence);
-        if (olderFence != 0L && olderFence != newerFence) {
-            GLES30.glDeleteSync(olderFence);
+            gpuSlotFences.retainFinalFence(slot, newerFence);
         }
     }
 
@@ -3219,14 +3206,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (task == null || task.shutdownRequest) {
             return;
         }
-        long finalFence = task.inputReadyFence != 0L
-                ? task.inputReadyFence : task.previousOutputConsumedFence;
-        if (task.inputReadyFence != 0L
-                && task.previousOutputConsumedFence != 0L
-                && task.previousOutputConsumedFence != task.inputReadyFence) {
-            GLES30.glDeleteSync(task.previousOutputConsumedFence);
-        }
-        replaceGpuFinalFence(task.bufferSlot, finalFence);
+        gpuSlotFences.retainUnsubmittedRun(task.bufferSlot, task.inputReadyFence,
+                task.previousOutputConsumedFence);
         colorFrameSlots.release(task.colorFrameLease,
                 ClientSbsFrameSlots.State.INFERENCE);
         releaseInferenceClaim(task.inferenceClaimToken);
@@ -3242,8 +3223,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             GLES30.glDeleteSync(result.outputReadyFence);
             return;
         }
-        if (!gpuOutputConsumedFences.compareAndSet(
-                result.bufferSlot, 0L, result.outputReadyFence)) {
+        if (!gpuSlotFences.storeConsumedFence(result.bufferSlot, result.outputReadyFence)) {
             GLES30.glDeleteSync(result.outputReadyFence);
             requestGpuShutdown("discarded output fence collided for slot "
                     + result.bufferSlot);
@@ -3252,16 +3232,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     private void clearGpuOutputConsumedFenceHandles(boolean glContextValid) {
         synchronized (gpuBufferOwnershipLock) {
-            clearGpuOutputConsumedFenceHandlesLocked(glContextValid);
-        }
-    }
-
-    private void clearGpuOutputConsumedFenceHandlesLocked(boolean glContextValid) {
-        for (int slot = 0; slot < gpuOutputConsumedFences.length(); slot++) {
-            long fence = gpuOutputConsumedFences.getAndSet(slot, 0L);
-            if (glContextValid && fence != 0L) {
-                GLES30.glDeleteSync(fence);
-            }
+            gpuSlotFences.clear(glContextValid);
         }
     }
 
@@ -3543,8 +3514,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             if (outputConsumedFence == 0L) {
                 throw new IllegalStateException("Unable to fence GPU depth consumption");
             }
-            if (!gpuOutputConsumedFences.compareAndSet(
-                    result.bufferSlot, 0L, outputConsumedFence)) {
+            if (!gpuSlotFences.storeConsumedFence(result.bufferSlot, outputConsumedFence)) {
                 GLES30.glDeleteSync(outputConsumedFence);
                 throw new IllegalStateException(
                         "Output-consumed fence collision for slot " + result.bufferSlot);
@@ -3594,8 +3564,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // Native deliberately marks a reuse transaction as requiring this returned fence on
             // the slot's next invocation. No renderer work reads the untouched LiteRT output, so
             // the ready fence itself is the correct no-op consumer dependency.
-            if (!gpuOutputConsumedFences.compareAndSet(
-                    result.bufferSlot, 0L, result.outputReadyFence)) {
+            if (!gpuSlotFences.storeConsumedFence(result.bufferSlot, result.outputReadyFence)) {
                 throw new IllegalStateException(
                         "Reused output fence collision for slot " + result.bufferSlot);
             }
@@ -3685,8 +3654,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
 
         ClientSbsGpuInferenceEngine gpuEngine = gpuInferenceEngine;
-        long slotZeroFence = gpuOutputConsumedFences.getAndSet(0, 0L);
-        long slotOneFence = gpuOutputConsumedFences.getAndSet(1, 0L);
+        long slotZeroFence = gpuSlotFences.takeCloseFence(0);
+        long slotOneFence = gpuSlotFences.takeCloseFence(1);
         boolean allClosed = true;
         if (gpuEngine != null) {
             boolean closed = gpuEngine.close(slotZeroFence, slotOneFence, finishConfirmed);
@@ -3703,8 +3672,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         } else if (slotZeroFence != 0L || slotOneFence != 0L) {
             // Never discard an untransferred renderer dependency. This indicates an ownership bug,
             // so retain the handles and make lifecycle teardown retry instead of guessing safety.
-            gpuOutputConsumedFences.compareAndSet(0, 0L, slotZeroFence);
-            gpuOutputConsumedFences.compareAndSet(1, 0L, slotOneFence);
+            gpuSlotFences.restoreCloseFence(0, slotZeroFence);
+            gpuSlotFences.restoreCloseFence(1, slotOneFence);
             LimeLog.severe("Client SBS final renderer fences have no native engine owner");
             allClosed = false;
         }
