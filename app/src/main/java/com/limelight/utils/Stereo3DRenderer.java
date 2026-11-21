@@ -1977,9 +1977,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         perf.resetDepthTelemetryEra();
 
         simple3dProgram = createProgram(
-                ShaderUtils.SIMPLE_VERTEX_SHADER, ClientSbsShaders.FLAT_FRAGMENT);
+                ShaderUtils.VERTEX_SHADER, ClientSbsShaders.FLAT_FRAGMENT);
         modelInputProgram = createProgram(
-                ShaderUtils.SIMPLE_VERTEX_SHADER,
+                ShaderUtils.VERTEX_SHADER,
                 ClientSbsShaders.createModelInputFragment(
                         pipelineContract.usesDirectFullFrameResize()));
         modelInputPackProgram = createComputeProgram(
