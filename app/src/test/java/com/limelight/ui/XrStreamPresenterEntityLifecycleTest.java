@@ -123,7 +123,8 @@ public class XrStreamPresenterEntityLifecycleTest {
             applied.set(invocation.getArgument(0));
             return null;
         }).when(settings).setPose(any(Pose.class));
-        ReflectionHelpers.setField(presenter, "auxiliaryPanel", settings);
+        ReflectionHelpers.setField(
+                ReflectionHelpers.getField(presenter, "sessionSettingsPane"), "panel", settings);
         XrControlUiState state = ReflectionHelpers.getField(presenter, "controlUiState");
         state.toggle(XrControlUiState.Surface.SESSION_SETTINGS);
         repositionStats();

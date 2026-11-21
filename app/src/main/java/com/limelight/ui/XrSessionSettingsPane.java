@@ -4,9 +4,16 @@ import android.app.Activity;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+
+import androidx.xr.runtime.Session;
+import androidx.xr.runtime.math.FloatSize2d;
+import androidx.xr.runtime.math.Pose;
+import androidx.xr.scenecore.PanelEntity;
+import androidx.xr.scenecore.SurfaceEntity;
 
 import com.limelight.Game;
 import com.limelight.R;
@@ -21,10 +28,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The session-settings pane hosted by the presenter's auxiliary panel: the two-column view of
- * settings shared by every presentation mode, the per-key control references an open pane is
+ * The App Settings pane left of the video: its SceneCore panel and host view, the two-column view
+ * of settings shared by every presentation mode, the per-key control references an open pane is
  * refreshed through, and the footer defaults button. {@link XrStreamPresenter} owns the model
- * snapshot, the panel entity and when the pane is rebuilt, refreshed or released.
+ * snapshot, decides when the pane is shown, refreshed or released, and supplies its pose.
+ * Every method runs on the main thread.
  */
 final class XrSessionSettingsPane {
     /** What the pane reads from its owner. */
@@ -64,6 +72,63 @@ final class XrSessionSettingsPane {
     private final EnumMap<SessionSettingsModel.Key, TextView> sessionPendingViews =
             new EnumMap<>(SessionSettingsModel.Key.class);
     private Button sessionDefaultsButton;
+    /** Left-side panel for the settings shared by every presentation mode in this session. */
+    private PanelEntity panel;
+    private FrameLayout contentHost;
+
+    /** Creates the hidden panel and its host view, parented to the video entity. */
+    void createPanel(Session session, SurfaceEntity videoEntity, Pose pose) {
+        contentHost = new FrameLayout(activity);
+        XrPanelViews.setSolidPanelCanvas(activity, contentHost);
+        panel = PanelEntity.create(
+                session, contentHost,
+                new FloatSize2d(XrPanelPoseSolver.AUXILIARY_WIDTH_METERS,
+                        XrPanelPoseSolver.AUXILIARY_HEIGHT_METERS),
+                "xr-session-controls", pose, videoEntity);
+        XrPanelViews.configureSolidPanel(panel);
+        panel.setEnabled(false);
+    }
+
+    boolean hasPanel() {
+        return panel != null && !panel.isDisposed();
+    }
+
+    boolean hasContentHost() {
+        return contentHost != null;
+    }
+
+    /**
+     * Rebuilds and shows the pane at {@code pose}, or hides it and drops its control references.
+     *
+     * @param pose ignored when hiding or before the panel exists
+     */
+    void applyVisibility(boolean visible, Pose pose) {
+        if (visible && contentHost != null) {
+            contentHost.removeAllViews();
+            contentHost.addView(buildSessionSettingsView(), new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        } else if (!visible) {
+            clearSessionSettingsReferences();
+        }
+        if (hasPanel()) {
+            if (visible && pose != null) {
+                XrPanelPoseSolver.updatePanelPose(panel, pose);
+            }
+            panel.setEnabled(visible);
+        }
+    }
+
+    void reposition(Pose pose) {
+        XrPanelPoseSolver.updatePanelPose(panel, pose);
+    }
+
+    void disposePanel() {
+        if (panel != null && !panel.isDisposed()) {
+            panel.dispose();
+        }
+        panel = null;
+        contentHost = null;
+    }
 
     View buildSessionSettingsView() {
         clearSessionSettingsReferences();

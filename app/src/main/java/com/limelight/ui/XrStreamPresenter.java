@@ -29,7 +29,6 @@ import androidx.xr.runtime.math.Vector3;
 import androidx.xr.scenecore.Entity;
 import androidx.xr.scenecore.EntityMoveListener;
 import androidx.xr.scenecore.MovableComponent;
-import androidx.xr.scenecore.PanelEntity;
 import androidx.xr.scenecore.ResizableComponent;
 import androidx.xr.scenecore.ResizeEvent;
 import androidx.xr.scenecore.Scene;
@@ -201,9 +200,6 @@ public class XrStreamPresenter {
 
     private final XrCinemaController cinemaController;
 
-    /** Left-side PanelEntity for settings shared by every presentation mode in this session. */
-    private PanelEntity auxiliaryPanel;
-    private FrameLayout auxiliaryContentHost;
     private SessionSettingsModel sessionSettingsModel;
     private final EnumMap<PresentationMode, ModeStreamQualityModel> modeStreamQualityModels =
             new EnumMap<>(PresentationMode.class);
@@ -1054,7 +1050,7 @@ public class XrStreamPresenter {
     public void setSessionSettingsModel(SessionSettingsModel model) {
         sessionSettingsModel = java.util.Objects.requireNonNull(model, "model");
         if (controlUiState.getVisibleSurface()
-                == XrControlUiState.Surface.SESSION_SETTINGS && auxiliaryContentHost != null) {
+                == XrControlUiState.Surface.SESSION_SETTINGS && sessionSettingsPane.hasContentHost()) {
             sessionSettingsPane.updateSessionSettingsView();
         }
     }
@@ -1081,7 +1077,7 @@ public class XrStreamPresenter {
         clientSbsModeSettingsModel = java.util.Objects.requireNonNull(clientModel, "clientModel");
         this.reconnectPending = applyPending;
         if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.SESSION_SETTINGS
-                && auxiliaryContentHost != null) {
+                && sessionSettingsPane.hasContentHost()) {
             sessionSettingsPane.updateSessionSettingsView();
         }
         else if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.MODE_OPTIONS) {
@@ -1551,26 +1547,14 @@ public class XrStreamPresenter {
         if (statsVisible) {
             statsUi.createStatsPanel(videoHeightMeters);
         }
-        createAuxiliaryPanel(videoHeightMeters);
+        sessionSettingsPane.createPanel(session, surfaceEntity,
+                poseSolver.statsPose(videoHeightMeters));
         applyControlUiState(false, "initial");
         depthStatusOverlay.createPanel(session, surfaceEntity);
         transientMessagePanel.createPanel(session, surfaceEntity);
         glanceStrip.createGlancePanel(videoHeightMeters);
         updateGlancePanel();
         dockController.updateDockVisibilityPolicy();
-    }
-
-    /** Create the left-side entity used by shared Session Settings. */
-    private void createAuxiliaryPanel(float videoHeightMeters) {
-        auxiliaryContentHost = new FrameLayout(activity);
-        setSolidPanelCanvas(auxiliaryContentHost);
-        auxiliaryPanel = PanelEntity.create(
-                session, auxiliaryContentHost,
-                new FloatSize2d(XrPanelPoseSolver.AUXILIARY_WIDTH_METERS,
-                        XrPanelPoseSolver.AUXILIARY_HEIGHT_METERS),
-                "xr-session-controls", poseSolver.statsPose(videoHeightMeters), surfaceEntity);
-        XrPanelViews.configureSolidPanel(auxiliaryPanel);
-        auxiliaryPanel.setEnabled(false);
     }
 
     /**
@@ -1866,20 +1850,11 @@ public class XrStreamPresenter {
                 || visible == XrControlUiState.Surface.CINEMA_OPTIONS;
         modeOptionsPane.applyVisibility(showModeOptions);
 
-        boolean showAuxiliary = visible == XrControlUiState.Surface.SESSION_SETTINGS;
-        if (showAuxiliary && auxiliaryContentHost != null) {
-            renderAuxiliaryContent();
-        }
-        else if (!showAuxiliary) {
-            sessionSettingsPane.clearSessionSettingsReferences();
-        }
-        if (auxiliaryPanel != null && !auxiliaryPanel.isDisposed()) {
-            if (showAuxiliary) {
-                XrPanelPoseSolver.updatePanelPose(auxiliaryPanel,
-                        poseSolver.sessionSettingsPose(panelHeightMeters));
-            }
-            auxiliaryPanel.setEnabled(showAuxiliary);
-        }
+        boolean showSessionSettings = visible == XrControlUiState.Surface.SESSION_SETTINGS;
+        // Head pose is read only for the panel being shown.
+        sessionSettingsPane.applyVisibility(showSessionSettings,
+                showSessionSettings && sessionSettingsPane.hasPanel()
+                        ? poseSolver.sessionSettingsPose(panelHeightMeters) : null);
 
         if (settingsItem != null) {
             settingsItem.setSelected(visible == XrControlUiState.Surface.SESSION_SETTINGS);
@@ -1987,13 +1962,6 @@ public class XrStreamPresenter {
                         ? activity.getString(R.string.xr_mode_host_waiting)
                         : activity.getString(R.string.xr_mode_starts_when_selected);
         }
-    }
-
-    private void renderAuxiliaryContent() {
-        auxiliaryContentHost.removeAllViews();
-        View content = sessionSettingsPane.buildSessionSettingsView();
-        auxiliaryContentHost.addView(content, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
     }
 
     private String modeLabel(PresentationMode mode) {
@@ -2233,12 +2201,9 @@ public class XrStreamPresenter {
             XrPanelPoseSolver.updatePanelPose(statsUi.panel(),
                     poseSolver.statsPose(panelHeightMeters));
         }
-        XrControlUiState.Surface visible = controlUiState.getVisibleSurface();
-        if (auxiliaryPanel != null && !auxiliaryPanel.isDisposed()) {
-            if (visible == XrControlUiState.Surface.SESSION_SETTINGS) {
-                XrPanelPoseSolver.updatePanelPose(auxiliaryPanel,
-                        poseSolver.sessionSettingsPose(panelHeightMeters));
-            }
+        if (controlUiState.getVisibleSurface() == XrControlUiState.Surface.SESSION_SETTINGS
+                && sessionSettingsPane.hasPanel()) {
+            sessionSettingsPane.reposition(poseSolver.sessionSettingsPose(panelHeightMeters));
         }
     }
 
@@ -4678,8 +4643,7 @@ public class XrStreamPresenter {
         dockController.disposeBarPanel();
         modeOptionsPane.disposePanel();
         statsUi.disposePanel();
-        disposePanel(auxiliaryPanel);
-        auxiliaryPanel = null;
+        sessionSettingsPane.disposePanel();
         glanceStrip.disposePanel();
         depthStatusOverlay.disposePanel();
         transientMessagePanel.disposePanel();
@@ -4696,7 +4660,6 @@ public class XrStreamPresenter {
         lastCinemaTileTapMs = 0L;
         lastCinemaActionTapMs = 0L;
         modeOptionsPane.releaseViews();
-        auxiliaryContentHost = null;
         pendingDecoderTransitionMode = null;
         clientSbsHdrTransitionInProgress = false;
         modeSwitchInProgress = false;
@@ -4704,11 +4667,5 @@ public class XrStreamPresenter {
         barItems.clear();
         controlUiState.close();
         session = null;
-    }
-
-    private static void disposePanel(PanelEntity panel) {
-        if (panel != null && !panel.isDisposed()) {
-            panel.dispose();
-        }
     }
 }

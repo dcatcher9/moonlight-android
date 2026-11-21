@@ -1,9 +1,22 @@
 package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.widget.TextView;
+
+import androidx.xr.runtime.math.Pose;
+import androidx.xr.runtime.math.Quaternion;
+import androidx.xr.runtime.math.Vector3;
+import androidx.xr.scenecore.PanelEntity;
+import androidx.xr.scenecore.Space;
 
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
@@ -80,6 +93,33 @@ public final class XrSessionSettingsPaneTest {
 
         assertEquals(controller.get().getString(R.string.xr_setting_pending_active, "On"),
                 pendingText(SessionSettingsModel.Key.HDR));
+    }
+
+    @Test
+    public void paneRendersAndPlacesOnlyWhileShown() {
+        install(SessionSettingsModel.builder().build(), false);
+        PanelEntity panel = mock(PanelEntity.class);
+        when(panel.getPose(Space.PARENT)).thenReturn(Pose.Identity);
+        android.widget.FrameLayout host = new android.widget.FrameLayout(controller.get());
+        ReflectionHelpers.setField(pane(), "panel", panel);
+        ReflectionHelpers.setField(pane(), "contentHost", host);
+        Pose shown = new Pose(new Vector3(-1f, 0f, 0.2f), Quaternion.Identity);
+
+        XrSessionSettingsPane settings = (XrSessionSettingsPane) pane();
+        settings.applyVisibility(true, shown);
+        assertEquals(1, host.getChildCount());
+        verify(panel).setPose(shown);
+        verify(panel).setEnabled(true);
+
+        settings.applyVisibility(false, null);
+        verify(panel).setEnabled(false);
+        verify(panel, times(1)).setPose(any(Pose.class));
+        assertTrue(ReflectionHelpers.<Map<?, ?>>getField(pane(), "sessionPendingViews").isEmpty());
+
+        settings.disposePanel();
+        verify(panel).dispose();
+        assertFalse(settings.hasPanel());
+        assertFalse(settings.hasContentHost());
     }
 
     private String bitratePendingText(boolean qualityDeltaRequiresReconnect) {
