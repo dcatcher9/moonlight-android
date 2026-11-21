@@ -49,7 +49,8 @@ public final class TransportReconnectPolicyTest {
         assertTrue(TransportReconnectPolicy.canRetry(resume, 1, -408, true, 0));
         assertTrue(TransportReconnectPolicy.canRetry(resume, 1, -1, true,
                 MoonBridge.ML_PORT_FLAG_TCP_47984));
-        for (int error : new int[] {0, 401, 403, 409, 470, 525, 599, -1}) {
+        for (int error : new int[] {0, 401, 403, 409, 470, 525, 599, -1,
+                com.limelight.nvstream.http.HostSessionContractException.STAGE_FAILURE_CODE}) {
             assertFalse("error " + error,
                     TransportReconnectPolicy.canRetry(resume, 1, error, true, 0));
         }

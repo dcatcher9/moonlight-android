@@ -36,6 +36,7 @@ import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.HostHttpResponseException;
+import com.limelight.nvstream.http.HostSessionContractException;
 import com.limelight.nvstream.http.LimelightCryptoProvider;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
@@ -351,7 +352,7 @@ public class NvConnection {
         return StreamConfiguration.STREAM_CFG_AUTO;
     }
     
-    private boolean startApp() throws XmlPullParserException, IOException
+    boolean startApp() throws XmlPullParserException, IOException
     {
         NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId,
                 context.serverCert, cryptoProvider, startupHttpCalls);
@@ -607,6 +608,14 @@ public class NvConnection {
                     context.connListener.displayMessage(e.getMessage());
                     retry = context.connListener.stageFailed(appName, 0, e.getErrorCode());
                     if (!retry) return;
+                } catch (HostSessionContractException e) {
+                    // The same request cannot satisfy the contract on a retry or a reconnect.
+                    if (stopRequested) return;
+                    e.printStackTrace();
+                    context.connListener.displayMessage(e.getMessage());
+                    context.connListener.stageFailed(appName, 0,
+                            HostSessionContractException.STAGE_FAILURE_CODE);
+                    return;
                 } catch (XmlPullParserException | IOException e) {
                     if (stopRequested) return;
                     e.printStackTrace();

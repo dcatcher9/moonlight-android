@@ -549,7 +549,7 @@ public class NvHTTP {
                 getXmlString(xml, "hostsessionid", false));
         if (hostSessionIdSupported && (hostSessionId == null
                 || (resume && !hostSessionId.equals(expectedHostSessionId)))) {
-            throw new IOException("Host returned a missing or mismatched session token");
+            throw new HostSessionContractException("Host returned a missing or mismatched session token");
         }
         return hostSessionId;
     }
@@ -1038,7 +1038,7 @@ public class NvHTTP {
         if (resume && context.hostSessionIdSupported
                 && (expectedHostSessionId == null || expectedHostSessionId.isEmpty()
                 || "0".equals(expectedHostSessionId))) {
-            throw new IOException("Refusing to resume without a bound host session token");
+            throw new HostSessionContractException("Refusing to resume without a bound host session token");
         }
 
         String appIdentityQuery;
@@ -1051,7 +1051,7 @@ public class NvHTTP {
             appIdentityQuery = "appuuid=" + appUUID;
         }
         else {
-            throw new IOException("Refusing to launch without an application identity");
+            throw new HostSessionContractException("Refusing to launch without an application identity");
         }
 
         String xmlStr = openHttpConnectionToString(httpClientSession, getHttpsUrl(true), verb,
