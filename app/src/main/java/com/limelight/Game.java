@@ -1045,7 +1045,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (!TransportReconnectPolicy.canRetry(getHostSessionLaunchRequest(getIntent()),
                 previousAttempts, -1, false, 0)) {
             LimeLog.info("XR: stream recovery budget was exhausted before the headset returned");
-            finish();
+            // Report the ended stream like any other terminated connection, then leave.
+            displayedFailureDialog = true;
+            Dialog.displayDialog(this, getString(R.string.conn_terminated_title),
+                    getString(R.string.conn_terminated_msg), true);
             return;
         }
         int attempt = previousAttempts + 1;

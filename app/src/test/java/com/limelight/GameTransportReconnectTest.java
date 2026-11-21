@@ -346,6 +346,19 @@ public final class GameTransportReconnectTest {
         game.onStop();
         assertFalse(game.isFinishing());
         game.onStart();
+        shadowOf(Looper.getMainLooper()).idle();
+
+        // The user is told the stream ended before it returns to the library.
+        android.app.AlertDialog dialog =
+                (android.app.AlertDialog) org.robolectric.shadows.ShadowAlertDialog
+                        .getLatestAlertDialog();
+        assertNotNull(dialog);
+        assertTrue(dialog.isShowing());
+        assertEquals(game.getString(R.string.conn_terminated_msg),
+                shadowOf(dialog).getMessage().toString());
+        assertFalse(game.isFinishing());
+        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
         assertTrue(game.isFinishing());
         assertEquals(0, game.recreationCount);
     }
