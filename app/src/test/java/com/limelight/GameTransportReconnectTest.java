@@ -238,6 +238,21 @@ public final class GameTransportReconnectTest {
         assertEquals(5, game.getIntent().getIntExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 0));
     }
 
+    @Test public void settingsRestartOfARecoveredStreamStartsWithoutTheRecoveryBudget() {
+        // A recovered stream restarts for a settings change before it reached stable playback.
+        game.getIntent().putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, 2);
+        ReflectionHelpers.callInstanceMethod(game, "scheduleXrSessionReconnect");
+        game.nativeStopCompleted.run();
+        assertNotNull(surfaceReleased);
+        surfaceReleased.run();
+
+        assertEquals(1, game.recreationCount);
+        assertFalse(game.getIntent().hasExtra(TransportReconnectPolicy.EXTRA_ATTEMPT));
+        assertTrue(game.getIntent().getBooleanExtra(TransportReconnectPolicy.EXTRA_APP_RECONNECT,
+                false));
+        assertEquals("exact-token", Game.getHostSessionLaunchRequest(game.getIntent()).expectedToken);
+    }
+
     @Test public void networkLossEndsTransportAndHoldsRecoveryUntilNetworkReturns() {
         networkLost();
         assertFalse(game.connected);

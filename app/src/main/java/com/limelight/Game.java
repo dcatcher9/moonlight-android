@@ -788,6 +788,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         reconnectIntent.putExtra(TransportReconnectPolicy.EXTRA_APP_RECONNECT, true);
         if (automaticReconnectScheduled) {
             reconnectIntent.putExtra(TransportReconnectPolicy.EXTRA_ATTEMPT, automaticAttempt);
+        } else {
+            // A settings or capability restart is not a recovery attempt: it neither shows
+            // "reconnecting N/5" nor inherits the recovered stream's unfinished budget.
+            reconnectIntent.removeExtra(TransportReconnectPolicy.EXTRA_ATTEMPT);
         }
         if (presenter != null) {
             presenter.captureReconnectViewState(reconnectIntent);
