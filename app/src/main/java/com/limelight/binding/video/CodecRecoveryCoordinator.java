@@ -19,8 +19,9 @@ import java.util.function.BooleanSupplier;
  * <p>Locks. {@code monitor} is the decoder's codec-recovery lock, supplied and also held by
  * {@link MediaCodecDecoderRenderer} around surface switches, geometry updates and cleanup. The
  * recovery runs with it held, so any lock the recovery takes (the renderer's statistics lock) is
- * ordered after it. The quiesced flags, the attempt count and the presentation-transition reason
- * are written only with the monitor held. The recovery type is atomic: exception escalation and
+ * ordered after it. The quiesced flags and the attempt count are written only with the monitor
+ * held. The two expected-recovery reasons are volatile: they are set with the monitor held, and
+ * the exception path clears them without it. The recovery type is atomic: exception escalation and
  * the terminal {@link #CR_RECOVERY_TYPE_STOPPED} token are published without the monitor, so
  * teardown never waits behind an uninterruptible vendor call; every other transition happens with
  * the monitor held. No recovery compare-and-set accepts the terminal token, and transactions in
@@ -62,9 +63,9 @@ final class CodecRecoveryCoordinator {
     // HDR metadata arrives over the control stream after the decoder is initially configured.
     // Track that expected reset separately so it isn't reported or counted as a codec failure.
     private volatile boolean hdrMetadataRecoveryPending;
-    // Guarded by monitor. Presentation-mode recovery is expected and must not consume the limited
-    // codec-error recovery budget.
-    private boolean presentationModeRecoveryPending;
+    // Presentation-mode recovery is expected and must not consume the limited codec-error
+    // recovery budget. Set with the monitor held; noteCodecFailure() clears it without it.
+    private volatile boolean presentationModeRecoveryPending;
 
     CodecRecoveryCoordinator(Object monitor, BooleanSupplier stopping,
                              BooleanSupplier choreographerParticipates) {
@@ -121,9 +122,15 @@ final class CodecRecoveryCoordinator {
         presentationModeRecoveryPending = false;
     }
 
-    /** A genuine codec failure owns the next recovery and must count against the budget. */
+    /**
+     * A genuine codec failure owns the next recovery and must count against the budget, even when
+     * it promotes an HDR or presentation-transition recovery that was already scheduled. The
+     * participants that call this are the ones a running recovery has quiesced, so it never races
+     * the recovery's snapshot of the reasons.
+     */
     void noteCodecFailure() {
         hdrMetadataRecoveryPending = false;
+        presentationModeRecoveryPending = false;
     }
 
     /**

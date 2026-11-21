@@ -214,6 +214,22 @@ public final class CodecRecoveryCoordinatorTest {
     }
 
     @Test
+    public void codecFailureDuringAPresentationFlushCountsAgainstTheBudget() {
+        assertTrue(coordinator.schedulePresentationModeFlush());
+
+        // handleDecoderException() on a participant thread, before the barrier runs.
+        coordinator.noteCodecFailure();
+        coordinator.requestRecoveryForCodecException(true, new IllegalStateException("test"));
+
+        assertEquals(CR_RECOVERY_TYPE_RESTART, coordinator.type());
+        synchronized (monitor) {
+            // The recovery's snapshot must classify the promoted restart as a codec failure.
+            assertFalse(coordinator.isPresentationModeRecoveryPending());
+            assertFalse(coordinator.isHdrMetadataRecoveryPending());
+        }
+    }
+
+    @Test
     public void illegalStateEscalatesAFlushToAReset() {
         assertTrue(coordinator.schedulePresentationModeFlush());
         coordinator.requestResetForIllegalState(new IllegalStateException("test"));
