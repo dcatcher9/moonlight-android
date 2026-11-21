@@ -199,6 +199,36 @@ public final class XrLiveQualityIntegrationTest {
         assertEquals(1, persisted.size());
     }
 
+    @Test
+    public void unsentGameEntryLeavesTheGameSourceStateUntouched() throws Exception {
+        presenter.setGameProviderV1Supported(true);
+        GameStereoSourceState source = ReflectionHelpers.getField(presenter, "gameSourceState");
+        source.recordWidenFailure();
+        game.getIntent().putExtra("xr_game_widen_failure", true);
+        ShadowMoonBridge.setVideoModeV2Result(0);
+
+        selectMode(PresentationMode.GAME_3D);
+
+        assertEquals(PresentationMode.NORMAL,
+                ReflectionHelpers.getField(presenter, "currentPresenterMode"));
+        assertTrue(source.hasWidenFailure());
+        assertTrue(game.getIntent().getBooleanExtra("xr_game_widen_failure", false));
+        assertFalse(presenter.isStreamQualityTransactionBusy());
+    }
+
+    @Test
+    public void unsentHostAiEntryKeepsTheReportedDepthPhase() throws Exception {
+        presenter.onDepthStatus(2);
+        ShadowMoonBridge.setVideoModeV2Result(0);
+
+        selectMode(PresentationMode.HOST_SBS_AI);
+
+        XrDepthStatusOverlay overlay = ReflectionHelpers.getField(presenter, "depthStatusOverlay");
+        assertEquals(2, overlay.phase());
+        assertEquals(PresentationMode.NORMAL,
+                ReflectionHelpers.getField(presenter, "currentPresenterMode"));
+    }
+
     private void startSameGeometryClientProof() {
         assertTrue(presenter.applyLiveStreamQuality(
                 new StreamQualityTuple("1920x1080", "60", 100000)));

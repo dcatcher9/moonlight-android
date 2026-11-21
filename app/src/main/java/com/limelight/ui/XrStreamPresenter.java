@@ -2455,13 +2455,6 @@ public class XrStreamPresenter {
         }
         lastModeSwitchMs = now;
         modeSwitchInProgress = true;
-        if (item.selectsMode == PresentationMode.GAME_3D) {
-            gameSourceState.enterGame();
-            gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
-            confirmedGamePresentationGeneration = 0;
-            activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_FAILURE);
-            activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_QUALITY);
-        }
         updateGlancePanel();
         dockController.revealDockTemporarily();
         PresentationMode previousMode = currentPresenterMode;
@@ -2546,10 +2539,6 @@ public class XrStreamPresenter {
         liveQualityConfirmations.begin(
                 true, nextMode == PresentationMode.CLIENT_SBS_AI);
 
-        // Reset Host AI telemetry before its transition starts.
-        if (XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
-            resetHostDepthStatus();
-        }
         if (sendHostVideoModeControl(
                 nextMode,
                 size[0], size[1], fpsX100, requestId, target.bitrateKbps) <= 0) {
@@ -2561,10 +2550,14 @@ public class XrStreamPresenter {
             return;
         }
 
-        // A rejected local send leaves the old Game stream intact. ACK/status delivery is
-        // serialized on this same main thread, so retire proof now, before either can run.
+        // A rejected local send leaves the old Game stream and the old host depth status intact.
+        // ACK, source-status and depth-status delivery are serialized on this same main thread,
+        // so retiring them now still precedes any reply to the queued request.
         if (previousMode == PresentationMode.GAME_3D || nextMode == PresentationMode.GAME_3D) {
             invalidateGameSourceProof();
+        }
+        if (XrPresentationPolicy.resetsHostDepthStatusAtTransitionStart(previousMode, nextMode)) {
+            resetHostDepthStatus();
         }
 
         armLiveQualityAckTimeout();
@@ -3847,6 +3840,15 @@ public class XrStreamPresenter {
             gameSourceState.leaveGame();
             confirmedGamePresentationGeneration = 0;
             gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+        } else if (previousMode != PresentationMode.GAME_3D
+                && nextMode == PresentationMode.GAME_3D) {
+            // An explicit entry allows one new automatic widening attempt. It is recorded where
+            // the switch commits, so a mode start that fails leaves the Game state untouched.
+            gameSourceState.enterGame();
+            gameWireMode = MoonBridge.SBS_MODE_GAME_MONO;
+            confirmedGamePresentationGeneration = 0;
+            activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_FAILURE);
+            activity.getIntent().removeExtra(EXTRA_GAME_WIDEN_QUALITY);
         }
         currentPresenterMode = nextMode;
         // Same-wire and deferred Client SBS switches can commit without a live-quality ACK.
