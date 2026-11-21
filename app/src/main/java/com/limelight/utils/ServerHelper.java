@@ -118,9 +118,9 @@ public class ServerHelper {
         return createStartIntent(parent, app, computer, managerBinder, withVDisplay, request);
     }
 
-    private static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
-                                            ComputerManagerService.ComputerManagerBinder managerBinder,
-                                            boolean withVDisplay, HostSessionLaunchRequest request) {
+    public static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
+                                           ComputerManagerService.ComputerManagerBinder managerBinder,
+                                           boolean withVDisplay, HostSessionLaunchRequest request) {
         Intent gameIntent = null;
         PreferenceConfiguration prefConfig = PreferenceConfiguration.readPreferences(parent);
         // Try to add secondary DisplayContext if supported and connected

@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.limelight.computers.ComputerDatabaseManager;
 import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
+import com.limelight.nvstream.HostSessionLaunchRequest;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.StreamConfiguration;
@@ -42,7 +43,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 
 public class ShortcutTrampoline extends AppCompatActivity {
@@ -146,7 +146,7 @@ public class ShortcutTrampoline extends AppCompatActivity {
                                             
                                             // Launch game if provided app ID, otherwise launch app view
                                             if (app != null) {
-                                                if (details.runningGameId == 0 || details.runningGameId == app.getAppId() || Objects.equals(details.runningGameUUID, app.getAppUUID())) {
+                                                if (!requiresReplaceConfirmation(details, app)) {
                                                     intentStack.add(ServerHelper.createStartIntent(ShortcutTrampoline.this, app, details, managerBinder, prefConfig.useVirtualDisplay));
 
                                                     // Close this activity
@@ -156,8 +156,9 @@ public class ShortcutTrampoline extends AppCompatActivity {
                                                     startActivities(intentStack.toArray(new Intent[]{}));
                                                 } else {
                                                     // Create the start intent immediately, so we can safely unbind the managerBinder
-                                                    // below before we return.
-                                                    final Intent startIntent = ServerHelper.createStartIntent(ShortcutTrampoline.this, app, details, managerBinder, prefConfig.useVirtualDisplay);
+                                                    // below before we return. It carries Replace authority for the
+                                                    // session observed now; it is used only after the user confirms.
+                                                    final Intent startIntent = createConfirmedReplaceIntent(ShortcutTrampoline.this, app, details, managerBinder, prefConfig.useVirtualDisplay);
 
                                                     UiHelper.displayQuitConfirmationDialog(ShortcutTrampoline.this, new Runnable() {
                                                         @Override
@@ -239,6 +240,26 @@ public class ShortcutTrampoline extends AppCompatActivity {
             managerBinder = null;
         }
     };
+
+    /**
+     * Whether another application holds the host, so the shortcut's app may start only after the
+     * user confirms replacing it. Identity follows {@link HostSessionLaunchRequest#sameApplication}:
+     * two missing app UUIDs do not make two different app IDs the same app.
+     */
+    static boolean requiresReplaceConfirmation(ComputerDetails details, NvApp app) {
+        boolean appRunning = details.runningGameId != 0
+                || (details.runningGameUUID != null && !details.runningGameUUID.isEmpty());
+        return appRunning && !HostSessionLaunchRequest.sameApplication(details.runningGameId,
+                details.runningGameUUID, app.getAppId(), app.getAppUUID());
+    }
+
+    /** The start intent for a confirmed "quit and start", bound to the observed session. */
+    static Intent createConfirmedReplaceIntent(Activity parent, NvApp app, ComputerDetails details,
+                                               ComputerManagerService.ComputerManagerBinder managerBinder,
+                                               boolean withVDisplay) {
+        return ServerHelper.createStartIntent(parent, app, details, managerBinder, withVDisplay,
+                HostSessionLaunchRequest.replace(details));
+    }
 
     protected boolean validateHostInput(String hostUUID, String hostName) {
         // Validate PC UUID/Name
