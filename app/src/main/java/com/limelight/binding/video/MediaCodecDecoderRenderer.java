@@ -452,6 +452,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int decoderQueueSamplePendingFrames;
     /** Input-thread-only: the next accepted serial gap was intentionally gated by a mode switch. */
     private boolean intentionalInputDiscontinuityPending;
+    /**
+     * Input-thread-only: a recovery ran while the transition gate was dropping input, so the
+     * decoder accepts nothing but an IDR until one is admitted.
+     */
+    private boolean idrRequiredAfterGatedRecovery;
     private int refreshRate;
     private PreferenceConfiguration prefs;
 
@@ -3124,9 +3129,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // recovery barrier. Do that while dropping the compressed frame so setOutputSurface()
             // cannot wait behind an idle input thread. DR_OK deliberately avoids an early IDR
             // storm; completePresentationModeTransition() requests one after the target is bound.
-            doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+            if (doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD)) {
+                // A transition cancelled before that request reopens the gate for P-frames.
+                idrRequiredAfterGatedRecovery = true;
+            }
             return transitionInputDecision == DecoderModeTransitionGate.InputDecision.NEED_IDR
                     ? MoonBridge.DR_NEED_IDR : MoonBridge.DR_OK;
+        }
+        if (idrRequiredAfterGatedRecovery) {
+            if (!idrFrame) {
+                // The flushed decoder cannot decode a P-frame. One DR_NEED_IDR makes
+                // moonlight-common-c drop its queued frames and request the IDR.
+                intentionalInputDiscontinuityPending = true;
+                return MoonBridge.DR_NEED_IDR;
+            }
+            idrRequiredAfterGatedRecovery = false;
         }
 
         long statsNowMs = SystemClock.uptimeMillis();
