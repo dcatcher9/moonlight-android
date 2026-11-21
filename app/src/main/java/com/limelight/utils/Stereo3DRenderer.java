@@ -236,12 +236,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private int contractiveWarpMapProgram;
     private int contractiveWarpMapRefinementProgram;
     private int warpedDibr3dProgram;
-    private final int[] colorFrameTextures = new int[2];
-    private final int[] colorFrameFbos = new int[2];
-    private int colorFrameWidth;
-    private int colorFrameHeight;
+    private final ClientSbsColorTargets colorTargets = new ClientSbsColorTargets();
     private final ClientSbsFrameSlots colorFrameSlots =
-            new ClientSbsFrameSlots(colorFrameTextures.length);
+            new ClientSbsFrameSlots(ClientSbsColorTargets.SLOT_COUNT);
     private volatile ClientSbsFrameSlots.Lease activeColorFrameLease;
     private ClientSbsFrameSlots.Lease pendingColorFrameLease;
 
@@ -264,7 +261,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** True only when the window and every presentation-color target retain at least 10 bits. */
     private volatile boolean hdrOutputCapable;
     private boolean hdrWindowCapable;
-    private ColorTargetFormat presentationColorFormat = ColorTargetFormat.RGBA8;
     private int modelInputProgram;
     private int modelInputPackProgram;
     private int simple3dProgram;
@@ -399,25 +395,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         /** Fails an exact handoff/recovery generation whose EGL output size is unusable. */
         void onStereo3DOutputSurfaceValidationFailed(int surfaceGeneration, String reason);
-    }
-
-    private enum ColorTargetFormat {
-        RGB10_A2(GLES30.GL_RGB10_A2, GLES20.GL_RGBA,
-                GLES30.GL_UNSIGNED_INT_2_10_10_10_REV, true),
-        RGBA16F(GLES30.GL_RGBA16F, GLES20.GL_RGBA, GLES30.GL_HALF_FLOAT, true),
-        RGBA8(GLES30.GL_RGBA8, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, false);
-
-        final int internalFormat;
-        final int format;
-        final int type;
-        final boolean hdrPrecision;
-
-        ColorTargetFormat(int internalFormat, int format, int type, boolean hdrPrecision) {
-            this.internalFormat = internalFormat;
-            this.format = format;
-            this.type = type;
-            this.hdrPrecision = hdrPrecision;
-        }
     }
 
     public Stereo3DRenderer(ClientSbsRenderSurface view, OnSurfaceReadyListener listener, Context context,
@@ -639,7 +616,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         warpedComposeValidated = false;
         hdrOutputCapable = false;
         hdrWindowCapable = false;
-        presentationColorFormat = ColorTargetFormat.RGBA8;
+        colorTargets.forgetAfterContextLoss();
         hasFrameForActiveGeneration = false;
         releaseDecoderSurface();
 
@@ -1027,11 +1004,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
             resetPresentationForGeneration(resizedGeneration);
 
-            boolean targetsAlreadyMatch = colorFrameWidth == resize.width
-                    && colorFrameHeight == resize.height
-                    && colorFrameTextures[0] != 0 && colorFrameFbos[0] != 0;
+            boolean targetsAlreadyMatch = colorTargets.matches(resize.width, resize.height);
             if (!targetsAlreadyMatch) {
-                releaseColorFrameTargets();
+                colorTargets.release();
             }
             sourceWidth = resize.width;
             sourceHeight = resize.height;
@@ -1874,7 +1849,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         warpedComposeValidated = false;
         hdrOutputCapable = false;
         hdrWindowCapable = false;
-        presentationColorFormat = ColorTargetFormat.RGBA8;
+        colorTargets.forgetAfterContextLoss();
         invalidateDepthOutputs();
         clearGpuOutputConsumedFenceHandles(false);
         RendererFinishRequest staleFinishRequest = rendererFinishRequest.getAndSet(null);
@@ -2191,7 +2166,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         ClientSbsFrameSlots.Lease colorLease = activeColorFrameLease;
         int colorSlot = colorLease != null ? colorLease.getSlot() : -1;
         if (bindings == null || !bindings.isComplete()
-                || colorSlot < 0 || colorSlot >= colorFrameTextures.length
+                || colorSlot < 0 || colorSlot >= ClientSbsColorTargets.SLOT_COUNT
                 || refinedWarpMapTextureId == 0) {
             return false;
         }
@@ -2203,7 +2178,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         bindQuadAttributes(bindings.position, bindings.texCoord, textureVertexBuffer);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, colorFrameTextures[colorSlot]);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, colorTargets.texture(colorSlot));
         GLES20.glUniform1i(bindings.colorTexture, 0);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, refinedWarpMapTextureId);
@@ -3821,8 +3796,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean initializeFbo() {
         // This target intentionally stays RGBA8: it is the tonemapped SDR input to the selected
         // depth model, not part of the full-resolution presentation-color path.
-        fboTextureId = createColorTexture(
-                modelInputWidth, modelInputHeight, ColorTargetFormat.RGBA8);
+        fboTextureId = ClientSbsColorTargets.createTexture(
+                modelInputWidth, modelInputHeight, ClientSbsColorTargets.Format.RGBA8);
         int[] fbos = new int[1];
         GLES20.glGenFramebuffers(1, fbos, 0);
         fboHandle = fbos[0];
@@ -3841,98 +3816,22 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean initializeColorFrameSlots() {
         // Keep the color frame at the client request/output resolution. A legacy host that
         // negotiates a lower decode is sampled into this target; depth inference remains low resolution.
-        colorFrameWidth = Math.max(1, sourceWidth);
-        colorFrameHeight = Math.max(1, sourceHeight);
-        // Names from a lost context are not valid deletion targets in this new context.
-        for (int slot = 0; slot < colorFrameTextures.length; slot++) {
-            colorFrameTextures[slot] = 0;
-            colorFrameFbos[slot] = 0;
-        }
-
-        boolean halfFloatRenderable = supportsHalfFloatColorTargets();
-        ColorTargetFormat[] candidates;
-        if (hdrWindowCapable && halfFloatRenderable) {
-            candidates = new ColorTargetFormat[] {
-                    ColorTargetFormat.RGB10_A2,
-                    ColorTargetFormat.RGBA16F,
-                    ColorTargetFormat.RGBA8
-            };
-        } else if (hdrWindowCapable) {
-            candidates = new ColorTargetFormat[] {
-                    ColorTargetFormat.RGB10_A2,
-                    ColorTargetFormat.RGBA8
-            };
-        } else {
-            candidates = new ColorTargetFormat[] {ColorTargetFormat.RGBA8};
-        }
-
-        boolean complete = false;
-        for (ColorTargetFormat candidate : candidates) {
-            if (createColorFrameSlots(candidate)) {
-                presentationColorFormat = candidate;
-                complete = true;
-                break;
-            }
-            releaseColorFrameTargets();
-        }
-
+        boolean complete = colorTargets.allocate(sourceWidth, sourceHeight, hdrWindowCapable);
+        ClientSbsColorTargets.Format presentationColorFormat = colorTargets.format();
         hdrOutputCapable = complete && hdrWindowCapable
                 && presentationColorFormat.hdrPrecision;
         if (!complete) {
-            presentationColorFormat = ColorTargetFormat.RGBA8;
             LimeLog.severe("Unable to create Client SBS color frame targets");
         }
         activeColorFrameLease = null;
         pendingColorFrameLease = null;
         colorFrameSlots.reset();
         LimeLog.info("Client SBS render size: source=" + sourceWidth + "x"
-                + sourceHeight + ", perEye=" + colorFrameWidth + "x" + colorFrameHeight
+                + sourceHeight + ", perEye=" + colorTargets.width() + "x" + colorTargets.height()
                 + ", packed=" + getOutputWidth() + "x" + getOutputHeight()
                 + ", color=" + presentationColorFormat
                 + ", HDR output=" + (hdrOutputCapable ? "preserved" : "SDR tonemap"));
         return complete;
-    }
-
-    private boolean createColorFrameSlots(ColorTargetFormat format) {
-        drainGlErrors();
-        GLES20.glGenFramebuffers(colorFrameFbos.length, colorFrameFbos, 0);
-        boolean complete = true;
-        for (int slot = 0; slot < colorFrameTextures.length; slot++) {
-            colorFrameTextures[slot] = createColorTexture(
-                    colorFrameWidth, colorFrameHeight, format);
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, colorFrameFbos[slot]);
-            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-                    GLES20.GL_TEXTURE_2D, colorFrameTextures[slot], 0);
-            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER)
-                    != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-                complete = false;
-            }
-            complete &= colorFrameFbos[slot] != 0 && colorFrameTextures[slot] != 0;
-        }
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        int error = GLES20.glGetError();
-        complete &= error == GLES20.GL_NO_ERROR;
-        if (!complete) {
-            LimeLog.warning("Client SBS " + format + " color targets unavailable (GL=0x"
-                    + Integer.toHexString(error) + ")");
-        }
-        return complete;
-    }
-
-    private void releaseColorFrameTargets() {
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-        GLES20.glDeleteFramebuffers(colorFrameFbos.length, colorFrameFbos, 0);
-        GLES20.glDeleteTextures(colorFrameTextures.length, colorFrameTextures, 0);
-        for (int slot = 0; slot < colorFrameTextures.length; slot++) {
-            colorFrameTextures[slot] = 0;
-            colorFrameFbos[slot] = 0;
-        }
-    }
-
-    private boolean supportsHalfFloatColorTargets() {
-        String extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS);
-        return extensions != null && (extensions.contains("GL_EXT_color_buffer_half_float")
-                || extensions.contains("GL_EXT_color_buffer_float"));
     }
 
     private boolean acquireMatchedColorFrame(int captureGeneration) {
@@ -3956,8 +3855,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             throw new IllegalStateException("Client SBS color capture has no slot lease");
         }
         int slot = lease.getSlot();
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, colorFrameFbos[slot]);
-        GLES20.glViewport(0, 0, colorFrameWidth, colorFrameHeight);
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, colorTargets.framebuffer(slot));
+        GLES20.glViewport(0, 0, colorTargets.width(), colorTargets.height());
         drawQuad(simple3dProgram);
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
     }
@@ -3984,7 +3883,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     + "depth remains flat");
             return false;
         }
-        if (!supportsHalfFloatColorTargets()) {
+        if (!ClientSbsColorTargets.supportsHalfFloatColorBuffers()) {
             LimeLog.warning("Client SBS RG16F warp maps unsupported; depth remains flat");
             return false;
         }
@@ -4124,20 +4023,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         GLES20.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
         GLES20.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
-        return textureId;
-    }
-
-    private int createColorTexture(int width, int height, ColorTargetFormat format) {
-        int[] textures = new int[1];
-        GLES20.glGenTextures(1, textures, 0);
-        int textureId = textures[0];
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId);
-        GLES30.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, format.internalFormat,
-                width, height, 0, format.format, format.type, null);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
         return textureId;
     }
 
