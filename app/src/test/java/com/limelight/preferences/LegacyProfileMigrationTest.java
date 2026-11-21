@@ -84,7 +84,7 @@ public final class LegacyProfileMigrationTest {
                 LegacyProfileMigration.RETIRED_SETTINGS_CLEANED_KEY, false));
         assertFalse(preferences.contains("checkbox_show_onscreen_controls"));
         assertFalse(preferences.contains("checkbox_use_virtual_display"));
-        assertFalse(preferences.contains("checkbox_enable_perf_overlay"));
+        assertTrue(preferences.getBoolean("checkbox_enable_perf_overlay", false));
         assertFalse(preferences.contains(
                 PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING));
         assertTrue(preferences.getBoolean(
@@ -155,6 +155,22 @@ public final class LegacyProfileMigrationTest {
         LegacyProfileMigration.retireClientSbsModelSelection(context);
         assertEquals("host-1", store.getCurrentSession(firstPc)
                 .getResumeMetadata().getHostSessionId());
+    }
+
+    @Test
+    public void retiredSettingsCleanupKeepsTheInHeadsetStatsChoice() {
+        // The XR Stats tile persists its visibility under this key; it is not a retired control.
+        PreferenceConfiguration.setPerformanceOverlayEnabled(context, true);
+        assertTrue(preferences.edit()
+                .putBoolean("checkbox_enable_perf_overlay_lite", true)
+                .commit());
+
+        LegacyProfileMigration.migrateActiveProfile(context);
+
+        assertTrue(preferences.getBoolean(
+                LegacyProfileMigration.RETIRED_SETTINGS_CLEANED_KEY, false));
+        assertFalse(preferences.contains("checkbox_enable_perf_overlay_lite"));
+        assertTrue(PreferenceConfiguration.readPreferences(context).enablePerfOverlay);
     }
 
     @Test

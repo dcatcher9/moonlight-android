@@ -77,7 +77,6 @@ public final class LegacyProfileMigration {
             "checkbox_enable_joyconfix",
             "checkbox_enable_keyboard",
             "checkbox_enable_keyboard_square",
-            "checkbox_enable_perf_overlay",
             "checkbox_enable_perf_overlay_bottom",
             "checkbox_enable_perf_overlay_lite",
             "checkbox_enable_perf_overlay_lite_dialog",
