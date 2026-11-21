@@ -268,8 +268,15 @@ public class ProConController extends AbstractController {
             sendPacketCount = 0;
         }
 
+        encodeRumbleAmplitudes(data, lowFreqMotor, highFreqMotor);
+
+        sendData(data, data.length);
+    }
+
+    /** Fills the rumble payload of a 0x10 command for the two 16-bit motor strengths. */
+    static void encodeRumbleAmplitudes(byte[] data, short lowFreqMotor, short highFreqMotor) {
         if (lowFreqMotor != 0) {
-            data[4] = data[8] = (byte)(0x50 - (lowFreqMotor & 0xFFFF >> 12));
+            data[4] = data[8] = (byte)(0x50 - ((lowFreqMotor & 0xFFFF) >> 12));
             data[5] = data[9] = (byte)((((lowFreqMotor & 0xFFFF) >> 8) / 5) + 0x40);
         }
         if (highFreqMotor != 0) {
@@ -283,8 +290,6 @@ public class ProConController extends AbstractController {
         data[6] |= 0x00;
         data[7] |= 0x01;
         data[9] |= 0x40;
-
-        sendData(data, data.length);
     }
 
     @Override

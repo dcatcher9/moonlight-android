@@ -39,4 +39,22 @@ public final class UsbControllerDriverTest {
         // The first report before any USB packet must not hold every button down.
         assertEquals(0, controller.buttonFlags);
     }
+
+    @Test
+    public void proControllerLowFrequencyAmplitudeUsesTheTopNibble() {
+        byte[] half = new byte[10];
+        ProConController.encodeRumbleAmplitudes(half, (short) 0x8000, (short) 0);
+        // 0x50 - (0x8000 >> 12): a half-strength motor lowers the base by 8.
+        assertEquals(0x48, half[4] & 0xFF);
+        assertEquals(0x48, half[8] & 0xFF);
+
+        byte[] full = new byte[10];
+        ProConController.encodeRumbleAmplitudes(full, (short) 0xFFFF, (short) 0);
+        assertEquals(0x41, full[4] & 0xFF);
+
+        byte[] off = new byte[10];
+        ProConController.encodeRumbleAmplitudes(off, (short) 0, (short) 0);
+        assertEquals(0, off[4]);
+        assertEquals(0x40, off[5] & 0xFF);
+    }
 }
