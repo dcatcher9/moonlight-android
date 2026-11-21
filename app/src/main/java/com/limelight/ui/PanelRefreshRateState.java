@@ -1,5 +1,7 @@
 package com.limelight.ui;
 
+import com.limelight.ui.xrcontrols.StreamQualityTuple;
+
 /**
  * Small deterministic state machine for panel-rate following.
  *
@@ -51,6 +53,23 @@ final class PanelRefreshRateState {
             return requestedCeilingHz;
         }
         return XrPresentationPolicy.snapToOfferedFrameRate(Math.min(requestedCeilingHz, observedPanelHz));
+    }
+
+    /**
+     * The wire request for a user-chosen tuple: its FPS ceiling capped to the observed panel
+     * rate, or the tuple itself when the ceiling already fits.
+     *
+     * @param fallbackFps rate assumed when the tuple's frame rate does not parse
+     */
+    StreamQualityTuple capUserQuality(StreamQualityTuple requested, float fallbackFps) {
+        int requestedHz = Math.round(
+                XrPresentationPolicy.parseFrameRate(requested.frameRate, fallbackFps));
+        int effectiveFps = capUserTarget(Math.max(1, requestedHz));
+        return effectiveFps == requestedHz
+                ? requested
+                : new StreamQualityTuple(
+                        requested.resolution, String.valueOf(effectiveFps),
+                        requested.bitrateKbps);
     }
 
     void automaticRequestSucceeded(int appliedHz) {

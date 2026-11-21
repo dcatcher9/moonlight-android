@@ -4,6 +4,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import com.limelight.nvstream.jni.MoonBridge;
@@ -532,6 +533,20 @@ public class XrStreamPresenterVideoModeAckTest {
         assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(24));
         assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(1));
         assertEquals(30, XrPresentationPolicy.snapToOfferedFrameRate(0));
+    }
+
+    @Test
+    public void userQualityIsCappedToThePanelOnlyOnTheWire() {
+        PanelRefreshRateState state = new PanelRefreshRateState(90);
+        StreamQualityTuple ninety = new StreamQualityTuple("3840x2160", "90", 100000);
+        StreamQualityTuple fractional = new StreamQualityTuple("3840x2160", "59.94", 100000);
+        assertSame(ninety, state.capUserQuality(ninety, 90));
+
+        state.observe(72);
+        assertEquals(new StreamQualityTuple("3840x2160", "72", 100000),
+                state.capUserQuality(ninety, 90));
+        // A ceiling that already fits the panel keeps its exact rate.
+        assertSame(fractional, state.capUserQuality(fractional, 90));
     }
 
     @Test

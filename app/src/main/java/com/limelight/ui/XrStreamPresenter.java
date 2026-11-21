@@ -2379,14 +2379,8 @@ public class XrStreamPresenter {
         StreamQualityTuple requestedTarget = applyTargetQuality && targetQuality != null
                 ? targetQuality.pendingQuality
                 : durableLiveQualityTuple();
-        float requestedCeiling = XrPresentationPolicy.parseFrameRate(requestedTarget.frameRate, prefConfig.fps);
-        int effectiveFps = panelRefreshRateState.capUserTarget(
-                Math.max(1, Math.round(requestedCeiling)));
-        StreamQualityTuple target = effectiveFps == Math.round(requestedCeiling)
-                ? requestedTarget
-                : new StreamQualityTuple(
-                        requestedTarget.resolution, String.valueOf(effectiveFps),
-                        requestedTarget.bitrateKbps);
+        StreamQualityTuple target =
+                panelRefreshRateState.capUserQuality(requestedTarget, prefConfig.fps);
         int[] size = XrPresentationPolicy.parseResolutionSize(target.resolution);
         float fps = XrPresentationPolicy.parseFrameRate(target.frameRate, prefConfig.fps);
         int fpsX100 = XrPresentationPolicy.frameRateX100(target.frameRate, prefConfig.fps);
@@ -2561,15 +2555,9 @@ public class XrStreamPresenter {
             controlActionListener.onLiveStreamQualityNeedsReconnect();
             return false;
         }
-        float requestedCeiling = XrPresentationPolicy.parseFrameRate(target.frameRate, prefConfig.fps);
-        int effectiveFps = panelRefreshRateState.capUserTarget(
-                Math.max(1, Math.round(requestedCeiling)));
-        StreamQualityTuple effectiveTarget = effectiveFps == Math.round(requestedCeiling)
-                ? target
-                : new StreamQualityTuple(
-                        target.resolution, String.valueOf(effectiveFps), target.bitrateKbps);
         return applyLiveStreamQuality(
-                effectiveTarget, LiveQualityRequestOrigin.USER, target);
+                panelRefreshRateState.capUserQuality(target, prefConfig.fps),
+                LiveQualityRequestOrigin.USER, target);
     }
 
     public boolean isStreamQualityTransactionBusy() {
