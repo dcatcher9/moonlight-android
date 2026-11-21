@@ -2,9 +2,11 @@ package com.limelight.binding.video;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -94,5 +96,24 @@ public final class MediaCodecDecoderRendererLifecycleTest {
         verify(codec).flush();
         // Spinning to the 5 s hang deadline would escalate the flush to a reset.
         verify(codec, never()).reset();
+    }
+
+    @Test
+    public void failedRollbackRecordsTheSurfaceTheCodecStillHolds() {
+        ReflectionHelpers.setField(renderer, "videoDecoder", codec);
+        Surface previous = validSurface();
+        Surface attempted = validSurface();
+        ReflectionHelpers.setField(renderer, "renderTarget", previous);
+        doAnswer(call -> {
+            // A newer request supersedes this one while the vendor call is in flight.
+            renderer.cancelPendingOutputSurfaceSwitches();
+            return null;
+        }).when(codec).setOutputSurface(attempted);
+        doThrow(new IllegalStateException("codec rejected rollback"))
+                .when(codec).setOutputSurface(previous);
+
+        assertFalse(renderer.setOutputSurface(attempted));
+
+        assertSame(attempted, ReflectionHelpers.getField(renderer, "renderTarget"));
     }
 }

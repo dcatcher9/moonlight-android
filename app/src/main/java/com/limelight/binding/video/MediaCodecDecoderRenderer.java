@@ -2208,7 +2208,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             Surface previousSurface, Surface attemptedSurface, String boundary) {
         if (!stopping && previousSurface != null && previousSurface != attemptedSurface
                 && previousSurface.isValid()) {
-            videoDecoder.setOutputSurface(previousSurface);
+            try {
+                videoDecoder.setOutputSurface(previousSurface);
+            } catch (RuntimeException e) {
+                // MediaCodec keeps the attempted surface. Record that binding so recovery and
+                // teardown act on the surface the codec holds; the caller still reports failure.
+                renderTarget = attemptedSurface;
+                LimeLog.severe("Decoder output-surface rollback " + boundary
+                        + " failed; the decoder remains bound to the abandoned surface: " + e);
+                return false;
+            }
             renderTarget = previousSurface;
             applySurfaceFrameRate(
                     previousSurface, streamFrameRateState.getSurfaceFrameRateHintFps());
