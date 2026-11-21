@@ -61,6 +61,8 @@ public final class XrSegmentedLadder extends LinearLayout {
     private OnSegmentSelectedListener listener;
     private CaptionProvider captionProvider;
     private int selectedIndex;
+    /** Advanced by every host-driven selection; detects a listener that republished one. */
+    private int selectionVersion;
     private int recommendedIndex = -1;
     /** Hint supplied without any recommended choice; shown as visible text under the row. */
     private CharSequence unmarkedHintText;
@@ -120,6 +122,9 @@ public final class XrSegmentedLadder extends LinearLayout {
         if (values.isEmpty()) {
             throw new IllegalArgumentException("ladder choices must not be empty");
         }
+        // A refresh with the same choices keeps the existing segment buttons, so a gaze- or
+        // controller-focused segment keeps its focus across settings-model updates.
+        boolean sameSegments = choices.equals(values) && segments.size() == values.size();
         this.choices = Collections.unmodifiableList(new ArrayList<>(values));
         this.listener = selectionListener;
         this.captionProvider = captions;
@@ -133,9 +138,12 @@ public final class XrSegmentedLadder extends LinearLayout {
         unmarkedHintText = recommendedChoiceId == null && !android.text.TextUtils.isEmpty(hintText)
                 ? hintText : null;
 
-        rebuildSegments();
+        if (!sameSegments) {
+            rebuildSegments();
+        }
         int index = indexOf(selectedChoiceId);
         selectedIndex = index < 0 ? 0 : index;
+        selectionVersion++;
         applySelection();
     }
 
@@ -150,6 +158,7 @@ public final class XrSegmentedLadder extends LinearLayout {
             return false;
         }
         selectedIndex = index;
+        selectionVersion++;
         applySelection();
         return true;
     }
@@ -228,7 +237,13 @@ public final class XrSegmentedLadder extends LinearLayout {
             return;
         }
         String id = choices.get(index).id;
+        int versionBeforeListener = selectionVersion;
         if (listener != null && !listener.onSegmentSelected(id)) {
+            return;
+        }
+        if (selectionVersion != versionBeforeListener) {
+            // The listener's host republished the selection, possibly over replaced choices;
+            // the tapped index no longer names the same segment.
             return;
         }
         selectedIndex = index;

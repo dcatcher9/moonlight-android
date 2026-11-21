@@ -2,6 +2,8 @@ package com.limelight.ui.xrcontrols;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -51,6 +53,60 @@ public class XrSegmentedLadderTest {
         assertEquals(0, XrSegmentedLadder.segmentWeights(-3).length);
         assertEquals(1, XrSegmentedLadder.segmentWeights(1).length);
         assertEquals(1.0f, XrSegmentedLadder.segmentWeights(1)[0], 0.0001f);
+    }
+
+    @Test
+    public void reentrantHostRefreshDuringSelectionKeepsTheHostSelection() {
+        XrSegmentedLadder ladder = new XrSegmentedLadder(themedContext());
+        java.util.List<SessionSettingsModel.Choice> refreshed = Arrays.asList(
+                new SessionSettingsModel.Choice("60", "60"),
+                new SessionSettingsModel.Choice("90", "90"),
+                new SessionSettingsModel.Choice("120", "120"));
+        ladder.setChoices(Arrays.asList(
+                        new SessionSettingsModel.Choice("30", "30"),
+                        new SessionSettingsModel.Choice("60", "60"),
+                        new SessionSettingsModel.Choice("90", "90")),
+                "60", null, null, null, choice -> {
+                    // The accepted choice refreshes the settings model synchronously.
+                    ladder.setChoices(refreshed, "90", null, null, null, ignored -> true);
+                    return true;
+                });
+
+        ladder.segmentRow().getChildAt(0).performClick();
+
+        assertEquals(1, ladder.getSelectedIndex());
+    }
+
+    @Test
+    public void refreshWithUnchangedChoicesKeepsTheSegmentViews() {
+        XrSegmentedLadder ladder = new XrSegmentedLadder(themedContext());
+        ladder.setChoices(Arrays.asList(
+                        new SessionSettingsModel.Choice("50", "50 Mbps"),
+                        new SessionSettingsModel.Choice("100", "100 Mbps")),
+                "50", null, null, null, choice -> true);
+        android.view.View first = ladder.segmentRow().getChildAt(0);
+
+        ladder.setChoices(Arrays.asList(
+                        new SessionSettingsModel.Choice("50", "50 Mbps"),
+                        new SessionSettingsModel.Choice("100", "100 Mbps")),
+                "100", "100", "recommended", null, choice -> true);
+
+        assertSame(first, ladder.segmentRow().getChildAt(0));
+        assertEquals(1, ladder.getSelectedIndex());
+
+        ladder.setChoices(Arrays.asList(
+                        new SessionSettingsModel.Choice("50", "50 Mbps"),
+                        new SessionSettingsModel.Choice("70", "70 Mbps")),
+                "70", null, null, null, choice -> true);
+        assertNotSame(first, ladder.segmentRow().getChildAt(0));
+        assertEquals("70 Mbps",
+                ((android.widget.TextView) ladder.segmentRow().getChildAt(1)).getText()
+                        .toString());
+    }
+
+    private static Context themedContext() {
+        return new ContextThemeWrapper(ApplicationProvider.getApplicationContext(),
+                androidx.appcompat.R.style.Theme_AppCompat);
     }
 
     @Test
