@@ -247,6 +247,15 @@ public final class DevicePerformanceSampler {
             return value != null && value >= 0.0 && value <= 100.0 ? value : null;
         }
 
+        return parseBusyTotalPercent(line);
+    }
+
+    /**
+     * Parses a KGSL {@code gpubusy} "busy total" pair for the window since the previous read.
+     * A window in which the GPU stayed powered down reports "0 0": that is an idle reading of
+     * 0%, not a read failure. A nonzero busy count with a zero total is malformed.
+     */
+    static Double parseBusyTotalPercent(String line) {
         Long busy = parseFirstUnsignedLong(line, 0);
         if (busy == null) {
             return null;
@@ -254,8 +263,11 @@ public final class DevicePerformanceSampler {
         int secondNumberStart = findNextNumberStart(line, findNumberEnd(line, 0));
         Long total = secondNumberStart >= 0
                 ? parseFirstUnsignedLong(line, secondNumberStart) : null;
-        if (total == null || total <= 0L || busy < 0L || busy > total) {
+        if (total == null || total < 0L || busy < 0L || busy > total) {
             return null;
+        }
+        if (total == 0L) {
+            return 0.0;
         }
         return busy * 100.0 / total;
     }
