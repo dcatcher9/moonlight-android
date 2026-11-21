@@ -4238,7 +4238,14 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         // Even a generation that became stale after enqueue must run once. The
                         // native call consumes both shared-context fences and is the only ordering
                         // edge preventing output overwrite while the prior GPU dispatch reads it.
-                        // All Java-side run preconditions are guaranteed above and by capture.
+                        // A rejected argument throws here, while this task still owns its fences.
+                        ClientSbsGpuInferenceEngine.validateRunArguments(renderResult.bufferSlot,
+                                renderResult.inputReadyFence,
+                                renderResult.nearIdenticalCandidate,
+                                renderResult.nearIdenticalDecisionBufferId,
+                                renderResult.nearIdenticalDecisionByteOffset,
+                                renderResult.nearReuseClassifier != null
+                                        ? renderResult.inferenceClaimToken : 0L);
                         // From this point, native owns both task fences even when run() fails.
                         fencesTransferredToNative = true;
                         long outputReadyFence = gpuEngine.run(renderResult.bufferSlot,

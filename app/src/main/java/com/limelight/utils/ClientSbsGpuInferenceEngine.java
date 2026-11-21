@@ -588,16 +588,8 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
         if (!isInitialized()) {
             throw new IllegalStateException("Native GPU engine is not initialized");
         }
-        if (inputReadyFence == 0L) {
-            throw new IllegalArgumentException(
-                    "Client SBS input-ready fence must be nonzero");
-        }
-        if (nearIdenticalCandidate && (decisionBufferId == 0
-                || decisionByteOffset < 0 || (decisionByteOffset & 3) != 0
-                || decisionToken == 0L)) {
-            throw new IllegalArgumentException(
-                    "Near-identical candidate requires a decision buffer, aligned offset, and token");
-        }
+        validateRunArguments(slotIndex, inputReadyFence, nearIdenticalCandidate,
+                decisionBufferId, decisionByteOffset, decisionToken);
         long resultFence;
         // System tracing distinguishes native arbitration/inference from retained-output gaps.
         // This does not enable profiling, change sampling settings, or read GPU results.
@@ -613,6 +605,27 @@ final class ClientSbsGpuInferenceEngine implements AutoCloseable {
             throw new IllegalStateException(nativeGetLastError(nativeHandle));
         }
         return resultFence;
+    }
+
+    /**
+     * Every argument check {@link #run} performs before native takes ownership of the fences. A
+     * caller that must know whether ownership moved calls this first: once it returns, a
+     * {@code run} on an initialized engine either reaches {@code nativeRun} or fails inside it.
+     */
+    static void validateRunArguments(int slotIndex, long inputReadyFence,
+                                     boolean nearIdenticalCandidate, int decisionBufferId,
+                                     int decisionByteOffset, long decisionToken) {
+        validateSlotIndex(slotIndex);
+        if (inputReadyFence == 0L) {
+            throw new IllegalArgumentException(
+                    "Client SBS input-ready fence must be nonzero");
+        }
+        if (nearIdenticalCandidate && (decisionBufferId == 0
+                || decisionByteOffset < 0 || (decisionByteOffset & 3) != 0
+                || decisionToken == 0L)) {
+            throw new IllegalArgumentException(
+                    "Near-identical candidate requires a decision buffer, aligned offset, and token");
+        }
     }
 
     /**

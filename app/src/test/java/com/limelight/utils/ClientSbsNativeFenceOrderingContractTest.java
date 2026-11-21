@@ -101,6 +101,32 @@ public final class ClientSbsNativeFenceOrderingContractTest {
                 nativeRun.substring(0, inputConsume).contains("consume_run_fences("));
     }
 
+    @Test
+    public void inferenceOwnerTransfersRunFencesOnlyAfterJavaValidation() throws Exception {
+        String source = new String(Files.readAllBytes(new File(
+                "src/main/java/com/limelight/utils/Stereo3DRenderer.java").toPath()),
+                StandardCharsets.UTF_8);
+        String worker = functionBody(source, "private class AiTask implements Runnable");
+
+        // Everything that can throw before nativeRun() runs first, so a rejected task still
+        // reaches retainUnsubmittedTaskForClose() with both of its renderer fences.
+        int validation = worker.indexOf("ClientSbsGpuInferenceEngine.validateRunArguments(");
+        int transfer = worker.indexOf("fencesTransferredToNative = true;", validation);
+        int run = worker.indexOf("gpuEngine.run(", transfer);
+        int reclaim = worker.indexOf("retainUnsubmittedTaskForClose(renderResult)", run);
+        assertOrdered("Java validation, fence transfer", validation, transfer);
+        assertOrdered("fence transfer, native run", transfer, run);
+        assertOrdered("native run, unsubmitted reclaim", run, reclaim);
+
+        String engine = new String(Files.readAllBytes(new File(
+                "src/main/java/com/limelight/utils/ClientSbsGpuInferenceEngine.java").toPath()),
+                StandardCharsets.UTF_8);
+        String engineRun = functionBody(engine,
+                "long run(int slotIndex, long inputReadyFence, long previousOutputConsumedFence,");
+        assertOrdered("engine validation, nativeRun",
+                engineRun.indexOf("validateRunArguments("), engineRun.indexOf("nativeRun("));
+    }
+
     /** True when the text calls consume_fence() itself rather than consume_or_retain_fence(). */
     private static boolean containsBareConsumeFence(String body) {
         return body.replace("consume_or_retain_fence(", "").contains("consume_fence(");

@@ -103,6 +103,27 @@ public class ClientSbsGpuInferenceEngineTest {
     }
 
     @Test
+    public void runArgumentsAreRejectedBeforeAnyFenceOwnershipMoves() {
+        ClientSbsGpuInferenceEngine.validateRunArguments(0, 7L, false, 0, 0, 0L);
+        ClientSbsGpuInferenceEngine.validateRunArguments(1, 7L, true, 3, 32, 9L);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(-1, 7L, false, 0, 0, 0L));
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(2, 7L, false, 0, 0, 0L));
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(0, 0L, false, 0, 0, 0L));
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(0, 7L, true, 0, 32, 9L));
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(0, 7L, true, 3, -4, 9L));
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(0, 7L, true, 3, 30, 9L));
+        assertThrows(IllegalArgumentException.class,
+                () -> ClientSbsGpuInferenceEngine.validateRunArguments(0, 7L, true, 3, 32, 0L));
+    }
+
+    @Test
     public void runDispositionMatchesNativeWireContract() {
         assertEquals(1, ClientSbsGpuInferenceEngine.RunDisposition.INFER.wireValue);
         assertEquals(2, ClientSbsGpuInferenceEngine.RunDisposition.REUSE.wireValue);
