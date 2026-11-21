@@ -6,6 +6,7 @@ import java.io.StringReader;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -58,6 +59,9 @@ public class ComputerManagerService extends Service {
     private final AtomicInteger dbRefCount = new AtomicInteger(0);
 
     private IdentityManager idManager;
+    // Lock order: a tuple's networkLock may be held while pollingTuples is taken (a poll reports
+    // to the listener, which can call back into the binder). pollingTuples is never held while
+    // taking a networkLock or calling the listener.
     private final LinkedList<PollingTuple> pollingTuples = new LinkedList<>();
     private ComputerManagerListener listener = null;
     private final AtomicInteger activePolls = new AtomicInteger(0);
@@ -207,6 +211,7 @@ public class ComputerManagerService extends Service {
             // Start mDNS autodiscovery too
             discoveryBinder.startDiscovery(MDNS_QUERY_PERIOD_MS);
 
+            List<PollingTuple> tuples;
             synchronized (pollingTuples) {
                 for (PollingTuple tuple : pollingTuples) {
                     // Enforce the poll data TTL
@@ -214,10 +219,17 @@ public class ComputerManagerService extends Service {
                         LimeLog.info("Timing out polled state for "+tuple.computer.name);
                         tuple.computer.state = ComputerDetails.State.UNKNOWN;
                     }
+                }
+                tuples = new ArrayList<>(pollingTuples);
+            }
 
-                    // Report this computer initially
-                    listener.notifyComputerUpdated(tuple.computer);
+            // Report each computer initially. The listener may call back into this binder.
+            for (PollingTuple tuple : tuples) {
+                listener.notifyComputerUpdated(tuple.computer);
+            }
 
+            synchronized (pollingTuples) {
+                for (PollingTuple tuple : pollingTuples) {
                     // This polling thread might already be there
                     if (tuple.thread == null) {
                         tuple.thread = createPollingThread(tuple);
@@ -294,14 +306,13 @@ public class ComputerManagerService extends Service {
         }
 
         public void invalidateStateForComputer(String uuid) {
-            synchronized (pollingTuples) {
-                for (PollingTuple tuple : pollingTuples) {
-                    if (uuid.equals(tuple.computer.uuid)) {
-                        // We need the network lock to prevent a concurrent poll
-                        // from wiping this change out
-                        synchronized (tuple.networkLock) {
-                            tuple.computer.state = ComputerDetails.State.UNKNOWN;
-                        }
+            for (PollingTuple tuple : snapshotPollingTuples()) {
+                if (uuid.equals(tuple.computer.uuid)) {
+                    // We need the network lock to prevent a concurrent poll
+                    // from wiping this change out. It is taken without pollingTuples held:
+                    // a poll holds it while its listener calls back into this binder.
+                    synchronized (tuple.networkLock) {
+                        tuple.computer.state = ComputerDetails.State.UNKNOWN;
                     }
                 }
             }
@@ -481,6 +492,26 @@ public class ComputerManagerService extends Service {
                 e.printStackTrace();
             }
         };
+    }
+
+    private List<PollingTuple> snapshotPollingTuples() {
+        synchronized (pollingTuples) {
+            return new ArrayList<>(pollingTuples);
+        }
+    }
+
+    /** Applies a network-wide state change, then reports it outside the tuple-list lock. */
+    void setAllComputerStates(ComputerDetails.State state) {
+        List<PollingTuple> tuples = snapshotPollingTuples();
+        for (PollingTuple tuple : tuples) {
+            tuple.computer.state = state;
+        }
+        ComputerManagerListener currentListener = listener;
+        if (currentListener != null) {
+            for (PollingTuple tuple : tuples) {
+                currentListener.notifyComputerUpdated(tuple.computer);
+            }
+        }
     }
 
     private void addTuple(ComputerDetails details) {
@@ -792,27 +823,13 @@ public class ComputerManagerService extends Service {
                 @Override
                 public void onAvailable(Network network) {
                     LimeLog.info("Resetting PC state for new available network");
-                    synchronized (pollingTuples) {
-                        for (PollingTuple tuple : pollingTuples) {
-                            tuple.computer.state = ComputerDetails.State.UNKNOWN;
-                            if (listener != null) {
-                                listener.notifyComputerUpdated(tuple.computer);
-                            }
-                        }
-                    }
+                    setAllComputerStates(ComputerDetails.State.UNKNOWN);
                 }
 
                 @Override
                 public void onLost(Network network) {
                     LimeLog.info("Offlining PCs due to network loss");
-                    synchronized (pollingTuples) {
-                        for (PollingTuple tuple : pollingTuples) {
-                            tuple.computer.state = ComputerDetails.State.OFFLINE;
-                            if (listener != null) {
-                                listener.notifyComputerUpdated(tuple.computer);
-                            }
-                        }
-                    }
+                    setAllComputerStates(ComputerDetails.State.OFFLINE);
                 }
             };
 
