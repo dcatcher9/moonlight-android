@@ -57,6 +57,11 @@ JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendHostSbsTelemetrySubscription(
         JNIEnv *env, jclass clazz, jboolean enabled, jboolean focused,
         jint requestId, jint intervalMs) {
+    // Both wire fields are 16 bits. Refuse a value that would wrap rather than send a different
+    // request id or cadence; 0 reports that nothing was queued.
+    if (requestId < 0 || requestId > UINT16_MAX || intervalMs < 0 || intervalMs > UINT16_MAX) {
+        return 0;
+    }
     return LiSendHostSbsTelemetrySubscription(
             enabled == JNI_TRUE, focused == JNI_TRUE,
             (uint16_t)requestId, (uint16_t)intervalMs);
