@@ -364,8 +364,11 @@ public final class SessionSettingsStore {
     }
 
     /**
-     * A guarded, one-shot atomic update. The expected app prevents a stale settings panel from
-     * applying changes to a replacement session that started while the panel was open.
+     * A one-shot atomic update of one PC's current record and its app profile. {@link #commit()}
+     * writes nothing and returns false unless the record still has the local session generation
+     * captured when the editor was created (or supplied to it) and, when an expected app was
+     * given, still belongs to that application. A stale settings panel therefore cannot write into
+     * a replacement session, even one for the same app, that started while it was open.
      */
     public final class Editor {
         private final PcIdentity pc;
@@ -627,8 +630,14 @@ public final class SessionSettingsStore {
     }
 
     /**
-     * Starts a genuinely new host session with fresh ownership and this app's saved settings.
-     * An application without saved settings inherits the global defaults and starts in Normal mode.
+     * Replaces the PC's current record with a new local session generation for {@code app}, with
+     * {@code hostSessionId} as unconfirmed resume metadata. The new record starts from this app's
+     * saved profile, including its saved presentation mode. When the replaced record belongs to
+     * the same application its settings are used instead, unless the launch carries an app UUID
+     * that the record lacks and a profile exists for it. An application without saved settings
+     * inherits the global defaults with Normal as its saved mode. The replaced record's settings
+     * are saved to its app profile in the same commit. The caller decides the startup mode;
+     * {@code Game} repairs a non-resume launch to Normal.
      */
     public boolean startNewSession(PcIdentity pc, AppIdentity app,
                                    String hostSessionId, long hostConfirmedAtEpochMillis) {
@@ -807,7 +816,10 @@ public final class SessionSettingsStore {
                 expectedLocalSessionId, false);
     }
 
-    /** Unguarded form for state such as a confirmed mode switch owned by the active Game. */
+    /**
+     * Editor without an application guard, for state such as a confirmed mode switch owned by
+     * the active Game. It still requires the local session generation current at creation.
+     */
     public Editor edit(PcIdentity pc) {
         return new Editor(pc, null, null, true);
     }

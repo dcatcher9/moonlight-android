@@ -139,8 +139,6 @@ public class StreamSettings extends AppCompatActivity {
                 }
             }
 
-            // Bitrate is purely user-set: resolution/FPS changes deliberately leave it
-            // untouched. getDefaultBitrate() remains only the fresh-install default.
             configureDiagnostics();
         }
 
