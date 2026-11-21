@@ -3,7 +3,6 @@ package com.limelight.ui;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
-import android.os.Build;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
@@ -187,8 +186,35 @@ public class XrStreamPresenter {
 
     private Session session;
     private SurfaceEntity surfaceEntity;
-    /** Written by the UI/SceneCore thread and read by the Client SBS EGL owner. */
-    private volatile Surface videoSurface;
+    private final XrVideoSurfaceOwner videoSurfaceOwner = new XrVideoSurfaceOwner(
+            new XrVideoSurfaceOwner.Host() {
+                @Override
+                public SurfaceEntity videoEntity() {
+                    return surfaceEntity;
+                }
+
+                @Override
+                public android.view.Window window() {
+                    return activity.getWindow();
+                }
+
+                @Override
+                public android.view.Display activeDisplay() {
+                    return ServerHelper.getActiveDisplay(activity, prefConfig);
+                }
+
+                @Override
+                public boolean preferClientPanelRate() {
+                    return PanelRefreshRateState.shouldPreferClientPanelRate(
+                            panelRefreshRateState, currentPresenterMode);
+                }
+
+                @Override
+                public int surfaceFrameRateVoteHz() {
+                    return PanelRefreshRateState.durableSurfaceFrameRateVoteHz(
+                            panelRefreshRateState, currentPresenterMode);
+                }
+            });
 
     /** The control-bar items (one clickable tile each, all hosted in the dock panel). */
     private final List<BarItem> barItems = new ArrayList<>();
@@ -235,8 +261,6 @@ public class XrStreamPresenter {
      * right now — including one that panel-follow lowered it to.
      */
     private final PanelRefreshRateState panelRefreshRateState;
-    private final ClientPanelRefreshRatePreference clientPanelRefreshRatePreference =
-            new ClientPanelRefreshRatePreference();
     /** Origin of the outstanding request; automatic panel-follow changes are never persisted. */
     private LiveQualityRequestOrigin pendingLiveQualityOrigin;
     /** User-authored tuple retained separately when the panel caps the effective wire FPS. */
@@ -1392,10 +1416,10 @@ public class XrStreamPresenter {
         // quad" symptom was misattributed to a codec/consumer buffer stall; the real causes were
         // the missing setParent above and the occluding 2D main panel — both fixed here — so the
         // direct path works and no GL bridge is needed.)
-        adoptVideoSurface(surfaceEntity.getSurface());
+        videoSurfaceOwner.adopt(surfaceEntity.getSurface());
 
         if (listener != null) {
-            listener.onSurfaceReady(videoSurface);
+            listener.onSurfaceReady(videoSurfaceOwner.surface());
         }
         return true;
     }
@@ -3297,7 +3321,7 @@ public class XrStreamPresenter {
         // The decoder target is an offscreen SurfaceTexture while Client SBS is active. Reapply
         // the durable vote to SceneCore's actual presentation swapchain as the authoritative
         // display-rate owner, in addition to keeping the decoder target's hint current.
-        applyPresentationFrameRatePreference();
+        videoSurfaceOwner.applyFrameRatePreference();
         if (activity instanceof com.limelight.Game) {
             ((com.limelight.Game) activity).updateDecoderSurfaceFrameRateCeiling(
                     panelRefreshRateState.getUserCeilingHz());
@@ -3678,7 +3702,7 @@ public class XrStreamPresenter {
         currentPresenterMode = nextMode;
         // Same-wire and deferred Client SBS switches can commit without a live-quality ACK.
         // Release the scoped window preference here too when the committed producer changes.
-        applyPresentationFrameRatePreference();
+        videoSurfaceOwner.applyFrameRatePreference();
         hostTelemetrySubscription.reconcile();
         surfaceEntity.setStereoMode(stereoModeFor(currentPresenterMode));
         applyContentColorMetadata();
@@ -4428,56 +4452,7 @@ public class XrStreamPresenter {
     }
 
     public Surface getVideoSurface() {
-        return videoSurface;
-    }
-
-    /**
-     * Adopts a newly obtained SceneCore presentation Surface and immediately restores its durable
-     * frame-rate vote. SceneCore may replace the Surface when pixel dimensions change.
-     */
-    private void adoptVideoSurface(Surface surface) {
-        videoSurface = surface;
-        applyPresentationFrameRatePreference();
-    }
-
-    /**
-     * Reapplies mode-aware panel preferences to the window and actual SceneCore output swapchain.
-     *
-     * <p>Best effort: the Surface may already be retiring during a mode transition. The next
-     * {@link #adoptVideoSurface(Surface)} call reapplies the same durable value to its replacement.
-     * The temporary effective stream FPS is intentionally not used here.</p>
-     */
-    private void applyPresentationFrameRatePreference() {
-        // Prefer the advertised 72 Hz panel mode for Client SBS's low stream ceilings.
-        // Use the durable ceiling so a new 90 FPS request releases the preference even if
-        // its first ACK remains capped to the current panel rate.
-        clientPanelRefreshRatePreference.apply(activity.getWindow(),
-                ServerHelper.getActiveDisplay(activity, prefConfig),
-                PanelRefreshRateState.shouldPreferClientPanelRate(panelRefreshRateState, currentPresenterMode));
-        Surface surface = videoSurface;
-        int ceilingHz = PanelRefreshRateState.durableSurfaceFrameRateVoteHz(panelRefreshRateState, currentPresenterMode);
-        if (surface == null || !surface.isValid() || ceilingHz <= 0
-                || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return;
-        }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                surface.setFrameRate(
-                        (float) ceilingHz,
-                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                        Surface.CHANGE_FRAME_RATE_ALWAYS);
-            } else {
-                surface.setFrameRate(
-                        (float) ceilingHz,
-                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-            }
-            LimeLog.info("XR: SceneCore presentation Surface requests "
-                    + ceilingHz + " Hz");
-        } catch (Throwable error) {
-            // Surface replacement races are recoverable: the next adopted Surface retries.
-            LimeLog.warning("XR: unable to apply SceneCore Surface frame-rate ceiling: "
-                    + error.getMessage());
-        }
+        return videoSurfaceOwner.surface();
     }
 
     /**
@@ -4495,9 +4470,7 @@ public class XrStreamPresenter {
         }
         int width = fullStereo ? getClientSbsSurfaceWidth() : prefConfig.width;
         int height = fullStereo ? getClientSbsSurfaceHeight() : prefConfig.height;
-        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(width, height));
-        adoptVideoSurface(surfaceEntity.getSurface());
-        return videoSurface != null && videoSurface.isValid();
+        return videoSurfaceOwner.resize(width, height);
     }
 
     /**
@@ -4511,12 +4484,10 @@ public class XrStreamPresenter {
      */
     public boolean setClientSbsSurfaceSize(int perEyeWidth, int perEyeHeight) {
         int[] packed = XrPresentationPolicy.clientSbsPackedDimensions(perEyeWidth, perEyeHeight);
-        if (packed == null || surfaceEntity == null || surfaceEntity.isDisposed()) {
+        if (packed == null) {
             return false;
         }
-        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(packed[0], packed[1]));
-        adoptVideoSurface(surfaceEntity.getSurface());
-        return videoSurface != null && videoSurface.isValid();
+        return videoSurfaceOwner.resize(packed[0], packed[1]);
     }
 
     /** Final XR swapchain width for Client SBS: two negotiated-size eye views side by side. */
@@ -4598,9 +4569,7 @@ public class XrStreamPresenter {
             w = logicalWidth;
             h = logicalHeight;
         }
-        surfaceEntity.setSurfacePixelDimensions(new IntSize2d(w, h));
-        adoptVideoSurface(surfaceEntity.getSurface());
-        return videoSurface != null && videoSurface.isValid();
+        return videoSurfaceOwner.resize(w, h);
     }
 
     /**
@@ -4615,7 +4584,7 @@ public class XrStreamPresenter {
         presenterDestroyed = true;
         statsUi.cancelStatsPanelFit();
         depthStatusOverlay.cancelPendingShowAndHide();
-        clientPanelRefreshRatePreference.apply(activity.getWindow(), null, false);
+        videoSurfaceOwner.releaseWindowPreference();
         onHostActivityStopped();
         dockController.closeGazeTracker();
         // Native connection cleanup has already completed by StreamContainer teardown time. Only
@@ -4649,7 +4618,7 @@ public class XrStreamPresenter {
         transientMessagePanel.disposePanel();
         glanceStrip.releaseViews();
         dockController.releaseViews();
-        videoSurface = null;
+        videoSurfaceOwner.clear();
         statsUi.releaseViews();
         settingsItem = null;
         cinemaItem = null;

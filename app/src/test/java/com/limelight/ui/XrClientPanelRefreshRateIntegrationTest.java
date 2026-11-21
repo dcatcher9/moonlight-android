@@ -93,21 +93,21 @@ public final class XrClientPanelRefreshRateIntegrationTest {
     @Test
     public void windowPreferenceAppliesAndRestoresWithoutAnAdoptedVideoSurface()
             throws Exception {
-        assertNull(field("videoSurface"));
+        assertNull(videoSurfaceOwner().surface());
         setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
 
-        invoke("applyPresentationFrameRatePreference");
+        videoSurfaceOwner().applyFrameRatePreference();
         assertWindowPreference(2, 72.00001f);
 
         setField("currentPresenterMode", PresentationMode.HOST_SBS_AI);
-        invoke("applyPresentationFrameRatePreference");
+        videoSurfaceOwner().applyFrameRatePreference();
         assertWindowPreference(41, 90.0f);
     }
 
     @Test
     public void destroyingClientPresenterRestoresTheOriginalWindowPreference() throws Exception {
         setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
-        invoke("applyPresentationFrameRatePreference");
+        videoSurfaceOwner().applyFrameRatePreference();
         assertWindowPreference(2, 72.00001f);
 
         presenter.onDestroy();
@@ -124,12 +124,12 @@ public final class XrClientPanelRefreshRateIntegrationTest {
                         3, 7104, 3840, 72.00001f)});
         setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
 
-        invoke("applyPresentationFrameRatePreference");
+        videoSurfaceOwner().applyFrameRatePreference();
 
         assertWindowPreference(3, 72.00001f);
         assertEquals(30.0f, preferences.fps, 0.0f);
         setField("currentPresenterMode", PresentationMode.NORMAL);
-        invoke("applyPresentationFrameRatePreference");
+        videoSurfaceOwner().applyFrameRatePreference();
         assertWindowPreference(41, 90.0f);
     }
 
@@ -137,7 +137,7 @@ public final class XrClientPanelRefreshRateIntegrationTest {
     public void successfulHigherDurableCeilingReleasesSeventyTwoDespiteEffectiveSixtyAck()
             throws Exception {
         setField("currentPresenterMode", PresentationMode.CLIENT_SBS_AI);
-        invoke("applyPresentationFrameRatePreference");
+        videoSurfaceOwner().applyFrameRatePreference();
         assertWindowPreference(2, 72.00001f);
 
         panel.observe(60.0f);
@@ -186,7 +186,7 @@ public final class XrClientPanelRefreshRateIntegrationTest {
             Surface surface = mock(Surface.class);
             when(surface.isValid()).thenReturn(true);
 
-            invoke("adoptVideoSurface", new Class<?>[] {Surface.class}, surface);
+            videoSurfaceOwner().adopt(surface);
 
             verify(surface).setFrameRate(72.0f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
                     Surface.CHANGE_FRAME_RATE_ALWAYS);
@@ -199,6 +199,10 @@ public final class XrClientPanelRefreshRateIntegrationTest {
     private void assertWindowPreference(int modeId, float refreshRate) {
         assertEquals(modeId, window.getAttributes().preferredDisplayModeId);
         assertEquals(refreshRate, window.getAttributes().preferredRefreshRate, 0.0f);
+    }
+
+    private XrVideoSurfaceOwner videoSurfaceOwner() throws Exception {
+        return (XrVideoSurfaceOwner) field("videoSurfaceOwner");
     }
 
     private Object field(String name) throws Exception {
