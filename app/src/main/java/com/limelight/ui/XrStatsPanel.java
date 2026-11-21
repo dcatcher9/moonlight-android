@@ -257,17 +257,12 @@ final class XrStatsPanel {
                     stream.getNetworkLossPercent() > 1.0f
                             ? paletteColor(R.color.xr_status_warn) : paletteColor(R.color.xr_text_primary));
 
-            String hostLatency = stream.hasHostProcessingLatency()
-                    ? String.format(Locale.US, "%.2f / %.2f",
-                            stream.getHostProcessingAverageMs(),
-                            stream.getHostProcessingMaxMs())
-                    : "n/a";
-            String decodeLatency = stream.hasDecodeLatency()
-                    ? String.format(Locale.US, "%.2f / %.2f",
-                            stream.getDecodeAverageMs(), stream.getDecodeMaxMs())
-                    : "n/a";
             addStatsRow("Host / decode avg / max",
-                    "host " + hostLatency + " | decode " + decodeLatency + " ms",
+                    XrStatsFormat.formatHostDecodeLatency(
+                            stream.hasHostProcessingLatency(),
+                            stream.getHostProcessingAverageMs(), stream.getHostProcessingMaxMs(),
+                            stream.hasDecodeLatency(),
+                            stream.getDecodeAverageMs(), stream.getDecodeMaxMs()),
                     stream.hasDecodeLatency() ? paletteColor(R.color.xr_text_primary) : paletteColor(R.color.xr_text_disabled));
         }
 

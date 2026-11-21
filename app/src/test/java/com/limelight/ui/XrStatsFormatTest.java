@@ -34,6 +34,16 @@ public final class XrStatsFormatTest {
     }
 
     @Test
+    public void hostAndDecodeLatencyEachCarryTheirOwnUnit() {
+        assertEquals("host 1.25 / 2.50 ms | decode 3.00 / 4.00 ms",
+                XrStatsFormat.formatHostDecodeLatency(true, 1.25f, 2.5f, true, 3f, 4f));
+        assertEquals("host 1.25 / 2.50 ms | decode n/a",
+                XrStatsFormat.formatHostDecodeLatency(true, 1.25f, 2.5f, false, 0f, 0f));
+        assertEquals("host n/a | decode 3.00 / 4.00 ms",
+                XrStatsFormat.formatHostDecodeLatency(false, 0f, 0f, true, 3f, 4f));
+    }
+
+    @Test
     public void reuseRatioWithoutCandidatesIsNotAZeroPercentRatio() {
         assertEquals("No eligible decisions",
                 XrStatsFormat.formatClientReuseRatio(Float.NaN));

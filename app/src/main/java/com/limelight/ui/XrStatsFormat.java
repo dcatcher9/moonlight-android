@@ -78,6 +78,19 @@ final class XrStatsFormat {
                 : "No eligible decisions";
     }
 
+    /** Host processing and decode latency, each with its own unit or its own "n/a". */
+    static String formatHostDecodeLatency(boolean hasHost, float hostAverageMs, float hostMaxMs,
+                                          boolean hasDecode, float decodeAverageMs,
+                                          float decodeMaxMs) {
+        return "host " + formatLatencyPair(hasHost, hostAverageMs, hostMaxMs)
+                + " | decode " + formatLatencyPair(hasDecode, decodeAverageMs, decodeMaxMs);
+    }
+
+    private static String formatLatencyPair(boolean available, float averageMs, float maxMs) {
+        return available
+                ? String.format(Locale.US, "%.2f / %.2f ms", averageMs, maxMs) : "n/a";
+    }
+
     static String formatClientReuseRejects(long content, long invalid) {
         return String.format(Locale.US, "content %d | invalid %d", content, invalid);
     }
