@@ -1122,7 +1122,7 @@ Full/Limited video range, audio layout, and play audio on the host PC**. The App
 edits only this shared set for the current app on the current PC. Global Settings provide the defaults
 for both the shared set and the quality baseline inherited independently by each mode.
 
-The factory baseline for a fresh install is **3840 x 2160 at 90 FPS, 200 Mbps, HEVC, HDR, Full
+The factory baseline for a fresh install is **3840 x 2160 at 60 FPS, 200 Mbps, HEVC, HDR, Full
 range, and latency pacing**, with stereo audio and host audio off. There is no global Raw packing
 picker. Client SBS always uses ZipDepth. In-session **Use global defaults** inherits and automatically
 applies the values currently saved in Global Settings rather than forcing this factory baseline,
@@ -1130,7 +1130,7 @@ clearing the corresponding saved profile overrides through the usual guarded com
 **Use saved settings** discards pending edits and restores that mode's durable app/PC values,
 falling back to its current global values where no profile override exists.
 
-2D, Game, Movie and Host AI 3D therefore begin with a durable **90 FPS ceiling**. Client SBS
+2D, Game, Movie and Host AI 3D therefore begin with a durable **60 FPS ceiling**. Client SBS
 defaults to **1920 x 1080 at 30 FPS with a 72 Hz panel preference**. A headset panel/thermal
 transition may temporarily lower the effective on-wire rate to an offered rung, but it never
 rewrites the selected ceiling; the host
@@ -1604,9 +1604,14 @@ SceneCore, runtime, runtime-openxr, ARCore, and arcore-openxr are pinned togethe
 `1.0.0` (2026-10-21; rc01, beta02, and the earlier DP4/beta releases preceded it). Keep the five artifacts
 aligned; mixed Java and native OpenXR versions can crash `ViewCameraState` construction.
 
-Debug minification remains disabled. R8 keep rules avoid several reflection/JNI failures, but
-hardware still reproduces an `AbstractMethodError` in the device-provided XR `Consumer` interface
-when the debug build is minified. Release minification remains a separate unresolved task.
+Debug builds are not minified. Release builds run R8 with `proguard-android-optimize.txt` and
+`app/proguard-rules.pro`, which keep the whole `androidx.xr` tree, the platform-provided
+`com.android.extensions.xr` classes and interfaces, and the JNI bridge `com.limelight.nvstream.jni`.
+The source tree also compiles stubs of three platform XR callback interfaces, including
+`com.android.extensions.xr.function.Consumer`, so R8 lambda desugaring cannot leave their methods
+abstract. `assembleNonRoot_gameRelease` needs no signing configuration and produces unsigned APKs.
+No unit test or CI job builds or runs a minified APK, so check a release build on the headset
+before distributing it.
 
 ## Testing
 
