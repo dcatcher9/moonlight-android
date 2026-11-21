@@ -450,6 +450,74 @@ public final class SessionSettingsStoreTest {
     }
 
     @Test
+    public void streamingResetClearsKeysFromEverySharedAndModeMapOnEveryPc() {
+        PcIdentity secondPc = new PcIdentity("second-pc", "192.168.1.3");
+        AppIdentity secondApp = new AppIdentity("7", "app-portal", "Portal 2");
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        assertTrue(store.edit(pc, firstApp)
+                .setSharedValue(HDR, false, true)
+                .setSharedValue(GAMMA, "2.4", "default")
+                .setModeValue(PresentationMode.NORMAL, RESOLUTION, "2560x1440", "3840x2160")
+                .setModeValue(PresentationMode.HOST_SBS_AI, FPS, "120", "60")
+                .setModeValue(PresentationMode.HOST_SBS_AI, MODEL, "kept", "global")
+                .setLastSuccessfulMode(PresentationMode.HOST_SBS_AI)
+                .commit());
+        assertTrue(store.startNewSession(secondPc, secondApp, "second", 2L));
+        assertTrue(store.edit(secondPc, secondApp)
+                .setModeValue(PresentationMode.MOVIE_3D, BITRATE, 300000, 200000)
+                .commit());
+        assertTrue(store.clearCurrentSession(secondPc));
+        String firstRecordKey = "session." + pc.getStorageId();
+        JsonObject firstRecord = JsonParser.parseString(
+                storage.getString(firstRecordKey, null)).getAsJsonObject();
+        firstRecord.addProperty("future_marker", "keep");
+        JsonObject futureMode = new JsonObject();
+        JsonObject futureFps = new JsonObject();
+        futureFps.addProperty("type", "string");
+        futureFps.addProperty("string", "240");
+        futureMode.add(FPS, futureFps);
+        firstRecord.getAsJsonObject("modes").add("FUTURE_MODE", futureMode);
+        String malformed = "{\"schema\":1,\"modes\":{}}";
+        String unknown = "{\"schema\":999,\"shared\":{\"" + HDR + "\":{}}}";
+        assertTrue(storage.edit().putString(firstRecordKey, firstRecord.toString())
+                .putString("settings.malformed", malformed)
+                .putString("session.unknown", unknown).commit());
+
+        assertTrue(store.clearValueOverridesForAllSessions(
+                Arrays.asList(RESOLUTION, FPS, BITRATE, HDR, GAMMA)));
+
+        SessionRecord first = store.getCurrentSession(pc);
+        assertTrue(first.getSharedOverrides().isEmpty());
+        assertTrue(first.getModeOverrides(PresentationMode.NORMAL).isEmpty());
+        assertEquals(Collections.singletonMap(MODEL, "kept"),
+                first.getModeOverrides(PresentationMode.HOST_SBS_AI));
+        assertEquals(PresentationMode.HOST_SBS_AI, first.getLastSuccessfulMode());
+        assertEquals("first", first.getResumeMetadata().getHostSessionId());
+        JsonObject stored = JsonParser.parseString(
+                storage.getString(firstRecordKey, null)).getAsJsonObject();
+        assertEquals("keep", stored.get("future_marker").getAsString());
+        JsonObject storedModes = stored.getAsJsonObject("modes");
+        assertFalse(storedModes.has("FUTURE_MODE"));
+        assertFalse(storedModes.has(PresentationMode.NORMAL.name()));
+        assertEquals(malformed, storage.getString("settings.malformed", null));
+        assertEquals(unknown, storage.getString("session.unknown", null));
+
+        assertTrue(store.startNewSession(secondPc, secondApp, "third", 3L));
+        assertTrue(store.getCurrentSession(secondPc)
+                .getModeOverrides(PresentationMode.MOVIE_3D).isEmpty());
+    }
+
+    @Test
+    public void streamingResetWithNothingToClearCommitsNothing() {
+        assertTrue(store.startNewSession(pc, firstApp, "first", 1L));
+        String before = storage.getString("session." + pc.getStorageId(), null);
+
+        assertTrue(store.clearValueOverridesForAllSessions(Arrays.asList(RESOLUTION, FPS)));
+
+        assertEquals(before, storage.getString("session." + pc.getStorageId(), null));
+    }
+
+    @Test
     public void legacyHostResumePreservesSettingsUsingApplicationIdentity() {
         assertTrue(store.startNewSession(pc, firstApp, null, 100L));
         assertTrue(store.edit(pc, firstApp)

@@ -536,6 +536,26 @@ public final class SessionSettingsStore {
     public boolean clearModeValueOverridesForAllCurrentSessions(PresentationMode mode, String key) {
         Objects.requireNonNull(mode, "mode");
         validateSettingKey(key);
+        return removeOverridesFromAllRecords(Collections.singletonList(key), mode);
+    }
+
+    /**
+     * Removes the given keys from the shared map and from every presentation-mode map of every
+     * active session and saved app profile on every PC, so each of those keys inherits its
+     * global value again. Unrelated settings, the saved mode, resume metadata, unknown JSON
+     * fields, malformed records, and other schema versions are preserved.
+     */
+    public boolean clearValueOverridesForAllSessions(Collection<String> keys) {
+        Objects.requireNonNull(keys, "keys");
+        for (String key : keys) {
+            validateSettingKey(key);
+        }
+        return removeOverridesFromAllRecords(keys, null);
+    }
+
+    /** Removes keys from the shared map and from {@code onlyMode}'s map, or every mode's if null. */
+    private boolean removeOverridesFromAllRecords(Collection<String> keys,
+                                                  PresentationMode onlyMode) {
         synchronized (WRITE_LOCK) {
             SharedPreferences.Editor editor = null;
             for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
@@ -567,17 +587,30 @@ public final class SessionSettingsStore {
                     continue;
                 }
 
-                boolean changed = removeJsonMapValue(root, "shared", key);
+                boolean changed = false;
+                for (String key : keys) {
+                    changed |= removeJsonMapValue(root, "shared", key);
+                }
                 JsonElement modesElement = root.get("modes");
                 if (modesElement != null && modesElement.isJsonObject()) {
                     JsonObject modes = modesElement.getAsJsonObject();
-                    JsonElement modeElement = modes.get(mode.name());
-                    if (modeElement != null && modeElement.isJsonObject()) {
+                    List<String> modeNames = onlyMode != null
+                            ? Collections.singletonList(onlyMode.name())
+                            : new ArrayList<>(modes.keySet());
+                    for (String modeName : modeNames) {
+                        JsonElement modeElement = modes.get(modeName);
+                        if (modeElement == null || !modeElement.isJsonObject()) {
+                            continue;
+                        }
                         JsonObject modeValues = modeElement.getAsJsonObject();
-                        if (modeValues.remove(key) != null) {
+                        boolean modeChanged = false;
+                        for (String key : keys) {
+                            modeChanged |= modeValues.remove(key) != null;
+                        }
+                        if (modeChanged) {
                             changed = true;
                             if (modeValues.size() == 0) {
-                                modes.remove(mode.name());
+                                modes.remove(modeName);
                             }
                         }
                     }

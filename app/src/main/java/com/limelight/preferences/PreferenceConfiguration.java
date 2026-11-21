@@ -7,7 +7,13 @@ import android.view.Display;
 
 import androidx.preference.PreferenceManager;
 
+import com.limelight.LimeLog;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.session.SessionSettingsStore;
+
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 public class PreferenceConfiguration {
 
@@ -677,19 +683,35 @@ public class PreferenceConfiguration {
         }
     }
 
+    /** Settings that configure the decoder, which the decoder-crash reset returns to defaults. */
+    private static final List<String> STREAMING_SETTING_KEYS = Collections.unmodifiableList(
+            Arrays.asList(
+                    BITRATE_PREF_STRING,
+                    RESOLUTION_PREF_STRING,
+                    FPS_PREF_STRING,
+                    VIDEO_FORMAT_PREF_STRING,
+                    ENABLE_HDR_PREF_STRING,
+                    UNLOCK_FPS_STRING,
+                    FULL_RANGE_PREF_STRING,
+                    STREAM_GAMMA_PREF_STRING));
+
+    /**
+     * Returns the streaming settings to their defaults in Global Settings and removes the same
+     * settings from every app/PC profile and active session record. A profile override takes
+     * precedence over the global value, so a crashing override would otherwise be re-applied on
+     * the next launch.
+     */
     public static void resetStreamingSettings(Context context) {
-        // We consider resolution, FPS, bitrate, HDR, and video format as "streaming settings" here
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
-        prefs.edit()
-                .remove(BITRATE_PREF_STRING)
-                .remove(RESOLUTION_PREF_STRING)
-                .remove(FPS_PREF_STRING)
-                .remove(VIDEO_FORMAT_PREF_STRING)
-                .remove(ENABLE_HDR_PREF_STRING)
-                .remove(UNLOCK_FPS_STRING)
-                .remove(FULL_RANGE_PREF_STRING)
-                .remove(STREAM_GAMMA_PREF_STRING)
-                .apply();
+        SharedPreferences.Editor editor = prefs.edit();
+        for (String key : STREAMING_SETTING_KEYS) {
+            editor.remove(key);
+        }
+        editor.apply();
+        if (!new SessionSettingsStore(context)
+                .clearValueOverridesForAllSessions(STREAMING_SETTING_KEYS)) {
+            LimeLog.warning("Unable to reset the streaming settings saved for each app and PC");
+        }
     }
 
 //    public static void completeLanguagePreferenceMigration(Context context) {
