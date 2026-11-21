@@ -57,6 +57,34 @@ public final class GameInstanceLifecycleTest {
         assertNull(Game.instance);
     }
 
+    public static final class BindingGame extends Game {
+        final java.util.List<android.content.ServiceConnection> bound = new java.util.ArrayList<>();
+        final java.util.List<android.content.ServiceConnection> unbound = new java.util.ArrayList<>();
+
+        @Override public boolean bindService(android.content.Intent service,
+                                             android.content.ServiceConnection connection, int flags) {
+            bound.add(connection);
+            return true;
+        }
+
+        @Override public void unbindService(android.content.ServiceConnection connection) {
+            unbound.add(connection);
+        }
+    }
+
+    @Test public void destroyBeforeTheUsbDriverServiceConnectsStillUnbindsIt() {
+        BindingGame game = Robolectric.buildActivity(BindingGame.class).get();
+        ReflectionHelpers.setField(game, "prefConfig", new PreferenceConfiguration());
+        ReflectionHelpers.setField(game, "timerHandler", new Handler(Looper.getMainLooper()));
+
+        // connectionStarted() binds; onServiceConnected() never arrives before destroy.
+        game.bindUsbDriverService();
+        ReflectionHelpers.callInstanceMethod(game, "onDestroy");
+
+        org.junit.Assert.assertEquals(1, game.bound.size());
+        org.junit.Assert.assertEquals(game.bound, game.unbound);
+    }
+
     private static Game destroyableGame() {
         Game game = Robolectric.buildActivity(Game.class).get();
         ReflectionHelpers.setField(game, "prefConfig", new PreferenceConfiguration());

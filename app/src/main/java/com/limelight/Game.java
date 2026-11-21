@@ -340,20 +340,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private WifiManager.WifiLock highPerfWifiLock;
     private WifiManager.WifiLock lowLatencyWifiLock;
 
-    private boolean connectedToUsbDriverService = false;
-    private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
+    // The binding, not the connection callback, decides unbinding: destroy can precede
+    // onServiceConnected(), and a crashed service stays bound until unbindService().
+    private boolean usbDriverServiceBound;
+    private final ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
             binder.setListener(controllerHandler);
             binder.setStateListener(Game.this);
             binder.start();
-            connectedToUsbDriverService = true;
         }
 
         @Override
         public void onServiceDisconnected(ComponentName componentName) {
-            connectedToUsbDriverService = false;
         }
     };
 
@@ -2530,16 +2530,27 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     .apply();
         }
 
-        if (connectedToUsbDriverService) {
-            // Unbind from the discovery service
-            unbindService(usbDriverServiceConnection);
-        }
+        unbindUsbDriverService();
 
         // Destroy the capture provider
         if (inputCaptureProvider != null) {
             inputCaptureProvider.destroy();
         }
         super.onDestroy();
+    }
+
+    void bindUsbDriverService() {
+        if (!usbDriverServiceBound) {
+            usbDriverServiceBound = bindService(new Intent(Game.this, UsbDriverService.class),
+                    usbDriverServiceConnection, Service.BIND_AUTO_CREATE);
+        }
+    }
+
+    private void unbindUsbDriverService() {
+        if (usbDriverServiceBound) {
+            usbDriverServiceBound = false;
+            unbindService(usbDriverServiceConnection);
+        }
     }
 
     @Override
@@ -4340,8 +4351,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
 
                 if (prefConfig.usbDriver) {
-                    bindService(new Intent(Game.this, UsbDriverService.class),
-                            usbDriverServiceConnection, Service.BIND_AUTO_CREATE);
+                    bindUsbDriverService();
                 }
 
                 // Shortcut/channel APIs can do disk or provider work. Start them only after the
