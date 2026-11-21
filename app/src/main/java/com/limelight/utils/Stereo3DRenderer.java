@@ -2946,7 +2946,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     || captureGeneration != clientSbsGeneration.get()
                     || !colorFrameSlots.markInference(colorFrameLease)) {
                 // The model-input and classifier writes were already issued, so this fence is the
-                // slot's newest dependency; keep it for slot reuse and bounded teardown.
+                // slot's newest dependency; keep it for bounded teardown. The ledger hands it to
+                // the slot's next run only when native holds an output there awaiting consumption.
                 replaceGpuFinalFence(bufferSlot, inputReadyFence);
                 colorFrameSlots.release(colorFrameLease);
                 markLastCaptureForRetry();
@@ -3188,6 +3189,13 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private void replaceGpuFinalFence(int slot, long newerFence) {
         synchronized (gpuBufferOwnershipLock) {
             gpuSlotFences.retainFinalFence(slot, newerFence);
+        }
+    }
+
+    /** Retains a native ready fence whose result never reaches the renderer's adoption path. */
+    private void retainNativeResultFence(int slot, long readyFence) {
+        synchronized (gpuBufferOwnershipLock) {
+            gpuSlotFences.retainNativeResultFence(slot, readyFence);
         }
     }
 
@@ -3647,7 +3655,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         GpuInferenceResult unpublished = latestGpuInferenceResult.getAndSet(null);
         if (unpublished != null) {
-            replaceGpuFinalFence(unpublished.bufferSlot, unpublished.outputReadyFence);
+            retainNativeResultFence(unpublished.bufferSlot, unpublished.outputReadyFence);
             colorFrameSlots.release(unpublished.colorFrameLease,
                     ClientSbsFrameSlots.State.INFERENCE);
             releaseInferenceClaim(unpublished.inferenceClaimToken);
@@ -4266,7 +4274,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                         boolean terminating = shuttingDown.get() || gpuShutdownRequested.get()
                                 || Thread.currentThread().isInterrupted();
                         if (terminating) {
-                            replaceGpuFinalFence(renderResult.bufferSlot, outputReadyFence);
+                            retainNativeResultFence(renderResult.bufferSlot, outputReadyFence);
                             colorFrameSlots.release(renderResult.colorFrameLease,
                                     ClientSbsFrameSlots.State.INFERENCE);
                             releaseInferenceClaim(renderResult.inferenceClaimToken);
@@ -4284,7 +4292,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                                 disposition == ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
                                 renderResult.performanceEpoch);
                         if (!latestGpuInferenceResult.compareAndSet(null, gpuResult)) {
-                            replaceGpuFinalFence(renderResult.bufferSlot, outputReadyFence);
+                            retainNativeResultFence(renderResult.bufferSlot, outputReadyFence);
                             throw new IllegalStateException(
                                     "GPU result mailbox was unexpectedly occupied");
                         }

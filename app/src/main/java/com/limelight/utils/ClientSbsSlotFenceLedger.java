@@ -4,9 +4,14 @@ package com.limelight.utils;
  * Renderer-side GL sync handles for the native tensor slots of one {@link Stereo3DRenderer}.
  *
  * <p>Each slot holds at most one renderer-created fence: the newest renderer dependency that
- * covers every renderer GL access to that slot's shared input/output buffers. The next native run
- * on the slot receives it as the previous output-consumed fence, and native teardown receives the
- * remaining fences as the final renderer dependencies.</p>
+ * covers every renderer GL access to that slot's shared input/output buffers. Native teardown
+ * receives the remaining fences as the final renderer dependencies.</p>
+ *
+ * <p>Native {@code nativeRun} requires a nonzero previous output-consumed fence on a slot exactly
+ * when it returned a ready fence for that slot whose consumption has not yet been transferred
+ * back, and rejects one otherwise. The ledger records that expectation per slot. A fence kept for
+ * a slot without that expectation, such as the input-ready fence of a capture that failed before
+ * the slot ever ran, is only a teardown dependency and is never transferred to a run.</p>
  *
  * <p>Threading: the renderer calls these methods from the GL thread and the inference owner
  * calls them from its worker, always while holding the renderer's {@code gpuBufferOwnershipLock}.
@@ -21,6 +26,8 @@ final class ClientSbsSlotFenceLedger {
     }
 
     private final long[] fences;
+    /** True from a native result on the slot until the next run receives its consumed fence. */
+    private final boolean[] nativeAwaitsConsumedFence;
     private final FenceDeleter deleter;
 
     ClientSbsSlotFenceLedger(int slotCount, FenceDeleter deleter) {
@@ -31,11 +38,8 @@ final class ClientSbsSlotFenceLedger {
             throw new NullPointerException("Client SBS fence deleter must not be null");
         }
         fences = new long[slotCount];
+        nativeAwaitsConsumedFence = new boolean[slotCount];
         this.deleter = deleter;
-    }
-
-    int slotCount() {
-        return fences.length;
     }
 
     /** The fence currently retained for {@code slot}, or 0. */
@@ -59,14 +63,43 @@ final class ClientSbsSlotFenceLedger {
         }
     }
 
+    /** Whether native expects a consumed fence with the next run on {@code slot}. */
+    synchronized boolean nativeAwaitsConsumedFence(int slot) {
+        return nativeAwaitsConsumedFence[slot];
+    }
+
+    /**
+     * Retains a ready fence that native returned on {@code slot} as the slot's final dependency
+     * when the result will not reach the renderer. Native now expects a consumed fence there.
+     */
+    synchronized void retainNativeResultFence(int slot, long readyFence) {
+        if (readyFence == 0L || slot < 0 || slot >= fences.length) {
+            return;
+        }
+        retainFinalFence(slot, readyFence);
+        nativeAwaitsConsumedFence[slot] = true;
+    }
+
     /**
      * Removes and returns the fence that a new native run on {@code slot} receives as its previous
-     * output-consumed fence. Ownership of a nonzero result passes to the caller.
+     * output-consumed fence, or 0 when native holds no output for the slot. Ownership of a nonzero
+     * result passes to the caller.
+     *
+     * <p>Call only after the run's input-ready fence was submitted. When native expects no
+     * consumed fence, a retained teardown fence is deleted: the newer input-ready fence on the
+     * same renderer queue supersedes it.</p>
      */
     synchronized long takeFenceForRun(int slot) {
         long fence = fences[slot];
         fences[slot] = 0L;
-        return fence;
+        if (nativeAwaitsConsumedFence[slot]) {
+            nativeAwaitsConsumedFence[slot] = false;
+            return fence;
+        }
+        if (fence != 0L) {
+            deleter.deleteFence(fence);
+        }
+        return 0L;
     }
 
     /**
@@ -84,6 +117,11 @@ final class ClientSbsSlotFenceLedger {
             deleter.deleteFence(previousOutputConsumedFence);
         }
         retainFinalFence(slot, finalFence);
+        if (previousOutputConsumedFence != 0L && slot >= 0 && slot < fences.length) {
+            // Native never received the consumed fence, so it still expects one; the retained
+            // newer fence covers the same consumer reads.
+            nativeAwaitsConsumedFence[slot] = true;
+        }
     }
 
     /**
@@ -97,6 +135,7 @@ final class ClientSbsSlotFenceLedger {
             return false;
         }
         fences[slot] = fence;
+        nativeAwaitsConsumedFence[slot] = true;
         return true;
     }
 
@@ -115,13 +154,16 @@ final class ClientSbsSlotFenceLedger {
     }
 
     /**
-     * Forgets every fence. With {@code deleteHandles} the handles are deleted through the
-     * current renderer context; without it they belong to a context that is gone.
+     * Forgets every fence and every native expectation; callers clear when the native engine that
+     * held those expectations is closing or replaced. With {@code deleteHandles} the handles are
+     * deleted through the current renderer context; without it they belong to a context that is
+     * gone.
      */
     synchronized void clear(boolean deleteHandles) {
         for (int slot = 0; slot < fences.length; slot++) {
             long fence = fences[slot];
             fences[slot] = 0L;
+            nativeAwaitsConsumedFence[slot] = false;
             if (deleteHandles && fence != 0L) {
                 deleter.deleteFence(fence);
             }
