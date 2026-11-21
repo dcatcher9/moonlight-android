@@ -5,13 +5,12 @@ final class ClientSbsShaders {
     private ClientSbsShaders() {
     }
 
-    static final String FLAT_FRAGMENT = String.join("\n",
-            "#extension GL_OES_EGL_image_external : require",
-            "precision highp float;",
-            "varying vec2 v_TexCoord;",
-            "uniform highp samplerExternalOES u_Texture;",
-            "uniform mat4 u_TextureTransform;",
-            "uniform bool u_tonemapHdrToSdr;",
+    /**
+     * PQ/BT.2020 HDR to tonemapped SDR sRGB, shared by the flat color and model-input shaders.
+     * ST2084 is normalized to 10,000 nits; {@code tonemapHdr} expresses it in the 80-nit
+     * reference-white units expected by the SDR model, converts primaries, then tonemaps.
+     */
+    private static final String HDR_TO_SDR_FUNCTIONS = String.join("\n",
             "vec3 pqToLinear(vec3 encoded) {",
             "  const float m1 = 0.1593017578125;",
             "  const float m2 = 78.84375;",
@@ -40,7 +39,16 @@ final class ClientSbsShaders {
             "  float peak = max(1.0, max(linearColor.r,",
             "      max(linearColor.g, linearColor.b)));",
             "  return linearToSrgb(clamp(linearColor / peak, 0.0, 1.0));",
-            "}",
+            "}");
+
+    static final String FLAT_FRAGMENT = String.join("\n",
+            "#extension GL_OES_EGL_image_external : require",
+            "precision highp float;",
+            "varying vec2 v_TexCoord;",
+            "uniform highp samplerExternalOES u_Texture;",
+            "uniform mat4 u_TextureTransform;",
+            "uniform bool u_tonemapHdrToSdr;",
+            HDR_TO_SDR_FUNCTIONS,
             "void main() {",
             "  vec2 sourceUv = (u_TextureTransform * vec4(v_TexCoord, 0.0, 1.0)).xy;",
             "  vec4 color = texture2D(u_Texture, sourceUv);",
@@ -123,38 +131,9 @@ final class ClientSbsShaders {
             "uniform bool u_isHdr;",
             aspectUniform,
             mirrorFunction,
-            "vec3 pqToLinear(vec3 encoded) {",
-            "  const float m1 = 0.1593017578125;",
-            "  const float m2 = 78.84375;",
-            "  const float c1 = 0.8359375;",
-            "  const float c2 = 18.8515625;",
-            "  const float c3 = 18.6875;",
-            "  vec3 power = pow(max(encoded, 0.0), vec3(1.0 / m2));",
-            "  return pow(max(power - c1, 0.0) / max(c2 - c3 * power, 0.00001),",
-            "      vec3(1.0 / m1));",
-            "}",
-            "vec3 bt2020ToBt709(vec3 color) {",
-            "  return mat3(1.660491, -0.124550, -0.018151,",
-            "      -0.587641, 1.132900, -0.100579,",
-            "      -0.072850, -0.008349, 1.118730) * color;",
-            "}",
-            "vec3 linearToSrgb(vec3 color) {",
-            "  vec3 low = 12.92 * color;",
-            "  vec3 high = 1.055 * pow(max(color, 0.0), vec3(1.0 / 2.4)) - 0.055;",
-            "  return mix(low, high, step(vec3(0.0031308), color));",
-            "}",
+            HDR_TO_SDR_FUNCTIONS,
             "vec3 toModelColor(vec3 encoded) {",
-            "  if (u_isHdr) {",
-            // ST2084 is normalized to 10,000 nits. Express it in the 80-nit reference-white
-            // units expected by the SDR model, then convert primaries before tonemapping.
-            "    vec3 linearColor = max(bt2020ToBt709(",
-            "        pqToLinear(encoded) * 125.0), vec3(0.0));",
-            "    float luminance = dot(linearColor, vec3(0.2126, 0.7152, 0.0722));",
-            "    linearColor /= 1.0 + max(luminance, 0.0);",
-            "    float peak = max(1.0, max(linearColor.r,",
-            "        max(linearColor.g, linearColor.b)));",
-            "    return linearToSrgb(clamp(linearColor / peak, 0.0, 1.0));",
-            "  }",
+            "  if (u_isHdr) return tonemapHdr(encoded);",
             "  return encoded;",
             "}",
             "vec2 sourceCellUv(ivec2 sourceCell) {",

@@ -109,6 +109,23 @@ public class ShaderUtilsTest {
     }
 
     @Test
+    public void flatAndModelInputShareOneHdrToSdrConversion() {
+        for (String shader : new String[] {ClientSbsShaders.FLAT_FRAGMENT,
+                ClientSbsShaders.createModelInputFragment(true),
+                ClientSbsShaders.createModelInputFragment(false)}) {
+            assertEquals(1, occurrences(shader, "vec3 pqToLinear(vec3 encoded)"));
+            assertEquals(1, occurrences(shader, "vec3 bt2020ToBt709(vec3 color)"));
+            assertEquals(1, occurrences(shader, "vec3 linearToSrgb(vec3 color)"));
+            assertEquals(1, occurrences(shader, "vec3 tonemapHdr(vec3 encoded)"));
+            assertEquals(1, occurrences(shader, "pqToLinear(encoded) * 125.0"));
+        }
+        assertTrue(ClientSbsShaders.FLAT_FRAGMENT.contains(
+                "if (u_tonemapHdrToSdr) color.rgb = tonemapHdr(color.rgb);"));
+        assertTrue(ClientSbsShaders.createModelInputFragment(true).contains(
+                "if (u_isHdr) return tonemapHdr(encoded);"));
+    }
+
+    @Test
     public void everyBucketedModelInputIsADirectFullFrameFootprintIntegral() {
         String shader = ClientSbsShaders.createModelInputFragment(true);
         assertTrue(shader.contains("vec2 sourceUv = v_TexCoord;"));
