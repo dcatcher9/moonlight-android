@@ -534,81 +534,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    private void pollGpuTelemetry() {
-        // Both timer queries and the GPU-to-CPU health/evidence ring are diagnostics. Normal
-        // streaming does neither; with performance sampling enabled both are polled once every
-        // GPU_TELEMETRY_POLL_STRIDE calls.
-        perf.applyDepthTelemetryEraResetOnGlThread();
-        int pollCounter = perf.gpuTelemetryPollCounter++;
-        ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
-        perf.applyHealthSamplingStateOnGlThread(processor);
-        if (!ClientSbsPerfStats.shouldPollHealthTelemetry(perf.performanceSamplingEnabled, pollCounter)) {
-            return;
-        }
-        ClientSbsGpuTimer timer = perf.gpuTimer;
-        if (timer != null) {
-            timer.poll();
-        }
-        if (processor == null) {
-            return;
-        }
-        if (perf.depthHealthRetryPollsRemaining > 0) {
-            perf.depthHealthRetryPollsRemaining--;
-            return;
-        }
-        try {
-            ClientSbsGpuDepthProcessor.HealthSnapshot health =
-                    processor.pollHealthSnapshot();
-            if (health != null) {
-                // A completed, mapped sample is the recovery boundary. A nonthrowing null poll
-                // means only that no fence is ready, so it must not erase the visible failure state.
-                perf.depthHealthConsecutiveFailures = 0;
-                DepthHealthState updated = new DepthHealthState(health);
-                perf.depthHealthState = updated;
-            }
-        } catch (Throwable error) {
-            // Health data is diagnostic only. A driver that rejects asynchronous staging must not
-            // disable otherwise-valid GPU depth rendering. Do not retain a live-looking old sample:
-            // mark health unavailable, then retry with bounded exponential backoff so a transient
-            // map/query failure can recover without turning a persistent driver fault into log spam.
-            perf.depthHealthState = DepthHealthState.READBACK_FAILED;
-            if (perf.depthHealthConsecutiveFailures < Integer.MAX_VALUE) {
-                perf.depthHealthConsecutiveFailures++;
-            }
-            perf.depthHealthRetryPollsRemaining =
-                    ClientSbsPerfStats.healthTelemetryRetryPolls(perf.depthHealthConsecutiveFailures);
-            LimeLog.warning("Client SBS depth health telemetry unavailable; retrying after "
-                    + perf.depthHealthRetryPollsRemaining + " poll opportunities: "
-                    + error.getMessage());
-        }
-    }
-
-    /** Runs only from a draw with this renderer's EGL context current. */
-    private void applyPerformanceSamplingStateOnGlThread() {
-        if (!perf.performanceGlStateResetRequested.getAndSet(false)) {
-            return;
-        }
-
-        ClientSbsGpuTimer oldTimer = perf.gpuTimer;
-        perf.gpuTimer = null;
-        if (oldTimer != null) {
-            try {
-                oldTimer.close();
-            } catch (Throwable error) {
-                LimeLog.warning("Client SBS GPU timer reset failed: " + error.getMessage());
-            }
-        }
-        if (perf.performanceSamplingEnabled) {
-            perf.gpuTimer = ClientSbsGpuTimer.createIfSupported();
-        }
-
-        java.util.Arrays.fill(perf.gpuTimerSampleCounters, 0);
-        perf.gpuTelemetryPollCounter = 0;
-
-        lastThermalStatusPollNs = 0L;
-        currentThermalStatus = PowerManager.THERMAL_STATUS_NONE;
-    }
-
     /**
      * Starts terminal teardown without joining the inference worker on the caller/UI thread.
      *
@@ -2354,9 +2279,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
         outputDrawSequence++;
 
-        applyPerformanceSamplingStateOnGlThread();
+        if (perf.applySamplingStateResetOnGlThread()) {
+            lastThermalStatusPollNs = 0L;
+            currentThermalStatus = PowerManager.THERMAL_STATUS_NONE;
+        }
         // Polls availability only; neither timer queries nor depth-health staging ever wait.
-        pollGpuTelemetry();
+        perf.pollGpuTelemetryOnGlThread(gpuDepthProcessor);
 
         int currentClientSbsGeneration = clientSbsGeneration.get();
         if (activeClientSbsGeneration != currentClientSbsGeneration) {

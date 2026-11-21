@@ -1,5 +1,6 @@
 package com.limelight.utils;
 
+import com.limelight.LimeLog;
 import com.limelight.sbs.ClientSbsGpuDepthProcessor;
 import com.limelight.sbs.ClientSbsGpuTimer;
 import com.limelight.sbs.ClientSbsNearIdenticalPolicy;
@@ -9,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Performance counters, sampling epoch, GPU-timer stride and depth-health polling state of one
- * {@link Stereo3DRenderer}.
+ * {@link Stereo3DRenderer}, and the GL-thread sampling reset and telemetry poll over that state.
  *
  * <p>Counters and the sampling epoch are atomics written by the GL, inference and stats threads;
  * {@link #performanceSampleLock} serializes only window drains and enable/disable edges. The GPU
@@ -248,6 +249,87 @@ final class ClientSbsPerfStats {
 
     static boolean shouldPollHealthTelemetry(boolean diagnosticsEnabled, int pollCounter) {
         return diagnosticsEnabled && shouldPollHealthTelemetry(pollCounter);
+    }
+
+    /**
+     * GL thread only, from a draw with the renderer context current. Applies a pending sampling
+     * reset: replaces the timer ring (created only while sampling) and clears the stride
+     * counters. Returns whether a reset ran, so the renderer can restart its own diagnostic clocks.
+     */
+    boolean applySamplingStateResetOnGlThread() {
+        if (!performanceGlStateResetRequested.getAndSet(false)) {
+            return false;
+        }
+
+        ClientSbsGpuTimer oldTimer = gpuTimer;
+        gpuTimer = null;
+        if (oldTimer != null) {
+            try {
+                oldTimer.close();
+            } catch (Throwable error) {
+                LimeLog.warning("Client SBS GPU timer reset failed: " + error.getMessage());
+            }
+        }
+        if (performanceSamplingEnabled) {
+            gpuTimer = ClientSbsGpuTimer.createIfSupported();
+        }
+
+        java.util.Arrays.fill(gpuTimerSampleCounters, 0);
+        gpuTelemetryPollCounter = 0;
+        return true;
+    }
+
+    /**
+     * GL thread only, once per draw with the renderer context current. Applies a pending era
+     * reset and the health-sampling focus for {@code processor}. While sampling, every
+     * {@link #GPU_TELEMETRY_POLL_STRIDE}-th call polls the timer ring and, outside a readback
+     * backoff, the processor's health snapshot. Neither poll waits.
+     */
+    void pollGpuTelemetryOnGlThread(ClientSbsGpuDepthProcessor processor) {
+        // Both timer queries and the GPU-to-CPU health/evidence ring are diagnostics. Normal
+        // streaming does neither; with performance sampling enabled both are polled once every
+        // GPU_TELEMETRY_POLL_STRIDE calls.
+        applyDepthTelemetryEraResetOnGlThread();
+        int pollCounter = gpuTelemetryPollCounter++;
+        applyHealthSamplingStateOnGlThread(processor);
+        if (!shouldPollHealthTelemetry(performanceSamplingEnabled, pollCounter)) {
+            return;
+        }
+        ClientSbsGpuTimer timer = gpuTimer;
+        if (timer != null) {
+            timer.poll();
+        }
+        if (processor == null) {
+            return;
+        }
+        if (depthHealthRetryPollsRemaining > 0) {
+            depthHealthRetryPollsRemaining--;
+            return;
+        }
+        try {
+            ClientSbsGpuDepthProcessor.HealthSnapshot health =
+                    processor.pollHealthSnapshot();
+            if (health != null) {
+                // A completed, mapped sample is the recovery boundary. A nonthrowing null poll
+                // means only that no fence is ready, so it must not erase the visible failure state.
+                depthHealthConsecutiveFailures = 0;
+                depthHealthState = new DepthHealthState(health);
+            }
+        } catch (Throwable error) {
+            // Health data is diagnostic only. A driver that rejects asynchronous staging must not
+            // disable otherwise-valid GPU depth rendering. Do not retain a live-looking old sample:
+            // mark health unavailable, then retry with bounded exponential backoff so a transient
+            // map/query failure can recover without turning a persistent driver fault into log spam.
+            depthHealthState = DepthHealthState.READBACK_FAILED;
+            if (depthHealthConsecutiveFailures < Integer.MAX_VALUE) {
+                depthHealthConsecutiveFailures++;
+            }
+            depthHealthRetryPollsRemaining =
+                    healthTelemetryRetryPolls(depthHealthConsecutiveFailures);
+            LimeLog.warning("Client SBS depth health telemetry unavailable; retrying after "
+                    + depthHealthRetryPollsRemaining + " poll opportunities: "
+                    + error.getMessage());
+        }
     }
 
     void applyHealthSamplingStateOnGlThread(ClientSbsGpuDepthProcessor processor) {
