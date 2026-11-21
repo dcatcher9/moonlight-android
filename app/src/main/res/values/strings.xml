@@ -986,4 +986,5 @@
     <string name="xr_cinema_environment_passthrough">Passthrough</string>
     <string name="xr_cinema_environment_hint">Choose the system environment in headset settings.</string>
     <string name="xr_cinema_exit">Exit Cinema</string>
+    <string name="xr_setting_pending_live">Active: %1$s &#x00B7; Updating</string>
 </resources>

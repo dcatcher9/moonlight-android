@@ -585,6 +585,16 @@ public class XrStreamPresenter {
                     public boolean settingsControlsEnabled() {
                         return XrStreamPresenter.this.settingsControlsEnabled();
                     }
+
+                    @Override
+                    public ModeStreamQualityModel selectedModeQualityModel() {
+                        for (ModeStreamQualityModel model : modeStreamQualityModels.values()) {
+                            if (model.selected) {
+                                return model;
+                            }
+                        }
+                        return null;
+                    }
                 });
         this.cinemaController = new XrCinemaController(prefConfig,
                 new XrCinemaController.Host() {

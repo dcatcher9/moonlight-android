@@ -11,6 +11,7 @@ import android.widget.TextView;
 import com.limelight.Game;
 import com.limelight.R;
 import com.limelight.preferences.XrChoiceGroup;
+import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.XrBitrateControl;
 
@@ -33,6 +34,12 @@ final class XrSessionSettingsPane {
         XrStreamPresenter.ControlActionListener controlActionListener();
 
         boolean settingsControlsEnabled();
+
+        /**
+         * Live-apply classification of the selected mode's staged quality tuple, which owns the
+         * bitrate row; null before the settings snapshot arrives.
+         */
+        ModeStreamQualityModel selectedModeQualityModel();
     }
 
     private final Activity activity;
@@ -212,7 +219,7 @@ final class XrSessionSettingsPane {
         pending.setPadding(0, dimen(R.dimen.xr_space_xs), 0, 0);
         sessionPendingViews.put(key, pending);
         row.addView(pending);
-        updateSessionPendingView(pending, value);
+        updateSessionPendingView(pending, key, value);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dimen(R.dimen.xr_space_md);
@@ -279,7 +286,7 @@ final class XrSessionSettingsPane {
         pending.setPadding(0, compactSpacing, 0, 0);
         sessionPendingViews.put(key, pending);
         row.addView(pending);
-        updateSessionPendingView(pending, value);
+        updateSessionPendingView(pending, key, value);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dimen(R.dimen.xr_space_md);
@@ -334,14 +341,14 @@ final class XrSessionSettingsPane {
             if (sourceView != null) {
                 sourceView.setText(settingSourceLabel(value.source));
             }
-            updateSessionPendingView(sessionPendingViews.get(key), value);
+            updateSessionPendingView(sessionPendingViews.get(key), key, value);
         }
         if (sessionDefaultsButton != null) {
             sessionDefaultsButton.setEnabled(host.settingsControlsEnabled());
         }
     }
 
-    private void updateSessionPendingView(TextView pending,
+    private void updateSessionPendingView(TextView pending, SessionSettingsModel.Key key,
                                           SessionSettingsModel.Value value) {
         if (pending == null) {
             return;
@@ -353,9 +360,26 @@ final class XrSessionSettingsPane {
         }
         pending.setVisibility(value.hasPendingChange() ? View.VISIBLE : View.GONE);
         if (value.hasPendingChange()) {
-            pending.setText(activity.getString(
-                    R.string.xr_setting_pending_active, value.appliedValue));
+            pending.setText(activity.getString(pendingChangeRequiresReconnect(key, value)
+                            ? R.string.xr_setting_pending_active
+                            : R.string.xr_setting_pending_live,
+                    value.appliedValue));
         }
+    }
+
+    /**
+     * Shared settings carry their own classification. Bitrate is the selected mode's quality, so
+     * that mode's tuple classification decides whether the staged change applies live.
+     */
+    private boolean pendingChangeRequiresReconnect(SessionSettingsModel.Key key,
+                                                   SessionSettingsModel.Value value) {
+        if (key == SessionSettingsModel.Key.BITRATE) {
+            ModeStreamQualityModel selected = host.selectedModeQualityModel();
+            if (selected != null) {
+                return selected.requiresReconnect();
+            }
+        }
+        return value.reconnectRequired;
     }
 
     private LinearLayout panelColumn() {
