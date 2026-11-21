@@ -9,9 +9,8 @@ import android.opengl.GLES31;
 /**
  * GLES 3.1 helpers shared by the Client SBS compute processors.
  *
- * <p>Every method issues exactly the GL calls of the per-processor copy it replaced, in the same
- * order, and must run on the thread that owns the current EGL context. Callers supply their own
- * message text so each processor keeps its established diagnostics.</p>
+ * <p>Every method must run on the thread that owns the current EGL context. Callers supply
+ * their own message text so each processor reports its own diagnostics.</p>
  */
 public final class ClientSbsGlCompute {
     /** A bounded drain prevents a pathological driver from trapping the GL thread. */

@@ -8,8 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>This class has no lock of its own. {@link Stereo3DRenderer} calls {@link #publish},
  * {@link #clear}, {@link #take} and the {@code taken*} accessors only while holding its frame
- * lock, inside the same critical sections that previously touched these fields directly.
- * {@link #hasPendingFrame} reads one atomic flag and may be called without that lock.</p>
+ * lock. {@link #hasPendingFrame} reads one atomic flag and may be called without that lock.</p>
  */
 final class DecoderFrameMailbox {
     private final AtomicBoolean frameAvailable = new AtomicBoolean(false);

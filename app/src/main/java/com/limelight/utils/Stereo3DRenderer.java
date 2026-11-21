@@ -326,7 +326,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     private int surfaceWidth;
     private int surfaceHeight;
-    /** Current-context packed viewport limit used to preflight the optional one-draw path. */
+    /** Current-context viewport width limit that the packed single-draw compose must fit. */
     private int maximumViewportWidth;
     // When >0, the explicit pixel size of the GL output (EGL) surface to render into, overriding the
     // on-screen input/layout holder size. Needed for the XR client-SBS path: the GL output is
@@ -2686,8 +2686,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     pipelineContract.getModelContentAspect());
         }
         if (bindings.downsampleRatio != -1) {
-            // Source pixels per model texel. 1920 -> 350 is 5.5x per axis and 3840 -> 350 is 11x,
-            // which is why the model-input pass integrates a footprint instead of taking one tap.
+            // Source pixels per model texel. 3840x2160 -> 672x384 is about 5.7 x 5.6, which is
+            // why the model-input pass integrates a footprint instead of taking one tap.
             float sourceW = Math.max(sourceWidth, 1);
             float sourceH = Math.max(sourceHeight, 1);
             GLES20.glUniform2f(bindings.downsampleRatio,
@@ -2810,9 +2810,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     /**
-     * Captures the exact color pair and writes LiteRT's packed Float32 input directly into its
-     * shared SSBO. No pixel is mapped into Java; the worker waits on the returned GL fence in its
-     * shared context.
+     * Renders the model input, publishes the near-reuse decision (packing LiteRT's Float32 input
+     * here only when native lazy packing is unavailable), captures the matched color, and queues
+     * the slot's input-ready and previous output-consumed fences for the inference worker. No
+     * pixel is mapped into Java; the worker waits on those fences in its shared context.
      */
     private boolean submitGpuInferenceCapture(ClientSbsGpuInferenceEngine engine,
                                               long inferenceClaimToken) {
@@ -3909,8 +3910,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             outputSurfaceValidationEpoch = 1;
         }
         outputSurfaceValidated = true;
-        // Keep a legal per-eye default. The optional cached-warp path installs a 2W viewport only
-        // after checking it against GL_MAX_VIEWPORT_DIMS; otherwise composition uses two W draws.
+        // Keep a legal per-eye default. The packed compose installs its 2W viewport only after
+        // checking it against GL_MAX_VIEWPORT_DIMS; if it does not fit, the strict route is
+        // disabled and the flat output draws two W viewports.
         GLES20.glViewport(0, 0, sourceWidth, sourceHeight);
         matchedOutputPresented = false;
         if (onSurfaceReadyListener != null && videoSurface != null && videoSurface.isValid()
