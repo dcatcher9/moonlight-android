@@ -119,9 +119,8 @@ Gradle `install*` tasks also honor `ANDROID_SERIAL`.
   or require a virtual display; reconnecting or re-entering Movie 3D resets the format to 2D.
 - Client AI 3D has no strength/convergence/balance parameter panel; the old `render_mode_list`
   and client depth-parameter preferences are not part of the current path.
-- Performance logging is opt-in in both debug and release builds so diagnostics do not perturb
-  latency or frame-pacing measurements. The first update from the former debug-on policy disables
-  that forced value once; subsequent explicit Diagnostics choices persist.
+- There is no performance-logging setting and no periodic performance log line. Performance is
+  read from the in-headset Stats panel, which samples its detailed counters only while it is open.
 - From **Git Bash**, prefix adb commands that pass Unix-style paths (e.g. `run-as`, `/data/...`)
   with `MSYS_NO_PATHCONV=1` so MSYS doesn't mangle the paths.
 
@@ -136,7 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 
 Add `-Assemble` to produce the supported debug APK splits after the tests. PC/JVM tests verify the
 model manifest and aspect-bucket selection, the process-wide single-model lifecycle, two-slot
-scheduling, decoder/presenter transitions, shader contracts, scene-cut state and GPU sources, and
-disjoint timer logic, but cannot execute the Galaxy XR Adreno OpenCL/OpenGL interop path. Follow
+scheduling, decoder/presenter transitions, shader contracts and GPU shader sources, and disjoint
+timer logic, but cannot execute the Galaxy XR Adreno OpenCL/OpenGL interop path. Follow
 [client-sbs-evaluation.md](client-sbs-evaluation.md) for the safe manual native smoke test, stats
 interpretation, HDR/SDR checks, and sustained live-stream comparison.

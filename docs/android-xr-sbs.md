@@ -1119,7 +1119,8 @@ footprint crosses a padding fold.
 
 The settings truly shared by all five modes are **codec, video frame pacing, HDR, stream gamma,
 Full/Limited video range, audio layout, and play audio on the host PC**. The App Settings pane
-edits only this shared set for the current app on the current PC. Global Settings provide the defaults
+edits this shared set for the current app on the current PC, plus the current presentation mode's
+bitrate, which each mode keeps separately. Global Settings provide the defaults
 for both the shared set and the quality baseline inherited independently by each mode.
 
 The factory baseline for a fresh install is **3840 x 2160 at 60 FPS, 200 Mbps, HEVC, HDR, Full
@@ -1336,9 +1337,10 @@ mode row's **Use saved settings** restores only that mode's durable app/PC quali
 restore transient Movie packing or reinterpret legacy Raw's Full/Half field.
 
 The **App Settings** tile opens the left App Settings panel for values saved for the current app on the
-current PC and shared by every mode. Its controls use two short semantic columns: Video (HDR,
-gamma, range, codec) and Delivery (pacing, audio layout, host audio), with large XR-readable labels,
-choice targets, and status text.
+current PC. Its controls use two short semantic columns: Video (HDR, gamma, range, codec) and
+Delivery (pacing, audio layout, host audio, bitrate), with large XR-readable labels, choice targets,
+and status text. Every row except bitrate is shared by all modes; the bitrate row edits the current
+presentation mode's bitrate and says that other modes keep their own.
 Each setting is a distinct raised card under a strong semantic heading; mode options likewise group
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
 surfaces rather than one undifferentiated row.
@@ -1478,11 +1480,13 @@ hidden. This is a soft visibility policy only; it must not alter the dock pose o
 
 ### Stats content and telemetry
 
-Stats remains available in every presentation mode. The removed performance-logging switch no
-longer enables background sampling or periodic `ClientSbsPerf` / `DecoderPerf` log lines. Startup,
-capability, transition, failure, and bounded playback-recovery logs remain available. Closing Stats
-stops its device/CPU sampling, detailed Client-SBS counters, GL timer queries, and asynchronous
-health-copy polling; reopening starts fresh sample windows rather than including hidden time.
+Stats remains available in every presentation mode. There is no performance-logging switch and no
+periodic `ClientSbsPerf` / `DecoderPerf` log line. Startup, capability, transition, failure, and
+bounded playback-recovery logs remain available. Closing Stats stops decoder frame timing, detailed
+Client-SBS counters, GL timer queries, and asynchronous health-copy polling; reopening starts fresh
+sample windows for them rather than including hidden time. Device load (app CPU and device GPU
+busy) is not tied to Stats: the passive glance strip samples it every 2 seconds while the streaming
+Activity is started, and Stats reads the same sampler.
 Host SBS depth-health telemetry follows the same visibility rule: hiding Stats unsubscribes,
 cancels subscription retries, and drops the latest host state and its rate windows; reopening
 requests fresh samples at 100 ms. Late replies cannot restore a hidden subscription. Operational host depth/mode status and
@@ -1507,12 +1511,13 @@ snapshots or histogram copies, and do not sample a pruning clock for absent timi
 Stats retain unchanged row text and share one pending panel-sizing callback, cancelled when the
 panel is hidden or destroyed.
 
-The pane shows negotiated codec/profile and Android decoder, low-latency component/options,
-output-pacing policy, sender/receive/output/release/surface FPS, network/host/decode latency, app
-CPU core-equivalent load, device GPU busy/clock, and Android thermal status. Client SBS adds
-model/backend/input shape, latch/inference/reuse/output FPS, candidate-map bypasses, reuse ratio,
-content/invalid rejection counts, decision-read wall, LiteRT call wall, real result age, and four
-separate GL GPU averages. Exact reuse and age/frame-gap rejection counters are retired.
+The pane shows the video size, HDR/SDR and range, negotiated codec/profile and Android decoder,
+low-latency component/options, output-pacing policy, sender/receive/output/release/surface FPS,
+network bandwidth/loss/RTT, host/decode latency, app CPU core-equivalent load, and device GPU
+busy/clock. Client SBS adds Android thermal status, model/backend/input shape,
+latch/inference/reuse/output FPS, near-identical reuse ratio, host-proven repeats, content/invalid
+rejection counts, decision-read wall, LiteRT call wall, real result age, and four separate GL GPU
+averages. There are no exact-reuse or age/frame-gap rejection counters.
 On updated Apollo-3D hosts, host processing latency measures the current conversion pass through
 packet publication; retained encoder-input repeats carry no processing sample. Accurate source
 content age remains a separate host diagnostic measurement, not part of this processing average.
