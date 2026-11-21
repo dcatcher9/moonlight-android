@@ -126,6 +126,24 @@ public class NvConnection {
         }
     }
 
+    /**
+     * Runs a host-session mutation for a connection that no longer holds the host-session
+     * transaction, such as quitting a session whose stream already stopped. It runs only while no
+     * other connection holds that transaction, so it cannot reach a session another stream is
+     * starting; otherwise it returns false without running.
+     */
+    public static boolean runOutsideActiveConnection(Runnable mutation) {
+        if (!connectionAllowed.tryAcquire()) {
+            return false;
+        }
+        try {
+            mutation.run();
+            return true;
+        } finally {
+            connectionAllowed.release();
+        }
+    }
+
     private void stopNativeConnection() {
         Thread startThread;
         HttpCallScope calls;

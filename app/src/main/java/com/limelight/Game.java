@@ -137,6 +137,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
@@ -285,6 +286,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private Thread connectionStopThread;
     private final List<Runnable> connectionStopCallbacks = new ArrayList<>();
     private boolean connectionNativeStopped;
+    // Set by whichever path sends the user's Quit: the stop thread or quitStoppedHostSession().
+    private final AtomicBoolean hostSessionQuitClaimed = new AtomicBoolean();
     private boolean autoEnterPip = false;
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
@@ -3904,46 +3907,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             // immediately, while the global permit still blocks a replacement host
                             // session through the optional HTTP quit below.
                             publishNativeStopComplete();
-                            if (heldSessionTransaction && httpConn != null && quitOnStop) {
-                                try {
-                                    // startApp() publishes its token before stop completes. Read it
-                                    // here so a Quit racing the HTTP launch can still cancel the
-                                    // exact session that this local generation just created.
-                                    String expectedHostSessionId = sessionHostSessionId;
-                                    boolean sessionEnded = httpConn.quitApp(
-                                            expectedHostSessionId,
-                                            hostSessionIdSupported);
-                                    if (sessionEnded && sessionSettingsStore != null
-                                            && sessionPc != null) {
-                                        if (sessionApp != null && expectedLocalSessionId != null) {
-                                            sessionSettingsStore.edit(sessionPc, sessionApp,
-                                                    expectedLocalSessionId)
-                                                    .setResumeMetadata(
-                                                            new SessionSettingsStore.ResumeMetadata(
-                                                                    false, null,
-                                                                    System.currentTimeMillis()))
-                                                    .commit();
-                                        }
-                                    }
-                                    Game.this.runOnUiThread(() -> {
-                                        if (!isFinishing()) {
-                                            Toast.makeText(Game.this,
-                                                    Game.this.getResources().getString(
-                                                            sessionEnded
-                                                                    ? R.string.applist_quit_success
-                                                                    : R.string.applist_quit_fail)
-                                                            + " " + appName,
-                                                    Toast.LENGTH_LONG).show();
-                                        }
-                                    });
-                                } catch (Exception e) {
-                                    Game.this.runOnUiThread(() -> {
-                                        if (!isFinishing()) {
-                                            Toast.makeText(Game.this, e.getMessage(),
-                                                    Toast.LENGTH_LONG).show();
-                                        }
-                                    });
-                                }
+                            if (heldSessionTransaction && quitOnStop) {
+                                quitHostSessionOnce(expectedLocalSessionId);
                             }
                         });
                     } finally {
@@ -3956,6 +3921,86 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             };
             connectionStopThread.start();
         }
+    }
+
+    /**
+     * Sends the user's Quit for this generation's host session, at most once per Activity. Runs
+     * on a background thread while no other connection holds the host-session transaction.
+     */
+    private void quitHostSessionOnce(String expectedLocalSessionId) {
+        if (httpConn == null || !hostSessionQuitClaimed.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            // startApp() publishes its token before stop completes. Read it
+            // here so a Quit racing the HTTP launch can still cancel the
+            // exact session that this local generation just created.
+            String expectedHostSessionId = sessionHostSessionId;
+            boolean sessionEnded = httpConn.quitApp(
+                    expectedHostSessionId,
+                    hostSessionIdSupported);
+            if (sessionEnded && sessionSettingsStore != null
+                    && sessionPc != null) {
+                if (sessionApp != null && expectedLocalSessionId != null) {
+                    sessionSettingsStore.edit(sessionPc, sessionApp,
+                            expectedLocalSessionId)
+                            .setResumeMetadata(
+                                    new SessionSettingsStore.ResumeMetadata(
+                                            false, null,
+                                            System.currentTimeMillis()))
+                            .commit();
+                }
+            }
+            Game.this.runOnUiThread(() -> {
+                if (!isFinishing()) {
+                    Toast.makeText(Game.this,
+                            Game.this.getResources().getString(
+                                    sessionEnded
+                                            ? R.string.applist_quit_success
+                                            : R.string.applist_quit_fail)
+                                    + " " + appName,
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        } catch (Exception e) {
+            Game.this.runOnUiThread(() -> {
+                if (!isFinishing()) {
+                    Toast.makeText(Game.this, e.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+    }
+
+    /**
+     * Quits the established host session when its connection has already stopped, as it has
+     * while a scheduled reconnect waits for its backoff, the network or the replacement
+     * Activity; no later stop would carry the Quit to the host. A stop still in flight finishes
+     * first, and its own Quit wins when it saw the request.
+     */
+    private void quitStoppedHostSession() {
+        if (connecting || connected || httpConn == null
+                || getHostSessionLaunchRequest(getIntent()).kind
+                        != HostSessionLaunchRequest.Kind.RESUME) {
+            return;
+        }
+        final String expectedLocalSessionId = sessionLocalSessionId;
+        new Thread(() -> {
+            synchronized (connectionStopLock) {
+                while (connectionStopThread != null) {
+                    try {
+                        connectionStopLock.wait();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+            if (!NvConnection.runOutsideActiveConnection(
+                    () -> quitHostSessionOnce(expectedLocalSessionId))) {
+                LimeLog.warning("Another connection owns the host session; not sending Quit");
+            }
+        }, "Artemis host session quit").start();
     }
 
     public void runAfterConnectionStop(Runnable callback) {
@@ -5283,6 +5328,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private void finishAndQuitSession() {
         cancelAutomaticReconnect();
         quitOnStop = true;
+        quitStoppedHostSession();
         finish();
     }
 
