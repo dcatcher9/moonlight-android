@@ -27,41 +27,68 @@ if (-not (Test-Path -LiteralPath $gradleWrapper -PathType Leaf)) {
     throw "Gradle wrapper not found at $gradleWrapper"
 }
 
+# Each class must exist in a JVM test source set. Gradle accepts a --tests filter that
+# matches nothing as long as another filter matches, so a stale name would report green
+# for a test that never ran.
+$focusedTests = @(
+    "com.limelight.sbs.ClientSbsFrameSlotsTest",
+    "com.limelight.sbs.ClientSbsComputeProgramConsistencyTest",
+    "com.limelight.sbs.ClientSbsGpuDepthShadersTest",
+    "com.limelight.sbs.ClientSbsGpuDisparityShadersTest",
+    "com.limelight.sbs.ClientSbsGpuNearReuseClassifierTest",
+    "com.limelight.sbs.ClientSbsGpuNearReuseShadersTest",
+    "com.limelight.sbs.ClientSbsNearIdenticalPolicyTest",
+    "com.limelight.sbs.ClientSbsGpuTimerTest",
+    "com.limelight.binding.video.DecodedVideoDimensionsTest",
+    "com.limelight.binding.video.DecoderModeTransitionGateTest",
+    "com.limelight.binding.video.MediaCodecDecoderRendererTelemetryTest",
+    "com.limelight.binding.video.MediaCodecDecoderRendererTransitionTest",
+    "com.limelight.binding.video.MediaCodecHelperRegularDecoderTest",
+    "com.limelight.preferences.PreferenceConfigurationClientSbsModelMigrationTest",
+    "com.limelight.utils.ClientSbsGpuInferenceEngineTest",
+    "com.limelight.utils.ClientSbsModelArchiveTest",
+    "com.limelight.utils.ClientSbsPackagedModelArchiveTest",
+    "com.limelight.utils.ClientSbsOutputSurfaceValidationTest",
+    "com.limelight.utils.ClientSbsPerformanceSnapshotTest",
+    "com.limelight.utils.ClientSbsSwapProofTest",
+    "com.limelight.utils.ClientSbsModelManifestTest",
+    "com.limelight.utils.Stereo3DRendererSchedulingTest",
+    "com.limelight.utils.ShaderUtilsTest",
+    "com.limelight.ui.ClientSbsResizePolicyTest",
+    "com.limelight.ui.XrStreamPresenterLayoutTest",
+    "com.limelight.ui.XrStreamPresenterTransitionTest",
+    "com.limelight.ui.XrStreamPresenterVideoModeAckTest",
+    "com.limelight.ui.XrViewStateStoreTest"
+)
+
+$testSourceRoots = @(
+    (Join-Path $repoRoot "app\src\test\java"),
+    (Join-Path $repoRoot "app\src\testNonRoot_game\java")
+)
+foreach ($testClass in $focusedTests) {
+    $relativePath = ($testClass -replace "\.", "\") + ".java"
+    $found = $false
+    foreach ($root in $testSourceRoots) {
+        if (Test-Path -LiteralPath (Join-Path $root $relativePath) -PathType Leaf) {
+            $found = $true
+        }
+    }
+    if (-not $found) {
+        throw "Focused test class $testClass has no source in app\src\test or app\src\testNonRoot_game"
+    }
+}
+
+$gradleArgs = @(":app:testNonRoot_gameDebugUnitTest")
+foreach ($testClass in $focusedTests) {
+    $gradleArgs += "--tests"
+    $gradleArgs += $testClass
+}
+$gradleArgs += "--console=plain"
+
 Push-Location $repoRoot
 try {
     Write-Host "Running focused native-GPU Client SBS JVM tests (no device changes)..."
-    & $gradleWrapper `
-        ":app:testNonRoot_gameDebugUnitTest" `
-        "--tests" "com.limelight.sbs.ClientSbsFrameSlotsTest" `
-        "--tests" "com.limelight.sbs.ClientSbsComputeProgramConsistencyTest" `
-        "--tests" "com.limelight.sbs.ClientSbsGpuDepthShadersTest" `
-        "--tests" "com.limelight.sbs.ClientSbsGpuDisparityShadersTest" `
-        "--tests" "com.limelight.sbs.ClientSbsGpuNearReuseClassifierTest" `
-        "--tests" "com.limelight.sbs.ClientSbsGpuNearReuseShadersTest" `
-        "--tests" "com.limelight.sbs.ClientSbsNearIdenticalPolicyTest" `
-        "--tests" "com.limelight.sbs.ClientSbsGpuTimerTest" `
-        "--tests" "com.limelight.binding.video.DecodedVideoDimensionsTest" `
-        "--tests" "com.limelight.binding.video.DecoderModeTransitionGateTest" `
-        "--tests" "com.limelight.binding.video.MediaCodecDecoderRendererTelemetryTest" `
-        "--tests" "com.limelight.binding.video.MediaCodecDecoderRendererTransitionTest" `
-        "--tests" "com.limelight.binding.video.MediaCodecHelperRegularDecoderTest" `
-        "--tests" "com.limelight.preferences.PreferenceConfigurationClientSbsModelMigrationTest" `
-        "--tests" "com.limelight.preferences.PreferenceConfigurationPerformanceLoggingTest" `
-        "--tests" "com.limelight.utils.ClientSbsGpuInferenceEngineTest" `
-        "--tests" "com.limelight.utils.ClientSbsModelArchiveTest" `
-        "--tests" "com.limelight.utils.ClientSbsPackagedModelArchiveTest" `
-        "--tests" "com.limelight.utils.ClientSbsOutputSurfaceValidationTest" `
-        "--tests" "com.limelight.utils.ClientSbsPerformanceSnapshotTest" `
-        "--tests" "com.limelight.utils.ClientSbsSwapProofTest" `
-        "--tests" "com.limelight.utils.ClientSbsModelManifestTest" `
-        "--tests" "com.limelight.utils.Stereo3DRendererSchedulingTest" `
-        "--tests" "com.limelight.utils.ShaderUtilsTest" `
-        "--tests" "com.limelight.ui.ClientSbsResizePolicyTest" `
-        "--tests" "com.limelight.ui.XrStreamPresenterLayoutTest" `
-        "--tests" "com.limelight.ui.XrStreamPresenterTransitionTest" `
-        "--tests" "com.limelight.ui.XrStreamPresenterVideoModeAckTest" `
-        "--tests" "com.limelight.ui.XrViewStateStoreTest" `
-        "--console=plain"
+    & $gradleWrapper @gradleArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Client SBS JVM tests failed with exit code $LASTEXITCODE"
     }
