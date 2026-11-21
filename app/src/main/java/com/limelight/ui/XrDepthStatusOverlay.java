@@ -164,7 +164,7 @@ final class XrDepthStatusOverlay {
     }
 
     void reposition() {
-        if (panel != null) {
+        if (panel != null && !panel.isDisposed()) {
             panel.setPose(overlayPose());
         }
     }

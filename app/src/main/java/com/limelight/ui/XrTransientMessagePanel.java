@@ -78,7 +78,7 @@ final class XrTransientMessagePanel {
     }
 
     void reposition() {
-        if (panel != null) {
+        if (panel != null && !panel.isDisposed()) {
             panel.setPose(XrDepthStatusOverlay.overlayPose());
         }
     }

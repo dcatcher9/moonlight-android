@@ -3,11 +3,13 @@ package com.limelight.ui;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.os.Looper;
@@ -76,6 +78,25 @@ public final class XrTransientMessagePanelTest {
         verify(panel).dispose();
         verify(panel, never()).setEnabled(false);
         assertFalse(messages.show("late", 1000L));
+    }
+
+    @Test
+    public void repositionLeavesADisposedPanelAlone() {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        XrTransientMessagePanel messages = new XrTransientMessagePanel(activity);
+        PanelEntity panel = mock(PanelEntity.class);
+        when(panel.isDisposed()).thenReturn(true);
+        ReflectionHelpers.setField(messages, "panel", panel);
+        messages.reposition();
+
+        XrDepthStatusOverlay overlay = new XrDepthStatusOverlay(activity, () -> false);
+        PanelEntity overlayPanel = mock(PanelEntity.class);
+        when(overlayPanel.isDisposed()).thenReturn(true);
+        ReflectionHelpers.setField(overlay, "panel", overlayPanel);
+        overlay.reposition();
+
+        verify(panel, never()).setPose(any());
+        verify(overlayPanel, never()).setPose(any());
     }
 
     private static void idle(long millis) {
