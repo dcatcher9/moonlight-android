@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
@@ -165,9 +166,13 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      */
     private final Object gpuBufferOwnershipLock = new Object();
     private final Object frameLock = new Object();
-    private final Object firstModeEntryFrameLock = new Object();
-    /** True only from a Client-entry attach until that generation receives its first decoder frame. */
-    private volatile boolean awaitingFirstModeEntryFrame;
+    private final ClientSbsFirstFrameGate firstModeEntryFrameGate = new ClientSbsFirstFrameGate();
+    /** Evaluated by the gate under its own monitor; reads only volatile or GL-thread state. */
+    private final BooleanSupplier modeEntryFrameWaitActive =
+            () -> this.clientSbs && !this.shuttingDown.get();
+    private final BooleanSupplier freshModeEntryFrame = () -> hasFreshModeEntryFrame(
+            this.decoderFrameMailbox.hasPendingFrame(), this.hasFrameForActiveGeneration,
+            this.activeClientSbsGeneration, this.clientSbsGeneration.get());
     private final FloatBuffer quadVertexBuffer;
     private final FloatBuffer textureVertexBuffer;
     private final FloatBuffer oesTextureVertexBuffer;
@@ -852,7 +857,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // by the retiring registration until onSurfaceChanged() installs the new SurfaceTexture.
         invalidateFrameCallbackRegistration();
         clearClientSbsModeSwitchCompletion();
-        awaitingFirstModeEntryFrame = true;
+        firstModeEntryFrameGate.arm();
         invalidateQueuedFrameDrain();
         cancelStaleDepthWatchdog();
         synchronized (frameLock) {
@@ -1293,9 +1298,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // first new-generation callback from scheduling the event that would re-arm latching.
             queueFrameDrain(surfaceTexture, callbackGeneration);
         }
-        synchronized (firstModeEntryFrameLock) {
-            firstModeEntryFrameLock.notifyAll();
-        }
+        firstModeEntryFrameGate.signal();
     }
 
     static boolean isFrameCallbackCurrent(long callbackToken, long activeToken,
@@ -2347,43 +2350,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /** Holds the initial EGL callback so it cannot submit an empty buffer over SceneCore's old one. */
     private boolean awaitFirstModeEntryFrameIfNeeded() {
-        if (!awaitingFirstModeEntryFrame) {
-            return true;
-        }
-        long startedNs = System.nanoTime();
-        long deadlineNs = startedNs
-                + TimeUnit.MILLISECONDS.toNanos(MODE_ENTRY_FIRST_FRAME_WAIT_MS);
-        LimeLog.info("Client SBS holding initial EGL swap for a fresh decoder frame");
-        synchronized (firstModeEntryFrameLock) {
-            while (awaitingFirstModeEntryFrame && clientSbs && !shuttingDown.get()
-                    && !hasFreshModeEntryFrame(
-                    decoderFrameMailbox.hasPendingFrame(), hasFrameForActiveGeneration,
-                    activeClientSbsGeneration, clientSbsGeneration.get())) {
-                long remainingNs = deadlineNs - System.nanoTime();
-                if (remainingNs <= 0L) {
-                    awaitingFirstModeEntryFrame = false;
-                    LimeLog.severe("Client SBS first-frame hold timed out before decoder output");
-                    return false;
-                }
-                try {
-                    TimeUnit.NANOSECONDS.timedWait(firstModeEntryFrameLock, remainingNs);
-                } catch (InterruptedException error) {
-                    Thread.currentThread().interrupt();
-                    awaitingFirstModeEntryFrame = false;
-                    return false;
-                }
-            }
-            boolean ready = clientSbs && !shuttingDown.get()
-                    && hasFreshModeEntryFrame(
-                    decoderFrameMailbox.hasPendingFrame(), hasFrameForActiveGeneration,
-                    activeClientSbsGeneration, clientSbsGeneration.get());
-            awaitingFirstModeEntryFrame = false;
-            if (ready) {
-                LimeLog.info("Client SBS fresh decoder frame released initial EGL swap after "
-                        + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNs) + " ms");
-            }
-            return ready;
-        }
+        return firstModeEntryFrameGate.awaitIfNeeded(MODE_ENTRY_FIRST_FRAME_WAIT_MS,
+                modeEntryFrameWaitActive, freshModeEntryFrame);
     }
 
     /** A queued no-swap drain may already have consumed the callback into this exact generation. */
@@ -2394,10 +2362,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     private void cancelFirstModeEntryFrameWait() {
-        synchronized (firstModeEntryFrameLock) {
-            awaitingFirstModeEntryFrame = false;
-            firstModeEntryFrameLock.notifyAll();
-        }
+        firstModeEntryFrameGate.cancel();
     }
 
     private void schedulePresentationCompletionAfterSwap() {
