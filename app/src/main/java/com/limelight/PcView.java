@@ -153,6 +153,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private boolean contextMenuHostSessionIdSupported;
     private boolean contextMenuOpen;
     private PopupMenu computerActionsPopup;
+    private boolean computerManagerBound;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
@@ -301,8 +302,8 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         UiHelper.setLocale(this);
 
         // Bind to the computer manager service
-        bindService(new Intent(PcView.this, ComputerManagerService.class), serviceConnection,
-                Service.BIND_AUTO_CREATE);
+        computerManagerBound = bindService(new Intent(PcView.this, ComputerManagerService.class),
+                serviceConnection, Service.BIND_AUTO_CREATE);
 
         pcGridAdapter = new PcGridAdapter(this, PreferenceConfiguration.readPreferences(this));
 
@@ -373,7 +374,9 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         pairingInProgress = false;
         super.onDestroy();
 
-        if (managerBinder != null) {
+        // The binding, not managerBinder, decides: the bind thread may not have published it yet.
+        if (computerManagerBound) {
+            computerManagerBound = false;
             unbindService(serviceConnection);
         }
     }

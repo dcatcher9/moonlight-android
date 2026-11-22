@@ -98,6 +98,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     public final static String SHOW_HIDDEN_APPS_EXTRA = "ShowHiddenApps";
 
     private ComputerManagerService.ComputerManagerBinder managerBinder;
+    private boolean computerManagerBound;
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         public void onServiceConnected(ComponentName className, IBinder binder) {
             final ComputerManagerService.ComputerManagerBinder localBinder =
@@ -405,8 +406,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         this.prefConfig = PreferenceConfiguration.readPreferences(this);
 
         // Bind to the computer manager service
-        bindService(new Intent(this, ComputerManagerService.class), serviceConnection,
-                Service.BIND_AUTO_CREATE);
+        computerManagerBound = bindService(new Intent(this, ComputerManagerService.class),
+                serviceConnection, Service.BIND_AUTO_CREATE);
     }
 
     private void updateHiddenApps(boolean hideImmediately) {
@@ -454,7 +455,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         SpinnerDialog.closeDialogs(this);
         Dialog.closeDialogs();
 
-        if (managerBinder != null) {
+        // The binding, not managerBinder, decides: the bind thread can exit before publishing it.
+        if (computerManagerBound) {
+            computerManagerBound = false;
             unbindService(serviceConnection);
         }
     }
