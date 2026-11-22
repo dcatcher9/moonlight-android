@@ -100,22 +100,6 @@ public class MediaCodecDecoderRendererTelemetryTest {
     }
 
     @Test
-    public void effectiveColorRangeMakesTheRequestedFallbackExplicit() {
-        assertEquals(MoonBridge.COLOR_RANGE_FULL,
-                MediaCodecDecoderRenderer.resolveEffectiveColorRange(
-                        MediaCodecDecoderRenderer.ActualColorRange.UNKNOWN,
-                        MoonBridge.COLOR_RANGE_FULL));
-        assertEquals(MoonBridge.COLOR_RANGE_LIMITED,
-                MediaCodecDecoderRenderer.resolveEffectiveColorRange(
-                        MediaCodecDecoderRenderer.ActualColorRange.UNRECOGNIZED,
-                        MoonBridge.COLOR_RANGE_LIMITED));
-        assertEquals(MoonBridge.COLOR_RANGE_LIMITED,
-                MediaCodecDecoderRenderer.resolveEffectiveColorRange(
-                        MediaCodecDecoderRenderer.ActualColorRange.LIMITED,
-                        MoonBridge.COLOR_RANGE_FULL));
-    }
-
-    @Test
     public void enablingTelemetryStartsACoherentWindowWithoutLosingAggregateStats() {
         VideoStats active = new VideoStats();
         active.measurementStartTimestamp = 100;

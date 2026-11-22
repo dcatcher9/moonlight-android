@@ -924,27 +924,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 currentOutputFormat, MediaFormat.KEY_COLOR_RANGE));
     }
 
-    static int resolveEffectiveColorRange(ActualColorRange actualRange, int preferredRange) {
-        switch (actualRange) {
-            case FULL:
-                return MoonBridge.COLOR_RANGE_FULL;
-            case LIMITED:
-                return MoonBridge.COLOR_RANGE_LIMITED;
-            case UNKNOWN:
-            case UNRECOGNIZED:
-            default:
-                return preferredRange;
-        }
-    }
-
-    /**
-     * Returns the decoder-reported range when known, otherwise the requested range. Rendering code
-     * that must choose a concrete range should use this explicitly named fallback API.
-     */
-    public int getEffectiveColorRange() {
-        return resolveEffectiveColorRange(getActualColorRange(), getPreferredColorRange());
-    }
-
     private String describeActualColorRange() {
         switch (getActualColorRange()) {
             case FULL:
