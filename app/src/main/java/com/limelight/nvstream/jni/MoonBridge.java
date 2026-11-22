@@ -22,7 +22,6 @@ public class MoonBridge {
     public static final int VIDEO_FORMAT_MASK_AV1 = 0xF000;
     public static final int VIDEO_FORMAT_MASK_10BIT = 0x2200;
 
-    public static final int SERVER_CODEC_MODE_H264 = 0x00000001;
     public static final int SERVER_CODEC_MODE_HEVC = 0x00000100;
     public static final int SERVER_CODEC_MODE_HEVC_MAIN10 = 0x00000200;
     public static final int SERVER_CODEC_MODE_AV1_MAIN8 = 0x00010000;
@@ -64,14 +63,6 @@ public class MoonBridge {
     public static final int ML_ERROR_UNEXPECTED_EARLY_TERMINATION = -102;
     public static final int ML_ERROR_PROTECTED_CONTENT = -103;
     public static final int ML_ERROR_FRAME_CONVERSION = -104;
-
-    public static final int ML_PORT_INDEX_TCP_47984 = 0;
-    public static final int ML_PORT_INDEX_TCP_47989 = 1;
-    public static final int ML_PORT_INDEX_TCP_48010 = 2;
-    public static final int ML_PORT_INDEX_UDP_47998 = 8;
-    public static final int ML_PORT_INDEX_UDP_47999 = 9;
-    public static final int ML_PORT_INDEX_UDP_48000 = 10;
-    public static final int ML_PORT_INDEX_UDP_48010 = 11;
 
     public static final int ML_PORT_FLAG_ALL = 0xFFFFFFFF;
     public static final int ML_PORT_FLAG_TCP_47984 = 0x0001;
@@ -245,14 +236,7 @@ public class MoonBridge {
         }
     }
 
-    //todo 不显示画面
-    public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
-                                               int frameNumber, int frameType, char frameHostProcessingLatency,
-                                               long receiveTimeMs, long enqueueTimeMs) {
-        return bridgeDrSubmitDecodeUnit(decodeUnitData, decodeUnitLength, decodeUnitType,
-                frameNumber, frameType, frameHostProcessingLatency, 0, receiveTimeMs, enqueueTimeMs);
-    }
-
+    // Called from native code; callbacks.c looks it up by name and signature.
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
                                                int frameSourceId, long receiveTimeMs, long enqueueTimeMs) {
@@ -473,11 +457,6 @@ public class MoonBridge {
     public static final int GAME_SOURCE_WAITING = 0;
     public static final int GAME_SOURCE_READY = 1;
     public static final int GAME_SOURCE_UNSUPPORTED = 2;
-    public static final int GAME_PROVIDER_NONE = 0;
-    public static final int GAME_PROVIDER_RESHADE = 1;
-
-    /** Host/client-negotiated exact encoder-input identity in frame headers. */
-    public static final int LI_FF_SOURCE_FRAME_ID_V1 = 0x10000000;
 
     /** Host/client-negotiated atomic presentation transaction support. */
     public static final int LI_FF_ATOMIC_PRESENTATION_MODE_V2 = 0x20000000;
