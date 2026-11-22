@@ -321,11 +321,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
 
-    // Direct submission invokes MediaCodec from the native receive thread. A blocked codec input
-    // buffer then prevents that thread from draining UDP, so use moonlight-common-c's dedicated
-    // decoder thread and bounded queue instead. The selected hardware decoder and its low-latency
-    // MediaFormat options are unchanged.
-    private static final boolean ENABLE_DIRECT_SUBMIT = false;
     // The native VideoDec callback thread otherwise inherits ordinary app scheduling priority.
     private final PlaybackThreadPriority inputThreadPriority =
             new PlaybackThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
@@ -363,7 +358,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private volatile MediaCodec videoDecoder;
     private Thread rendererThread;
     private boolean needsSpsBitstreamFixup, isExynos4;
-    private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
+    private boolean adaptivePlayback, fusedIdrFrame;
     private boolean constrainedHighProfile;
     private boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
     private byte optimalSlicesPerFrame;
@@ -977,21 +972,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         int avcOptimalSlicesPerFrame = 0;
         int hevcOptimalSlicesPerFrame = 0;
         if (avcDecoder != null) {
-            directSubmit = shouldUseDirectSubmit(
-                    MediaCodecHelper.decoderCanDirectSubmit(avcDecoder.getName()));
             refFrameInvalidationAvc = MediaCodecHelper.decoderSupportsRefFrameInvalidationAvc(avcDecoder.getName(), requestedHeight);
             avcOptimalSlicesPerFrame = MediaCodecHelper.getDecoderOptimalSlicesPerFrame(avcDecoder.getName());
 
-            if (directSubmit) {
-                LimeLog.info("Decoder "+avcDecoder.getName()+" will use direct submit");
-            }
             if (refFrameInvalidationAvc) {
                 LimeLog.info("Decoder "+avcDecoder.getName()+" will use reference frame invalidation for AVC");
             }
             LimeLog.info("Decoder "+avcDecoder.getName()+" wants "+avcOptimalSlicesPerFrame+" slices per frame");
         }
-        LimeLog.info("Video decoder submission: "
-                + (directSubmit ? "direct" : "buffered (network receive decoupled)"));
 
         if (hevcDecoder != null) {
             refFrameInvalidationHevc = MediaCodecHelper.decoderSupportsRefFrameInvalidationHevc(hevcDecoder);
@@ -1938,9 +1926,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 && !applyingHdrMetadata;
     }
 
-    static boolean shouldUseDirectSubmit(boolean decoderSupportsDirectSubmit) {
-        return ENABLE_DIRECT_SUBMIT && decoderSupportsDirectSubmit;
-    }
 
     static int countMissingFrames(int previousFrameNumber, int frameNumber,
                                   boolean intentionalDiscontinuity) {
@@ -3291,7 +3276,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         decoder,
                         MediaCodecHelper.isDedicatedLowLatencyDecoderName(decoder),
                         requestsDecoderLowLatency(configuredFormat),
-                        directSubmit,
                         describeOutputPacing(prefs.framePacing),
                         actualVideoRange);
                 if (performanceTelemetryEnabled) {
@@ -3567,11 +3551,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             capabilities |= MoonBridge.CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
         }
 
-        // Enable direct submit on supported hardware
-        if (directSubmit) {
-            capabilities |= MoonBridge.CAPABILITY_DIRECT_SUBMIT;
-        }
-
+        // CAPABILITY_DIRECT_SUBMIT is never requested. Direct submission would call MediaCodec
+        // from the native receive thread, where a blocked codec input buffer stops UDP draining;
+        // moonlight-common-c's decoder thread and bounded queue feed submitDecodeUnit() instead.
         return capabilities;
     }
 

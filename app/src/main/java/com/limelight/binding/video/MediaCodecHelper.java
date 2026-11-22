@@ -35,7 +35,7 @@ public class MediaCodecHelper {
     private static final List<String> spsFixupBitstreamFixupDecoderPrefixes;
     private static final List<String> blacklistedAdaptivePlaybackPrefixes;
     private static final List<String> baselineProfileHackPrefixes;
-    private static final List<String> directSubmitPrefixes;
+
     private static final List<String> constrainedHighProfilePrefixes;
     private static final List<String> whitelistedHevcDecoders;
     private static final List<String> refFrameInvalidationAvcPrefixes;
@@ -57,23 +57,6 @@ public class MediaCodecHelper {
     private static boolean isAdreno620 = false;
     private static boolean initialized = false;
 
-    static {
-        directSubmitPrefixes = new LinkedList<>();
-
-        // These decoders have low enough input buffer latency that they
-        // can be directly invoked from the receive thread
-        directSubmitPrefixes.add("omx.qcom");
-        directSubmitPrefixes.add("omx.sec");
-        directSubmitPrefixes.add("omx.exynos");
-        directSubmitPrefixes.add("omx.intel");
-        directSubmitPrefixes.add("omx.brcm");
-        directSubmitPrefixes.add("omx.TI");
-        directSubmitPrefixes.add("omx.arc");
-        directSubmitPrefixes.add("omx.nvidia");
-
-        // All Codec2 decoders
-        directSubmitPrefixes.add("c2.");
-    }
 
     static {
         refFrameInvalidationAvcPrefixes = new LinkedList<>();
@@ -741,9 +724,6 @@ public class MediaCodecHelper {
         return isDecoderInList(constrainedHighProfilePrefixes, decoderName);
     }
 
-    public static boolean decoderCanDirectSubmit(String decoderName) {
-        return isDecoderInList(directSubmitPrefixes, decoderName) && !isExynos4Device();
-    }
 
     public static boolean decoderNeedsSpsBitstreamRestrictions(String decoderName) {
         return isDecoderInList(spsFixupBitstreamFixupDecoderPrefixes, decoderName);

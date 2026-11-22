@@ -62,11 +62,6 @@ public class MediaCodecDecoderRendererTelemetryTest {
                         PreferenceConfiguration.FRAME_PACING_BALANCED));
     }
 
-    @Test
-    public void directSubmitRemainsDisabledWhenCodecSupportsIt() {
-        assertFalse(MediaCodecDecoderRenderer.shouldUseDirectSubmit(true));
-        assertFalse(MediaCodecDecoderRenderer.shouldUseDirectSubmit(false));
-    }
 
     @Test
     public void inputBufferHangDeadlineIsEnforcedInsideTheDequeueLoop() {

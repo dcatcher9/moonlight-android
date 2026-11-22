@@ -33,7 +33,7 @@ public final class StreamPerformanceSnapshot {
     private final String decoderName;
     private final boolean dedicatedLowLatencyDecoder;
     private final boolean decoderLowLatencyRequested;
-    private final boolean directDecoderSubmission;
+
     private final String outputPacingDescription;
     private final String videoRange;
 
@@ -60,7 +60,7 @@ public final class StreamPerformanceSnapshot {
                                      String decoderName,
                                      boolean dedicatedLowLatencyDecoder,
                                      boolean decoderLowLatencyRequested,
-                                     boolean directDecoderSubmission,
+
                                      String outputPacingDescription,
                                      String videoRange) {
         this.elapsedMs = elapsedMs;
@@ -86,7 +86,7 @@ public final class StreamPerformanceSnapshot {
         this.decoderName = decoderName;
         this.dedicatedLowLatencyDecoder = dedicatedLowLatencyDecoder;
         this.decoderLowLatencyRequested = decoderLowLatencyRequested;
-        this.directDecoderSubmission = directDecoderSubmission;
+
         this.outputPacingDescription = outputPacingDescription;
         this.videoRange = videoRange;
     }
@@ -213,10 +213,6 @@ public final class StreamPerformanceSnapshot {
         return decoderLowLatencyRequested;
     }
 
-    /** Whether MediaCodec input submission runs synchronously on the native receive thread. */
-    public boolean isDirectDecoderSubmission() {
-        return directDecoderSubmission;
-    }
 
     /** Artemis' output-buffer release policy, separate from the decoder's operating mode. */
     public String getOutputPacingDescription() {
