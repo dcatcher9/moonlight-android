@@ -934,8 +934,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                      CrashListener crashListener, int consecutiveCrashCount,
                                      boolean meteredData, boolean requestedHdr, boolean invertResolution,
                                      String glRenderer, PerfOverlayListener perfListener) {
-        //dumpDecoders();
-
         this.modeTransitionHandler = new Handler(Looper.getMainLooper());
         this.context = activity;
         this.activity = activity;

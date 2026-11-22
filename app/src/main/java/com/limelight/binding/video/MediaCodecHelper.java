@@ -30,7 +30,6 @@ public class MediaCodecHelper {
     private static final Pattern DEDICATED_LOW_LATENCY_COMPONENT_PATTERN = Pattern.compile(
             "(^|[._-])low[._-]?latency($|[._-])", Pattern.CASE_INSENSITIVE);
 
-    private static final List<String> preferredDecoders;
 
     private static final List<String> blacklistedDecoderPrefixes;
     private static final List<String> spsFixupBitstreamFixupDecoderPrefixes;
@@ -86,9 +85,6 @@ public class MediaCodecHelper {
         // Qualcomm and NVIDIA may be added at runtime
     }
 
-    static {
-        preferredDecoders = new LinkedList<>();
-    }
 
     static {
         blacklistedDecoderPrefixes = new LinkedList<>();
@@ -887,55 +883,6 @@ public class MediaCodecHelper {
         return infoList;
     }
 
-    @SuppressWarnings("RedundantThrows")
-    public static String dumpDecoders() throws Exception {
-        String str = "";
-        for (MediaCodecInfo codecInfo : getMediaCodecList()) {
-            // Skip encoders
-            if (codecInfo.isEncoder()) {
-                continue;
-            }
-
-            str += "Decoder: "+codecInfo.getName()+"\n";
-            for (String type : codecInfo.getSupportedTypes()) {
-                str += "\t"+type+"\n";
-                CodecCapabilities caps = codecInfo.getCapabilitiesForType(type);
-
-                for (CodecProfileLevel profile : caps.profileLevels) {
-                    str += "\t\t"+profile.profile+" "+profile.level+"\n";
-                }
-            }
-        }
-        return str;
-    }
-
-    private static MediaCodecInfo findPreferredDecoder() {
-        // This is a different algorithm than the other findXXXDecoder functions,
-        // because we want to evaluate the decoders in our list's order
-        // rather than MediaCodecList's order
-
-        if (!initialized) {
-            throw new IllegalStateException("MediaCodecHelper must be initialized before use");
-        }
-
-        for (String preferredDecoder : preferredDecoders) {
-            for (MediaCodecInfo codecInfo : getMediaCodecList()) {
-                // Skip encoders
-                if (codecInfo.isEncoder()) {
-                    continue;
-                }
-
-                // Check for preferred decoders
-                if (preferredDecoder.equalsIgnoreCase(codecInfo.getName())) {
-                    LimeLog.info("Preferred decoder choice is "+codecInfo.getName());
-                    return codecInfo;
-                }
-            }
-        }
-
-        return null;
-    }
-
     private static boolean isCodecBlacklisted(MediaCodecInfo codecInfo) {
         // Use the new isSoftwareOnly() function on Android Q
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -998,13 +945,7 @@ public class MediaCodecHelper {
     }
 
     public static MediaCodecInfo findProbableSafeDecoder(String mimeType, int requiredProfile) {
-        // First look for a preferred decoder by name
-        MediaCodecInfo info = findPreferredDecoder();
-        if (info != null) {
-            return info;
-        }
-
-        // Now look for decoders we know are safe
+        // Look for decoders we know are safe
         try {
             // If this function completes, it will determine if the decoder is safe
             return findKnownSafeDecoder(mimeType, requiredProfile);
@@ -1023,27 +964,12 @@ public class MediaCodecHelper {
      */
     public static MediaCodecInfo findProbableSafeRegularDecoder(String mimeType,
                                                                 int requiredProfile) {
-        MediaCodecInfo info = findPreferredDecoder();
-        if (info != null && decoderSupportsMimeType(info, mimeType)
-                && !isDedicatedLowLatencyDecoderName(info.getName())) {
-            return info;
-        }
-
         try {
             return findKnownSafeDecoder(mimeType, requiredProfile, true);
         }
         catch (Exception e) {
             return findFirstDecoder(mimeType, true);
         }
-    }
-
-    private static boolean decoderSupportsMimeType(MediaCodecInfo codecInfo, String mimeType) {
-        for (String supportedType : codecInfo.getSupportedTypes()) {
-            if (supportedType.equalsIgnoreCase(mimeType)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     static boolean isDedicatedLowLatencyDecoderName(String decoderName) {
