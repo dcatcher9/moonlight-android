@@ -20,7 +20,6 @@ public class StreamConfiguration {
     private int clientRefreshRateX100;
     private int bitrate;
     private boolean sops;
-    private boolean enableAdaptiveResolution;
     private boolean playLocalAudio;
     private int maxPacketSize;
     private int remote;
@@ -28,7 +27,6 @@ public class StreamConfiguration {
     private int supportedVideoFormats;
     private int colorRange;
     private int colorSpace;
-    private boolean enableUltraLowLatency;
     private int initialSbsMode;
     private StreamGamma streamGamma = StreamGamma.WINDOWS_DEFAULT;
     private HostSessionLaunchRequest launchRequest = HostSessionLaunchRequest.start();
@@ -87,11 +85,6 @@ public class StreamConfiguration {
             return this;
         }
         
-        public StreamConfiguration.Builder enableAdaptiveResolution(boolean enable) {
-            config.enableAdaptiveResolution = enable;
-            return this;
-        }
-        
         public StreamConfiguration.Builder enableLocalAudioPlayback(boolean enable) {
             config.playLocalAudio = enable;
             return this;
@@ -124,11 +117,6 @@ public class StreamConfiguration {
 
         public StreamConfiguration.Builder setColorSpace(int colorSpace) {
             config.colorSpace = colorSpace;
-            return this;
-        }
-
-        public StreamConfiguration.Builder setEnableUltraLowLatency(boolean enable) {
-            config.enableUltraLowLatency = enable;
             return this;
         }
 
@@ -169,10 +157,8 @@ public class StreamConfiguration {
         this.maxPacketSize = 1024;
         this.remote = STREAM_CFG_AUTO;
         this.sops = true;
-        this.enableAdaptiveResolution = false;
         this.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_STEREO;
         this.supportedVideoFormats = MoonBridge.VIDEO_FORMAT_H264;
-        this.enableUltraLowLatency = false;
         this.initialSbsMode = MoonBridge.SBS_MODE_OFF;
     }
     
@@ -222,10 +208,6 @@ public class StreamConfiguration {
         return sops;
     }
     
-    public boolean getAdaptiveResolutionEnabled() {
-        return enableAdaptiveResolution;
-    }
-    
     public boolean getPlayLocalAudio() {
         return playLocalAudio;
     }
@@ -252,10 +234,6 @@ public class StreamConfiguration {
 
     public int getColorSpace() {
         return colorSpace;
-    }
-
-    public boolean getEnableUltraLowLatency() {
-        return enableUltraLowLatency;
     }
 
     public int getInitialSbsMode() {

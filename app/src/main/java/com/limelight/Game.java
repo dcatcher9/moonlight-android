@@ -1518,7 +1518,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setVirtualDisplayOnly(prefConfig.virtualDisplayOnly)
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
-                .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
                 .setBitrate(isMetered ? prefConfig.meteredBitrate: prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
