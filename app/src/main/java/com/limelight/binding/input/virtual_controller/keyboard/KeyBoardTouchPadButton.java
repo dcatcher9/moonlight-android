@@ -174,8 +174,12 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
         }
     }
 
+    // True between a click callback, which presses the mouse button, and its release callback.
+    private boolean buttonDownSent;
+
     private void onClickCallback() {
         _DBG("clicked");
+        buttonDownSent = true;
         // notify listeners
         for (DigitalButtonListener listener : listeners) {
             listener.onClick();
@@ -203,9 +207,13 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
 
     private void onReleaseCallback() {
         _DBG("released");
-        // notify listeners
-        for (DigitalButtonListener listener : listeners) {
-            listener.onRelease();
+        // A drag that never pressed the button must not release it on the host.
+        if (buttonDownSent) {
+            buttonDownSent = false;
+            // notify listeners
+            for (DigitalButtonListener listener : listeners) {
+                listener.onRelease();
+            }
         }
 
         // We may be called for a release without a prior click
@@ -266,7 +274,9 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
             case MotionEvent.ACTION_CANCEL:
             case MotionEvent.ACTION_UP: {
                 setPressed(false);
-                if (event.getEventTime() - originalTouchTime <= 200) {
+                // A cancelled gesture is not a tap.
+                if (action == MotionEvent.ACTION_UP
+                        && event.getEventTime() - originalTouchTime <= 200) {
                     onClickCallback();
                 }
                 onReleaseCallback();
