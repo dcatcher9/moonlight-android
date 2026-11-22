@@ -4987,12 +4987,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void onPerfUpdate(final String text) {
-        onPerfUpdate(null, text);
-    }
-
-    @Override
-    public void onPerfUpdate(final StreamPerformanceSnapshot snapshot, final String text) {
+    public void onPerfUpdate(final StreamPerformanceSnapshot snapshot) {
         final StreamContainer currentContainer = streamContainer;
         final XrStreamPresenter currentPresenter = currentContainer != null
                 ? currentContainer.getXrPresenter() : null;

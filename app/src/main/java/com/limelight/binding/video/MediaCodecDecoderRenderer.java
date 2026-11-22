@@ -3019,7 +3019,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         describeOutputPacing(prefs.framePacing),
                         actualVideoRange);
                 if (performanceTelemetryEnabled) {
-                    perfListener.onPerfUpdate(performanceSnapshot, "");
+                    perfListener.onPerfUpdate(performanceSnapshot);
                 }
             }
         }
