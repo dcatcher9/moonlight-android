@@ -390,11 +390,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
 
-        if (PreferenceConfiguration.readPreferences(context).onscreenController) {
-            LimeLog.info("Counting OSC gamepad");
-            mask |= 1;
-        }
-
         LimeLog.info("Enumerated "+count+" gamepads");
         return mask;
     }
@@ -2148,7 +2143,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // If we didn't find a matching device, it must be the on-screen
             // controls that triggered the rumble. Vibrate the device if
             // the user has requested that behavior.
-            if (!foundMatchingDevice && prefConfig.onscreenController && !prefConfig.onlyL3R3 && prefConfig.vibrateOsc) {
+            if (!foundMatchingDevice && prefConfig.onscreenController) {
                 rumbleSingleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
             }
             else if (foundMatchingDevice && !vibrated && prefConfig.vibrateFallbackToDevice) {
@@ -2435,7 +2430,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // any action.
             if ((context.inputMap & ControllerPacket.PLAY_FLAG) != 0 &&
                     context.startUpTime - context.startDownTime > ControllerHandler.START_DOWN_TIME_MOUSE_MODE_MS) {
-                if (prefConfig.enableBackMenu && context.backMenuPending){
+                if (context.backMenuPending){
                     //todo 展示快捷菜单
                     context.backMenuPending = false;
                     gestures.showGameMenu(context);

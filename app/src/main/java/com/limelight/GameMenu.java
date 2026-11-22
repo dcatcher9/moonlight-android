@@ -16,7 +16,6 @@ import android.widget.Toast;
 
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
-import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.KeyConfigHelper;
 import com.limelight.utils.KeyMapper;
 
@@ -154,49 +153,47 @@ public class GameMenu implements Game.GameMenuCallbacks {
     private void showSpecialKeysMenu() {
         List<MenuOption> options = new ArrayList<>();
 
-        if(!PreferenceConfiguration.readPreferences(game).disableDefaultExtraKeys){
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_esc),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_ESCAPE})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_esc),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_ESCAPE})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_f11),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_F11})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_f11),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_F11})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_alt_f4),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_F4})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_alt_f4),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_F4})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_alt_enter),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_RETURN})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_alt_enter),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_RETURN})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_v),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_V})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_v),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_V})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_win),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_win),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_win_d),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_D})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_win_d),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_D})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_win_g),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_G})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_win_g),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_G})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_alt_tab),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_TAB})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_alt_tab),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL, KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_TAB})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_shift_tab),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_TAB})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_shift_tab),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_TAB})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_win_shift_left),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_LEFT})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_win_shift_left),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_LEFT})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_alt_shift_f1),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL,KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_F1})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_alt_shift_f1),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL,KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_F1})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_alt_shift_f12),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL,KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_F12})));
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_ctrl_alt_shift_f12),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL,KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_F12})));
 
-            options.add(new MenuOption(getString(R.string.game_menu_send_keys_alt_b),
-                    () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_B})));
-        }
+        options.add(new MenuOption(getString(R.string.game_menu_send_keys_alt_b),
+                () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_B})));
 
         // Import custom shortcuts
         SharedPreferences preferences = game.getSharedPreferences(PREF_NAME, Activity.MODE_PRIVATE);

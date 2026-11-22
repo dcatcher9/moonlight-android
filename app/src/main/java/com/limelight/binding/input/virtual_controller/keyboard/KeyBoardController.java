@@ -30,7 +30,6 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.input.ControllerHandler;
 import com.limelight.nvstream.NvConnection;
-import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.KeyConfigHelper;
 import com.limelight.utils.KeyMapper;
 
@@ -206,7 +205,6 @@ public class KeyBoardController {
                 }
                 // Save the new state
                 KeyBoardControllerConfigurationLoader.saveProfile(KeyBoardController.this, context);
-                vibrate(KeyEvent.ACTION_DOWN);
             });
             builder.setNegativeButton(context.getString(R.string.no), null);
             builder.show();
@@ -373,10 +371,6 @@ public class KeyBoardController {
         } else {
             Game.instance.onKey(null, keyEvent.getKeyCode(), keyEvent);
         }
-
-        if (keyEvent.getSource() != 2) {
-            vibrate(keyEvent.getAction());
-        }
     }
 
     public void sendMouseMove(int x,int y){
@@ -384,25 +378,6 @@ public class KeyBoardController {
             return;
         }
         Game.instance.mouseMove(x,y);
-    }
-
-    public void vibrate(int action) {
-        if (PreferenceConfiguration.readPreferences(context).enableKeyboardVibrate && vibrator.hasVibrator()) {
-            switch (action) {
-                case KeyEvent.ACTION_DOWN:
-                    frame_layout.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-                    break;
-                case KeyEvent.ACTION_UP:
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                        frame_layout.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE);
-                    } else {
-                        frame_layout.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-                    }
-                    break;
-                default:
-                    frame_layout.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            }
-        }
     }
 
     private void showControlButtons(boolean show) {
@@ -645,7 +620,6 @@ public class KeyBoardController {
                                 } else {
                                     newElement = KeyBoardControllerConfigurationLoader.createDigitalButton(
                                         elementId, code, type, 1, name, -1, 
-                                        PreferenceConfiguration.readPreferences(context).stickyModifierKey && 
                                         KeyBoardControllerConfigurationLoader.isModifierKey(code), 
                                         this, context);
                                 }
@@ -660,7 +634,6 @@ public class KeyBoardController {
                             existingElementIds.add(elementId);
                             
                             elementsAdded++;
-                            vibrate(KeyEvent.ACTION_DOWN);
                             
                         } catch (JSONException e) {
                             LimeLog.warning("Error adding key: " + e.getMessage());

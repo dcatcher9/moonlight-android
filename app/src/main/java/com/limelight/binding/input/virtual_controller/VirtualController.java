@@ -8,8 +8,6 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.VibrationEffect;
-import android.os.Vibrator;
 import android.util.DisplayMetrics;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
@@ -20,7 +18,6 @@ import android.widget.Toast;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.input.ControllerHandler;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -66,22 +63,11 @@ public class VirtualController {
 
     private List<VirtualControllerElement> elements = new ArrayList<>();
 
-    private Vibrator vibrator;
-
-    private final VibrationEffect defaultVibrationEffect;
-
     public VirtualController(final ControllerHandler controllerHandler, FrameLayout layout, final Context context) {
         this.controllerHandler = controllerHandler;
         this.frame_layout = layout;
         this.context = context;
         this.handler = new Handler(Looper.getMainLooper());
-
-        this.vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            defaultVibrationEffect = VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE);
-        } else {
-            defaultVibrationEffect = null;
-        }
 
         buttonConfigure = new Button(context);
         buttonConfigure.setAlpha(0.25f);
@@ -241,27 +227,11 @@ public class VirtualController {
         }
     }
 
-    public void sendControllerInputContext(long vibrationDuration, int vibrationAmplitude) {
+    public void sendControllerInputContext() {
         // Cancel retransmissions of prior gamepad inputs
         handler.removeCallbacks(delayedRetransmitRunnable);
 
         sendControllerInputContextInternal();
-        if (frame_layout != null && PreferenceConfiguration.readPreferences(context).enableKeyboardVibrate) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                VibrationEffect effect;
-                if (vibrationDuration == 0) {
-                    effect = defaultVibrationEffect;
-                } else {
-                    effect = VibrationEffect.createOneShot(vibrationDuration, vibrationAmplitude);
-                }
-                vibrator.vibrate(effect);
-            } else {
-                if (vibrationDuration == 0) {
-                    vibrationDuration = 10;
-                }
-                vibrator.vibrate(vibrationDuration);
-            }
-        }
         // HACK: GFE sometimes discards gamepad packets when they are received
         // very shortly after another. This can be critical if an axis zeroing packet
         // is lost and causes an analog stick to get stuck. To avoid this, we retransmit
@@ -269,9 +239,5 @@ public class VirtualController {
         handler.postDelayed(delayedRetransmitRunnable, 25);
         handler.postDelayed(delayedRetransmitRunnable, 50);
         handler.postDelayed(delayedRetransmitRunnable, 75);
-    }
-
-    public void sendControllerInputContext() {
-        sendControllerInputContext(0, 0);
     }
 }

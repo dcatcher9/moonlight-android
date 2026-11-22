@@ -452,7 +452,7 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
     }
 
     private void initFullKeyboard(PreferenceConfiguration prefConfig) {
-        keyBoardLayoutController = new KeyBoardLayoutController(rootLayout, this, prefConfig);
+        keyBoardLayoutController = new KeyBoardLayoutController(rootLayout, this);
         keyBoardLayoutController.setViewCallbacks(this);
         keyBoardLayoutController.refreshLayout();
         keyBoardLayoutController.show();

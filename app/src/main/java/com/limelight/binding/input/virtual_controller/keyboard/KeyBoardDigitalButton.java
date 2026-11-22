@@ -14,7 +14,6 @@ import android.view.MotionEvent;
 
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.input.virtual_controller.VirtualControllerElement;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -165,11 +164,7 @@ public class KeyBoardDigitalButton extends keyBoardVirtualControllerElement {
         rect.right = getWidth() - rect.left;
         rect.bottom = getHeight() - rect.top;
 
-        if(PreferenceConfiguration.readPreferences(getContext()).enableKeyboardSquare){
-            canvas.drawRect(rect,paint);
-        }else{
-            canvas.drawOval(rect, paint);
-        }
+        canvas.drawOval(rect, paint);
 
         if (icon != -1) {
             Drawable d = getResources().getDrawable(icon);

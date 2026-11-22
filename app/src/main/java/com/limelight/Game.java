@@ -436,9 +436,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private float floatingButtonStartX, floatingButtonStartY;
 
     // Zoom button drag state
-    private float zoomButtonDX, zoomButtonDY;
-    private boolean isZoomButtonMoving = false;
-    private float zoomButtonStartX, zoomButtonStartY;
 
     // Queue for batching commitText payloads
     private final CommitTextQueue commitTextQueue = new CommitTextQueue(
@@ -1263,22 +1260,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             initMouseMode();
         }
 
-        if (prefConfig.onscreenController) {
-            // create virtual onscreen controller
-            if (prefConfig.hideOSCWhenHasGamepad) {
-                if (!controllerHandler.hasController()) {
-                    initVirtualController();
-                }
-            } else {
-                initVirtualController();
-            }
-        }
-
-        //特殊按键屏幕布局
-        if(prefConfig.enableKeyboard){
-            initKeyboardController();
-        }
-
         if (!decoderRenderer.isAvcSupported()) {
             if (spinner != null) {
                 spinner.dismiss();
@@ -1297,7 +1278,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         gameMenuCallbacks = new GameMenu(this);
 
         floatingMenuButton = findViewById(R.id.floatingMenuButton);
-        updateFloatingButtonVisibility(prefConfig.enableBackMenu && prefConfig.enableFloatingButton);
+        updateFloatingButtonVisibility(false);
         initFloatingButton();
 
         overlayToggleButton = findViewById(R.id.overlayToggleZoomButton);
@@ -1340,67 +1321,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         conn.start(audioRenderer, decoderRenderer, Game.this);
     }
 
-    @SuppressLint("ClickableViewAccessibility")
     private void setupOverlayToggleButton() {
         if (overlayToggleButton != null) {
-            if (prefConfig.showOverlayZoomToggleButton) {
-                overlayToggleButton.setVisibility(View.VISIBLE);
-
-                // Set initial appearance based on current state
-                updateZoomButtonAppearance();
-
-                // Touch listener for drag and click
-                overlayToggleButton.setOnTouchListener((view, event) -> {
-                    switch (event.getAction()) {
-                        case MotionEvent.ACTION_DOWN:
-                            zoomButtonStartX = event.getRawX();
-                            zoomButtonStartY = event.getRawY();
-                            zoomButtonDX = view.getX() - event.getRawX();
-                            zoomButtonDY = view.getY() - event.getRawY();
-                            isZoomButtonMoving = false;
-                            return true;
-                        case MotionEvent.ACTION_MOVE:
-                            float newX = event.getRawX() + zoomButtonDX;
-                            float newY = event.getRawY() + zoomButtonDY;
-
-                            // Check if it's a move or just a tap
-                            if (Math.abs(event.getRawX() - zoomButtonStartX) > CLICK_ACTION_THRESHOLD ||
-                                    Math.abs(event.getRawY() - zoomButtonStartY) > CLICK_ACTION_THRESHOLD) {
-                                isZoomButtonMoving = true;
-                            }
-
-                            // Ensure the button stays within screen bounds
-                            if (newX < 0) newX = 0;
-                            if (newY < 0) newY = 0;
-
-                            int maxOffsetX = getWindow().getDecorView().getWidth() - view.getWidth();
-                            if (newX > maxOffsetX) {
-                                newX = maxOffsetX;
-                            }
-
-                            int maxOffsetY = getWindow().getDecorView().getHeight() - view.getHeight();
-                            if (newY > maxOffsetY) {
-                                newY = maxOffsetY;
-                            }
-
-                            view.setX(newX);
-                            view.setY(newY);
-                            return true;
-                        case MotionEvent.ACTION_UP:
-                            if (!isZoomButtonMoving) {
-                                // It's a click event, toggle zoom mode
-                                toggleZoomMode();
-                                updateZoomButtonAppearance();
-                            }
-                            isZoomButtonMoving = false;
-                            return true;
-                        default:
-                            return false;
-                    }
-                });
-            } else {
-                overlayToggleButton.setVisibility(View.GONE);
-            }
+            overlayToggleButton.setVisibility(View.GONE);
         }
     }
 
@@ -1570,7 +1493,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void initkeyBoardLayoutController(){
-        keyBoardLayoutController = new KeyBoardLayoutController((FrameLayout)rootView, this, prefConfig);
+        keyBoardLayoutController = new KeyBoardLayoutController((FrameLayout)rootView, this);
         keyBoardLayoutController.refreshLayout();
         keyBoardLayoutController.show();
     }
@@ -3079,9 +3002,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             toggleFullKeyboard();
                             return true;
                         } else if (currentEventTime - fiveFingerDownTime < FIVE_FINGER_TAP_THRESHOLD) {
-                            if(prefConfig.enableBackMenu) {
-                                showGameMenu(null);
-                            }
+                            showGameMenu(null);
                             return true;
                         }
                     }
@@ -3144,9 +3065,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             case MotionEvent.ACTION_UP:
                 long currentEventTime = event.getEventTime();
                 if (pointerCount >= 5 && fiveFingerDownTime > 0 && currentEventTime - fiveFingerDownTime < FIVE_FINGER_TAP_THRESHOLD) {
-                    if(prefConfig.enableBackMenu) {
-                        showGameMenu(null);
-                    }
+                    showGameMenu(null);
                     fiveFingerDownTime = 0;
                     break;
                 } else if (pointerCount == 4 && fourFingerDownTime > 0 && currentEventTime - fourFingerDownTime < FOUR_FINGER_TAP_THRESHOLD) {
@@ -4405,11 +4324,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void onBackPressed() {
-        if(prefConfig.enableBackMenu){
-            showGameMenu(null);
-            return;
-        }
-        super.onBackPressed();
+        showGameMenu(null);
     }
 
     public boolean isZoomModeEnabled() {

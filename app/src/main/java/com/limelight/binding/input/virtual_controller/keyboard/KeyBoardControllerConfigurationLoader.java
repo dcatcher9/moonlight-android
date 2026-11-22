@@ -21,7 +21,6 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
-import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.KeyConfigHelper;
 import com.limelight.utils.KeyMapper;
 
@@ -128,22 +127,6 @@ public class KeyBoardControllerConfigurationLoader {
 
     }
 
-    private static KeyBoardAnalogStickButtonFree createKeyBoardAnalogStickButton2(final KeyBoardController controller, String elementId, final Context context, int[] keylist) {
-
-        KeyBoardAnalogStickButtonFree analogStick = new KeyBoardAnalogStickButtonFree(controller, elementId, context, keylist);
-        analogStick.setListener(new KeyBoardAnalogStickButtonFree.KeyBoardAnalogStickListener() {
-            @Override
-            public void onkeyEvent(int code, boolean isPress) {
-                KeyEvent keyEvent = new KeyEvent(isPress ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP, code);
-                keyEvent.setSource(2);
-                controller.sendKeyEvent(keyEvent);
-            }
-        });
-
-        return analogStick;
-
-    }
-
     public static KeyBoardDigitalButton createDigitalButton(
             final String elementId,
             final int keyShort,
@@ -178,7 +161,6 @@ public class KeyBoardControllerConfigurationLoader {
                 @Override
                 public void onLongClick() {
                     button.setSticky(true);
-                    controller.vibrate(-1);
                 }
 
                 @Override
@@ -252,7 +234,6 @@ public class KeyBoardControllerConfigurationLoader {
                 @Override
                 public void onLongClick() {
                     button.setSticky(true);
-                    controller.vibrate(-1);
                 }
 
                 @Override
@@ -275,7 +256,6 @@ public class KeyBoardControllerConfigurationLoader {
 
                 @Override
                 public void onClick() {
-                    controller.vibrate(KeyEvent.ACTION_DOWN);
                     // Press keys down
                     modifier[0] = 0;
                     for (short key : keys) {
@@ -291,7 +271,6 @@ public class KeyBoardControllerConfigurationLoader {
 
                 @Override
                 public void onRelease() {
-                    controller.vibrate(KeyEvent.ACTION_UP);
                     // Release keys
                     for (int i = keys.length - 1; i >= 0; i--) {
                         short key = keys[i];
@@ -352,7 +331,6 @@ public class KeyBoardControllerConfigurationLoader {
 
         DisplayMetrics screen = context.getResources().getDisplayMetrics();
 
-        PreferenceConfiguration config = PreferenceConfiguration.readPreferences(context);
 
         int height = screen.heightPixels;
 
@@ -416,19 +394,11 @@ public class KeyBoardControllerConfigurationLoader {
                 int keyCodeMiddle = obj.optInt("middleCode");
                 int[] keys = new int[]{keyCodeUp, keyCodeDown, keyCodeLeft, keyCodeRight, keyCodeMiddle};
 
-                if (config.enableNewAnalogStick) {
-                    controller.addElement(createKeyBoardAnalogStickButton2(controller, code, context, keys),
-                            screenScale(4, height),
-                            screenScale(41, height),
-                            (int) (w * 2.5), (int) (w * 2.5)
-                    );
-                } else {
-                    controller.addElement(createKeyBoardAnalogStickButton(controller, code, context, keys),
-                            screenScale(4, height),
-                            screenScale(41, height),
-                            (int) (w * 2.5), (int) (w * 2.5)
-                    );
-                }
+                controller.addElement(createKeyBoardAnalogStickButton(controller, code, context, keys),
+                        screenScale(4, height),
+                        screenScale(41, height),
+                        (int) (w * 2.5), (int) (w * 2.5)
+                );
             }
 
             //鼠标按键
@@ -472,7 +442,7 @@ public class KeyBoardControllerConfigurationLoader {
                             w, w
                     );
                 } else {
-                    controller.addElement(createDigitalButton(elementId, code, type, 1, name, -1, config.stickyModifierKey && isModifierKey(code), controller, context),
+                    controller.addElement(createDigitalButton(elementId, code, type, 1, name, -1, isModifierKey(code), controller, context),
                             x, y,
                             w, w
                     );
@@ -546,7 +516,7 @@ public class KeyBoardControllerConfigurationLoader {
             throw new RuntimeException(e);
         }
 
-        controller.setOpacity(config.oscOpacity);
+        controller.setOpacity(90);
     }
 
     public static void saveProfile(final KeyBoardController controller,

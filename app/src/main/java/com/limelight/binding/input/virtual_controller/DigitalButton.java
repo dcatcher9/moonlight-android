@@ -12,7 +12,6 @@ import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -158,21 +157,7 @@ public class DigitalButton extends VirtualControllerElement {
         rect.right = getWidth() - rect.left;
         rect.bottom = getHeight() - rect.top;
 
-        //皮肤选择 官方皮肤
-        if(PreferenceConfiguration.readPreferences(getContext()).enableOnScreenStyleOfficial){
-            paint.setStyle(Paint.Style.STROKE);
-            //方形
-            if(PreferenceConfiguration.readPreferences(getContext()).enableKeyboardSquare){
-                canvas.drawRect(rect,paint);
-            }else{
-                canvas.drawOval(rect, paint);
-            }
-            paint.setStyle(Paint.Style.FILL_AND_STROKE);
-            paint.setStrokeWidth(getDefaultStrokeWidth()/2);
-            canvas.drawText(text, getPercent(getWidth(), 50), getPercent(getHeight(), 63), paint);
-            return;
-        }
-        int oscOpacity=PreferenceConfiguration.readPreferences(getContext()).oscOpacity;
+        int oscOpacity = 90;
         //虚拟手柄皮肤
         if (icon != -1) {
             Drawable d = getResources().getDrawable(isPressed()?iconPress:icon);

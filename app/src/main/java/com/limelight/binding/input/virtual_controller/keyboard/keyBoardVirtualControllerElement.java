@@ -107,10 +107,6 @@ public abstract class keyBoardVirtualControllerElement extends View {
             newPos_x = snapResult.newX;
             newPos_y = snapResult.newY;
 
-            // Provide haptic feedback if snapping occurred
-            if (snapResult.didSnap || snapResult.didAdjustSpacing) {
-                virtualController.vibrate(KeyEvent.ACTION_DOWN);
-            }
         }
 
         FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
@@ -155,7 +151,6 @@ public abstract class keyBoardVirtualControllerElement extends View {
                 FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
                 layoutParams.width = snapResult.newWidth;
                 layoutParams.height = snapResult.newHeight;
-                virtualController.vibrate(KeyEvent.ACTION_DOWN);
                 requestLayout();
             }
         }

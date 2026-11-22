@@ -27,7 +27,6 @@ import android.widget.TextView;
 
 import com.limelight.Game;
 import com.limelight.R;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.BitSet;
 import java.util.HashMap;
@@ -41,7 +40,6 @@ public class KeyBoardLayoutController {
 
     private final long timerLongClickTimeout = 300;
     private final Context context;
-    private final PreferenceConfiguration prefConfig;
     private ViewCallbacks viewCallbacks;
     private FrameLayout frame_layout = null;
     private final Handler handler;
@@ -88,21 +86,16 @@ public class KeyBoardLayoutController {
     }
 
     private boolean isModifierKey(int keyCode) {
-        if (prefConfig.stickyModifierKey) {
-            return MODIFIER_KEY_CODES.contains(keyCode);
-        }
-
-        return false;
+        return MODIFIER_KEY_CODES.contains(keyCode);
     }
 
     private boolean isSpecialKey(int keyCode) {
         return SPECIAL_KEY_CODES.contains(keyCode) || MODIFIER_KEY_CODES.contains(keyCode);
     }
 
-    public KeyBoardLayoutController(FrameLayout layout, final Context context, PreferenceConfiguration prefConfig) {
+    public KeyBoardLayoutController(FrameLayout layout, final Context context) {
         this.frame_layout = layout;
         this.context = context;
-        this.prefConfig = prefConfig;
         this.keyboardView = (LinearLayout) LayoutInflater.from(context).inflate(R.layout.layout_axixi_keyboard, null);
         this.handler = new Handler(Looper.getMainLooper());
         initKeyPopup();
@@ -216,22 +209,8 @@ public class KeyBoardLayoutController {
             }
 
             if (keyAction == KeyEvent.ACTION_DOWN) {
-                if (prefConfig.enableKeyboardVibrate) {
-                    keyboardView.performHapticFeedback(
-                            HapticFeedbackConstants.VIRTUAL_KEY,
-                            HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING |
-                                    HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
-                    );
-                }
                 v.setBackgroundResource(R.drawable.bg_ax_keyboard_button_confirm);
             } else {
-                if (prefConfig.enableKeyboardVibrate) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                        keyboardView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE);
-                    } else {
-                        keyboardView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-                    }
-                }
                 v.setBackgroundResource(R.drawable.bg_ax_keyboard_button);
             }
             return true;
@@ -249,9 +228,6 @@ public class KeyBoardLayoutController {
                 if (isModifierKey(keycode)) {
                     longClickRunnables.put(keycode, () -> {
                         modifierKeyStates.set(keycode);
-                        if (prefConfig.enableKeyboardVibrate) {
-                            child.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                        }
                     });
                 }
             }
@@ -281,13 +257,6 @@ public class KeyBoardLayoutController {
     }
 
     public void hide(boolean temporary) {
-        if (prefConfig.enableKeyboardVibrate) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                keyboardView.performHapticFeedback(HapticFeedbackConstants.REJECT);
-            } else {
-                keyboardView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            }
-        }
         keyboardView.setVisibility(View.GONE);
         if (!temporary) {
             shown = false;
@@ -323,36 +292,16 @@ public class KeyBoardLayoutController {
 
         int height = 0;
         int width = 0;
-        int widthPreference = 0;
-        if (prefConfig.onscreenKeyboardAutoFitDisabled) {
-            height = dip2px(context,prefConfig.onscreenKeyboardHeight);
-            widthPreference = prefConfig.onscreenKeyboardWidth;
-            width = widthPreference == 1000 ? ViewGroup.LayoutParams.MATCH_PARENT : dip2px(context, widthPreference);
-        } else {
-            DisplayMetrics screen = context.getResources().getDisplayMetrics();
-            width = screen.widthPixels;
-            height = (int) (screen.heightPixels * 0.5);
-        }
+        DisplayMetrics screen = context.getResources().getDisplayMetrics();
+        width = screen.widthPixels;
+        height = (int) (screen.heightPixels * 0.5);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
         params.gravity = Gravity.BOTTOM;
-        switch (prefConfig.onscreenKeyboardAlignMode) {
-            case "left": {
-                params.gravity |= Gravity.START;
-                break;
-            }
-            case "right": {
-                params.gravity |= Gravity.END;
-                break;
-            }
-            case "center":
-            default: {
-                params.gravity |= Gravity.CENTER_HORIZONTAL;
-            }
-        }
+        params.gravity |= Gravity.CENTER_HORIZONTAL;
 
         // params.leftMargin = 20 + buttonSize;
         // params.topMargin = 15;
-        keyboardView.setAlpha(prefConfig.oscKeyboardOpacity / 100f);
+        keyboardView.setAlpha(0.9f);
         frame_layout.addView(keyboardView, params);
     }
 

@@ -51,14 +51,12 @@ public class PreferenceConfiguration {
         }
     }
 
-
     public static final String RESOLUTION_PREF_STRING = "list_resolution";
     public static final String FPS_PREF_STRING = "list_fps";
     public static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
     private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
     public static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
-    private static final String OSC_OPACITY_PREF_STRING = "seekbar_osc_opacity";
     private static final String LANGUAGE_PREF_STRING = "list_languages";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     public static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
@@ -69,10 +67,6 @@ public class PreferenceConfiguration {
     public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
             "list_client_sbs_depth_model";
     public static final String CINEMA_ENVIRONMENT_PREF_STRING = "list_cinema_environment";
-    private static final String ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls";
-    private static final String CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD = "checkbox_hide_osc_when_has_gamepad";
-    private static final String ONLY_L3_R3_PREF_STRING = "checkbox_only_show_L3R3";
-    private static final String SHOW_GUIDE_BUTTON_PREF_STRING = "checkbox_show_guide_button";
     public static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
@@ -80,7 +74,6 @@ public class PreferenceConfiguration {
     private static final String REMEMBER_MOUSE_MODE_PREF_STRING = "checkbox_remember_mouse_mode";
     private static final String ANALOG_SCROLLING_PREF_STRING = "analog_scrolling";
     private static final String MOUSE_NAV_BUTTONS_STRING = "checkbox_mouse_nav_buttons";
-    private static final String VIBRATE_OSC_PREF_STRING = "checkbox_vibrate_osc";
     private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
     private static final String VIBRATE_FALLBACK_STRENGTH_PREF_STRING = "seekbar_vibrate_fallback_strength";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
@@ -98,8 +91,6 @@ public class PreferenceConfiguration {
 
     private static final String ENABLE_RUMBLE_PREF_STRING = "checkbox_enable_rumble";
 
-    private static final String LIST_ONSCREEN_KEYBOARD_ALIGN_MODE = "list_onscreen_keyboard_align_mode";
-
     private static final String CHECKBOX_ENABLE_BATTERY_REPORT = "checkbox_gamepad_enable_battery_report";
     private static final String CHECKBOX_FORCE_QWERTY = "checkbox_force_qwerty";
     private static final String CHECKBOX_BACK_AS_META = "checkbox_back_as_meta";
@@ -107,23 +98,6 @@ public class PreferenceConfiguration {
     private static final String CHECKBOX_BACK_AS_GUIDE = "checkbox_back_as_guide";
     private static final String CHECKBOX_SMART_CLIPBOARD_SYNC = "checkbox_smart_clipboard_sync";
     private static final String CHECKBOX_HIDE_CLIPBOARD_CONTENT = "checkbox_hide_clipboard_content";
-
-    private static final String CHECKBOX_ENABLE_STICKY_MODIFIER_KEY_VIRTUAL_KEYBOARD = "checkbox_enable_sticky_modifier_key_virtual_keyboard";
-
-    private static final String CHECKBOX_ENABLE_QUIT_DIALOG = "checkbox_enable_quit_dialog";
-
-    private static final String CHECKBOX_ENABLE_FLOATING_BUTTON = "checkbox_enable_floating_button";
-
-    private static final String CHECKBOX_SHOW_OVERLAY_ZOOM_TOGGLE_BUTTON = "checkbox_show_overlay_zoom_toggle_button";
-
-    //屏幕特殊按键
-    private static final String CHECKBOX_ENABLE_KEYBOARD = "checkbox_enable_keyboard";
-
-    //屏幕特殊按键 震动
-    private static final String CHECKBOX_ENABLE_KEYBOARD_VIBRATE = "checkbox_vibrate_keyboard";
-
-    //自动摇杆
-    private static final String CHECKBOX_CHECKBOX_ENABLE_ANALOG_STICK_NEW = "checkbox_enable_analog_stick_new";
 
     //触控屏幕灵敏度
     private static final String SEEKBAR_TOUCH_SENSITIVITY = "seekbar_touch_sensitivity_opacity_x";
@@ -141,7 +115,6 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
     static final boolean DEFAULT_HOST_AUDIO = false;
     private static final int DEFAULT_DEADZONE = 5;
-    private static final int DEFAULT_OPACITY = 90;
     public static final String DEFAULT_LANGUAGE = "default";
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
@@ -160,10 +133,6 @@ public class PreferenceConfiguration {
         return DEFAULT_AUDIO_BOOST_DB;
     }
 
-    private static final boolean DEFAULT_ONSCREEN_CONTROLLER = false;
-    private static final boolean DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD = true;
-    private static final boolean ONLY_L3_R3_DEFAULT = false;
-    private static final boolean SHOW_GUIDE_BUTTON_DEFAULT = true;
     static final boolean DEFAULT_ENABLE_HDR = true;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
@@ -171,7 +140,6 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_REMEMBER_MOUSE_MODE = false;
     private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "right";
     private static final boolean DEFAULT_MOUSE_NAV_BUTTONS = false;
-    private static final boolean DEFAULT_VIBRATE_OSC = true;
     private static final boolean DEFAULT_VIBRATE_FALLBACK = false;
     private static final int DEFAULT_VIBRATE_FALLBACK_STRENGTH = 100;
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
@@ -191,19 +159,15 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_FORCE_QWERTY = true;
     private static final boolean DEFAULT_SEND_META_ON_PHYSICAL_BACK = false;
     private static final boolean DEFAULT_IGNORE_SYNTH_EVENTS = false;
-    private static final boolean DEFAULT_ENABLE_FLOATING_BUTTON = false;
     private static final boolean DEFAULT_BACK_AS_GUIDE = false;
     private static final boolean DEFAULT_SMART_CLIPBOARD_SYNC = false;
     private static final boolean DEFAULT_HIDE_CLIPBOARD_CONTENT = true;
-    private static final boolean DEFAULT_ENABLE_STICKY_MODIFIER_KEY_VIRTUAL_KEYBOARD = true;
     private static final int DEFAULT_TRACKPAD_SENSITIVITY_X = 100;
     private static final int DEFAULT_TRACKPAD_SENSITIVITY_Y = 100;
     private static final boolean DEFAULT_TRACKPAD_DRAG_DROP_VIBRATION = false;
     private static final int DEFAULT_TRACKPAD_DRAG_DROP_THRESHOLD = 250;
     private static final boolean DEFAULT_TRACKPAD_SWAP_AXIS = false;
     private static final boolean DEFAULT_ENABLE_COMMIT_TEXT = false;
-    private static final String DEFAULT_ONSCREEN_KEYBOARD_ALIGN_MODE = "center";
-    private static final boolean DEFAULT_SHOW_OVERLAY_TOGGLE_BUTTON = false;
 
     public static final int FRAME_PACING_MIN_LATENCY = 0;
     public static final int FRAME_PACING_BALANCED = 1;
@@ -279,17 +243,10 @@ public class PreferenceConfiguration {
     public CinemaEnvironment cinemaEnvironment = CinemaEnvironment.BLACK;
     public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
-    public int oscOpacity;
-    public int oscKeyboardOpacity;
-    public int onscreenKeyboardHeight;
-    public boolean onscreenKeyboardAutoFitDisabled;
-    public int onscreenKeyboardWidth;
-    public String onscreenKeyboardAlignMode;
     public boolean useVirtualDisplay, playHostAudio;
     public String language;
     public boolean multiController, usbDriver, flipFaceButtons;
     public boolean onscreenController;
-    public boolean hideOSCWhenHasGamepad;
     public boolean enableBatteryReport;
     public boolean forceQwerty;
     public boolean backAsMeta;
@@ -297,25 +254,13 @@ public class PreferenceConfiguration {
     public boolean backAsGuide;
     public boolean smartClipboardSync;
     public boolean hideClipboardContent;
-    public boolean stickyModifierKey;
-    public boolean onlyL3R3;
-    public boolean showGuideButton;
     public boolean enableHdr;
     public com.limelight.nvstream.StreamGamma streamGamma;
 
     public boolean enablePerfOverlay;
 
-    public boolean enableBackMenu;
-    public boolean enableFloatingButton;
-    public boolean showOverlayZoomToggleButton;
-
-    //虚拟屏幕键盘按键
-    public boolean enableKeyboard;
     //修复JoyCon十字键
     public boolean enableJoyConFix;
-
-    //自由摇杆啊
-    public boolean enableNewAnalogStick;
 
     public boolean enableFullExDisplay;
 
@@ -344,24 +289,11 @@ public class PreferenceConfiguration {
 
     public boolean enableMultiTouchGestures;
 
-    //禁用内置的特殊指令
-    public boolean disableDefaultExtraKeys;
-
     //强制使用设备自身的震动马达
     public boolean enableDeviceRumble;
 
     // Enable forwarding of commitText from soft keyboard
     public boolean enableCommitText;
-
-    public boolean enableKeyboardVibrate;
-
-    public boolean enableKeyboardSquare;
-
-    //官方虚拟按钮风格
-    public boolean enableOnScreenStyleOfficial;
-
-    //自由摇杆背景透明度
-    public int enableNewAnalogStickOpacity;
 
     public int trackpadSensitivityX;
     public int trackpadSensitivityY;
@@ -375,7 +307,6 @@ public class PreferenceConfiguration {
     public boolean mouseNavButtons;
     public boolean rememberMouseMode;
 
-    public boolean vibrateOsc;
     public boolean vibrateFallbackToDevice;
     public int vibrateFallbackToDeviceStrength;
     public boolean touchscreenTrackpad;
@@ -661,7 +592,6 @@ public class PreferenceConfiguration {
         config.cinemaEnvironment = CinemaEnvironment.fromPreferenceValue(cinemaEnvironment);
         config.framePacing = getFramePacingValue(prefs);
 
-
         String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
         if (warpFactorStr.equals("warp")) {
             config.framePacingWarpFactor = 2;
@@ -672,8 +602,6 @@ public class PreferenceConfiguration {
         config.analogStickForScrolling = getAnalogStickForScrollingValue(prefs);
 
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
-
-        config.oscOpacity = prefs.getInt(OSC_OPACITY_PREF_STRING, DEFAULT_OPACITY);
 
         config.language = prefs.getString(LANGUAGE_PREF_STRING, DEFAULT_LANGUAGE);
 
@@ -706,10 +634,6 @@ public class PreferenceConfiguration {
                 config.touchscreenTrackpad = false;
                 break;
         }
-        config.onscreenController = prefs.getBoolean(ONSCREEN_CONTROLLER_PREF_STRING, DEFAULT_ONSCREEN_CONTROLLER);
-        config.hideOSCWhenHasGamepad = prefs.getBoolean(CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD, DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD);
-        config.onlyL3R3 = prefs.getBoolean(ONLY_L3_R3_PREF_STRING, ONLY_L3_R3_DEFAULT);
-        config.showGuideButton = prefs.getBoolean(SHOW_GUIDE_BUTTON_PREF_STRING, SHOW_GUIDE_BUTTON_DEFAULT);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
         config.streamGamma = com.limelight.nvstream.StreamGamma.fromPreference(
                 prefs.getString(STREAM_GAMMA_PREF_STRING, "default"));
@@ -718,34 +642,13 @@ public class PreferenceConfiguration {
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
         config.rememberMouseMode = prefs.getBoolean(REMEMBER_MOUSE_MODE_PREF_STRING, DEFAULT_REMEMBER_MOUSE_MODE);
-        config.vibrateOsc = prefs.getBoolean(VIBRATE_OSC_PREF_STRING, DEFAULT_VIBRATE_OSC);
         config.vibrateFallbackToDevice = prefs.getBoolean(VIBRATE_FALLBACK_PREF_STRING, DEFAULT_VIBRATE_FALLBACK);
         config.vibrateFallbackToDeviceStrength = prefs.getInt(VIBRATE_FALLBACK_STRENGTH_PREF_STRING, DEFAULT_VIBRATE_FALLBACK_STRENGTH);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
 //        config.touchscreenTrackpad = prefs.getBoolean(TOUCHSCREEN_TRACKPAD_PREF_STRING, DEFAULT_TOUCHSCREEN_TRACKPAD);
-        config.enableBackMenu = prefs.getBoolean(CHECKBOX_ENABLE_QUIT_DIALOG,true);
-        config.enableFloatingButton = prefs.getBoolean(CHECKBOX_ENABLE_FLOATING_BUTTON,DEFAULT_ENABLE_FLOATING_BUTTON);
-        config.showOverlayZoomToggleButton = prefs.getBoolean(CHECKBOX_SHOW_OVERLAY_ZOOM_TOGGLE_BUTTON, DEFAULT_SHOW_OVERLAY_TOGGLE_BUTTON);
 
-
-        config.enableKeyboard = prefs.getBoolean(CHECKBOX_ENABLE_KEYBOARD,false);
-
-        config.enableKeyboardVibrate = prefs.getBoolean(CHECKBOX_ENABLE_KEYBOARD_VIBRATE,false);
         //兼容joycon手柄
         config.enableJoyConFix = prefs.getBoolean("checkbox_joycon_fix",false);
-        //全键盘透明度
-        config.oscKeyboardOpacity = prefs.getInt("seekbar_keyboard_axi_opacity",DEFAULT_OPACITY);
-
-        config.enableOnScreenStyleOfficial = prefs.getBoolean("checkbox_onscreen_style_official",false);
-
-        config.enableNewAnalogStickOpacity = prefs.getInt("seekbar_osc_free_analog_stick_opacity",20);
-
-        config.onscreenKeyboardHeight = prefs.getInt("seekbar_onscreen_keyboard_height",200);
-        config.onscreenKeyboardAutoFitDisabled = prefs.getBoolean("onscreen_keyboard_autofit",false);
-        config.onscreenKeyboardWidth = prefs.getInt("seekbar_onscreen_keyboard_width",1000);
-        config.onscreenKeyboardAlignMode = prefs.getString(LIST_ONSCREEN_KEYBOARD_ALIGN_MODE, DEFAULT_ONSCREEN_KEYBOARD_ALIGN_MODE);
-
-        config.enableNewAnalogStick=prefs.getBoolean(CHECKBOX_CHECKBOX_ENABLE_ANALOG_STICK_NEW,false);
 
         config.enableFullExDisplay=prefs.getBoolean("checkbox_enable_fullexdisplay",false);
 
@@ -763,14 +666,9 @@ public class PreferenceConfiguration {
 
         config.enableMultiTouchGestures = prefs.getBoolean("checkbox_multi_touch_gestures", false);
 
-
-        config.disableDefaultExtraKeys =prefs.getBoolean("checkbox_enable_clear_default_special_button", false);
-
         config.enableDeviceRumble=prefs.getBoolean("checkbox_enable_device_rumble", false);
 
         config.enableCommitText = prefs.getBoolean(CHECKBOX_ENABLE_COMMIT_TEXT, DEFAULT_ENABLE_COMMIT_TEXT);
-
-        config.enableKeyboardSquare=prefs.getBoolean("checkbox_enable_keyboard_square",false);
 
         config.touchPadSensitivity=prefs.getInt("seekbar_touchpad_sensitivity_opacity",100);
 
@@ -792,7 +690,6 @@ public class PreferenceConfiguration {
         config.backAsGuide = prefs.getBoolean(CHECKBOX_BACK_AS_GUIDE, DEFAULT_BACK_AS_GUIDE);
         config.smartClipboardSync = prefs.getBoolean(CHECKBOX_SMART_CLIPBOARD_SYNC, DEFAULT_SMART_CLIPBOARD_SYNC);
         config.hideClipboardContent = prefs.getBoolean(CHECKBOX_HIDE_CLIPBOARD_CONTENT, DEFAULT_HIDE_CLIPBOARD_CONTENT);
-        config.stickyModifierKey = prefs.getBoolean(CHECKBOX_ENABLE_STICKY_MODIFIER_KEY_VIRTUAL_KEYBOARD, DEFAULT_ENABLE_STICKY_MODIFIER_KEY_VIRTUAL_KEYBOARD);
         config.fullRange = prefs.getBoolean(FULL_RANGE_PREF_STRING, DEFAULT_FULL_RANGE);
         config.gamepadTouchpadAsMouse = prefs.getBoolean(GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING, DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE);
         config.gamepadMotionSensors = prefs.getBoolean(GAMEPAD_MOTION_SENSORS_PREF_STRING, DEFAULT_GAMEPAD_MOTION_SENSORS);
