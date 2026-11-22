@@ -45,10 +45,6 @@ public class LegacyDatabaseReader3 {
         }
     }
 
-    private static String splitTupleToAddress(ComputerDetails.AddressTuple tuple) {
-        return tuple.address+PORT_DELIMITER+tuple.port;
-    }
-
     private static ComputerDetails getComputerFromCursor(Cursor c) {
         ComputerDetails details = new ComputerDetails();
 

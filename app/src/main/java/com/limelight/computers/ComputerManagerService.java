@@ -859,12 +859,6 @@ public class ComputerManagerService extends Service {
             this.computer = computer;
         }
 
-        public void pollNow() {
-            synchronized (pollEvent) {
-                pollEvent.notify();
-            }
-        }
-
         private boolean waitPollingDelay() {
             try {
                 synchronized (pollEvent) {
@@ -1029,15 +1023,5 @@ class PollingTuple {
             }
             pollNowRequested = false;
         }
-    }
-}
-
-class ReachabilityTuple {
-    public final String reachableAddress;
-    public final ComputerDetails computer;
-
-    public ReachabilityTuple(ComputerDetails computer, String reachableAddress) {
-        this.computer = computer;
-        this.reachableAddress = reachableAddress;
     }
 }

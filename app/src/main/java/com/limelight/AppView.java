@@ -833,18 +833,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 null);
     }
 
-    private void endCurrentSessionThenStart(NvApp nextApp) {
-        if (!hasCurrentSession() || managerBinder == null || computer == null) {
-            startApp(nextApp);
-            return;
-        }
-
-        AppObject runningApp = findCurrentSessionApp();
-        NvApp currentApp = runningApp != null ? runningApp.app :
-                new NvApp("app", computer.runningGameUUID, lastRunningAppId, false);
-        endCurrentSessionThenStart(nextApp, captureCurrentHostSession(currentApp));
-    }
-
     private void endCurrentSessionThenStart(NvApp nextApp,
                                             HostSessionSnapshot expectedSession) {
         if (!stillOwnsHostSession(expectedSession)) {
@@ -917,10 +905,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                     getString(R.string.xr_home_status_running));
             panel.setVisibility(View.VISIBLE);
         });
-    }
-
-    @Override
-    public void onContextMenuClosed(Menu menu) {
     }
 
     @Override
@@ -1100,16 +1084,6 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                 && (details.runningGameUUID == null
                 || details.runningGameUUID.isEmpty())
                 && details.hostSessionId == null;
-    }
-
-    private void updateRunningSessionCleared(HostSessionSnapshot expected) {
-        if (!stillOwnsHostSession(expected)) {
-            return;
-        }
-        computer.runningGameId = 0;
-        computer.runningGameUUID = null;
-        computer.hostSessionId = null;
-        updateRunningSession(computer);
     }
 
     private void clearPersistedSessionAfterAuthoritativeEnd(int endedAppId,

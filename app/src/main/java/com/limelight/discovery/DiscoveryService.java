@@ -1,7 +1,5 @@
 package com.limelight.discovery;
 
-import java.util.List;
-
 import com.limelight.nvstream.mdns.MdnsComputer;
 import com.limelight.nvstream.mdns.MdnsDiscoveryAgent;
 import com.limelight.nvstream.mdns.MdnsDiscoveryListener;
@@ -28,10 +26,6 @@ public class DiscoveryService extends Service {
 
         public void stopDiscovery() {
             discoveryAgent.stopDiscovery();
-        }
-
-        public List<MdnsComputer> getComputerSet() {
-            return discoveryAgent.getComputerSet();
         }
     }
 

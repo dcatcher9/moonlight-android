@@ -4,9 +4,7 @@ import com.limelight.LimeLog;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 
 public abstract class MdnsDiscoveryAgent {
     protected MdnsDiscoveryListener listener;
@@ -49,12 +47,6 @@ public abstract class MdnsDiscoveryAgent {
                     listener.notifyComputerAdded(computer);
                 }
             }
-        }
-    }
-
-    public List<MdnsComputer> getComputerSet() {
-        synchronized (computers) {
-            return new ArrayList<>(computers);
         }
     }
 
