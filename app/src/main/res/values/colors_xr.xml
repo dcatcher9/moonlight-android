@@ -49,7 +49,6 @@
 
     <!-- Role aliases. Not new colours: they let a widget read as its job rather than as a hue. -->
     <color name="xr_on_accent">@color/xr_surface_sunken</color>
-    <color name="xr_scrim">@color/xr_surface_sunken</color>
     <color name="xr_segment_filled">@color/xr_accent</color>
     <color name="xr_segment_empty">@color/xr_border</color>
     <color name="xr_segment_disabled">@color/xr_surface_raised</color>

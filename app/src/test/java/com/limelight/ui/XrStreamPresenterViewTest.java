@@ -114,8 +114,8 @@ public final class XrStreamPresenterViewTest {
             assertSame(PresentationMode.CLIENT_SBS_AI, getField(items.get(2), "selectsMode"));
             assertSame(PresentationMode.GAME_3D, getField(items.get(3), "selectsMode"));
             assertSame(PresentationMode.MOVIE_3D, getField(items.get(4), "selectsMode"));
-            assertFalse(labels.contains(activity.getString(R.string.xr_bar_host_sbs_ai)));
-            assertFalse(labels.contains(activity.getString(R.string.xr_bar_client_sbs_ai)));
+            assertFalse(labels.contains("Host 3D"));
+            assertFalse(labels.contains("Client 3D"));
             assertFalse(labels.contains("Raw SBS"));
             assertEquals(activity.getString(R.string.game_menu_disconnect), labels.get(8));
             if (BuildConfig.DEBUG) {
