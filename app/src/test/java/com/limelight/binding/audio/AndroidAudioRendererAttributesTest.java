@@ -20,7 +20,7 @@ import org.robolectric.util.ReflectionHelpers.ClassParameter;
 public final class AndroidAudioRendererAttributesTest {
     private AudioAttributes attributes(boolean lowLatency) {
         Context context = ApplicationProvider.getApplicationContext();
-        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, false, 0);
+        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, 0);
         return ReflectionHelpers.callInstanceMethod(renderer, "createPlaybackAttributes",
                 ClassParameter.from(boolean.class, lowLatency));
     }

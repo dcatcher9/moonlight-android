@@ -455,13 +455,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             });
 
-    private final Runnable backgroundPing = () -> {
-        if (connected) {
-            timerHandler.postDelayed(Game.this.backgroundPing, 20);
-            MoonBridge.sendEmptyPayload();
-        }
-    };
-
     private SharedPreferences prepareCurrentSessionPreferences() {
         XrSessionBootstrap.Startup startup = XrSessionBootstrap.prepare(this, getIntent());
         hostSessionIdSupported = startup.hostSessionIdSupported;
@@ -1260,10 +1253,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setRefreshRate(chosenFrameRate)
                 .setVirtualDisplay(vDisplay)
                 .setVirtualDisplayOnly(prefConfig.virtualDisplayOnly)
-                .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
-                .setBitrate(isMetered ? prefConfig.meteredBitrate: prefConfig.bitrate)
-                .setEnableSops(prefConfig.enableSops)
+                .setBitrate(prefConfig.bitrate)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
                 .setMaxPacketSize(1392)
                 .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO) // NvConnection will perform LAN and VPN detection
@@ -1382,8 +1373,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         decoderRenderer.setRenderTarget(streamContainer.getSurface());
 
         // Starten Sie die NvConnection
-        audioRenderer = new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx,
-                prefConfig.audioBoostDb);
+        audioRenderer = new AndroidAudioRenderer(Game.this, prefConfig.audioBoostDb);
         conn.start(audioRenderer, decoderRenderer, Game.this);
     }
 
@@ -1983,8 +1973,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private boolean mayReduceRefreshRate() {
         return prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
-                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED && prefConfig.reduceRefreshRate);
+                prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
     }
 
     public boolean isOnExternalDisplay() {
@@ -2093,8 +2082,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // If we only changed refresh rate and we're on an OS that supports Surface.setFrameRate()
             // use that instead of using preferredDisplayModeId to avoid the possibility of triggering
             // bugs that can cause the system to switch from 4K60 to 4K24 on Chromecast 4K.
-            if (prefConfig.enforceDisplayMode ||
-                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                     currentMode.getPhysicalWidth() != bestMode.getPhysicalWidth() ||
                     currentMode.getPhysicalHeight() != bestMode.getPhysicalHeight()) {
                 // Apply the display mode change
@@ -3926,10 +3914,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 setupOverlayToggleButton();
 
                 hideSystemUi(1000);
-
-                if (prefConfig.preventPacketLoss) {
-                    timerHandler.postDelayed(backgroundPing, 1000);
-                }
 
                 if (prefConfig.usbDriver) {
                     bindUsbDriverService();

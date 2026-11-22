@@ -714,7 +714,6 @@ public final class XrSessionSettingsControllerTest {
                 context, snapshot.preferencesForMode(
                         PresentationMode.NORMAL));
         assertEquals(24000, effective.bitrate);
-        assertEquals(24000, effective.meteredBitrate);
     }
 
     @Test

@@ -37,7 +37,7 @@ public final class AndroidAudioRendererFocusTest {
         AudioManager manager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         ShadowAudioManager shadowManager = Shadows.shadowOf(manager);
         shadowManager.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
-        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, false, 3);
+        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, 3);
 
         assertEquals(0, renderer.setup(new MoonBridge.AudioConfiguration(2, 0x3),
                 48_000, 240));
@@ -78,7 +78,7 @@ public final class AndroidAudioRendererFocusTest {
         AudioManager manager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         ShadowAudioManager shadowManager = Shadows.shadowOf(manager);
         shadowManager.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
-        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, false, 0);
+        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, 0);
 
         assertEquals(0, renderer.setup(new MoonBridge.AudioConfiguration(2, 0x3),
                 48_000, 240));
@@ -176,7 +176,7 @@ public final class AndroidAudioRendererFocusTest {
             shadowManager = Shadows.shadowOf(manager);
             assertNull(shadowManager.getLastAudioFocusRequest());
             shadowManager.setNextFocusRequestResponse(firstResponse);
-            renderer = new AndroidAudioRenderer(context, false, 0);
+            renderer = new AndroidAudioRenderer(context, 0);
             assertEquals(0, renderer.setup(new MoonBridge.AudioConfiguration(2, 0x3),
                     48_000, 240));
             renderer.start();

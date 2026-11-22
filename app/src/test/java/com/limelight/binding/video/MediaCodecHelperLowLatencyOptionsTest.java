@@ -48,12 +48,12 @@ public final class MediaCodecHelperLowLatencyOptionsTest {
     public void firstTryStillCarriesTheVendorOptions() {
         MediaFormat format = format();
         assertTrue(MediaCodecHelper.setDecoderLowLatencyOptions(
-                format, decoder("c2.nvidia.avc.decoder"), false, 0));
+                format, decoder("c2.nvidia.avc.decoder"), 0));
         assertTrue(format.containsKey("vendor.nvidia.disable-output-reorder"));
 
         format = format();
         assertTrue(MediaCodecHelper.setDecoderLowLatencyOptions(
-                format, decoder("c2.mtk.avc.decoder"), false, 3));
+                format, decoder("c2.mtk.avc.decoder"), 3));
         assertTrue(format.containsKey("vendor.mtk.vdec.low-latency.mode"));
     }
 
@@ -62,7 +62,7 @@ public final class MediaCodecHelperLowLatencyOptionsTest {
         int firstExhaustedTry = -1;
         for (int tryNumber = 0; tryNumber < TRY_LIMIT; tryNumber++) {
             boolean newOption = MediaCodecHelper.setDecoderLowLatencyOptions(
-                    format(), decoder, false, tryNumber);
+                    format(), decoder, tryNumber);
             if (!newOption && firstExhaustedTry < 0) {
                 firstExhaustedTry = tryNumber;
             }

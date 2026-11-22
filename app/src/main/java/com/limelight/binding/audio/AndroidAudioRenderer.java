@@ -1,13 +1,11 @@
 package com.limelight.binding.audio;
 
 import android.content.Context;
-import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
-import android.media.audiofx.AudioEffect;
 import android.os.Build;
 import android.os.SystemClock;
 import android.os.Process;
@@ -21,8 +19,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private static final long DROP_LOG_INTERVAL_MS = 5_000;
     private static final int MAX_WRITE_WAIT_MS = AudioBacklogPolicy.MAX_PENDING_AUDIO_MS;
 
-    private final Context context;
-    private final boolean enableAudioFx;
     private final int audioBoostDb;
     private final AudioManager audioManager;
     private final Object stateLock = new Object();
@@ -86,7 +82,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
     // Guarded by stateLock. True while this renderer holds focus or waits for a delayed grant;
     // false before the first request, after a refused request, and after a permanent loss.
     private boolean audioFocusRequested;
-    private boolean audioFxSessionOpen;
 
     private int selectedChannelConfig;
     private int selectedChannelCount;
@@ -101,9 +96,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private long nextDropLogTimeMs;
     private boolean invalidShortCountLogged;
 
-    public AndroidAudioRenderer(Context context, boolean enableAudioFx, int audioBoostDb) {
-        this.context = context;
-        this.enableAudioFx = enableAudioFx;
+    public AndroidAudioRenderer(Context context, int audioBoostDb) {
         this.audioBoostDb = audioBoostDb;
         audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
     }
@@ -189,9 +182,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
             if (AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC) != sampleRate
                     && lowLatency) {
-                continue;
-            }
-            if (enableAudioFx && lowLatency) {
                 continue;
             }
 
@@ -370,10 +360,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
 
         requestAudioFocusIfNotHeld();
-
-        synchronized (stateLock) {
-            openAudioEffectSessionLocked();
-        }
     }
 
     /**
@@ -533,7 +519,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
             abandonFocus = audioFocusRequested;
             audioFocusRequested = false;
-            closeAudioEffectSessionLocked();
             if (track != null) {
                 pauseAndFlush(track);
             }
@@ -587,7 +572,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 return;
             }
 
-            closeAudioEffectSessionLocked();
             playbackGeneration++;
             try {
                 failedTrack.release();
@@ -605,7 +589,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 int actualBufferFrames = preparePlaybackLocked(replacement);
                 backlogPolicy = new AudioBacklogPolicy((int) (actualBufferFrames * 1000L
                         / selectedSampleRate));
-                openAudioEffectSessionLocked();
                 LimeLog.info("Recovered dead AudioTrack");
                 logAudioTrackConfiguration(replacement, actualBufferFrames);
             }
@@ -614,29 +597,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 LimeLog.severe("Unable to recover dead AudioTrack: " + e.getMessage());
             }
         }
-    }
-
-    private void openAudioEffectSessionLocked() {
-        if (!enableAudioFx || audioFxSessionOpen || !started || track == null) {
-            return;
-        }
-        Intent intent = new Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION);
-        intent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
-        intent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
-        intent.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_GAME);
-        context.sendBroadcast(intent);
-        audioFxSessionOpen = true;
-    }
-
-    private void closeAudioEffectSessionLocked() {
-        if (!audioFxSessionOpen || track == null) {
-            return;
-        }
-        Intent intent = new Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION);
-        intent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
-        intent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
-        context.sendBroadcast(intent);
-        audioFxSessionOpen = false;
     }
 
     private static void pauseAndFlush(AudioTrack audioTrack) {

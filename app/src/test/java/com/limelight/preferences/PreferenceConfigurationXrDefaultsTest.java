@@ -43,7 +43,6 @@ public final class PreferenceConfigurationXrDefaultsTest {
         assertEquals(2160, configuration.height);
         assertEquals(60f, configuration.fps, 0f);
         assertEquals(200000, configuration.bitrate);
-        assertEquals(200000, configuration.meteredBitrate);
         assertEquals(PreferenceConfiguration.FormatOption.FORCE_HEVC,
                 configuration.videoFormat);
         assertTrue(configuration.enableHdr);

@@ -58,7 +58,7 @@ public final class AndroidAudioRendererBackpressureTest {
 
     private AndroidAudioRenderer renderer(AudioTrack track) {
         Context context = ApplicationProvider.getApplicationContext();
-        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, false, 0);
+        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, 0);
         ReflectionHelpers.setField(renderer, "track", track);
         ReflectionHelpers.setField(renderer, "started", true);
         ReflectionHelpers.setField(renderer, "hasAudioFocus", true);

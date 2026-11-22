@@ -70,18 +70,8 @@ public class StreamConfiguration {
             return this;
         }
 
-        public StreamConfiguration.Builder setResolutionScaleFactor(int scaleFactor) {
-            config.resolutionScaleFactor = scaleFactor;
-            return this;
-        }
-        
         public StreamConfiguration.Builder setBitrate(int bitrate) {
             config.bitrate = bitrate;
-            return this;
-        }
-        
-        public StreamConfiguration.Builder setEnableSops(boolean enable) {
-            config.sops = enable;
             return this;
         }
         

@@ -40,7 +40,7 @@ public final class AndroidAudioRendererPrimingTest {
         Context context = ApplicationProvider.getApplicationContext();
         AudioManager manager = (AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
         Shadows.shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
-        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, false, 0);
+        AndroidAudioRenderer renderer = new AndroidAudioRenderer(context, 0);
         AndroidAudioRendererBackpressureTest.PendingAudioShadow.pendingMs = 0;
         ReflectionHelpers.setField(renderer, "track", track);
         ReflectionHelpers.setField(renderer, "selectedChannelConfig", AudioFormat.CHANNEL_OUT_STEREO);

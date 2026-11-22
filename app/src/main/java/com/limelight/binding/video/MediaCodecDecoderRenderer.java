@@ -1402,7 +1402,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
             // This will try low latency options until we find one that works (or we give up).
             boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(
-                    mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
+                    mediaFormat, selectedDecoderInfo, tryNumber);
             //todo 色彩格式
 //            MediaCodecInfo.CodecCapabilities codecCapabilities = selectedDecoderInfo.getCapabilitiesForType(mimeType);
 //            int[] colorFormats=codecCapabilities.colorFormats;
