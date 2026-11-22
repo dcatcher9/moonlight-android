@@ -815,41 +815,6 @@ public class NvHTTP {
         }
     }
 
-    /**
-     * Get an app by ID
-     * @param appId The ID of the app
-     * @see #getAppByName(String) for alternative.
-     * @return app details, or null if no app with that ID exists
-     */
-    public NvApp getAppById(int appId) throws IOException, XmlPullParserException {
-        LinkedList<NvApp> appList = getAppList();
-        for (NvApp appFromList : appList) {
-            if (appFromList.getAppId() == appId) {
-                return appFromList;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Get an app by name
-     * NOTE: It is perfectly valid for multiple apps to have the same name,
-     * this function will only return the first one it finds.
-     * Consider using getAppById instead.
-     * @param appName The name of the app
-     * @see #getAppById(int) for alternative.
-     * @return app details, or null if no app with that name exists
-     */
-    public NvApp getAppByName(String appName) throws IOException, XmlPullParserException {
-        LinkedList<NvApp> appList = getAppList();
-        for (NvApp appFromList : appList) {
-            if (appFromList.getAppName().equalsIgnoreCase(appName)) {
-                return appFromList;
-            }
-        }
-        return null;
-    }
-
     public PairingManager getPairingManager() {
         return pm;
     }
@@ -928,18 +893,6 @@ public class NvHTTP {
         return openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "applist");
     }
     
-    public LinkedList<NvApp> getAppList() throws HostHttpResponseException, IOException, XmlPullParserException {
-        if (verbose) {
-            // Use the raw function so the app list is printed
-            return getAppListByReader(new StringReader(getAppListRaw()));
-        }
-        else {
-            try (final ResponseBody resp = openHttpConnection(httpClientLongConnectTimeout, getHttpsUrl(true), "applist", null, null)) {
-                return getAppListByReader(new InputStreamReader(resp.byteStream()));
-            }
-        }
-    }
-
     String executePairingCommand(String additionalArguments, boolean enableReadTimeout) throws HostHttpResponseException, IOException {
         return openHttpConnectionToString(enableReadTimeout ? httpClientLongConnectTimeout : httpClientLongConnectNoReadTimeout,
                 baseUrlHttp, "pair", "updateState=1&" + additionalArguments);

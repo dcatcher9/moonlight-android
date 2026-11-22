@@ -21,8 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
 
 import javax.crypto.KeyGenerator;
@@ -341,11 +339,8 @@ public class NvConnection {
         NvHTTP.ServerInfoResponse serverInfoResponse = h.getServerInfoWithProvenance(true);
         String serverInfo = serverInfoResponse.xml;
         
+        // getServerVersion() throws for a missing appversion, so this is never null.
         context.serverAppVersion = h.getServerVersion(serverInfo);
-        if (context.serverAppVersion == null) {
-            context.connListener.displayMessage("Server version malformed");
-            return false;
-        }
 
         ComputerDetails details = h.getComputerDetails(serverInfo,
                 serverInfoResponse.authenticated);
@@ -425,19 +420,8 @@ public class NvConnection {
         // Video stream format will be decided during the RTSP handshake
         //
         
-        NvApp app = context.streamConfig.getApp();
-        
-        // If the client did not provide an exact app ID, do a lookup with the applist
-        if (!context.streamConfig.getApp().isInitialized()) {
-            LimeLog.info("Using deprecated app lookup method - Please specify an app ID in your StreamConfiguration instead");
-            app = h.getAppByName(context.streamConfig.getApp().getAppName());
-            if (app == null) {
-                context.connListener.displayMessage("The app " + context.streamConfig.getApp().getAppName() + " is not in GFE app list");
-                return false;
-            }
-        }
-        
-        return startApp(h, details, app);
+        // Game always supplies the app's exact ID or UUID.
+        return startApp(h, details, context.streamConfig.getApp());
     }
 
     /** Applies only the mutation authorized by the original, immutable user decision. */
@@ -665,7 +649,6 @@ public class NvConnection {
             synchronized (lifecycleLock) {
                 if (connectionThread == Thread.currentThread()) {
                     connectionThread = null;
-                    lifecycleLock.notifyAll();
                 }
             }
         }
