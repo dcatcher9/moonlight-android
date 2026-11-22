@@ -306,6 +306,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private int currentOrientation;
 
     public NvConnection conn;
+    // The audio renderer of the running connection, so focus regain can re-request audio focus.
+    // Set and cleared on main.
+    private AndroidAudioRenderer audioRenderer;
     private SpinnerDialog spinner;
     private boolean displayedFailureDialog = false;
     private volatile boolean connecting = false;
@@ -1379,9 +1382,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         decoderRenderer.setRenderTarget(streamContainer.getSurface());
 
         // Starten Sie die NvConnection
-        conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx,
-                        prefConfig.audioBoostDb),
-                decoderRenderer, Game.this);
+        audioRenderer = new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx,
+                prefConfig.audioBoostDb);
+        conn.start(audioRenderer, decoderRenderer, Game.this);
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -1934,6 +1937,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (hasFocus) {
             synchronized (physicalMouseInputLock) {
                 physicalMouseInputAccepting = grabbedInput && !cursorVisible;
+            }
+            // Another app that took audio focus permanently leaves the stream silent until it
+            // asks again; returning to the stream is that request.
+            if (audioRenderer != null) {
+                audioRenderer.reacquireAudioFocus();
             }
         }
 
@@ -3570,6 +3578,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         connecting = connected = false;
+        audioRenderer = null;
         xrSettingsApply.onConnectionStopping();
         if (xrSessionSettingsController != null) {
             xrSessionSettingsController.getStreamGammaState().connectionStopped();
