@@ -377,13 +377,14 @@ public final class GameTransportReconnectTest {
         assertTrue(game.isFinishing());
     }
 
+    // The monitor's main-thread entry points, as its ConnectivityManager callback delivers them.
     private void networkLost() {
-        ReflectionHelpers.callInstanceMethod(game, "onStreamNetworkLost");
+        ((StreamNetworkMonitor) ReflectionHelpers.getField(game, "streamNetwork")).onLost();
         shadowOf(Looper.getMainLooper()).idle();
     }
 
     private void networkAvailable() {
-        ReflectionHelpers.callInstanceMethod(game, "onStreamNetworkAvailable");
+        ((StreamNetworkMonitor) ReflectionHelpers.getField(game, "streamNetwork")).onAvailable();
         shadowOf(Looper.getMainLooper()).idle();
     }
 

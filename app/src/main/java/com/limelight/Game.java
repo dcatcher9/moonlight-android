@@ -81,7 +81,6 @@ import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
 import android.net.ConnectivityManager;
-import android.net.Network;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -260,9 +259,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     refreshXrSessionSettingsModels();
                 }
             }, reconnectHandler);
-    // No default network exists; a stream transport cannot survive and recovery must wait.
-    private boolean streamNetworkLost;
-    private ConnectivityManager.NetworkCallback streamNetworkCallback;
+    private final StreamNetworkMonitor streamNetwork = new StreamNetworkMonitor(
+            this::runOnUiThread, new StreamNetworkMonitor.Listener() {
+                @Override
+                public void onNetworkLost() {
+                    onStreamNetworkLost();
+                }
+
+                @Override
+                public void onNetworkReturned() {
+                    onStreamNetworkReturned();
+                }
+            });
     // An automatic recovery step is waiting for the network or the headset to return.
     private boolean recoveryRestartHeld;
     // Device sleep (headset removed) holds a pending recovery until onStart instead of ending it.
@@ -849,10 +857,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return false;
         }
         boolean waitForHeadset = recoveryHeldForSleep && !streamActivityStarted;
-        if (!streamNetworkLost && !waitForHeadset) {
+        if (!streamNetwork.isNetworkLost() && !waitForHeadset) {
             return false;
         }
-        if (!recoveryRestartHeld && streamNetworkLost) {
+        if (!recoveryRestartHeld && streamNetwork.isNetworkLost()) {
             LimeLog.info("XR: stream recovery is waiting for the network to return");
             showCenteredStreamMessage(getString(R.string.xr_session_network_lost),
                     NETWORK_WAIT_MESSAGE_MS);
@@ -892,7 +900,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 + "/" + TransportReconnectPolicy.MAX_ATTEMPTS + ", error " + errorCode);
         // Without a network the restart holds until one returns; that wait replaces the backoff.
         scheduleXrSessionReconnect(attempt,
-                streamNetworkLost ? 0 : TransportReconnectPolicy.delayMillis(attempt));
+                streamNetwork.isNetworkLost() ? 0 : TransportReconnectPolicy.delayMillis(attempt));
         return true;
     }
 
@@ -928,52 +936,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    private void registerStreamNetworkCallback(ConnectivityManager connMgr) {
-        streamNetworkLost = connMgr.getActiveNetwork() == null;
-        streamNetworkCallback = new ConnectivityManager.NetworkCallback() {
-            @Override
-            public void onAvailable(Network network) {
-                runOnUiThread(Game.this::onStreamNetworkAvailable);
-            }
-
-            @Override
-            public void onLost(Network network) {
-                runOnUiThread(Game.this::onStreamNetworkLost);
-            }
-        };
-        try {
-            connMgr.registerDefaultNetworkCallback(streamNetworkCallback);
-        } catch (RuntimeException e) {
-            // The platform caps callbacks per app. Recovery then relies on transport timeouts.
-            LimeLog.warning("Stream network monitoring unavailable: " + e.getMessage());
-            streamNetworkCallback = null;
-            streamNetworkLost = false;
-        }
-    }
-
-    private void unregisterStreamNetworkCallback() {
-        if (streamNetworkCallback == null) {
-            return;
-        }
-        ConnectivityManager connMgr =
-                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        try {
-            connMgr.unregisterNetworkCallback(streamNetworkCallback);
-        } catch (IllegalArgumentException ignored) {
-            // Registration failed or already ended.
-        }
-        streamNetworkCallback = null;
-    }
-
     /**
      * A default-network loss ends the stalled transport now rather than after the control
      * stream's ten-second timeout; the host drops a silent peer sooner than that anyway.
      */
     private void onStreamNetworkLost() {
-        if (streamNetworkLost) {
-            return;
-        }
-        streamNetworkLost = true;
         if (isFinishing() || isDestroyed() || !connected || reconnectScheduled) {
             // A starting attempt fails through its own HTTP/RTSP error, and a scheduled
             // recovery holds its next step until a network returns.
@@ -984,13 +951,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         connectionTerminated(-1);
     }
 
-    private void onStreamNetworkAvailable() {
-        if (!streamNetworkLost) {
-            // Registration reports the current default network, and a switch between two
-            // networks never lost connectivity.
-            return;
-        }
-        streamNetworkLost = false;
+    private void onStreamNetworkReturned() {
         LimeLog.info("XR: stream network returned");
         releaseHeldRecoveryRestart();
     }
@@ -1298,7 +1259,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (isMetered) {
             displayTransientMessage(getResources().getString(R.string.conn_metered));
         }
-        registerStreamNetworkCallback(connMgr);
+        streamNetwork.register(connMgr);
 
         // Make sure Wi-Fi is fully powered up
         WifiManager wifiMgr = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -2441,7 +2402,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onDestroy() {
         cancelAutomaticReconnect();
-        unregisterStreamNetworkCallback();
+        streamNetwork.unregister();
         // Drop the display callback before teardown: it dereferences streamContainer.
         stopListeningForPanelRefreshRateChanges();
         // Native connection teardown must complete before codec/EGL/XR resources disappear.
