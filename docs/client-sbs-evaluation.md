@@ -1506,6 +1506,8 @@ coordinate-calibration and strict-failure guardrails in addition to the family-a
     --tests "com.limelight.utils.ClientSbsPackagedModelArchiveTest" `
     --tests "com.limelight.utils.Stereo3DRendererSchedulingTest" `
     --tests "com.limelight.utils.Stereo3DRendererStrictFailureContractTest" `
+    --tests "com.limelight.utils.ClientSbsInferenceOwnerLifecycleTest" `
+    --tests "com.limelight.utils.ClientSbsDecoderFrameSourceLifecycleTest" `
     --tests "com.limelight.utils.ShaderUtilsTest" `
     --tests "com.limelight.ui.XrStreamPresenterLayoutTest" `
     --tests "com.limelight.ui.XrStreamPresenterTransitionTest" `
@@ -1558,6 +1560,15 @@ The tests cover:
   retired Bestv2/probe shader state is absent, raw `R32F` depth feeds the conditioner directly
   while both inverse targets remain `RG16F`, the exact seed cannot become a fallback, and any
   strict V2 stage failure reaches flat composition only.
+- `ClientSbsInferenceOwnerLifecycleTest`: with a mock native engine, the inference owner creates,
+  runs and closes the engine on its worker; a run receives both slot fences and publishes its
+  result before the draw request; a GPU failure closes only after the renderer finish (a live
+  `glFinish` or a destroyed context); and a failed owner close is retried on the cleanup thread
+  before terminal completion.
+- `ClientSbsDecoderFrameSourceLifecycleTest`: decoder callback tokens and the coalesced drain
+  event, the latch holding the frame lock through `updateTexImage()`, the live-resize and HDR
+  boundary discards before their generation advance, the ordered `SurfaceTexture` replacement for
+  a new handoff generation, and terminal callback shutdown.
 - `ShaderUtilsTest`: exact source-cell area downsampling, bilinear-upscale selection, reflected
   per-cell portrait mapping, per-cell HDR conversion, per-stream fixed-shape packing, the 11-step
   unique seed inverse, and the one-correction refinement contract.
