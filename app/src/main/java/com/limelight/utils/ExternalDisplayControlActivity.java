@@ -395,7 +395,6 @@ public class ExternalDisplayControlActivity extends AppCompatActivity implements
         }
 
         rootLayout.setInputCallbacks(Game.instance);
-        rootLayout.setCommitTextEnabled(prefConfig.enableCommitText);
 
         setContentView(rootLayout);
 

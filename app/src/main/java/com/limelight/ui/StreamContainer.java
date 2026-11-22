@@ -12,9 +12,6 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
-import android.view.inputmethod.BaseInputConnection;
-import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputConnection;
 import android.widget.FrameLayout;
 
 import com.limelight.Game;
@@ -37,8 +34,6 @@ public class StreamContainer extends FrameLayout {
     public interface InputCallbacks {
         boolean handleKeyUp(KeyEvent event);
         boolean handleKeyDown(KeyEvent event);
-        boolean handleCommitText(CharSequence text);
-        boolean handleDeleteSurroundingText(int beforeLength, int afterLength);
         boolean handleFocusChange(boolean hasWindowFocus);
     }
 
@@ -92,7 +87,6 @@ public class StreamContainer extends FrameLayout {
     private volatile Surface mExpectedEglOutputSurface;
     private Runnable onSurfaceAvailable;
     private InputCallbacks mInputCallbacks;
-    private boolean commitTextEnabled = false;
 
     private boolean isSurfaceReady = false;
 
@@ -1199,10 +1193,6 @@ public class StreamContainer extends FrameLayout {
         this.mInputCallbacks = callbacks;
     }
 
-    public void setCommitTextEnabled(boolean enabled) {
-        this.commitTextEnabled = enabled;
-    }
-
     @Override
     public boolean onKeyPreIme(int keyCode, KeyEvent event) {
         if (mInputCallbacks != null) {
@@ -1221,30 +1211,6 @@ public class StreamContainer extends FrameLayout {
         if (mInputCallbacks != null) {
             mInputCallbacks.handleFocusChange(hasWindowFocus);
         }
-    }
-
-    @Override
-    public boolean onCheckIsTextEditor() {
-        return commitTextEnabled || super.onCheckIsTextEditor();
-    }
-
-    @Override
-    public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        if (!commitTextEnabled) {
-            return super.onCreateInputConnection(outAttrs);
-        }
-        outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT;
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI;
-        return new BaseInputConnection(this, false) {
-            @Override
-            public boolean commitText(CharSequence text, int newCursorPosition) {
-                return mInputCallbacks != null && mInputCallbacks.handleCommitText(text) || super.commitText(text, newCursorPosition);
-            }
-            @Override
-            public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-                return mInputCallbacks != null && mInputCallbacks.handleDeleteSurroundingText(beforeLength, afterLength) || super.deleteSurroundingText(beforeLength, afterLength);
-            }
-        };
     }
 
     public void setOnSurfaceAvailable(Runnable callback) {

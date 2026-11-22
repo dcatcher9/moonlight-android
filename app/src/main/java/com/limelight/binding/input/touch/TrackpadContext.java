@@ -38,10 +38,6 @@ public class TrackpadContext implements TouchContext {
     private final int actionIndex;
     private final Handler handler;
 
-    private boolean swapAxis = false;
-    private float sensitivityX = 1;
-    private float sensitivityY = 1;
-
     private static final int TAP_MOVEMENT_THRESHOLD = 30;
     private static final int TAP_TIME_THRESHOLD = 230;
     private static final int CLICK_RELEASE_DELAY = TAP_TIME_THRESHOLD;
@@ -59,13 +55,6 @@ public class TrackpadContext implements TouchContext {
         this.conn = conn;
         this.actionIndex = actionIndex;
         this.handler = new Handler(Looper.getMainLooper());
-    }
-
-    public TrackpadContext(NvConnection conn, int actionIndex, boolean swapAxis, int sensitivityX, int sensitivityY) {
-        this(conn, actionIndex);
-        this.swapAxis = swapAxis;
-        this.sensitivityX = (float) sensitivityX / 100;
-        this.sensitivityY = (float) sensitivityY / 100;
     }
 
     private final Runnable scrollTransitionRunnable = new Runnable() {
@@ -328,26 +317,14 @@ public class TrackpadContext implements TouchContext {
             double magnitude = Math.sqrt(rawDeltaX * rawDeltaX + rawDeltaY * rawDeltaY);
             double precisionMultiplier = Math.cbrt(magnitude / ACCELERATION_THRESHOLD);
 
-            float deltaX, deltaY;
-            if (swapAxis) {
-                deltaY = rawDeltaX;
-                deltaX = rawDeltaY;
+            float deltaX = rawDeltaX;
+            float deltaY = rawDeltaY;
 
-                absDeltaX = Math.abs(rawDeltaY);
-                absDeltaY = Math.abs(rawDeltaX);
-            } else {
-                deltaX = rawDeltaX;
-                deltaY = rawDeltaY;
-
-                absDeltaX = Math.abs(rawDeltaX);
-                absDeltaY = Math.abs(rawDeltaY);
-            }
+            absDeltaX = Math.abs(rawDeltaX);
+            absDeltaY = Math.abs(rawDeltaY);
 
             deltaX *= precisionMultiplier;
             deltaY *= precisionMultiplier;
-
-            deltaX *= sensitivityX;
-            deltaY *= sensitivityY;
 
             // Update velocity for flicking
             if (deltaTime > 0 && (confirmedMove || confirmedDrag)) {

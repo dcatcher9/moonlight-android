@@ -5,10 +5,7 @@ import android.view.MotionEvent;
 import android.view.View;
 
 import com.limelight.nvstream.jni.MoonBridge;
-import com.limelight.preferences.PreferenceConfiguration;
 
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Converts Android touch and stylus {@link MotionEvent}s into the host's native touch and pen
@@ -29,12 +26,10 @@ final class NativeTouchEventSender {
                          float contactAreaMinor, short rotation, byte tilt);
     }
 
-    private final PreferenceConfiguration prefConfig;
     private final View streamView;
     private final Sink sink;
 
-    NativeTouchEventSender(PreferenceConfiguration prefConfig, View streamView, Sink sink) {
-        this.prefConfig = prefConfig;
+    NativeTouchEventSender(View streamView, Sink sink) {
         this.streamView = streamView;
         this.sink = sink;
     }
@@ -80,65 +75,11 @@ final class NativeTouchEventSender {
         }
     }
 
-    //灵敏度保存到集合 适配多个手指
-    private final Map<String,SensitivityBean> sensitivityMap=new HashMap<>();
-
-    //修改移动的触控灵敏度（通过修改移动的距离实现） 默认使用右半边屏幕的时候开启
-    private float[] getStreamViewRelativeSensitivityXY(MotionEvent event,float normalizedX,float normalizedY,int pointerIndex){
-        float[] normalized=new float[2];
-        normalized[0]=normalizedX;
-        normalized[1]=normalizedY;
-
-        //如果不是全局模式 并且 坐标 不在右边 则返回
-        if(!prefConfig.touchSensitivityGlobal&&normalizedX<streamView.getResources().getDisplayMetrics().widthPixels/2){
-            return normalized;
-        }
-        if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-            SensitivityBean bean=sensitivityMap.get(String.valueOf(event.getPointerId(pointerIndex)));
-            if(bean==null){
-                bean=new SensitivityBean();
-            }
-            if(bean.getLastAbsoluteX() !=-1){
-                float dx=normalizedX- bean.getLastAbsoluteX();
-                float dy=normalizedY- bean.getLastAbsoluteY();
-                dx*=0.01f*prefConfig.touchSensitivityX;//灵敏度
-                dy*=0.01f*prefConfig.touchSensitivityY;
-                normalizedX= bean.getLastRelativelyX() +dx;
-                normalizedY= bean.getLastRelativelyY() +dy;
-            }
-            if(prefConfig.touchSensitivityRotationAuto){
-                if(normalizedX>= streamView.getWidth()){
-                    normalizedX= streamView.getWidth()/2.0f;
-                }
-                if(normalizedY>= streamView.getHeight()){
-                    normalizedY= streamView.getHeight()/2.0f;
-                }
-            }
-            bean.setLastAbsoluteX(event.getX(pointerIndex));
-            bean.setLastAbsoluteY(event.getY(pointerIndex));
-            bean.setLastRelativelyX(normalizedX);
-            bean.setLastRelativelyY(normalizedY);
-            sensitivityMap.put(String.valueOf(event.getPointerId(pointerIndex)),bean);
-        }
-        //抬起的时候，恢复初始化状态
-        if (event.getActionMasked() == MotionEvent.ACTION_UP||event.getActionMasked() == MotionEvent.ACTION_POINTER_UP) {
-            sensitivityMap.remove(String.valueOf(event.getPointerId(pointerIndex)));
-        }
-        normalized[0]=normalizedX;
-        normalized[1]=normalizedY;
-        return normalized;
-    }
 
 
     private float[] getStreamViewRelativeNormalizedXY(View view, MotionEvent event, int pointerIndex) {
         float normalizedX = event.getX(pointerIndex);
         float normalizedY = event.getY(pointerIndex);
-        //开启自定义修改触控灵敏度 并且 数值不为100
-        if(prefConfig.enableTouchSensitivity&&(prefConfig.touchSensitivityX !=100||prefConfig.touchSensitivityY!=100)){
-            float[] normalized=getStreamViewRelativeSensitivityXY(event,normalizedX,normalizedY,pointerIndex);
-            normalizedX=normalized[0];
-            normalizedY=normalized[1];
-        }
         // For the containing background view, we must subtract the origin
         // of the StreamView to get video-relative coordinates.
         if (view != streamView) {

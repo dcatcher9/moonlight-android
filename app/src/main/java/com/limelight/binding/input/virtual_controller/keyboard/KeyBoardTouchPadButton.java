@@ -14,7 +14,6 @@ import android.text.TextUtils;
 import android.view.MotionEvent;
 
 import com.limelight.LimeLog;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -123,7 +122,6 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
     public KeyBoardTouchPadButton(KeyBoardController controller, String elementId, int layer, Context context) {
         super(controller, context, elementId);
         this.layer = layer;
-        preferenceConfiguration=PreferenceConfiguration.readPreferences(context);
     }
 
     public void addDigitalButtonListener(DigitalButtonListener listener) {
@@ -142,7 +140,7 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
 
     int pressedColor = 0x2BF5F5F9;
 
-    PreferenceConfiguration preferenceConfiguration;
+    private static final int TOUCHPAD_SENSITIVITY_PERCENT = 100;
 
     @Override
     protected void onElementDraw(Canvas canvas) {
@@ -259,9 +257,8 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
                         onClickCallback();
                     }
                 }
-//                LimeLog.info("touchPadSensitivity"+preferenceConfiguration.touchPadSensitivity);
 //                LimeLog.info("onElementTouchEvent:" + deltaX + "," + deltaY);
-                onMoveCallback((int) (deltaX*0.01f*preferenceConfiguration.touchPadSensitivity), (int) (deltaY*0.01f*preferenceConfiguration.touchPadYSensitity));
+                onMoveCallback((int) (deltaX*0.01f*TOUCHPAD_SENSITIVITY_PERCENT), (int) (deltaY*0.01f*TOUCHPAD_SENSITIVITY_PERCENT));
                 if (deltaX != 0) {
                     lastTouchX = (int) event.getX();
                 }

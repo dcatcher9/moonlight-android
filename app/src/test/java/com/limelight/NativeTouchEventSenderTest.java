@@ -10,7 +10,6 @@ import android.view.View;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.limelight.nvstream.jni.MoonBridge;
-import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.shadows.ShadowMoonBridge;
 
 import org.junit.Before;
@@ -54,12 +53,10 @@ public class NativeTouchEventSenderTest {
     @Before
     public void setUp() {
         ShadowMoonBridge.reset();
-        PreferenceConfiguration prefs = new PreferenceConfiguration();
-        prefs.enableTouchSensitivity = false;
         streamView = new View(ApplicationProvider.getApplicationContext());
         streamView.layout(0, 0, 200, 100);
         sink = new RecordingSink();
-        sender = new NativeTouchEventSender(prefs, streamView, sink);
+        sender = new NativeTouchEventSender(streamView, sink);
     }
 
     @Test

@@ -71,13 +71,10 @@ public class PreferenceConfiguration {
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
-    private static final String REMEMBER_MOUSE_MODE_PREF_STRING = "checkbox_remember_mouse_mode";
     private static final String ANALOG_SCROLLING_PREF_STRING = "analog_scrolling";
-    private static final String MOUSE_NAV_BUTTONS_STRING = "checkbox_mouse_nav_buttons";
     private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
     private static final String VIBRATE_FALLBACK_STRENGTH_PREF_STRING = "seekbar_vibrate_fallback_strength";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
-//    static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
     public static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     public static final String VIRTUAL_DISPLAY_ONLY_PREF_STRING =
@@ -98,16 +95,6 @@ public class PreferenceConfiguration {
     private static final String CHECKBOX_BACK_AS_GUIDE = "checkbox_back_as_guide";
     private static final String CHECKBOX_SMART_CLIPBOARD_SYNC = "checkbox_smart_clipboard_sync";
     private static final String CHECKBOX_HIDE_CLIPBOARD_CONTENT = "checkbox_hide_clipboard_content";
-
-    //触控屏幕灵敏度
-    private static final String SEEKBAR_TOUCH_SENSITIVITY = "seekbar_touch_sensitivity_opacity_x";
-    private static final String SEEKBAR_TRACKPAD_SENSITIVITY_X = "seekbar_trackpad_sensitivity_x";
-    private static final String SEEKBAR_TRACKPAD_SENSITIVITY_Y = "seekbar_trackpad_sensitivity_y";
-    private static final String CHECKBOX_TRACKPAD_DRAG_DROP_VIBRATION = "checkbox_trackpad_drag_drop_vibration";
-    private static final String SEEKBAR_TRACKPAD_DRAG_DROP_THRESHOLD = "seekbar_trackpad_drag_drop_threshold";
-    private static final String CHECKBOX_TRACKPAD_SWAP_AXIS = "checkbox_trackpad_swap_axis";
-
-    private static final String CHECKBOX_ENABLE_COMMIT_TEXT = "checkbox_enable_commit_text";
 
     static final String DEFAULT_RESOLUTION = "3840x2160";
     static final String DEFAULT_FPS = "60";
@@ -137,13 +124,10 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
-    private static final boolean DEFAULT_REMEMBER_MOUSE_MODE = false;
     private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "right";
-    private static final boolean DEFAULT_MOUSE_NAV_BUTTONS = false;
     private static final boolean DEFAULT_VIBRATE_FALLBACK = false;
     private static final int DEFAULT_VIBRATE_FALLBACK_STRENGTH = 100;
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
-    private static final boolean DEFAULT_TOUCHSCREEN_TRACKPAD = true;
     static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
     static final int DEFAULT_AUDIO_BOOST_DB = 3;
     static final String DEFAULT_FRAME_PACING = "latency";
@@ -162,12 +146,6 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_BACK_AS_GUIDE = false;
     private static final boolean DEFAULT_SMART_CLIPBOARD_SYNC = false;
     private static final boolean DEFAULT_HIDE_CLIPBOARD_CONTENT = true;
-    private static final int DEFAULT_TRACKPAD_SENSITIVITY_X = 100;
-    private static final int DEFAULT_TRACKPAD_SENSITIVITY_Y = 100;
-    private static final boolean DEFAULT_TRACKPAD_DRAG_DROP_VIBRATION = false;
-    private static final int DEFAULT_TRACKPAD_DRAG_DROP_THRESHOLD = 250;
-    private static final boolean DEFAULT_TRACKPAD_SWAP_AXIS = false;
-    private static final boolean DEFAULT_ENABLE_COMMIT_TEXT = false;
 
     public static final int FRAME_PACING_MIN_LATENCY = 0;
     public static final int FRAME_PACING_BALANCED = 1;
@@ -264,48 +242,18 @@ public class PreferenceConfiguration {
 
     public boolean enableFullExDisplay;
 
-    //触控屏幕灵敏度
-    public int touchSensitivityX;
-    public int touchSensitivityY;
-    //超出边界自动回中心点
-    public boolean touchSensitivityRotationAuto;
-
-    //触控灵敏度调节范围
-    public boolean touchSensitivityGlobal;
-
-    //多点触控灵敏度调节
-    public boolean enableTouchSensitivity;
-
-    //触控板模式灵敏度
-    public int touchPadSensitivity;
-
-    public int touchPadYSensitity;
-
     //多点触控模式
     public boolean enableMultiTouchScreen;
 
     //物理光标捕获
     public boolean enableMouseLocalCursor;
 
-    public boolean enableMultiTouchGestures;
-
     //强制使用设备自身的震动马达
     public boolean enableDeviceRumble;
-
-    // Enable forwarding of commitText from soft keyboard
-    public boolean enableCommitText;
-
-    public int trackpadSensitivityX;
-    public int trackpadSensitivityY;
-    public boolean trackpadDragDropVibration;
-    public int trackpadDragDropThreshold;
-    public boolean trackpadSwapAxis;
 
     public boolean bindAllUsb;
     public boolean mouseEmulation;
     public AnalogStickForScrolling analogStickForScrolling;
-    public boolean mouseNavButtons;
-    public boolean rememberMouseMode;
 
     public boolean vibrateFallbackToDevice;
     public int vibrateFallbackToDeviceStrength;
@@ -611,74 +559,27 @@ public class PreferenceConfiguration {
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
 
-        // Read mouse mode and set touch settings accordingly
-        String mouseMode = prefs.getString("mouse_mode_list", "0");
-        int mouseModeInt = Integer.parseInt(mouseMode);
-        switch (mouseModeInt) {
-            case 0: // Multi-touch
-                config.enableMultiTouchScreen = true;
-                config.touchscreenTrackpad = false;
-                break;
-            case 1: // Normal mouse
-            case 5: // Normal mouse with swapped buttons
-                config.enableMultiTouchScreen = false;
-                config.touchscreenTrackpad = false;
-                break;
-            case 2: // Trackpad (natural)
-            case 3: // Trackpad (gaming)
-                config.enableMultiTouchScreen = false;
-                config.touchscreenTrackpad = true;
-                break;
-            case 4: // Touch mouse disabled
-                config.enableMultiTouchScreen = false;
-                config.touchscreenTrackpad = false;
-                break;
-        }
+        // Touch starts in multi-touch mode; the in-stream mouse-mode menu changes these flags.
+        config.enableMultiTouchScreen = true;
+        config.touchscreenTrackpad = false;
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
         config.streamGamma = com.limelight.nvstream.StreamGamma.fromPreference(
                 prefs.getString(STREAM_GAMMA_PREF_STRING, "default"));
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
-        config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
-        config.rememberMouseMode = prefs.getBoolean(REMEMBER_MOUSE_MODE_PREF_STRING, DEFAULT_REMEMBER_MOUSE_MODE);
         config.vibrateFallbackToDevice = prefs.getBoolean(VIBRATE_FALLBACK_PREF_STRING, DEFAULT_VIBRATE_FALLBACK);
         config.vibrateFallbackToDeviceStrength = prefs.getInt(VIBRATE_FALLBACK_STRENGTH_PREF_STRING, DEFAULT_VIBRATE_FALLBACK_STRENGTH);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
-//        config.touchscreenTrackpad = prefs.getBoolean(TOUCHSCREEN_TRACKPAD_PREF_STRING, DEFAULT_TOUCHSCREEN_TRACKPAD);
 
         //兼容joycon手柄
         config.enableJoyConFix = prefs.getBoolean("checkbox_joycon_fix",false);
 
         config.enableFullExDisplay=prefs.getBoolean("checkbox_enable_fullexdisplay",false);
 
-        config.touchSensitivityX =prefs.getInt(SEEKBAR_TOUCH_SENSITIVITY,100);
-
-        config.touchSensitivityY=prefs.getInt("seekbar_touch_sensitivity_opacity_y",100);
-
-        config.touchSensitivityRotationAuto=prefs.getBoolean("checkbox_enable_touch_sensitivity_rotation_auto",true);
-
-        config.touchSensitivityGlobal=prefs.getBoolean("checkbox_enable_global_touch_sensitivity",false);
-
-        config.enableTouchSensitivity=prefs.getBoolean("checkbox_enable_touch_sensitivity",false);
-
         config.enableMouseLocalCursor=prefs.getBoolean("checkbox_mouse_local_cursor",false);
 
-        config.enableMultiTouchGestures = prefs.getBoolean("checkbox_multi_touch_gestures", false);
-
         config.enableDeviceRumble=prefs.getBoolean("checkbox_enable_device_rumble", false);
-
-        config.enableCommitText = prefs.getBoolean(CHECKBOX_ENABLE_COMMIT_TEXT, DEFAULT_ENABLE_COMMIT_TEXT);
-
-        config.touchPadSensitivity=prefs.getInt("seekbar_touchpad_sensitivity_opacity",100);
-
-        config.touchPadYSensitity=prefs.getInt("seekbar_touchpad_sensitivity_y_opacity",100);
-
-        config.trackpadSensitivityX = prefs.getInt(SEEKBAR_TRACKPAD_SENSITIVITY_X, DEFAULT_TRACKPAD_SENSITIVITY_X);
-        config.trackpadSensitivityY = prefs.getInt(SEEKBAR_TRACKPAD_SENSITIVITY_Y, DEFAULT_TRACKPAD_SENSITIVITY_Y);
-        config.trackpadDragDropVibration = prefs.getBoolean(CHECKBOX_TRACKPAD_DRAG_DROP_VIBRATION, DEFAULT_TRACKPAD_DRAG_DROP_VIBRATION);
-        config.trackpadDragDropThreshold = prefs.getInt(SEEKBAR_TRACKPAD_DRAG_DROP_THRESHOLD, DEFAULT_TRACKPAD_DRAG_DROP_THRESHOLD);
-        config.trackpadSwapAxis = prefs.getBoolean(CHECKBOX_TRACKPAD_SWAP_AXIS, DEFAULT_TRACKPAD_SWAP_AXIS);
 
         config.absoluteMouseMode = prefs.getBoolean(ABSOLUTE_MOUSE_MODE_PREF_STRING, DEFAULT_ABSOLUTE_MOUSE_MODE);
         config.virtualDisplayOnly = prefs.getBoolean(

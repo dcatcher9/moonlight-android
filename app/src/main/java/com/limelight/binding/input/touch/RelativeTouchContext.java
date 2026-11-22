@@ -29,6 +29,7 @@ public class RelativeTouchContext implements TouchContext {
     private final int referenceHeight;
     private final View targetView;
     private final PreferenceConfiguration prefConfig;
+    private static final int TOUCHPAD_SENSITIVITY_PERCENT = 100;
     private final Handler handler;
 
     private final Runnable dragTimerRunnable = new Runnable() {
@@ -279,7 +280,7 @@ public class RelativeTouchContext implements TouchContext {
                                 (short) targetView.getHeight());
                     }
                     else {
-                        conn.sendMouseMove((short) (deltaX*prefConfig.touchPadSensitivity*0.01f), (short) (deltaY*prefConfig.touchPadYSensitity*0.01f));
+                        conn.sendMouseMove((short) (deltaX*TOUCHPAD_SENSITIVITY_PERCENT*0.01f), (short) (deltaY*TOUCHPAD_SENSITIVITY_PERCENT*0.01f));
                     }
                 }
 

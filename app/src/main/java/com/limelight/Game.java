@@ -83,8 +83,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.PowerManager;
-import android.os.VibrationEffect;
-import android.os.Vibrator;
 import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
@@ -436,14 +434,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private float floatingButtonStartX, floatingButtonStartY;
 
     // Zoom button drag state
-
-    // Queue for batching commitText payloads
-    private final CommitTextQueue commitTextQueue = new CommitTextQueue(
-            new Handler(Looper.getMainLooper()), chunk -> {
-                if (conn != null) {
-                    conn.sendUtf8Text(chunk);
-                }
-            });
 
     private SharedPreferences prepareCurrentSessionPreferences() {
         XrSessionBootstrap.Startup startup = XrSessionBootstrap.prepare(this, getIntent());
@@ -907,7 +897,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Listen for non-touch events on the game surface
         streamContainer = findViewById(R.id.streamContainer);
-        nativeTouchEvents = new NativeTouchEventSender(prefConfig, streamContainer,
+        nativeTouchEvents = new NativeTouchEventSender(streamContainer,
                 new NativeTouchEventSender.Sink() {
                     @Override
                     public int sendTouchEvent(byte eventType, int pointerId, float x, float y,
@@ -936,7 +926,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         streamContainer.setOnGenericMotionListener(this);
         streamContainer.setOnKeyListener(this);
         streamContainer.setInputCallbacks(this);
-        streamContainer.setCommitTextEnabled(prefConfig.enableCommitText);
 
         rootView = streamContainer.getParent();
 
@@ -1241,7 +1230,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Initialize trackpad contexts
         for (int i = 0; i < trackpadContextMap.length; i++) {
-            trackpadContextMap[i] = new TrackpadContext(conn, i, prefConfig.trackpadSwapAxis, prefConfig.trackpadSensitivityX, prefConfig.trackpadSensitivityY);
+            trackpadContextMap[i] = new TrackpadContext(conn, i);
         }
 
         if (Objects.equals(appUUID, NvApp.REMOTE_INPUT_UUID)) {
@@ -2308,12 +2297,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 eventSource == InputDevice.SOURCE_MOUSE_RELATIVE) &&
                 event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
 
-            // Send the right mouse button event if mouse back and forward
-            // are disabled. If they are enabled, handleMotionEvent() will take
-            // care of this.
-            if (!prefConfig.mouseNavButtons) {
-                conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
-            }
+            // Mouse back and forward are not forwarded, so this event is a right click.
+            conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
 
             // Always return true, otherwise the back press will be propagated
             // up to the parent and finish the activity.
@@ -2400,12 +2385,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 eventSource == InputDevice.SOURCE_MOUSE_RELATIVE) &&
                 event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
 
-            // Send the right mouse button event if mouse back and forward
-            // are disabled. If they are enabled, handleMotionEvent() will take
-            // care of this.
-            if (!prefConfig.mouseNavButtons) {
-                conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
-            }
+            // Mouse back and forward are not forwarded, so this event is a right click.
+            conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
 
             // Always return true, otherwise the back press will be propagated
             // up to the parent and finish the activity.
@@ -2654,13 +2635,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && event.getClassification() == MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE) {
                             if (!pointerSwiping) {
                                 pointerSwiping = true;
-                                handleTouchInput(event, trackpadContextMap, false, prefConfig.trackpadSwapAxis, MotionEvent.ACTION_POINTER_DOWN, 1, 2);
+                                handleTouchInput(event, trackpadContextMap, false, MotionEvent.ACTION_POINTER_DOWN, 1, 2);
                             }
-                            return handleTouchInput(event, trackpadContextMap, false, prefConfig.trackpadSwapAxis, MotionEvent.ACTION_MOVE, 1, 2);
+                            return handleTouchInput(event, trackpadContextMap, false, MotionEvent.ACTION_MOVE, 1, 2);
                         } else if (pointerSwiping && eventAction == MotionEvent.ACTION_UP) {
                             pointerSwiping = false;
                             synthClickPending = false;
-                            handleTouchInput(event, trackpadContextMap, false, prefConfig.trackpadSwapAxis, MotionEvent.ACTION_POINTER_UP, 1, 2);
+                            handleTouchInput(event, trackpadContextMap, false, MotionEvent.ACTION_POINTER_UP, 1, 2);
                             return true;
                         }
 
@@ -2671,20 +2652,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         );
 
                         if (synthClickPending &&
-                                event.getEventTime() - synthTouchDownTime >= prefConfig.trackpadDragDropThreshold) {
+                                event.getEventTime() - synthTouchDownTime >= 250) {
                             if (positionDelta > 50) {
                                 pendingDrag = false;
                             } else if (pendingDrag) {
                                 pendingDrag = false;
                                 isDragging = true;
-                                if (prefConfig.trackpadDragDropVibration) {
-                                    Vibrator vibrator = ((Vibrator) getSystemService(Context.VIBRATOR_SERVICE));
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        vibrator.vibrate(VibrationEffect.createOneShot(20, 127));
-                                    } else {
-                                        vibrator.vibrate(20);
-                                    }
-                                }
                                 conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
                                 return true;
                             }
@@ -2753,11 +2726,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 synchronized (physicalMouseInputLock) {
                     if (physicalMouseInputAccepting) {
                         int previousButtonState = physicalMouseButtonState.getAggregateState();
-                        if (!prefConfig.mouseNavButtons) {
-                            // Do not track navigation buttons which are intentionally not
-                            // forwarded, so focus loss cannot synthesize an unmatched up.
-                            buttonState &= ~(MotionEvent.BUTTON_BACK | MotionEvent.BUTTON_FORWARD);
-                        }
+                        // Do not track navigation buttons which are intentionally not
+                        // forwarded, so focus loss cannot synthesize an unmatched up.
+                        buttonState &= ~(MotionEvent.BUTTON_BACK | MotionEvent.BUTTON_FORWARD);
                         physicalMouseButtonState.updateDeviceState(deviceId, buttonState);
                         buttonState = physicalMouseButtonState.getAggregateState();
 
@@ -2773,13 +2744,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         sendPhysicalMouseButtonChange(previousButtonState, buttonState,
                                 MotionEvent.BUTTON_TERTIARY | MotionEvent.BUTTON_STYLUS_SECONDARY,
                                 MouseButtonPacket.BUTTON_MIDDLE);
-
-                        if (prefConfig.mouseNavButtons) {
-                            sendPhysicalMouseButtonChange(previousButtonState, buttonState,
-                                    MotionEvent.BUTTON_BACK, MouseButtonPacket.BUTTON_X1);
-                            sendPhysicalMouseButtonChange(previousButtonState, buttonState,
-                                    MotionEvent.BUTTON_FORWARD, MouseButtonPacket.BUTTON_X2);
-                        }
                     }
                 }
 
@@ -2845,7 +2809,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         return true;
                     }
 
-                    if (prefConfig.enableMultiTouchGestures || !prefConfig.enableMultiTouchScreen) {
+                    if (!prefConfig.enableMultiTouchScreen) {
                         int pointerCount = event.getPointerCount();
                         if (pointerCount > 2) {
                             int eventAction = event.getActionMasked();
@@ -2882,10 +2846,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private boolean handleTouchInput(MotionEvent event, TouchContext[] inputContextMap, boolean isTouchScreen) {
         // Actual invert logic is handled within the touch context
-        return handleTouchInput(event, inputContextMap, isTouchScreen, false, event.getActionMasked(), event.getActionIndex(), event.getPointerCount());
+        return handleTouchInput(event, inputContextMap, isTouchScreen, event.getActionMasked(), event.getActionIndex(), event.getPointerCount());
     }
 
-    private boolean handleTouchInput(MotionEvent event, TouchContext[] inputContextMap, boolean isTouchScreen, boolean invertAxis, int eventAction, int actionIndex, int pointerCount) {
+    private boolean handleTouchInput(MotionEvent event, TouchContext[] inputContextMap, boolean isTouchScreen, int eventAction, int actionIndex, int pointerCount) {
         TouchContext context = getTouchContext(actionIndex, inputContextMap);
         if (context == null) {
             return false;
@@ -2914,24 +2878,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                             historicalY = (int)normalizedCoords[1];
                         }
 
-                        // Invert axis again since synthetic events are not inverted
-                        // Invert twice could correct the direction
-                        // Blame Android for this problem
-                        // some devices report inverted axis when trackpad pointer is captured
-                        // but not when they're simulated as swipes on the screen
-                        if (invertAxis) {
-                            aTouchContextMap.touchMoveEvent(
-                                    historicalY,
-                                    historicalX,
-                                    event.getHistoricalEventTime(i)
-                            );
-                        } else {
-                            aTouchContextMap.touchMoveEvent(
-                                    historicalX,
-                                    historicalY,
-                                    event.getHistoricalEventTime(i)
-                            );
-                        }
+                        aTouchContextMap.touchMoveEvent(
+                                historicalX,
+                                historicalY,
+                                event.getHistoricalEventTime(i)
+                        );
                     }
                 }
             }
@@ -2949,19 +2900,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         currentY = (int)normalizedCoords[1];
                     }
 
-                    // Invert axis again since synthetic events are not inverted
-                    if (invertAxis) {
-                        aTouchContextMap.touchMoveEvent(
-                                currentY,
-                                currentX,
-                                event.getEventTime()
-                        );
-                    } else {
-                        aTouchContextMap.touchMoveEvent(
-                                currentX,
-                                currentY,
-                                event.getEventTime());
-                    }
+                    aTouchContextMap.touchMoveEvent(
+                            currentX,
+                            currentY,
+                            event.getEventTime());
                 }
             }
 
@@ -4464,12 +4406,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         toggleMouseLocalCursor();
                     } else {
                         applyMouseMode(selected.index);
-                        if (prefConfig.rememberMouseMode) {
-                            PreferenceManager.getDefaultSharedPreferences(this)
-                                    .edit()
-                                    .putString("mouse_mode_list", String.valueOf(selected.index))
-                                    .apply();
-                        }
                     }
                 })
                 .create()
@@ -4544,9 +4480,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    //切换触控灵敏度开关
     public void switchTouchSensitivity(){
-        prefConfig.enableTouchSensitivity = !prefConfig.enableTouchSensitivity;
+        // Touch sensitivity is fixed at 100%, so this menu action changes nothing.
     }
 
     public void disconnect() {
@@ -4632,27 +4567,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean handleCommitText(CharSequence text) {
-        if (!prefConfig.enableCommitText || conn == null) {
-            return false;
-        }
-        commitTextQueue.enqueue(text.toString());
-        return true;
+        return false;
     }
 
     @Override
     public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
-        if (!prefConfig.enableCommitText || conn == null) {
-            return false;
-        }
-        // Send backspace events for deleted preceding characters
-        if (beforeLength > 0) {
-            short backspaceCode = keyboardTranslator.translate(KeyEvent.KEYCODE_DEL, 0, -1);
-            for (int i = 0; i < beforeLength; i++) {
-                conn.sendKeyboardInput(backspaceCode, com.limelight.nvstream.input.KeyboardPacket.KEY_DOWN, (byte)0, (byte)0);
-                conn.sendKeyboardInput(backspaceCode, com.limelight.nvstream.input.KeyboardPacket.KEY_UP, (byte)0, (byte)0);
-            }
-        }
-        return true;
+        return false;
     }
 
     /** Helper ricorsivo per trovare la prima SurfaceView nel layout corrente */

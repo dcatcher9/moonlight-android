@@ -42,7 +42,6 @@ public final class GamePhysicalMouseInputTest {
         Game game = Robolectric.buildActivity(Game.class).get();
         NvConnection connection = mock(NvConnection.class);
         PreferenceConfiguration config = new PreferenceConfiguration();
-        config.mouseNavButtons = true;
         game.conn = connection;
         game.connected = true;
         ReflectionHelpers.setField(game, "prefConfig", config);
