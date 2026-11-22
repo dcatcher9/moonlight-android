@@ -17,12 +17,6 @@ import java.util.List;
 
 public class PreferenceConfiguration {
 
-    public enum ScaleMode {
-        FIT,
-        FILL,
-        STRETCH
-    }
-
     public enum FormatOption {
         AUTO,
         FORCE_AV1,
@@ -62,7 +56,6 @@ public class PreferenceConfiguration {
     public static final String FPS_PREF_STRING = "list_fps";
     public static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
     private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
-    private static final String VIDEO_SCALE_MODE_PREF_STRING = "list_video_scale_mode";
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
     public static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
@@ -105,7 +98,6 @@ public class PreferenceConfiguration {
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
     private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
     private static final String FORCE_MOTION_SENSORS_FALLBACK_PREF_STRING = "checkbox_force_device_motion";
-    private static final String FULL_SCREEN_PREF_STRING = "checkbox_full_screen";
 
     private static final String ENABLE_RUMBLE_PREF_STRING = "checkbox_enable_rumble";
 
@@ -128,8 +120,6 @@ public class PreferenceConfiguration {
 
     private static final String CHECKBOX_SHOW_OVERLAY_ZOOM_TOGGLE_BUTTON = "checkbox_show_overlay_zoom_toggle_button";
 
-    //竖屏模式
-    private static final String CHECKBOX_AUTO_ORIENTATION = "checkbox_auto_orientation";
     //屏幕特殊按键
     private static final String CHECKBOX_ENABLE_KEYBOARD = "checkbox_enable_keyboard";
 
@@ -153,7 +143,6 @@ public class PreferenceConfiguration {
     static final String DEFAULT_FPS = "60";
     static final int DEFAULT_BITRATE_KBPS = 200000;
     private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
-    private static final String DEFAULT_VIDEO_SCALE_MODE = "fit";
     private static final boolean DEFAULT_DISABLE_TOASTS = false;
     static final boolean DEFAULT_HOST_AUDIO = false;
     private static final int DEFAULT_DEADZONE = 5;
@@ -224,11 +213,6 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ENABLE_COMMIT_TEXT = false;
     private static final String DEFAULT_ONSCREEN_KEYBOARD_ALIGN_MODE = "center";
     private static final boolean DEFAULT_SHOW_OVERLAY_TOGGLE_BUTTON = false;
-
-    private static final boolean DEFAULT_REMEMBER_ZOOM_PAN = false;
-    private static final float DEFAULT_ZOOM_SCALE = 1.0f;
-    private static final float DEFAULT_PAN_OFFSET = 0.0f;
-    private static final boolean DEFAULT_FULL_SCREEN = true;
 
     public static final int FRAME_PACING_MIN_LATENCY = 0;
     public static final int FRAME_PACING_BALANCED = 1;
@@ -310,8 +294,7 @@ public class PreferenceConfiguration {
     public boolean onscreenKeyboardAutoFitDisabled;
     public int onscreenKeyboardWidth;
     public String onscreenKeyboardAlignMode;
-    public boolean useVirtualDisplay, playHostAudio, disableWarnings, fullScreen;
-    public ScaleMode videoScaleMode;
+    public boolean useVirtualDisplay, playHostAudio, disableWarnings;
     public String language;
     public boolean multiController, usbDriver, flipFaceButtons;
     public boolean onscreenController;
@@ -344,8 +327,6 @@ public class PreferenceConfiguration {
     public boolean enableFloatingButton;
     public boolean showOverlayZoomToggleButton;
 
-    //竖屏模式
-    public boolean autoOrientation;
     //虚拟屏幕键盘按键
     public boolean enableKeyboard;
     //修复JoyCon十字键
@@ -355,9 +336,6 @@ public class PreferenceConfiguration {
     public boolean enableNewAnalogStick;
 
     public boolean enableFullExDisplay;
-
-    //串流画面顶部居中显示
-    public boolean alignDisplayTopCenter;
 
     //触控屏幕灵敏度
     public int touchSensitivityX;
@@ -430,26 +408,6 @@ public class PreferenceConfiguration {
     public boolean gamepadMotionSensorsFallbackToDevice;
     public boolean forceMotionSensorsFallbackToDevice;
     public boolean enableRumble;
-
-    public boolean rememberZoomPan;
-    public float zoomScale;
-    public float panOffsetX;
-    public float panOffsetY;
-
-    private static final String CHECKBOX_REMEMBER_ZOOM_PAN = "checkbox_remember_zoom_pan";
-    private static final String NUMBER_ZOOM_SCALE = "number_zoom_scale";
-
-    private static final String NUMBER_PAN_OFFSET_X = "number_pan_offset_x";
-    private static final String NUMBER_PAN_OFFSET_Y = "number_pan_offset_y";
-
-    /**
-     * The XR route is always stereoscopic: it maintains the configured resolution, forces STRETCH
-     * scaling, and skips portrait resolution inversion. (Kept as a method so existing call sites
-     * in Game.java stay unchanged.)
-     */
-    public boolean isStereoMode() {
-        return true;
-    }
 
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option.
@@ -558,23 +516,6 @@ public class PreferenceConfiguration {
         else {
             // Should never get here
             return FormatOption.AUTO;
-        }
-    }
-
-    private static ScaleMode getVideoScaleMode(SharedPreferences prefs) {
-        String str = prefs.getString(VIDEO_SCALE_MODE_PREF_STRING, DEFAULT_VIDEO_SCALE_MODE);
-        if (str.equals("fit")) {
-            return ScaleMode.FIT;
-        }
-        else if (str.equals("fill")) {
-            return ScaleMode.FILL;
-        }
-        else if (str.equals("stretch")) {
-            return ScaleMode.STRETCH;
-        }
-        else {
-            // Should never get here
-            return ScaleMode.FIT;
         }
     }
 
@@ -727,8 +668,6 @@ public class PreferenceConfiguration {
         }
         config.audioBoostDb = normalizeAudioBoostDb(storedAudioBoostDb);
 
-        config.videoScaleMode = getVideoScaleMode(prefs);
-
         config.videoFormat = getVideoFormatValue(prefs);
         String cinemaEnvironment = null;
         try {
@@ -762,7 +701,6 @@ public class PreferenceConfiguration {
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
-        config.fullScreen = prefs.getBoolean(FULL_SCREEN_PREF_STRING, DEFAULT_FULL_SCREEN);
 
         // Read mouse mode and set touch settings accordingly
         String mouseMode = prefs.getString("mouse_mode_list", "0");
@@ -811,7 +749,6 @@ public class PreferenceConfiguration {
         config.enableBackMenu = prefs.getBoolean(CHECKBOX_ENABLE_QUIT_DIALOG,true);
         config.enableFloatingButton = prefs.getBoolean(CHECKBOX_ENABLE_FLOATING_BUTTON,DEFAULT_ENABLE_FLOATING_BUTTON);
         config.showOverlayZoomToggleButton = prefs.getBoolean(CHECKBOX_SHOW_OVERLAY_ZOOM_TOGGLE_BUTTON, DEFAULT_SHOW_OVERLAY_TOGGLE_BUTTON);
-        config.autoOrientation = prefs.getBoolean(CHECKBOX_AUTO_ORIENTATION,false);
 
 
         config.enableKeyboard = prefs.getBoolean(CHECKBOX_ENABLE_KEYBOARD,false);
@@ -834,8 +771,6 @@ public class PreferenceConfiguration {
         config.enableNewAnalogStick=prefs.getBoolean(CHECKBOX_CHECKBOX_ENABLE_ANALOG_STICK_NEW,false);
 
         config.enableFullExDisplay=prefs.getBoolean("checkbox_enable_fullexdisplay",false);
-
-        config.alignDisplayTopCenter =prefs.getBoolean("checkbox_enable_view_top_center",false);
 
         config.touchSensitivityX =prefs.getInt(SEEKBAR_TOUCH_SENSITIVITY,100);
 
@@ -890,11 +825,6 @@ public class PreferenceConfiguration {
         config.gamepadMotionSensorsFallbackToDevice = prefs.getBoolean(GAMEPAD_MOTION_FALLBACK_PREF_STRING, DEFAULT_GAMEPAD_MOTION_FALLBACK);
         config.forceMotionSensorsFallbackToDevice = prefs.getBoolean(FORCE_MOTION_SENSORS_FALLBACK_PREF_STRING, DEFAULT_FORCE_MOTION_SENSORS_FALLBACK);
         config.enableRumble = prefs.getBoolean(ENABLE_RUMBLE_PREF_STRING, DEFAULT_ENABLE_RUMBLE);
-
-        config.rememberZoomPan = prefs.getBoolean(CHECKBOX_REMEMBER_ZOOM_PAN, DEFAULT_REMEMBER_ZOOM_PAN);
-        config.zoomScale = prefs.getFloat(NUMBER_ZOOM_SCALE, DEFAULT_ZOOM_SCALE);
-        config.panOffsetX = prefs.getFloat(NUMBER_PAN_OFFSET_X, DEFAULT_PAN_OFFSET);
-        config.panOffsetY = prefs.getFloat(NUMBER_PAN_OFFSET_Y, DEFAULT_PAN_OFFSET);
 
         return config;
     }

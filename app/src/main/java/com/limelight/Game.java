@@ -89,7 +89,6 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Rational;
 import android.view.Display;
-import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
@@ -839,17 +838,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 this, prepareCurrentSessionPreferences());
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
 
-        if (prefConfig.fullScreen) {
-            // Full-screen
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        // Full-screen
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
-            // If we're going to use immersive mode, we want to have
-            // the entire screen
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
-                            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
-                            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
-        }
+        // If we're going to use immersive mode, we want to have
+        // the entire screen
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE |
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
 
@@ -885,15 +882,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         onExternelDisplay = currentDisplay.getDisplayId() != Display.DEFAULT_DISPLAY;
 
-        // The XR route is always stereoscopic (PreferenceConfiguration.isStereoMode()): it keeps
-        // the configured resolution, forces STRETCH scaling, and never inverts for portrait.
-        prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
-
-        if (prefConfig.autoOrientation) {
-            currentOrientation = getResources().getConfiguration().orientation;
-        } else {
-            currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
-        }
+        // The XR route keeps the configured resolution, stretches the video to its surface, and
+        // never inverts the resolution for portrait.
+        currentOrientation = Configuration.ORIENTATION_LANDSCAPE;
 
         // Host SBS AI keeps the full requested resolution for 2D. The per-eye
         // cap only applies when SBS is actually switched on: the host then caps the packed frame
@@ -910,20 +901,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         setPreferredOrientationForActivity();
 
 
-        if (
-                prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.STRETCH ||
-                        shouldIgnoreInsetsForResolution(displayWidth, displayHeight)
-        ) {
-            // Allow the activity to layout under notches if the fill-screen option
-            // was turned on by the user or it's a full-screen native resolution
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                getWindow().getAttributes().layoutInDisplayCutoutMode =
-                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
-            }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                getWindow().getAttributes().layoutInDisplayCutoutMode =
-                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-            }
+        // The stretched video fills the screen, so the activity lays out under notches.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        }
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            getWindow().getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
 
         //光标是否显示
@@ -964,11 +949,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         rootView = streamContainer.getParent();
 
-        //串流画面 顶部居中显示
-        if(prefConfig.alignDisplayTopCenter){
-            FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) streamContainer.getLayoutParams();
-            params.gravity = Gravity.CENTER_HORIZONTAL|Gravity.TOP;
-        }
         // Listen for touch events on the background touch view to enable trackpad mode
         // to work on areas outside of the StreamView itself. We use a separate View
         // for this rather than just handling it at the Activity level, because that
@@ -981,18 +961,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 getApplicationContext(),
                 this,
                 streamContainer.getSurfaceView(),
-                streamContainer,
-                prefConfig
+                streamContainer
         );
-
-        // Restore previous zoom & pan if enabled and saved
-        if (prefConfig.rememberZoomPan) {
-            streamContainer.post(() -> panZoomHandler.setInitialZoomAndPan(
-                    prefConfig.zoomScale,
-                    prefConfig.panOffsetX,
-                    prefConfig.panOffsetY
-            ));
-        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Request unbuffered input event dispatching for all input classes we handle here.
@@ -1786,13 +1756,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @TargetApi(Build.VERSION_CODES.O)
     private PictureInPictureParams getPictureInPictureParams(boolean autoEnter) {
-        View view;
+        View view = (View) rootView;
         Rect hint;
-        if (prefConfig.videoScaleMode == PreferenceConfiguration.ScaleMode.FIT && streamContainer.getScaleX() == 1) {
-            view = streamContainer;
-        } else {
-            view = (View)rootView;
-        }
 
         int[] viewLocation = new int[2];
 
@@ -1951,26 +1916,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 Math.round(refreshRate) % prefConfig.fps <= 3;
     }
 
-    private boolean shouldIgnoreInsetsForResolution(int width, int height) {
-        // Never ignore insets for non-native resolutions
-        if (!PreferenceConfiguration.isNativeResolution(width, height)) {
-            return false;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Display display = getActiveDisplay(Game.this, prefConfig);
-            for (Display.Mode candidate : display.getSupportedModes()) {
-                // Ignore insets if this is an exact match for the display resolution
-                if ((width == candidate.getPhysicalWidth() && height == candidate.getPhysicalHeight()) ||
-                        (height == candidate.getPhysicalWidth() && width == candidate.getPhysicalHeight())) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
     private boolean mayReduceRefreshRate() {
         return prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
@@ -2099,8 +2044,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         displayRefreshRate = bestMode.getRefreshRate();
 
-        // Note: on-screen surface aspect-ratio scaling was removed — the XR route always uses STRETCH
-        // (isStereoMode) and presents the video in the XR compositor, so there's nothing to fit here.
+        // The XR route stretches the video and presents it in the XR compositor, so there is no
+        // on-screen aspect ratio to fit here.
 
         // Set the desired refresh rate that will get passed into setFrameRate() later
         desiredRefreshRate = displayRefreshRate;
@@ -2129,7 +2074,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             // In multi-window mode, we need to drop our layout flags or we'll
             // be drawing underneath the system UI.
-            if (!prefConfig.fullScreen || isInMultiWindowMode()) {
+            if (isInMultiWindowMode()) {
                 Game.this.getWindow().getDecorView().setSystemUiVisibility(
                         View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             }
@@ -2208,16 +2153,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         if (highPerfWifiLock != null) {
             highPerfWifiLock.release();
-        }
-
-        // Save zoom/pan before other cleanup
-        if (prefConfig != null && prefConfig.rememberZoomPan && panZoomHandler != null) {
-            SharedPreferences basePrefs = PreferenceManager.getDefaultSharedPreferences(this);
-            basePrefs.edit()
-                    .putFloat("number_zoom_scale", panZoomHandler.getScaleFactor())
-                    .putFloat("number_pan_offset_x", panZoomHandler.getChildX())
-                    .putFloat("number_pan_offset_y", panZoomHandler.getChildY())
-                    .apply();
         }
 
         unbindUsbDriverService();
