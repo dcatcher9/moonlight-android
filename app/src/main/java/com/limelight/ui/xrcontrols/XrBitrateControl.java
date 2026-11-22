@@ -70,7 +70,7 @@ public final class XrBitrateControl extends LinearLayout {
         choices = Collections.unmodifiableList(ordered);
 
         String recommendedId = recommendedKbps > 0 ? String.valueOf(recommendedKbps) : null;
-        ladder.setChoices(choices, selectedChoiceId, recommendedId, hint, null,
+        ladder.setChoices(choices, selectedChoiceId, recommendedId, hint,
                 listener == null ? null : listener::onBitrateSelected);
     }
 

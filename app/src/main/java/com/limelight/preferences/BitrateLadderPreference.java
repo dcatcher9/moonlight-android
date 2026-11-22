@@ -117,7 +117,7 @@ public class BitrateLadderPreference extends Preference {
         ladder.setEnabled(isEnabled());
         // No caption: the highlighted segment already carries the value, and repeating it below
         // the row was the duplication removed from the in-session picker.
-        ladder.setChoices(choices, String.valueOf(currentValue), null, null, null,
+        ladder.setChoices(choices, String.valueOf(currentValue), null, null,
                 choiceId -> {
                     int selected = Integer.parseInt(choiceId);
                     if (!callChangeListener(selected)) {

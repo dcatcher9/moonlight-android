@@ -66,9 +66,9 @@ public class XrSegmentedLadderTest {
                         new SessionSettingsModel.Choice("30", "30"),
                         new SessionSettingsModel.Choice("60", "60"),
                         new SessionSettingsModel.Choice("90", "90")),
-                "60", null, null, null, choice -> {
+                "60", null, null, choice -> {
                     // The accepted choice refreshes the settings model synchronously.
-                    ladder.setChoices(refreshed, "90", null, null, null, ignored -> true);
+                    ladder.setChoices(refreshed, "90", null, null, ignored -> true);
                     return true;
                 });
 
@@ -83,13 +83,13 @@ public class XrSegmentedLadderTest {
         ladder.setChoices(Arrays.asList(
                         new SessionSettingsModel.Choice("50", "50 Mbps"),
                         new SessionSettingsModel.Choice("100", "100 Mbps")),
-                "50", null, null, null, choice -> true);
+                "50", null, null, choice -> true);
         android.view.View first = ladder.segmentRow().getChildAt(0);
 
         ladder.setChoices(Arrays.asList(
                         new SessionSettingsModel.Choice("50", "50 Mbps"),
                         new SessionSettingsModel.Choice("100", "100 Mbps")),
-                "100", "100", "recommended", null, choice -> true);
+                "100", "100", "recommended", choice -> true);
 
         assertSame(first, ladder.segmentRow().getChildAt(0));
         assertEquals(1, ladder.getSelectedIndex());
@@ -97,7 +97,7 @@ public class XrSegmentedLadderTest {
         ladder.setChoices(Arrays.asList(
                         new SessionSettingsModel.Choice("50", "50 Mbps"),
                         new SessionSettingsModel.Choice("70", "70 Mbps")),
-                "70", null, null, null, choice -> true);
+                "70", null, null, choice -> true);
         assertNotSame(first, ladder.segmentRow().getChildAt(0));
         assertEquals("70 Mbps",
                 ((android.widget.TextView) ladder.segmentRow().getChildAt(1)).getText()
@@ -121,7 +121,7 @@ public class XrSegmentedLadderTest {
         ladder.setChoices(Arrays.asList(
                         new SessionSettingsModel.Choice("50", "50 Mbps"),
                         new SessionSettingsModel.Choice("100", "100 Mbps")),
-                "50", null, null, null, choice -> {
+                "50", null, null, choice -> {
                     callbacks.incrementAndGet();
                     return true;
                 });

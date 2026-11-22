@@ -813,7 +813,7 @@ final class XrModeOptionsPane {
         modeFpsLadder.setChoices(
                 choicesOrCurrent(fps, fpsId),
                 fpsId,
-                null, null, null,
+                null, null,
                 choiceId -> host.controlActionListener().onModeQualitySettingSelected(mode,
                         SessionSettingsModel.Key.FRAME_RATE, choiceId,
                         modeStreamQualityModels.get(mode)));

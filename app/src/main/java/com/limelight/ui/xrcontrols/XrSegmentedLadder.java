@@ -43,12 +43,6 @@ public final class XrSegmentedLadder extends LinearLayout {
         boolean onSegmentSelected(@NonNull String choiceId);
     }
 
-    /** Supplies the caption shown under the row for the current selection. */
-    public interface CaptionProvider {
-        @NonNull
-        CharSequence captionFor(@NonNull SessionSettingsModel.Choice choice, int index, int count);
-    }
-
     /** Each segment is this much wider than the one before it. */
     private static final float WIDTH_RAMP = 1.18f;
 
@@ -59,7 +53,6 @@ public final class XrSegmentedLadder extends LinearLayout {
     private final List<AppCompatButton> segments = new ArrayList<>();
     private List<SessionSettingsModel.Choice> choices = Collections.emptyList();
     private OnSegmentSelectedListener listener;
-    private CaptionProvider captionProvider;
     private int selectedIndex;
     /** Advanced by every host-driven selection; detects a listener that republished one. */
     private int selectionVersion;
@@ -117,7 +110,6 @@ public final class XrSegmentedLadder extends LinearLayout {
                            @NonNull String selectedChoiceId,
                            @Nullable String recommendedChoiceId,
                            @Nullable CharSequence hintText,
-                           @Nullable CaptionProvider captions,
                            @Nullable OnSegmentSelectedListener selectionListener) {
         if (values.isEmpty()) {
             throw new IllegalArgumentException("ladder choices must not be empty");
@@ -127,7 +119,6 @@ public final class XrSegmentedLadder extends LinearLayout {
         boolean sameSegments = choices.equals(values) && segments.size() == values.size();
         this.choices = Collections.unmodifiableList(new ArrayList<>(values));
         this.listener = selectionListener;
-        this.captionProvider = captions;
         this.recommendedIndex = indexOf(recommendedChoiceId);
 
         // The hint text survives as the marker's description: it was never legible at the size that
@@ -282,27 +273,18 @@ public final class XrSegmentedLadder extends LinearLayout {
                         ? R.color.xr_on_accent : R.color.xr_accent)));
         if (selectedIndex >= 0 && selectedIndex < choices.size()) {
             SessionSettingsModel.Choice choice = choices.get(selectedIndex);
-            // No provider means no caption: the highlighted segment already shows the value, and
-            // the live figure belongs in the glance bar rather than under the control that sets it.
-            if (captionProvider == null && unmarkedHintText == null) {
+            // The caption line carries only a hint with no segment to mark: the highlighted
+            // segment already shows the value, and the live figure belongs in the glance bar.
+            if (unmarkedHintText == null) {
                 caption.setVisibility(GONE);
                 setContentDescription(choice.label);
             }
-            else if (captionProvider == null) {
+            else {
                 caption.setVisibility(VISIBLE);
                 caption.setText(unmarkedHintText);
                 caption.setTextColor(color(
                         enabled ? R.color.xr_status_warn : R.color.xr_text_disabled));
                 setContentDescription(choice.label + ", " + unmarkedHintText);
-            }
-            else {
-                CharSequence selectionCaption =
-                        captionProvider.captionFor(choice, selectedIndex, choices.size());
-                caption.setVisibility(VISIBLE);
-                caption.setText(unmarkedHintText == null ? selectionCaption
-                        : android.text.TextUtils.concat(selectionCaption, "\n", unmarkedHintText));
-                caption.setTextColor(color(enabled ? R.color.xr_accent : R.color.xr_text_disabled));
-                setContentDescription(caption.getText());
             }
         }
         updateHintPosition();
