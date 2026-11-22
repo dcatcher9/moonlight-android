@@ -21,7 +21,6 @@ import java.security.SecureRandom;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
@@ -326,44 +325,6 @@ public class NvHTTP {
         return hasXmlTag(new StringReader(str), tagname);
     }
 
-    static List<String> getXmlArray(Reader r, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
-        XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
-        factory.setNamespaceAware(true);
-        XmlPullParser xpp = factory.newPullParser();
-
-        xpp.setInput(r);
-        int eventType = xpp.getEventType();
-        Stack<String> currentTag = new Stack<>();
-
-        List<String> array = new ArrayList<>();
-
-        while (eventType != XmlPullParser.END_DOCUMENT) {
-            switch (eventType) {
-            case (XmlPullParser.START_TAG):
-                currentTag.push(xpp.getName());
-                break;
-            case (XmlPullParser.END_TAG):
-                currentTag.pop();
-                break;
-            case (XmlPullParser.TEXT):
-                if (currentTag.peek().equals(tagname)) {
-                    array.add(xpp.getText());
-                }
-                break;
-            }
-            eventType = xpp.next();
-        }
-
-        if (throwIfMissing && array.isEmpty()) {
-            throw new XmlPullParserException("Missing mandatory field in host response: "+tagname);
-        }
-
-        return array;
-    }
-
-    static List<String> getXmlArray(String str, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
-        return getXmlArray(new StringReader(str), tagname, throwIfMissing);
-    }
     
     /** A malformed numeric host field is a malformed response, not an unchecked exception. */
     private static long parseLongField(String value, String field) throws XmlPullParserException {
@@ -536,10 +497,6 @@ public class NvHTTP {
 
     public String getCurrentGameUUID(String serverInfo) throws IOException, XmlPullParserException {
         return getXmlString(serverInfo, "currentgameuuid", false);
-    }
-
-    public String getHostSessionId(String xml) throws IOException, XmlPullParserException {
-        return normalizeHostSessionId(getXmlString(xml, "hostsessionid", false));
     }
 
     /**
@@ -719,26 +676,6 @@ public class NvHTTP {
                 PairState.PAIRED : PairState.NOT_PAIRED;
     }
     
-    public long getMaxLumaPixelsH264(String serverInfo) throws XmlPullParserException, IOException {
-        // MaxLumaPixelsH264 wasn't present on old GFE versions
-        String str = getXmlString(serverInfo, "MaxLumaPixelsH264", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
-            return 0;
-        }
-    }
-    
-    public long getMaxLumaPixelsHEVC(String serverInfo) throws XmlPullParserException, IOException {
-        // MaxLumaPixelsHEVC wasn't present on old GFE versions
-        String str = getXmlString(serverInfo, "MaxLumaPixelsHEVC", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
-            return 0;
-        }
-    }
-
     // Possible meaning of bits
     // Bit 0: H.264 Baseline
     // Bit 1: H.264 High
@@ -757,11 +694,6 @@ public class NvHTTP {
         }
     }
     
-    public String getGpuType(String serverInfo) throws XmlPullParserException, IOException {
-        // ServerCodecModeSupport wasn't present on old GFE versions
-        return getXmlString(serverInfo, "gputype", false);
-    }
-
     public String getGfeVersion(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         return getXmlString(serverInfo, "GfeVersion", false);
