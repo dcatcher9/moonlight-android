@@ -492,14 +492,17 @@ public class MoonBridge {
     /** Transient failure; the host attempted the change and rolled it back. Retry allowed. */
     public static final int VIDEO_MODE_ACK_FAILED = 3;
 
-    // Ask the host (Apollo protocol extension) to change the live video mode mid-stream with no
-    // reconnect. framerateX100 is hundredths of a Hz (6000 = 60 fps, 2997 = 29.97 fps) so
-    // fractional rates survive the wire. bitrateKbps is the total wire budget in the same units
-    // the client advertises as maximumBitrateKbps in RTSP ANNOUNCE; the host applies its own
-    // clamp and FEC/audio deduction. requestId is an opaque correlation token echoed verbatim in
-    // the resulting videoModeAck; the host never interprets it.
-    /** Returns positive on successful enqueue, zero on send failure, or negative if unsupported. */
-    /** Sends the exact 20-byte atomic presentation v2 request on negotiated Apollo hosts. */
+    /**
+     * Sends the exact 20-byte atomic presentation v2 request on negotiated Apollo hosts, which
+     * change the live video mode without a reconnect. framerateX100 is hundredths of a Hz
+     * (6000 = 60 fps, 2997 = 29.97 fps). totalWireBitrateKbps is the total wire budget in the
+     * units the client advertises as maximumBitrateKbps in RTSP ANNOUNCE; the host applies its
+     * own clamp and FEC/audio deduction. requestId is an opaque correlation token that the host
+     * echoes in {@code videoModeAckV2}.
+     *
+     * @return positive when queued, zero on send failure, or negative when atomic presentation
+     * v2 was not negotiated or a parameter is out of range
+     */
     public static native int sendSetVideoModeV2(int desiredMode, int requestId,
                                                 int sourceWidth, int sourceHeight,
                                                 int framerateX100,
@@ -511,8 +514,9 @@ public class MoonBridge {
     /**
      * Enables, changes cadence, or disables Apollo host SBS telemetry v2.
      *
-     * @return positive when queued, zero on send failure, or negative when the host did not
-     * advertise LI_FF_HOST_SBS_TELEMETRY_V2
+     * @return positive when queued, zero when nothing was queued (a send failure, or a
+     * requestId or intervalMs outside 0..65535), or negative when the host did not advertise
+     * LI_FF_HOST_SBS_TELEMETRY_V2
      */
     public static native int sendHostSbsTelemetrySubscription(
             boolean enabled, boolean focused, int requestId, int intervalMs);
