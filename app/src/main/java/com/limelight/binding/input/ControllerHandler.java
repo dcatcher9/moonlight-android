@@ -3118,9 +3118,17 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public long startUpTime = 0;
         public boolean backMenuPending = false;
 
+        // Set by destroy(); read by the battery runnable on the background handler thread.
+        private volatile boolean batteryUpdatesStopped;
+
         public final Runnable batteryStateUpdateRunnable = new Runnable() {
             @Override
             public void run() {
+                // destroy() removes queued callbacks, but a run already in progress would requeue
+                // itself after that removal.
+                if (batteryUpdatesStopped) {
+                    return;
+                }
                 sendControllerBatteryPacket(InputDeviceContext.this);
 
                 // Requeue the callback
@@ -3143,6 +3151,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         @Override
         public void destroy() {
+            batteryUpdatesStopped = true;
             super.destroy();
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && vibratorManager != null) {
