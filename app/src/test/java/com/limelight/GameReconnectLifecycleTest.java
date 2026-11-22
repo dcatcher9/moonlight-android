@@ -76,9 +76,21 @@ public final class GameReconnectLifecycleTest {
 
         String method = source.substring(methodStart, methodEnd);
         int preStopHook = method.indexOf("presenter.onConnectionStopping()");
-        int nativeStop = method.indexOf("conn.stop(heldSessionTransaction -> {");
+        // stopConnection() hands the connection to ConnectionStopCoordinator, whose stop thread
+        // starts with NvConnection.stop(), the native transport teardown.
+        int nativeStop = method.indexOf("connectionStop.stop(conn,");
         assertTrue("Host telemetry must close before NvConnection destroys native transport",
                 preStopHook >= 0 && nativeStop > preStopHook);
+
+        String coordinator = new String(Files.readAllBytes(new File(
+                "src/main/java/com/limelight/ConnectionStopCoordinator.java").toPath()),
+                StandardCharsets.UTF_8);
+        int threadStart = coordinator.indexOf("stopThread = new Thread(");
+        int teardown = coordinator.indexOf("conn.stop(heldSessionTransaction -> {", threadStart);
+        int threadEnd = coordinator.indexOf("stopThread.start();", threadStart);
+        assertTrue("The stop thread must begin with NvConnection.stop()",
+                threadStart >= 0 && teardown > threadStart && threadEnd > teardown
+                        && coordinator.substring(threadStart, teardown).indexOf(';') < 0);
     }
 
     @Test

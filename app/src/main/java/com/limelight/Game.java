@@ -132,7 +132,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import android.view.SurfaceView;
 import android.view.ViewGroup;
@@ -311,12 +310,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean displayedFailureDialog = false;
     private volatile boolean connecting = false;
     public volatile boolean connected = false;
-    private final Object connectionStopLock = new Object();
-    private Thread connectionStopThread;
-    private final List<Runnable> connectionStopCallbacks = new ArrayList<>();
-    private boolean connectionNativeStopped;
-    // Set by whichever path sends the user's Quit: the stop thread or quitStoppedHostSession().
-    private final AtomicBoolean hostSessionQuitClaimed = new AtomicBoolean();
+    private final ConnectionStopCoordinator connectionStop = new ConnectionStopCoordinator(
+            new ConnectionStopCoordinator.MainThread() {
+                @Override
+                public boolean isCurrent() {
+                    return Looper.myLooper() == Looper.getMainLooper();
+                }
+
+                @Override
+                public void post(Runnable task) {
+                    runOnUiThread(task);
+                }
+            }, this::sendHostSessionQuit);
     // This connection's HTTP launch or resume succeeded; written on the connection thread.
     private volatile boolean ownsEstablishedHostSession;
     private boolean autoEnterPip = false;
@@ -3551,81 +3556,44 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void stopConnection() {
-        synchronized (connectionStopLock) {
-            if (!connecting && !connected) {
-                return;
-            }
-
-            // Unsubscribe while moonlight-common's control transport is still alive. Its mutexes
-            // are destroyed by conn.stop(), so deferred StreamContainer.onDestroy() cleanup must
-            // remain local-only.
-            XrStreamPresenter presenter = presenterOrNull();
-            if (presenter != null) {
-                presenter.onConnectionStopping();
-            }
-
-            connecting = connected = false;
-            xrSettingsApply.onConnectionStopping();
-            if (xrSessionSettingsController != null) {
-                xrSessionSettingsController.getStreamGammaState().connectionStopped();
-            }
-            updatePipAutoEnter();
-
-            controllerHandler.stop();
-
-            // Update GameManager state to indicate we're no longer in game
-            UiHelper.notifyStreamEnded(this);
-
-            // Stop may take a few hundred ms to do some network I/O to tell
-            // the server we're going away and clean up. Let it run in a separate
-            // thread to keep things smooth for the UI. Inside moonlight-common,
-            // we prevent another thread from starting a connection before and
-            // during the process of stopping this one.
-            connectionNativeStopped = false;
-            final String expectedLocalSessionId = sessionLocalSessionId;
-            final boolean resumeAuthority = getHostSessionLaunchRequest(getIntent()).kind
-                    == HostSessionLaunchRequest.Kind.RESUME;
-            connectionStopThread = new Thread("Artemis connection stop") {
-                public void run() {
-                    try {
-                        conn.stop(heldSessionTransaction -> {
-                            // Native decoder callbacks are finished now. Release XR/EGL resources
-                            // immediately, while the global permit still blocks a replacement host
-                            // session through the optional HTTP quit below.
-                            publishNativeStopComplete();
-                            if (!quitOnStop) {
-                                return;
-                            }
-                            if (heldSessionTransaction) {
-                                quitHostSessionOnce(expectedLocalSessionId);
-                            } else if (resumeAuthority || ownsEstablishedHostSession) {
-                                // The permit says nothing about host-session ownership: a native
-                                // start that failed after a successful HTTP launch released it.
-                                if (!NvConnection.runOutsideActiveConnection(
-                                        () -> quitHostSessionOnce(expectedLocalSessionId))) {
-                                    LimeLog.warning("Another connection owns the host session; "
-                                            + "not sending Quit");
-                                }
-                            }
-                        });
-                    } finally {
-                        synchronized (connectionStopLock) {
-                            connectionStopThread = null;
-                            connectionStopLock.notifyAll();
-                        }
-                    }
-                }
-            };
-            connectionStopThread.start();
+        // Main thread only, so the check and clear below cannot race another stop.
+        if (!connecting && !connected) {
+            return;
         }
+
+        // Unsubscribe while moonlight-common's control transport is still alive. Its mutexes
+        // are destroyed by conn.stop(), so deferred StreamContainer.onDestroy() cleanup must
+        // remain local-only.
+        XrStreamPresenter presenter = presenterOrNull();
+        if (presenter != null) {
+            presenter.onConnectionStopping();
+        }
+
+        connecting = connected = false;
+        xrSettingsApply.onConnectionStopping();
+        if (xrSessionSettingsController != null) {
+            xrSessionSettingsController.getStreamGammaState().connectionStopped();
+        }
+        updatePipAutoEnter();
+
+        controllerHandler.stop();
+
+        // Update GameManager state to indicate we're no longer in game
+        UiHelper.notifyStreamEnded(this);
+
+        final boolean resumeAuthority = getHostSessionLaunchRequest(getIntent()).kind
+                == HostSessionLaunchRequest.Kind.RESUME;
+        connectionStop.stop(conn, sessionLocalSessionId, () -> quitOnStop,
+                () -> resumeAuthority || ownsEstablishedHostSession);
     }
 
     /**
-     * Sends the user's Quit for this generation's host session, at most once per Activity. Runs
-     * on a background thread while no other connection holds the host-session transaction.
+     * Sends the user's Quit for this generation's host session. ConnectionStopCoordinator calls
+     * it at most once, on a background thread, while no other connection holds the host-session
+     * transaction.
      */
-    private void quitHostSessionOnce(String expectedLocalSessionId) {
-        if (httpConn == null || !hostSessionQuitClaimed.compareAndSet(false, true)) {
+    private void sendHostSessionQuit(String expectedLocalSessionId) {
+        if (httpConn == null) {
             return;
         }
         try {
@@ -3681,75 +3649,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         != HostSessionLaunchRequest.Kind.RESUME) {
             return;
         }
-        final String expectedLocalSessionId = sessionLocalSessionId;
-        new Thread(() -> {
-            synchronized (connectionStopLock) {
-                while (connectionStopThread != null) {
-                    try {
-                        connectionStopLock.wait();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-                }
-            }
-            if (!NvConnection.runOutsideActiveConnection(
-                    () -> quitHostSessionOnce(expectedLocalSessionId))) {
-                LimeLog.warning("Another connection owns the host session; not sending Quit");
-            }
-        }, "Artemis host session quit").start();
+        connectionStop.quitStoppedSession(sessionLocalSessionId);
     }
 
     public void runAfterConnectionStop(Runnable callback) {
-        boolean runNow;
-        synchronized (connectionStopLock) {
-            runNow = connectionStopThread == null || connectionNativeStopped;
-            if (!runNow) {
-                connectionStopCallbacks.add(callback);
-            }
-        }
-        if (runNow) {
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                callback.run();
-            } else {
-                runOnUiThread(callback);
-            }
-        }
-    }
-
-    private void publishNativeStopComplete() {
-        List<Runnable> callbacks;
-        synchronized (connectionStopLock) {
-            connectionNativeStopped = true;
-            callbacks = new ArrayList<>(connectionStopCallbacks);
-            connectionStopCallbacks.clear();
-        }
-        if (callbacks.isEmpty()) return;
-
-        CountDownLatch completed = new CountDownLatch(1);
-        runOnUiThread(() -> {
-            try {
-                for (Runnable callback : callbacks) {
-                    try {
-                        callback.run();
-                    } catch (RuntimeException e) {
-                        LimeLog.severe("Post-stream resource cleanup failed: " + e.getMessage());
-                    }
-                }
-            } finally {
-                completed.countDown();
-            }
-        });
-        boolean interrupted = false;
-        while (true) {
-            try {
-                completed.await();
-                break;
-            } catch (InterruptedException e) {
-                interrupted = true;
-            }
-        }
-        if (interrupted) Thread.currentThread().interrupt();
+        connectionStop.runAfterNativeStop(callback);
     }
 
     @Override

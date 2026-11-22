@@ -229,7 +229,7 @@ public class GameXrSettingsAutoApplyTest {
         waitMs(349);
         verify(game.conn, never()).stop(any());
         waitMs(1);
-        Thread stop = ReflectionHelpers.getField(game, "connectionStopThread");
+        Thread stop = ReflectionHelpers.getField(ReflectionHelpers.getField(game, "connectionStop"), "stopThread");
         if (stop != null) stop.join(2000);
         verify(game.conn, timeout(1000)).stop(any());
         Intent restart = ReflectionHelpers.getField(game, "scheduledReconnectIntent");
@@ -247,7 +247,7 @@ public class GameXrSettingsAutoApplyTest {
         verify(game.conn, never()).stop(any());
         actions.onPresentationModeNeedsReconnect(PresentationMode.HOST_SBS_AI);
         waitMs(350);
-        Thread stop = ReflectionHelpers.getField(game, "connectionStopThread");
+        Thread stop = ReflectionHelpers.getField(ReflectionHelpers.getField(game, "connectionStop"), "stopThread");
         if (stop != null) stop.join(2000);
         verify(game.conn, timeout(1000)).stop(any());
         assertFalse((Boolean) ReflectionHelpers.getField(game, "quitOnStop"));
@@ -256,7 +256,7 @@ public class GameXrSettingsAutoApplyTest {
     @Test public void stopCancelsDebounceEvenIfAnotherConnectionLaterBecomesActive() throws Exception {
         assertTrue(quality(PresentationMode.NORMAL, SessionSettingsModel.Key.BITRATE, "80000"));
         ReflectionHelpers.callInstanceMethod(game, "stopConnection");
-        Thread stop = ReflectionHelpers.getField(game, "connectionStopThread");
+        Thread stop = ReflectionHelpers.getField(ReflectionHelpers.getField(game, "connectionStop"), "stopThread");
         if (stop != null) stop.join(2000);
         game.connected = true;
         waitMs(350);

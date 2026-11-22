@@ -160,7 +160,7 @@ public final class GameHostSessionQuitTest {
     }
 
     private void joinStopThread() throws InterruptedException {
-        Thread stopThread = ReflectionHelpers.getField(game, "connectionStopThread");
+        Thread stopThread = ReflectionHelpers.getField(ReflectionHelpers.getField(game, "connectionStop"), "stopThread");
         if (stopThread != null) {
             stopThread.join(5000);
         }

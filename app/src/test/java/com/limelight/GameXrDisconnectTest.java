@@ -46,7 +46,7 @@ public final class GameXrDisconnectTest {
             assertTrue((Boolean) ReflectionHelpers.getField(this, "automaticReconnectCancelled"));
             assertFalse(connected);
             assertFalse((Boolean) ReflectionHelpers.getField(this, "connecting"));
-            assertNotNull(ReflectionHelpers.getField(this, "connectionStopThread"));
+            assertNotNull(ReflectionHelpers.getField(ReflectionHelpers.getField(this, "connectionStop"), "stopThread"));
             checkedNavigation = true;
             super.startActivity(intent);
         }
@@ -86,7 +86,7 @@ public final class GameXrDisconnectTest {
             game.disconnectFromXrControls();
             assertTrue(game.checkedNavigation);
             assertTrue(nativeStopEntered.await(5, TimeUnit.SECONDS));
-            stopThread = ReflectionHelpers.getField(game, "connectionStopThread");
+            stopThread = ReflectionHelpers.getField(ReflectionHelpers.getField(game, "connectionStop"), "stopThread");
             assertNotNull(stopThread);
             assertTrue(stopThread.isAlive());
             assertTrue(game.isFinishing());
