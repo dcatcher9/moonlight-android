@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.view.Surface;
 
 import com.limelight.Game;
+import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.Stereo3DRenderer;
 
@@ -40,6 +41,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import javax.microedition.khronos.egl.EGL10;
 import javax.microedition.khronos.egl.EGLConfig;
@@ -71,7 +74,7 @@ final class ClientSbsContainerHarness implements AutoCloseable {
             harness.decoderBinds.add(callback);
             DecoderOutputSurfaceSwitchRequest request =
                     mock(DecoderOutputSurfaceSwitchRequest.class);
-            when(request.cancelAtDeadline()).thenReturn(true);
+            when(request.cancelAtDeadline()).thenAnswer(call -> harness.decoderCancelAtDeadline);
             return request;
         }
 
@@ -146,7 +149,10 @@ final class ClientSbsContainerHarness implements AutoCloseable {
     /** What a Client SBS SceneCore resize publishes. */
     volatile Surface videoSurfaceAfterResize = resizedSceneCore;
     volatile boolean clientSurfaceSizeResult = true;
+    volatile boolean suspendResult = true;
     volatile boolean prepareLiveStreamResizeResult = true;
+    /** False: a queued decoder bind already owns completion when an owner deadline fires. */
+    volatile boolean decoderCancelAtDeadline = true;
     volatile boolean completeAfterSwapResult = true;
     volatile boolean backendInitializing;
     volatile EGLSurface createResult = window;
@@ -162,6 +168,17 @@ final class ClientSbsContainerHarness implements AutoCloseable {
     /** The decoder surface generation the container last prepared for the renderer. */
     volatile int preparedDecoderGeneration;
 
+    /** LimeLog output while the harness is open, as {@code "<LEVEL> <message>"}. */
+    final List<String> logs = Collections.synchronizedList(new ArrayList<>());
+    private final Logger limeLog = Logger.getLogger(LimeLog.class.getName());
+    private final java.util.logging.Handler logCapture = new java.util.logging.Handler() {
+        @Override public void publish(LogRecord record) {
+            logs.add(record.getLevel() + " " + record.getMessage());
+        }
+        @Override public void flush() { }
+        @Override public void close() { }
+    };
+
     private final ExecutorService eglThread =
             Executors.newSingleThreadExecutor(task -> new Thread(task, "ClientSbsEgl"));
     private final MockedConstruction<XrStreamPresenter> presenters;
@@ -169,6 +186,7 @@ final class ClientSbsContainerHarness implements AutoCloseable {
     private final MockedConstruction<Stereo3DRenderer> renderers;
 
     ClientSbsContainerHarness() {
+        limeLog.addHandler(logCapture);
         names.put(window, "window");
         game = Robolectric.buildActivity(TestGame.class).get();
         game.harness = this;
@@ -247,7 +265,7 @@ final class ClientSbsContainerHarness implements AutoCloseable {
                 .thenAnswer(call -> {
                     record("renderer.suspendPresentationForLiveStreamResize "
                             + call.getArgument(0) + "x" + call.getArgument(1));
-                    return true;
+                    return suspendResult;
                 });
         when(renderer.completeLiveStreamResizeAfterSwap(any())).thenAnswer(call -> {
             record("renderer.completeLiveStreamResizeAfterSwap");
@@ -460,6 +478,7 @@ final class ClientSbsContainerHarness implements AutoCloseable {
 
     @Override
     public void close() {
+        limeLog.removeHandler(logCapture);
         eglThread.shutdownNow();
         presenters.close();
         surfaces.close();
