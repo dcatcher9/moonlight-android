@@ -135,7 +135,6 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     }
 
     private final static int PAIR_ID = 2;
-    private final static int UNPAIR_ID = 3;
     private final static int WOL_ID = 4;
     private final static int DELETE_ID = 5;
     private final static int RESUME_ID = 6;
@@ -792,58 +791,6 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         }).start();
     }
 
-    private void doUnpair(final ComputerDetails computer) {
-        if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (managerBinder == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        Toast.makeText(PcView.this, getResources().getString(R.string.unpairing), Toast.LENGTH_SHORT).show();
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                NvHTTP httpConn;
-                String message;
-                try {
-                    httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),
-                            computer.httpsPort, managerBinder.getUniqueId(), computer.serverCert,
-                            PlatformBinding.getCryptoProvider(PcView.this));
-                    if (httpConn.getPairState() == PairState.PAIRED) {
-                        httpConn.unpair();
-                        if (httpConn.getPairState() == PairState.NOT_PAIRED) {
-                            message = getResources().getString(R.string.unpair_success);
-                        }
-                        else {
-                            message = getResources().getString(R.string.unpair_fail);
-                        }
-                    }
-                    else {
-                        message = getResources().getString(R.string.unpair_error);
-                    }
-                } catch (UnknownHostException e) {
-                    message = getResources().getString(R.string.error_unknown_host);
-                } catch (FileNotFoundException e) {
-                    message = getResources().getString(R.string.error_404);
-                } catch (XmlPullParserException | IOException e) {
-                    message = e.getMessage();
-                    e.printStackTrace();
-                }
-
-                final String toastMessage = message;
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
-                    }
-                });
-            }
-        }).start();
-    }
-
     private void doAppList(ComputerDetails computer, boolean newlyPaired, boolean showHiddenGames) {
         if (computer.state == ComputerDetails.State.OFFLINE) {
             Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
@@ -875,10 +822,6 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
             case PAIR_ID_OTP:
                 doOTPPair(computer.details);
-                return true;
-
-            case UNPAIR_ID:
-                doUnpair(computer.details);
                 return true;
 
             case WOL_ID:
