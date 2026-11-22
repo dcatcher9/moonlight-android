@@ -246,6 +246,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         managerBinder.startPolling(new ComputerManagerListener() {
             @Override
             public void notifyComputerUpdated(final ComputerDetails details) {
+                // The serverinfo and app-list pollers report on their own threads. The session
+                // and app-list state below is main-thread confined, so reports run there in order.
+                runOnUiThread(() -> onComputerUpdatedOnMainThread(details));
+            }
+
+            private void onComputerUpdatedOnMainThread(final ComputerDetails details) {
                 // Don't care about other computers
                 if (!details.uuid.equalsIgnoreCase(uuidString)) {
                     return;

@@ -862,7 +862,8 @@ public class ComputerManagerService extends Service {
     }
 
     public class ApplistPoller {
-        private Thread thread;
+        // Written by start()/stop(); each polling thread runs only while it is still this field.
+        private volatile Thread thread;
         private final ComputerDetails computer;
         private final Object pollEvent = new Object();
         private boolean receivedAppList = false;
@@ -894,7 +895,9 @@ public class ComputerManagerService extends Service {
                 return false;
             }
 
-            return thread != null && !thread.isInterrupted();
+            // A stop() and start() while this thread was in network I/O leave a newer thread in
+            // the field; this one must exit rather than poll alongside it.
+            return thread == Thread.currentThread() && !Thread.currentThread().isInterrupted();
         }
 
         private PollingTuple getPollingTuple(ComputerDetails details) {
@@ -979,7 +982,7 @@ public class ComputerManagerService extends Service {
 
                                 // Notify that the app list has been updated
                                 // and ensure that the thread is still active
-                                if (listener != null && thread != null) {
+                                if (listener != null && thread == Thread.currentThread()) {
                                     listener.notifyComputerUpdated(computer);
                                 }
                             }
