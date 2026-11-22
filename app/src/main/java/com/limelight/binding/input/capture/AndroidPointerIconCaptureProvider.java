@@ -17,9 +17,6 @@ public class AndroidPointerIconCaptureProvider extends InputCaptureProvider {
         this.targetView = targetView;
     }
 
-    public static boolean isCaptureProviderSupported() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.N;
-    }
 
     @Override
     public void hideCursor() {
