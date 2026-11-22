@@ -286,9 +286,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 activeWindowVideoStats.maxDecoderTimeNs = Math.max(
                         activeWindowVideoStats.maxDecoderTimeNs, decodeNs);
                 activeWindowVideoStats.decoderLatencySamples++;
-                if (!USE_FRAME_RENDER_TIME) {
-                    activeWindowVideoStats.totalTimeMs += decodeNs / 1_000_000L;
-                }
+                activeWindowVideoStats.totalTimeMs += decodeNs / 1_000_000L;
             }
         }
     }
@@ -322,8 +320,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
-    private static final boolean USE_FRAME_RENDER_TIME = false;
-    private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
     // Direct submission invokes MediaCodec from the native receive thread. A blocked codec input
     // buffer then prevents that thread from draining UDP, so use moonlight-common-c's dedicated
@@ -819,12 +815,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         notifyFirstFrameRendered();
         recordFramePresented();
-        long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
-        if (delta >= 0 && delta < 1000 && USE_FRAME_RENDER_TIME) {
-            synchronized (videoStatsLock) {
-                activeWindowVideoStats.totalTimeMs += delta;
-            }
-        }
     }
 
     static boolean isFrameRenderedCallbackCurrent(long callbackEpoch, long activeEpoch,
@@ -3457,7 +3447,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // is enabled, so the receive half is counted under the same condition. A session
             // average then covers measured frames only, rather than mixing complete samples with
             // receive-only ones.
-            if (!FRAME_RENDER_TIME_ONLY && performanceTelemetryEnabled) {
+            if (performanceTelemetryEnabled) {
                 // Count time from first packet received to enqueue time as receive time. We count
                 // DU queue time as part of decoding because it is caused by a slow decoder.
                 activeWindowVideoStats.totalTimeMs += enqueueTimeMs - receiveTimeMs;
