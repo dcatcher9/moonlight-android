@@ -62,7 +62,6 @@ import com.limelight.utils.UiHelper;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.AlertDialog;
-import android.app.PictureInPictureParams;
 import android.app.Service;
 import android.content.ClipboardManager;
 import android.content.ComponentName;
@@ -74,7 +73,6 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Point;
-import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
@@ -87,7 +85,6 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
-import android.util.Rational;
 import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
@@ -140,7 +137,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener, MouseInputListener,
         OnSystemUiVisibilityChangeListener, GameGestures, StreamContainer.InputCallbacks,
         ExternalControllerView.InputCallbacks,
-        PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
+        PerfOverlayListener, View.OnKeyListener {
     public static Game instance;
     private static final int ON_SCREEN_MOUSE_DEVICE_ID = Integer.MIN_VALUE;
 
@@ -326,10 +323,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }, this::sendHostSessionQuit);
     // This connection's HTTP launch or resume succeeded; written on the connection thread.
     private volatile boolean ownsEstablishedHostSession;
-    private boolean autoEnterPip = false;
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
-    private int suppressPipRefCount = 0;
     private String pcName;
     private String appName;
     private NvApp app;
@@ -384,7 +379,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
             binder.setListener(controllerHandler);
-            binder.setStateListener(Game.this);
             binder.start();
         }
 
@@ -959,7 +953,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         panZoomHandler = new PanZoomHandler(
                 getApplicationContext(),
-                this,
                 streamContainer.getSurfaceView(),
                 streamContainer
         );
@@ -1754,62 +1747,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
-    private PictureInPictureParams getPictureInPictureParams(boolean autoEnter) {
-        View view = (View) rootView;
-        Rect hint;
-
-        int[] viewLocation = new int[2];
-
-        view.getLocationOnScreen(viewLocation);
-
-        int left = viewLocation[0];
-        int top = viewLocation[1];
-        int width = view.getWidth();
-        int height = view.getHeight();
-        Rational aspectRatio = new Rational(width, height);
-        hint = new Rect(left, top, left + width, top + height);
-
-        PictureInPictureParams.Builder builder =
-                new PictureInPictureParams.Builder()
-                        .setAspectRatio(aspectRatio)
-                        .setSourceRectHint(hint);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(autoEnter);
-            builder.setSeamlessResizeEnabled(true);
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (appName != null) {
-                builder.setTitle(appName);
-                if (pcName != null) {
-                    builder.setSubtitle(pcName);
-                }
-            }
-            else if (pcName != null) {
-                builder.setTitle(pcName);
-            }
-        }
-
-        return builder.build();
-    }
-
-    public void updatePipAutoEnter() {
-        if (!prefConfig.enablePip || isOnExternalDisplay()) {
-            return;
-        }
-
-        boolean autoEnter = connected && suppressPipRefCount == 0;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            setPictureInPictureParams(getPictureInPictureParams(autoEnter));
-        }
-        else {
-            autoEnterPip = autoEnter;
-        }
-    }
-
     public void setMetaKeyCaptureState(boolean enabled) {
         // This uses custom APIs present on some Samsung devices to allow capture of
         // meta key events while streaming.
@@ -1843,32 +1780,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void onUserLeaveHint() {
-        super.onUserLeaveHint();
-
-        // PiP is only supported on Oreo and later, and we don't need to manually enter PiP on
-        // Android S and later. On Android R, we will use onPictureInPictureRequested() instead.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            if (autoEnterPip && !isOnExternalDisplay()) {
-                try {
-                    // This has thrown all sorts of weird exceptions on Samsung devices
-                    // running Oreo. Just eat them and close gracefully on leave, rather
-                    // than crashing.
-                    enterPictureInPictureMode(getPictureInPictureParams(false));
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
-
-    @Override
     @TargetApi(Build.VERSION_CODES.R)
     public boolean onPictureInPictureRequested() {
-        // Enter PiP when requested unless we're on Android 12 which supports auto-enter.
-        if (autoEnterPip && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            enterPictureInPictureMode(getPictureInPictureParams(false));
-        }
+        // The stream never enters picture-in-picture; report the request as handled.
         return true;
     }
 
@@ -3504,7 +3418,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (xrSessionSettingsController != null) {
             xrSessionSettingsController.getStreamGammaState().connectionStopped();
         }
-        updatePipAutoEnter();
 
         controllerHandler.stop();
 
@@ -3823,7 +3736,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     xrSessionSettingsController.getStreamGammaState().setSupported(negotiatedStreamGamma);
                     refreshXrSessionSettingsModels();
                 }
-                updatePipAutoEnter();
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
                 // when the spinner gets displayed. On Android Q, even now
@@ -4117,12 +4029,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         LimeLog.info("surfaceChanged-->"+width+" x "+height + "----"+displayWidth+" x "+displayHeight);
 
         panZoomHandler.handleSurfaceChange();
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!isInPictureInPictureMode()) {
-                updatePipAutoEnter();
-            }
-        }
     }
 
     /** Opaque owner token used by a UI deadline without exposing the decoder implementation. */
@@ -4531,20 +4437,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (decoderRenderer != null) {
             decoderRenderer.setPerformanceTelemetryEnabled(statsVisible);
         }
-    }
-
-    @Override
-    public void onUsbPermissionPromptStarting() {
-        // Disable PiP auto-enter while the USB permission prompt is on-screen. This prevents
-        // us from entering PiP while the user is interacting with the OS permission dialog.
-        suppressPipRefCount++;
-        updatePipAutoEnter();
-    }
-
-    @Override
-    public void onUsbPermissionPromptCompleted() {
-        suppressPipRefCount--;
-        updatePipAutoEnter();
     }
 
     @Override

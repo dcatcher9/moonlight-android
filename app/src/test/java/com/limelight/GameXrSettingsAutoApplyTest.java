@@ -36,7 +36,7 @@ import java.time.Duration;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, shadows = {ShadowMoonBridge.class, com.limelight.shadows.ShadowGameManager.class})
 public class GameXrSettingsAutoApplyTest {
-    public static class SettingsGame extends Game { @Override public void updatePipAutoEnter() { } }
+    public static class SettingsGame extends Game { }
     private SettingsGame game;
     private XrSessionSettingsController settings;
     private XrStreamPresenter presenter;

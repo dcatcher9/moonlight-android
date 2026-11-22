@@ -39,8 +39,6 @@ public final class GameXrDisconnectTest {
     public static final class NavigationObservingGame extends Game {
         boolean checkedNavigation;
 
-        @Override public void updatePipAutoEnter() { }
-
         @Override public void startActivity(Intent intent) {
             // No onStop/onDestroy callback has run. Navigation cannot be the trigger for stop.
             assertTrue((Boolean) ReflectionHelpers.getField(this, "automaticReconnectCancelled"));

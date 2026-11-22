@@ -63,7 +63,6 @@ public final class GameHostSessionQuitTest {
         int recreationCount;
         @Override boolean isDeviceInteractive() { return true; }
         @Override public void runAfterConnectionStop(Runnable callback) { }
-        @Override public void updatePipAutoEnter() { }
         @Override public void recreate() { recreationCount++; }
     }
 

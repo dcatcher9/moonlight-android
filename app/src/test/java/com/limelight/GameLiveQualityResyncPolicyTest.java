@@ -37,7 +37,6 @@ import org.robolectric.util.ReflectionHelpers;
 })
 public class GameLiveQualityResyncPolicyTest {
     public static final class ResyncGame extends Game {
-        @Override public void updatePipAutoEnter() { }
         @Override public void runAfterConnectionStop(Runnable callback) { }
     }
 

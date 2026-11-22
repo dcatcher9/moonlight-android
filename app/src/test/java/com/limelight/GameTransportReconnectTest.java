@@ -60,7 +60,6 @@ public final class GameTransportReconnectTest {
         @Override public void runAfterConnectionStop(Runnable callback) {
             nativeStopCompleted = callback;
         }
-        @Override public void updatePipAutoEnter() { }
         @Override public void recreate() { recreationCount++; }
     }
 

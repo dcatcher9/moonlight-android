@@ -6,13 +6,11 @@ import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
 
-import com.limelight.Game;
 import com.limelight.LimeLog;
 
 public class PanZoomHandler {
     static private final float MAX_SCALE = 10.0f;
 
-    private final Game game;
     private final View streamView;
     private final ScaleGestureDetector scaleGestureDetector;
     private final GestureDetector gestureDetector;
@@ -22,8 +20,7 @@ public class PanZoomHandler {
     private float parentWidth, parentHeight = 0;
     private float childWidth, childHeight = 0;
 
-    public PanZoomHandler(Context context, Game game, View streamView, View parent) {
-        this.game = game;
+    public PanZoomHandler(Context context, View streamView, View parent) {
         this.streamView = streamView;
         this.parent = parent;
         scaleGestureDetector = new ScaleGestureDetector(context, new ScaleListener());
@@ -125,11 +122,6 @@ public class PanZoomHandler {
 
             constrainToBounds();
             return true;
-        }
-
-        @Override
-        public void onScaleEnd(ScaleGestureDetector detector) {
-            game.updatePipAutoEnter();
         }
     }
 

@@ -451,7 +451,6 @@ public final class XrStreamPresenterControlTransportTeardownTest {
                 game, "prepareCurrentSessionPreferences");
         PreferenceConfiguration preferences = PreferenceConfiguration.readPreferences(game, startup);
         preferences.smartClipboardSync = false;
-        preferences.enablePip = false;
         setField(game, "prefConfig", preferences);
         setField(game, "controllerHandler", mock(ControllerHandler.class));
         setField(game, "conn", mock(NvConnection.class));
