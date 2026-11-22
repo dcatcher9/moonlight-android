@@ -1134,13 +1134,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    /** Cancels a superseded swap acknowledgement without invalidating the attached EGL output. */
-    public void cancelLiveStreamResizeCompletion() {
-        synchronized (liveStreamResizeLock) {
-            presentationCompletion.cancel(ClientSbsPresentationTransaction.Kind.RESIZE);
-        }
-    }
-
     /** Terminally gates a failed presentation; resource cleanup remains ordered after stop. */
     public void abandonPresentation() {
         // Neither a driver-bound resize nor SurfaceTexture acquisition may hold a failed
