@@ -271,8 +271,9 @@ public class KeyBoardTouchPadButton extends keyBoardVirtualControllerElement {
             case MotionEvent.ACTION_CANCEL:
             case MotionEvent.ACTION_UP: {
                 setPressed(false);
-                // A cancelled gesture is not a tap.
-                if (action == MotionEvent.ACTION_UP
+                // A cancelled gesture is not a tap, and a drag that already pressed the button
+                // must not press it a second time before its one release.
+                if (action == MotionEvent.ACTION_UP && !buttonDownSent
                         && event.getEventTime() - originalTouchTime <= 200) {
                     onClickCallback();
                 }
