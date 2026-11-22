@@ -1508,6 +1508,8 @@ coordinate-calibration and strict-failure guardrails in addition to the family-a
     --tests "com.limelight.utils.Stereo3DRendererStrictFailureContractTest" `
     --tests "com.limelight.utils.ClientSbsInferenceOwnerLifecycleTest" `
     --tests "com.limelight.utils.ClientSbsDecoderFrameSourceLifecycleTest" `
+    --tests "com.limelight.ui.ClientSbsEglAttachmentLifecycleTest" `
+    --tests "com.limelight.ui.ClientSbsResizeCoordinatorLifecycleTest" `
     --tests "com.limelight.utils.ShaderUtilsTest" `
     --tests "com.limelight.ui.XrStreamPresenterLayoutTest" `
     --tests "com.limelight.ui.XrStreamPresenterTransitionTest" `
@@ -1569,6 +1571,16 @@ The tests cover:
   event, the latch holding the frame lock through `updateTexImage()`, the live-resize and HDR
   boundary discards before their generation advance, the ordered `SurfaceTexture` replacement for
   a new handoff generation, and terminal callback shutdown.
+- `ClientSbsEglAttachmentLifecycleTest`: through the real `StreamContainer` wiring with a separate
+  EGL thread, the attach and detach flows for mode entry, exit and live resize; the window-surface
+  factory accepting only the exact requested surface; only a successful destroy acknowledging a
+  detach; every renderer-callback classification; the operation counter shared by the mode switch
+  and the resize; and zeroing on abandon and teardown.
+- `ClientSbsResizeCoordinatorLifecycleTest`: live-resize admission and its exclusion with the mode
+  switch, a request replacing the geometry during the detach, the two-second detach and attach
+  watchdogs, the eight-second swap fallback, the fresh two-second post-ACK proof window, deferral
+  to a decoder bind that owns its completion, the cold-backend window bounded at 30 seconds, each
+  failure path, a late proof after settling, and teardown.
 - `ShaderUtilsTest`: exact source-cell area downsampling, bilinear-upscale selection, reflected
   per-cell portrait mapping, per-cell HDR conversion, per-stream fixed-shape packing, the 11-step
   unique seed inverse, and the one-correction refinement contract.
