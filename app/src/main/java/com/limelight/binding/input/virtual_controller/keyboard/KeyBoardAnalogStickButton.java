@@ -14,8 +14,21 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
     private final int[] stickIndex = new int[4];
     private final boolean[] stickBool = new boolean[4];
     private final int[] stickSender = new int[5];
+    // Key state last sent to the host: the four direction keys and the double-click key.
+    private final boolean[] directionKeyDown = new boolean[4];
+    private boolean clickKeyDown;
 
     private KeyBoardAnalogStickListener listener;
+
+    /** Sends only the direction keys whose state changed, so each press pairs with one release. */
+    private void sendChangedDirectionKeys() {
+        for (int i = 0; i < 4; i++) {
+            if (stickBool[i] != directionKeyDown[i]) {
+                directionKeyDown[i] = stickBool[i];
+                listener.onkeyEvent(stickSender[i], stickBool[i]);
+            }
+        }
+    }
 
 
     public void setListener(KeyBoardAnalogStickListener listener) {
@@ -115,9 +128,7 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
                     stickBool[3] = false;
                 }
 
-                for (int i = 0; i < 4; i++) {
-                    listener.onkeyEvent(stickSender[i],stickBool[i]);
-                }
+                sendChangedDirectionKeys();
             }
 
             @Override
@@ -127,7 +138,10 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
 
             @Override
             public void onDoubleClick() {
-                listener.onkeyEvent(stickSender[4],true);
+                if (!clickKeyDown) {
+                    clickKeyDown = true;
+                    listener.onkeyEvent(stickSender[4], true);
+                }
             }
 
             @Override
@@ -140,10 +154,11 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
                 stickBool[1] = false;
                 stickBool[2] = false;
                 stickBool[3] = false;
-                for (int i = 0; i < 4; i++) {
-                    listener.onkeyEvent(stickSender[i],stickBool[i]);
+                sendChangedDirectionKeys();
+                if (clickKeyDown) {
+                    clickKeyDown = false;
+                    listener.onkeyEvent(stickSender[4], false);
                 }
-                listener.onkeyEvent(stickSender[4],false);
             }
         });
     }
