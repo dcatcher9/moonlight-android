@@ -55,7 +55,7 @@ public class HelpActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                if (loadingDialog == null) {
+                if (loadingDialog == null && !isDestroyed()) {
                     loadingDialog = SpinnerDialog.displayDialog(HelpActivity.this,
                             getResources().getString(R.string.help_loading_title),
                             getResources().getString(R.string.help_loading_msg), false);
@@ -99,6 +99,11 @@ public class HelpActivity extends AppCompatActivity {
                 getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(onBackInvokedCallback);
             }
         }
+
+        // Leaving before the page finished must not leak the loading spinner's window.
+        // SpinnerDialog.dismiss() is a no-op once the Activity is finishing.
+        SpinnerDialog.closeDialogs(this);
+        loadingDialog = null;
 
         super.onDestroy();
     }
