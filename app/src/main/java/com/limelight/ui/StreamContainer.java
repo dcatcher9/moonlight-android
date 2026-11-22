@@ -819,7 +819,7 @@ public class StreamContainer extends FrameLayout {
      */
     public boolean resizeClientSbsSurface(int width, int height,
                                           SurfaceSwitchCallback callback) {
-        int[] packed = XrStreamPresenter.clientSbsPackedDimensions(width, height);
+        int[] packed = XrPresentationPolicy.clientSbsPackedDimensions(width, height);
         if (callback == null || packed == null || mXrPresenter == null || mDestroyed
                 || mStereoRenderer == null || !mStereoRenderer.isClientSbs()
                 || mClientSbsSwitch.callback != null
@@ -866,7 +866,7 @@ public class StreamContainer extends FrameLayout {
         int resizeGeneration = mClientSbsResize.pendingGeneration;
         int width = mClientSbsResize.pendingWidth;
         int height = mClientSbsResize.pendingHeight;
-        int[] packed = XrStreamPresenter.clientSbsPackedDimensions(width, height);
+        int[] packed = XrPresentationPolicy.clientSbsPackedDimensions(width, height);
         boolean prepared = packed != null
                 && mStereoRenderer.prepareLiveStreamResize(
                         width, height, packed[0], packed[1]);

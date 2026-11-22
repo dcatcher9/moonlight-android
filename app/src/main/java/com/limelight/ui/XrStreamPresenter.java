@@ -4498,11 +4498,6 @@ public class XrStreamPresenter {
         return prefConfig.height;
     }
 
-    /** Kept for {@code StreamContainer}; the arithmetic lives in {@link XrPresentationPolicy}. */
-    static int[] clientSbsPackedDimensions(int perEyeWidth, int perEyeHeight) {
-        return XrPresentationPolicy.clientSbsPackedDimensions(perEyeWidth, perEyeHeight);
-    }
-
     private int hostSbsVideoFormat = MoonBridge.VIDEO_FORMAT_H265;
 
     /** Updates the host-SBS allocation from the codec actually selected by RTSP/MediaCodec. */
