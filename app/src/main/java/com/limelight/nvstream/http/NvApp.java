@@ -42,15 +42,6 @@ public class NvApp {
         }
     }
 
-    public void setAppIndex(String appIndex) {
-        try {
-            this.appIndex = Integer.parseInt(appIndex);
-            this.initialized = true;
-        } catch (NumberFormatException e) {
-            LimeLog.warning("Malformed app index: "+appIndex);
-        }
-    }
-
     public void setAppId(int appId) {
         this.appId = appId;
         this.initialized = true;
