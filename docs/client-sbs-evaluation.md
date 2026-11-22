@@ -34,8 +34,8 @@ broadcasts and opt-in classifier timing method have been removed. Operational st
 failure and playback-recovery logs remain. Existing offline evaluation, Dump3D and production-model
 benchmark tooling is retained; retired experimental APIs must not be assumed available.
 
-Current correctness gates include `ClientSbsNearIdenticalPolicyTest`,
-`ClientSbsGpuNearReuseShadersTest`, `ClientSbsGpuNearReuseClassifierTest`,
+Current correctness gates include `ClientSbsGpuNearReuseShadersTest`,
+`ClientSbsGpuNearReuseClassifierTest`,
 `ClientSbsComputeProgramConsistencyTest`, and the actual-GLES
 `ClientSbsGpuNearReuseDecisionInstrumentedTest`. Its long-lived reuse case exercises more than
 a day and a 64-bit source gap, unchanged/lazy inputs, cumulative change against a fixed owner,
@@ -1521,7 +1521,8 @@ The tests cover:
   the one-texel profile, and the std430 state layout against its Java byte offsets.
 - `ClientSbsGpuDisparityShadersTest` and `ClientSbsV2CoordinateContractTest`: the graph-scaled raw
   camera coordinate, host far-exp/linear/near-log curve, fixed `1.75 * 0.00375` gain, odd `+/-0.04`
-  fourth-root container, four serial-line compute passes, and CPU-reference contract bounds.
+  fourth-root container and four serial-line compute passes; the contract test also pins the
+  microsecond source-timestamp conversion.
 - `ClientSbsGpuNearReuseClassifierTest`: real-inference commit/reuse-discard transaction state,
   tile-grid dispatch math, and two-slot decision record offsets.
 - `ClientSbsGpuNearReuseShadersTest`: fused packing and near-identical tile evidence, the
@@ -1530,9 +1531,7 @@ The tests cover:
 - `ClientSbsComputeProgramConsistencyTest`: for every compute program, the uniforms Java looks up
   are declared and used, binding indices match, each dispatch covers its extent with the shader's
   local size, and the barrier after each dispatch covers what the pass wrote.
-- `ClientSbsNearIdenticalPolicyTest`: Apollo's inclusive pixel/tile thresholds, rectangular partial
-  tiles, finite/complete evidence validation, authenticated decision encoding, cumulative one-to-four
-  callback-step limit, and strict sub-100-ms owner age.
+- `ClientSbsNearIdenticalPolicyTest`: stable decision-record wire values and reason categories.
 - `ClientSbsGpuTimerTest`: nonblocking per-stage query rings, unsigned results, and disjoint-sample
   rejection.
 - `DecoderModeTransitionGateTest`: IDR/serial and presentation-timestamp gating around decoder
