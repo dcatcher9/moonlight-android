@@ -550,7 +550,7 @@
     <string name="xr_mode_quality_heading">Stream quality</string>
     <string name="xr_bitrate_recommended">recommended</string>
     <string name="xr_bitrate_codec_too_slow">this codec cannot reach this resolution — switch codec</string>
-    <string name="xr_glance_stream">%1$s &#x00B7; %2$s FPS &#x00B7; %3$d Mbps &#x00B7; %4$s</string>
+    <string name="xr_glance_stream">%1$s &#x00B7; %2$s FPS &#x00B7; %3$s &#x00B7; %4$s</string>
     <!-- Live rate followed by the selected ceiling, shown only while the stream runs below it. -->
     <string name="xr_glance_frame_rate_capped">%1$s / %2$d max</string>
     <string name="xr_glance_hdr" translatable="false">HDR</string>

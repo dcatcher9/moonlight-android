@@ -121,4 +121,33 @@ public class XrBitrateRecommendationTest {
         assertEquals(-1, packed(1920, 0, 60, CODEC_HEVC));
         assertEquals(-1, packed(1920, 1080, 0, CODEC_HEVC));
     }
+
+    @Test
+    public void everyRungReadsAsAWholeNumberOfMbps() {
+        assertEquals("50 Mbps", XrBitrateRecommendation.label(50000));
+        assertEquals("70 Mbps", XrBitrateRecommendation.label(70000));
+        assertEquals("100 Mbps", XrBitrateRecommendation.label(100000));
+        assertEquals("140 Mbps", XrBitrateRecommendation.label(140000));
+        assertEquals("200 Mbps", XrBitrateRecommendation.label(200000));
+        assertEquals("300 Mbps", XrBitrateRecommendation.label(300000));
+    }
+
+    @Test
+    public void labelRoundsToTheNearestTenthOfAMbpsWithHalvesUp() {
+        // An off-ladder value keeps its tenth instead of being truncated to whole Mbps.
+        assertEquals("187.5 Mbps", XrBitrateRecommendation.label(187500));
+        assertEquals("0.5 Mbps", XrBitrateRecommendation.label(500));
+        // 187.65 is a tie: integer arithmetic rounds it up, where a float would round it down.
+        assertEquals("187.7 Mbps", XrBitrateRecommendation.label(187650));
+        assertEquals("187.6 Mbps", XrBitrateRecommendation.label(187649));
+        assertEquals("2.6 Mbps", XrBitrateRecommendation.label(2550));
+        // A value that rounds to a whole Mbps prints like one, never as "200.0 Mbps".
+        assertEquals("200 Mbps", XrBitrateRecommendation.label(199950));
+        assertEquals("199.9 Mbps", XrBitrateRecommendation.label(199949));
+        assertEquals("0 Mbps", XrBitrateRecommendation.label(49));
+        assertEquals("0 Mbps", XrBitrateRecommendation.label(0));
+        assertEquals("-1.5 Mbps", XrBitrateRecommendation.label(-1500));
+        assertEquals("2147483.6 Mbps", XrBitrateRecommendation.label(Integer.MAX_VALUE));
+        assertEquals("-2147483.6 Mbps", XrBitrateRecommendation.label(Integer.MIN_VALUE));
+    }
 }

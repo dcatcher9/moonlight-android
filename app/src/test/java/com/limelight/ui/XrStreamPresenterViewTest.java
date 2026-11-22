@@ -536,6 +536,10 @@ public final class XrStreamPresenterViewTest {
         assertEquals("3840 \u00d7 2160 \u00b7 90 FPS \u00b7 100 Mbps \u00b7 HDR",
                 XrStatsFormat.formatGlanceStream(
                         activity, "3840x2160", "90", 100000, "HDR"));
+        // An off-ladder bitrate keeps its tenth, as in the quality cue and the settings rows.
+        assertEquals("3840 \u00d7 2160 \u00b7 90 FPS \u00b7 187.5 Mbps \u00b7 SDR",
+                XrStatsFormat.formatGlanceStream(
+                        activity, "3840x2160", "90", 187500, "SDR"));
         controller.destroy();
     }
 

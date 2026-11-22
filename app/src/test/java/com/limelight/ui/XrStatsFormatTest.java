@@ -2,6 +2,8 @@ package com.limelight.ui;
 
 import static org.junit.Assert.assertEquals;
 
+import com.limelight.ui.xrcontrols.StreamQualityTuple;
+
 import org.junit.Test;
 
 /** Stats rows report a window without samples as unsampled, never as a measured zero. */
@@ -51,5 +53,16 @@ public final class XrStatsFormatTest {
                 XrStatsFormat.formatClientReuseRatio(0.4f));
         assertEquals("0.0% of eligible decisions",
                 XrStatsFormat.formatClientReuseRatio(0f));
+    }
+
+    @Test
+    public void qualityCueUsesTheSharedBitrateLabel() {
+        assertEquals("3840 × 2160 @ 90 FPS · 200 Mbps",
+                XrStatsFormat.formatQualityTuple(
+                        new StreamQualityTuple("3840x2160", "90", 200000)));
+        // Off the ladder: the same text the glance strip and the settings rows show.
+        assertEquals("3840 × 2160 @ 90 FPS · 187.7 Mbps",
+                XrStatsFormat.formatQualityTuple(
+                        new StreamQualityTuple("3840x2160", "90", 187650)));
     }
 }

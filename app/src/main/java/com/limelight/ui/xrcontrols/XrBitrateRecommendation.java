@@ -104,8 +104,16 @@ public final class XrBitrateRecommendation {
         return best;
     }
 
-    /** Short label for a rung, e.g. {@code 140 Mbps}. */
+    /**
+     * Display text for a bitrate in kbps, and the only bitrate formatter in the app: the value in
+     * Mbps rounded to the nearest 0.1 Mbps (100 kbps, halves away from zero), with no decimal
+     * when that is a whole number. 140000 reads {@code 140 Mbps}, 187500 {@code 187.5 Mbps} and
+     * 199950 {@code 200 Mbps}. Integer arithmetic, so no float rounding and no locale digits.
+     */
     public static String label(int kbps) {
-        return (kbps / 1000) + " Mbps";
+        long tenths = (Math.abs((long) kbps) + 50L) / 100L;
+        String sign = kbps < 0 && tenths > 0L ? "-" : "";
+        long fraction = tenths % 10L;
+        return sign + (tenths / 10L) + (fraction == 0L ? "" : "." + fraction) + " Mbps";
     }
 }

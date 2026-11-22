@@ -51,6 +51,7 @@ import com.limelight.ui.xrcontrols.GameStereoSourceState;
 import com.limelight.ui.xrcontrols.AuthoredStereoModeState.MoviePictureFormat;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
+import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
 import com.limelight.sbs.HostSbsTelemetrySnapshot;
 import com.limelight.sbs.HostSbsTelemetryTracker;
 import com.limelight.ui.xrcontrols.XrControlPanelLayout;
@@ -1160,9 +1161,7 @@ public class XrStreamPresenter {
         String fps = Math.rint(prefConfig.fps) == prefConfig.fps
                 ? String.format(Locale.US, "%.0f FPS", prefConfig.fps)
                 : String.format(Locale.US, "%.2f FPS", prefConfig.fps);
-        String bitrate = prefConfig.bitrate % 1000 == 0
-                ? String.format(Locale.US, "%d Mbps", prefConfig.bitrate / 1000)
-                : String.format(Locale.US, "%.1f Mbps", prefConfig.bitrate / 1000.0f);
+        String bitrate = XrBitrateRecommendation.label(prefConfig.bitrate);
         String codec;
         PreferenceConfiguration.FormatOption videoFormat = prefConfig.videoFormat != null
                 ? prefConfig.videoFormat : PreferenceConfiguration.FormatOption.AUTO;

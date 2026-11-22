@@ -11,6 +11,7 @@ import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
+import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -967,7 +968,7 @@ public final class XrSessionSettingsController {
             case FRAME_RATE:
                 return value + " FPS";
             case BITRATE:
-                return XrSettingChoices.bitrateLabel((Integer) value);
+                return XrBitrateRecommendation.label((Integer) value);
             case FRAME_PACING:
                 if ("warp2".equals(value)) {
                     return "Warp 2";

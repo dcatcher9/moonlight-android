@@ -5,6 +5,7 @@ import android.app.Activity;
 import com.limelight.R;
 import com.limelight.sbs.SbsDepthTelemetrySnapshot;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
+import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
 
 import java.util.Locale;
 
@@ -17,9 +18,7 @@ final class XrStatsFormat {
     }
 
     static String formatQualityTuple(StreamQualityTuple tuple) {
-        String bitrate = tuple.bitrateKbps % 1000 == 0
-                ? (tuple.bitrateKbps / 1000) + " Mbps"
-                : String.format(Locale.US, "%.1f Mbps", tuple.bitrateKbps / 1000.0f);
+        String bitrate = XrBitrateRecommendation.label(tuple.bitrateKbps);
         return tuple.resolution.replace("x", " \u00d7 ") + " @ " + tuple.frameRate
                 + " FPS · " + bitrate;
     }
@@ -27,8 +26,8 @@ final class XrStatsFormat {
     static String formatGlanceStream(Activity activity, String resolution, String frameRate,
                                      int bitrateKbps, String dynamicRange) {
         return activity.getString(R.string.xr_glance_stream,
-                resolution.replace("x", " \u00d7 "), frameRate, bitrateKbps / 1000,
-                dynamicRange);
+                resolution.replace("x", " \u00d7 "), frameRate,
+                XrBitrateRecommendation.label(bitrateKbps), dynamicRange);
     }
 
     static String formatHostSbsTelemetryStatus(SbsDepthTelemetrySnapshot telemetry) {

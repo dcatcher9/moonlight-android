@@ -1,12 +1,12 @@
 package com.limelight.preferences;
 
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
+import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * The in-session choice catalog: every ordered option list the XR settings panel offers, with the
@@ -24,8 +24,7 @@ final class XrSettingChoices {
     // so reach matters more than resolution: the old thirteen-rung list spent six rungs below
     // 50 Mbps that no configuration on a local link ever wants, and put 120 and 130 -- an
     // eight percent difference nobody can see -- next to each other.
-    static final List<Integer> BITRATES =
-            com.limelight.ui.xrcontrols.XrBitrateRecommendation.LADDER_KBPS;
+    static final List<Integer> BITRATES = XrBitrateRecommendation.LADDER_KBPS;
     static final List<SessionSettingsModel.Choice> RESOLUTION_CHOICES =
             createResolutionChoices();
     // 72 is a native Galaxy XR panel mode (the display reports 60/72/90), so it is offered as a
@@ -85,12 +84,6 @@ final class XrSettingChoices {
         }
     }
 
-    static String bitrateLabel(int bitrate) {
-        return bitrate % 1000 == 0
-                ? String.format(Locale.US, "%d Mbps", bitrate / 1000)
-                : String.format(Locale.US, "%.1f Mbps", bitrate / 1000f);
-    }
-
     static SessionSettingsModel.Choice choice(String id, String label) {
         return new SessionSettingsModel.Choice(id, label);
     }
@@ -111,7 +104,7 @@ final class XrSettingChoices {
     private static List<SessionSettingsModel.Choice> createBitrateChoices() {
         ArrayList<SessionSettingsModel.Choice> choices = new ArrayList<>(BITRATES.size());
         for (int bitrate : BITRATES) {
-            choices.add(choice(String.valueOf(bitrate), bitrateLabel(bitrate)));
+            choices.add(choice(String.valueOf(bitrate), XrBitrateRecommendation.label(bitrate)));
         }
         return Collections.unmodifiableList(choices);
     }
