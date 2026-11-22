@@ -10,7 +10,6 @@ import static com.limelight.binding.video.CodecRecoveryCoordinator.CR_RECOVERY_T
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -1440,26 +1439,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Set HDR metadata if present
         if (currentHdrMetadata != null) {
-            ByteBuffer hdrStaticInfo = ByteBuffer.allocate(25).order(ByteOrder.LITTLE_ENDIAN);
-            ByteBuffer hdrMetadata = ByteBuffer.wrap(currentHdrMetadata).order(ByteOrder.LITTLE_ENDIAN);
-
-            // Create a HDMI Dynamic Range and Mastering InfoFrame as defined by CTA-861.3
-            hdrStaticInfo.put((byte) 0); // Metadata type
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // RX
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // RY
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // GX
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // GY
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // BX
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // BY
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // White X
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // White Y
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // Max mastering luminance
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // Min mastering luminance
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // Max content luminance
-            hdrStaticInfo.putShort(hdrMetadata.getShort()); // Max frame average luminance
-
-            hdrStaticInfo.rewind();
-            format.setByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO, hdrStaticInfo);
+            format.setByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO,
+                    HdrStaticInfo.pack(currentHdrMetadata));
         }
         else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             format.removeKey(MediaFormat.KEY_HDR_STATIC_INFO);
