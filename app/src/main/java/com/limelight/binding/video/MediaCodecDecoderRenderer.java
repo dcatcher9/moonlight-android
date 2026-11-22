@@ -1909,8 +1909,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     /**
      * Begin an XR presentation-mode transaction. Compressed frames are gated immediately and the
      * output is PTS-gated until the transition IDR emerges. AVC/HEVC also use the existing
-     * all-thread flush barrier. Qualcomm AV1 must not be flushed, restarted, reset, or recreated:
-     * live lifecycle changes can leave its Codec2 buffer channel discarding every completed work.
+     * all-thread flush barrier. AV1 transitions only gate: a live flush or restart can leave
+     * Qualcomm's AV1 Codec2 buffer channel discarding every completed work. AV1 HDR metadata
+     * changes use an in-place reset instead (see setHdrMode()), and an AV1 codec failure
+     * recreates the decoder.
      */
     public int beginPresentationModeTransition() {
         synchronized (codecRecoveryMonitor) {
@@ -2215,8 +2217,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             } catch (IllegalStateException e) {
                 e.printStackTrace();
 
-                // Something went wrong during the restart, let's use a bigger hammer
-                // and try a reset instead.
+                // The flush failed, so escalate to a restart.
                 codecRecovery.compareAndSetType(
                         CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_RESTART);
             }
@@ -2289,8 +2290,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         }
 
-        // For other non-recoverable exceptions on L+, call reset() before escalating to
-        // recreation. This retains the established, less expensive recovery path.
+        // For non-recoverable exceptions, call reset() before escalating to recreation. This
+        // retains the established, less expensive recovery path.
         if (codecRecovery.type() == CR_RECOVERY_TYPE_RESET
                 && !recreateAv1Decoder) {
             if (applyingHdrMetadata) {
@@ -2730,8 +2731,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
 
-        // If codec recovery is required, always return false to ensure the caller will request
-        // an IDR frame to complete the codec recovery.
+        // This thread just took part in a recovery that invalidated every codec buffer. Return
+        // false so the caller requests the IDR the recovered decoder needs.
         if (codecRecovered) {
             return false;
         }
@@ -2975,8 +2976,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
         }
 
-        // If codec recovery is required, always return false to ensure the caller will request
-        // an IDR frame to complete the codec recovery.
+        // This thread just took part in a recovery that invalidated every codec buffer. Fail so
+        // the caller requests the IDR the recovered decoder needs.
         if (codecRecovered) {
             return InputQueueResult.FAILED;
         }
