@@ -476,7 +476,9 @@ Normal mode, and Host SBS modes must remain usable.
 
 The inference worker owns native LiteRT creation, invocation, and destruction. Do not destroy the
 engine from the renderer thread. Renderer-side failures must signal the owner thread to stop, while
-releasing every frame-slot lease, inference claim, and GL fence exactly once.
+releasing every frame-slot lease, inference claim, and GL fence exactly once. Native teardown waits
+for a renderer-context finish acknowledgement; when context-loss recovery finds that EGL no longer
+accepts the renderer's previous context, that loss stands in for the acknowledgement.
 
 ## Color/depth scheduling and input reuse
 
@@ -641,6 +643,10 @@ Fence ownership is part of the slot contract:
    ready fence itself because no renderer read of that output buffer was submitted.
 4. Slot reuse transfers that consumed fence back to native. Shutdown transfers the newest final
    consumer fence for both slots to the inference worker for bounded teardown.
+5. A slot receives a previous output-consumed fence only while native has returned a ready fence
+   for it that has not been consumed back. The input-ready fence of a capture that failed before
+   reaching native stays only as that slot's teardown dependency; the next run on the slot
+   supersedes it.
 
 Never delete a transferred fence twice, reuse a slot without its consumer fence, or close the native
 engine from the renderer thread.
@@ -930,6 +936,9 @@ resume and the standard tokenless cancel request. Absence is not equivalent to a
 - A settings restart snapshots the live quad before SceneCore teardown and transiently hands its effective
   height plus real-world pose to the replacement Activity. This preserves both physical size and
   apparent size from the user's chosen distance; pose is not made a durable cross-session setting.
+  While Cinema View is applied, the handoff also carries the height and pose that Exit Cinema
+  restores, so the replacement resumes Cinema View and the durable per-PC height stays the
+  pre-Cinema height.
 - Transport, authentication, and pre-frame startup failures preserve the last successful saved mode.
   Restoring its intent never supplies current host, stereo-source, or gamma proof.
 
@@ -1160,7 +1169,9 @@ example ceiling 90, request 72, applied 60. That 60 is the effective on-wire rat
 panel/host throttling never ratchets the explicit 90 ceiling downward. ACK-clamped geometry and the
 requested total wire bitrate remain durable. Every explicit FPS selection is likewise a maximum:
 an ACK below a direct 90 request or a direct lower ceiling such as 60 changes only the effective
-on-wire rate and never lowers that durable ceiling. A missing application ACK proves no applied
+on-wire rate and never lowers that durable ceiling. A mode switch without a target-mode quality
+change requests the live tuple at the durable ceiling; only its wire request is capped to the
+panel. A missing application ACK proves no applied
 tuple, even when a matching fresh-IDR proves the requested geometry: the final FPS/bitrate clamps
 remain unknown. The same fail-closed rule covers an unknown/future ACK status, `APPLIED` with an
 unusable tuple, failure to adopt the host-authoritative geometry on the client, or any client resize
@@ -1192,6 +1203,9 @@ short proof watchdog polls while the backend remains explicitly `Initializing`, 
 2-second packed-presentation proof window and nudges the renderer again; the combined cold path is
 therefore bounded to 32 seconds. Already-ready, unavailable, and ordinary warm paths retain the
 short watchdog, so the exception cannot hide a broken EGL/presentation transition.
+A post-ACK Client SBS packed-swap proof at unchanged geometry has no resize transaction; it uses
+the same two-second budget as the mode-entry proof and, on expiry, fails closed to the mandatory
+resync while the old picture stays visible.
 Before a persistent Client SBS decoder `SurfaceTexture` crosses any live-resize generation, the GL
 thread unconditionally acquires and discards its latest queued image under the frame lock, clears
 the matching callback state, and only then advances the generation. Merely clearing the Java
@@ -1341,7 +1355,9 @@ The **App Settings** tile opens the left App Settings panel for values saved for
 current PC. Its controls use two short semantic columns: Video (HDR, gamma, range, codec) and
 Delivery (pacing, audio layout, host audio, bitrate), with large XR-readable labels, choice targets,
 and status text. Every row except bitrate is shared by all modes; the bitrate row edits the current
-presentation mode's bitrate and says that other modes keep their own.
+presentation mode's bitrate and says that other modes keep their own. A staged change reads
+**Updating** when it applies live and **Reconnect required** otherwise; the bitrate row follows the
+selected mode's live-apply classification.
 Each setting is a distinct raised card under a strong semantic heading; mode options likewise group
 resolution, motion, bandwidth, live state, and Client SBS depth details into visually separate
 surfaces rather than one undifferentiated row.
