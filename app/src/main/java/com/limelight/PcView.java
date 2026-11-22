@@ -11,6 +11,7 @@ import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.grid.PcGridAdapter;
 import com.limelight.grid.assets.DiskAssetLoader;
+import com.limelight.nvstream.HostSessionLaunchRequest;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
@@ -151,6 +152,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private String contextMenuHostSessionId;
     private boolean contextMenuHostSessionIdSupported;
     private boolean contextMenuOpen;
+    private PopupMenu computerActionsPopup;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
@@ -487,8 +489,22 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         PopupMenu popup = new PopupMenu(this, anchor);
         populateComputerActions(popup.getMenu(), computer);
         popup.setOnMenuItemClickListener(this::onContextItemSelected);
-        popup.setOnDismissListener(menu -> contextMenuOpen = false);
+        popup.setOnDismissListener(menu -> {
+            contextMenuOpen = false;
+            if (computerActionsPopup == menu) {
+                computerActionsPopup = null;
+            }
+        });
+        computerActionsPopup = popup;
         popup.show();
+    }
+
+    /** Whether the host still reports the session the open actions were built for. */
+    private boolean contextMenuSessionCurrent(ComputerDetails details) {
+        return details.runningGameId == contextMenuRunningGameId
+                && Objects.equals(details.runningGameUUID, contextMenuRunningGameUuid)
+                && Objects.equals(details.hostSessionId, contextMenuHostSessionId)
+                && details.hostSessionIdSupported == contextMenuHostSessionIdSupported;
     }
 
     private void performPrimaryComputerAction(ComputerObject computer, View anchor) {
@@ -893,10 +909,20 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                     return true;
                 }
 
+                // A tap on actions built for an earlier session must not turn into a Start of
+                // whatever the host reports now; Resume carries the session it was offered for.
+                if (!contextMenuSessionCurrent(computer.details)
+                        || computer.details.runningGameId == 0) {
+                    Toast.makeText(PcView.this, R.string.xr_session_changed,
+                            Toast.LENGTH_SHORT).show();
+                    managerBinder.pollComputerNow(computer.details.uuid);
+                    return true;
+                }
                 ServerHelper.doStart(this, new NvApp("app",
                         computer.details.runningGameUUID,
                         computer.details.runningGameId, false),
-                        computer.details, managerBinder, false);
+                        computer.details, managerBinder, false,
+                        HostSessionLaunchRequest.resume(computer.details));
                 return true;
 
             case QUIT_ID:
@@ -1094,14 +1120,14 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     private void updateComputer(ComputerDetails details) {
         if (contextMenuOpen && details.uuid.equals(contextMenuComputerUuid)
-                && (details.runningGameId != contextMenuRunningGameId
-                || !Objects.equals(details.runningGameUUID, contextMenuRunningGameUuid)
-                || !Objects.equals(details.hostSessionId, contextMenuHostSessionId)
-                || details.hostSessionIdSupported
-                != contextMenuHostSessionIdSupported)) {
+                && !contextMenuSessionCurrent(details)) {
             // Context-menu contents are snapshots. Close stale Resume/Quit actions when Apollo's
             // authoritative session state changes; the next open rebuilds the current actions.
+            // The card's More button shows the same actions in a PopupMenu.
             closeContextMenu();
+            if (computerActionsPopup != null) {
+                computerActionsPopup.dismiss();
+            }
         }
         ComputerObject existingEntry = null;
 
