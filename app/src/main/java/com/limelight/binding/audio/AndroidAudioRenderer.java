@@ -101,10 +101,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private long nextDropLogTimeMs;
     private boolean invalidShortCountLogged;
 
-    public AndroidAudioRenderer(Context context, boolean enableAudioFx) {
-        this(context, enableAudioFx, 0);
-    }
-
     public AndroidAudioRenderer(Context context, boolean enableAudioFx, int audioBoostDb) {
         this.context = context;
         this.enableAudioFx = enableAudioFx;
