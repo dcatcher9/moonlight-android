@@ -289,9 +289,9 @@ final class XrPresentationPolicy {
             int exactEncodedWidth, int exactEncodedHeight,
             int decoderOutputWidth, int decoderOutputHeight) {
         int[] previousSize = previous != null
-                ? parseResolutionSize(previous.resolution) : null;
+                ? StreamQualityTuple.parseResolutionSize(previous.resolution) : null;
         int[] requestedSize = requested != null
-                ? parseResolutionSize(requested.resolution) : null;
+                ? StreamQualityTuple.parseResolutionSize(requested.resolution) : null;
         return !modeTransitionPending
                 && previousSize != null && requestedSize != null
                 && previousSize[0] == requestedSize[0]
@@ -354,21 +354,6 @@ final class XrPresentationPolicy {
             return Float.parseFloat(frameRate.trim());
         } catch (RuntimeException e) {
             return fallback;
-        }
-    }
-
-    /** Parses a {@code WxH} stream-quality resolution id; null when it is not usable. */
-    static int[] parseResolutionSize(String resolution) {
-        if (resolution == null) {
-            return null;
-        }
-        try {
-            String[] parts = resolution.split("x", 2);
-            int width = Integer.parseInt(parts[0].trim());
-            int height = Integer.parseInt(parts[1].trim());
-            return (width > 0 && height > 0) ? new int[] {width, height} : null;
-        } catch (RuntimeException e) {
-            return null;
         }
     }
 

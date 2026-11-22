@@ -55,8 +55,13 @@ final class XrLiveApplyClassifier {
         if (liveResolutionMaxWidth <= 0 || liveResolutionMaxHeight <= 0) {
             return false;
         }
-        int[] dimensions = parseResolution(resolution);
-        int[] liveDimensions = parseResolution(liveStreamQuality.resolution);
+        int[] dimensions = StreamQualityTuple.parseResolutionSize(resolution);
+        int[] liveDimensions = StreamQualityTuple.parseResolutionSize(liveStreamQuality.resolution);
+        if (dimensions == null || liveDimensions == null) {
+            // No size to check against the decoder envelope, and the presenter's live path
+            // refuses the same value, so the change is classified as a reconnect.
+            return false;
+        }
         if ((dimensions[0] < dimensions[1]) != (liveDimensions[0] < liveDimensions[1])) {
             return false;
         }
@@ -109,17 +114,6 @@ final class XrLiveApplyClassifier {
                 CLIENT_MODEL_ID,
                 (double) candidate[0] / Math.max(candidate[1], 1),
                 (double) live[0] / Math.max(live[1], 1));
-    }
-
-    static int[] parseResolution(String value) {
-        try {
-            String[] dimensions = value.split("x", 2);
-            return new int[] {Integer.parseInt(dimensions[0]),
-                    Integer.parseInt(dimensions[1])};
-        }
-        catch (RuntimeException e) {
-            return new int[] {1280, 720};
-        }
     }
 
     private XrLiveApplyClassifier() {

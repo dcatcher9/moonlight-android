@@ -254,21 +254,11 @@ public final class XrResolutionSelector extends ViewGroup {
     }
 
     private static int[] parseDimensions(String id) {
-        String normalized = id.trim().toLowerCase(Locale.US).replace('\u00d7', 'x');
-        int separator = normalized.indexOf('x');
-        if (separator > 0 && separator == normalized.lastIndexOf('x')) {
-            try {
-                int width = Integer.parseInt(normalized.substring(0, separator).trim());
-                int height = Integer.parseInt(normalized.substring(separator + 1).trim());
-                if (width > 0 && height > 0) {
-                    return new int[] {width, height};
-                }
-            }
-            catch (NumberFormatException ignored) {
-                // Preserve the unknown ID and use a neutral screen cue below.
-            }
-        }
-        return new int[] {16, 9};
+        // The card also accepts an upper-case X or a multiplication sign as the separator.
+        int[] dimensions = StreamQualityTuple.parseResolutionSize(
+                id.toLowerCase(Locale.US).replace('\u00d7', 'x'));
+        // An unusable id keeps its card with a neutral screen cue.
+        return dimensions != null ? dimensions : new int[] {16, 9};
     }
 
     @Override

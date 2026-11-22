@@ -603,6 +603,21 @@ public final class XrSessionSettingsControllerTest {
     }
 
     @Test
+    public void unusableStoredClientResolutionShowsTheDefaultStreamsBucket() {
+        // A zero axis has no Client SBS bucket; the model shows the default 16:9 stream's.
+        assertTrue(store.edit(pc, app)
+                .setModeValue(PresentationMode.CLIENT_SBS_AI,
+                        PreferenceConfiguration.RESOLUTION_PREF_STRING, "1920x0",
+                        PreferenceConfiguration.DEFAULT_RESOLUTION)
+                .commit());
+
+        XrSessionSettingsController controller = controller();
+        assertEquals("1920x0", controller.getModeStreamQualityModel(
+                PresentationMode.CLIENT_SBS_AI).pendingQuality.resolution);
+        assertEquals("672 x 384", controller.getClientSbsModel().bucket);
+    }
+
+    @Test
     public void retiredStoredClientModelCannotChangeTheFixedZipDepthPipeline() {
         assertTrue(store.edit(pc, app)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI,

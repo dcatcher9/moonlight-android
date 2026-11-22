@@ -23,6 +23,7 @@ import com.limelight.preferences.XrChoiceGroup;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.SessionSettingsModel;
+import com.limelight.ui.xrcontrols.StreamQualityTuple;
 import com.limelight.ui.xrcontrols.XrBitrateControl;
 import com.limelight.ui.xrcontrols.XrBitrateRecommendation;
 import com.limelight.ui.xrcontrols.XrControlPanelLayout;
@@ -781,7 +782,7 @@ final class XrModeOptionsPane {
         if (model == null || model.pendingQuality == null) {
             return -1;
         }
-        int[] size = XrPresentationPolicy.parseResolutionSize(model.pendingQuality.resolution);
+        int[] size = StreamQualityTuple.parseResolutionSize(model.pendingQuality.resolution);
         if (size == null) {
             return -1;
         }

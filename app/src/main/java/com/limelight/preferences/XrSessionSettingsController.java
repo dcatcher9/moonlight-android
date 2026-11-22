@@ -330,9 +330,14 @@ public final class XrSessionSettingsController {
     }
 
     public ClientSbsModeSettingsModel getClientSbsModel() {
-        int[] size = parseResolution((String) pendingModeQuality.get(
+        int[] size = StreamQualityTuple.parseResolutionSize((String) pendingModeQuality.get(
                 PresentationMode.CLIENT_SBS_AI).get(
                 SessionSettingsModel.Key.RESOLUTION));
+        if (size == null) {
+            // The bucket needs a positive size; an unusable id shows the default stream's.
+            size = StreamQualityTuple.parseResolutionSize(
+                    PreferenceConfiguration.DEFAULT_RESOLUTION);
+        }
         return new ClientSbsModeSettingsModel(
                 ClientSbsModeSettingsModel.selectBucket(size[0], size[1]),
                 "GPU-only \u00b7 initializes on first use");
@@ -980,9 +985,5 @@ public final class XrSessionSettingsController {
             default:
                 return String.valueOf(value);
         }
-    }
-
-    private static int[] parseResolution(String value) {
-        return XrLiveApplyClassifier.parseResolution(value);
     }
 }

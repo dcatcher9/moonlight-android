@@ -410,6 +410,25 @@ public final class XrResolutionSelectorTest {
     }
 
     @Test
+    public void customCardSizesItsGlyphWithTheSharedParserOrANeutralCue() {
+        XrResolutionSelector selector = new XrResolutionSelector(context);
+        int customIndex = XrResolutionOptions.standardOptions().size();
+
+        // Case and the multiplication sign are normalised before the shared parser runs.
+        selector.setSelectedResolutionId("3840 × 1600");
+        assertEquals(3840f / 1600f, selector.getAspectRatioAt(customIndex), 0.0001f);
+        selector.setSelectedResolutionId("3840X1600");
+        assertEquals(3840f / 1600f, selector.getAspectRatioAt(customIndex), 0.0001f);
+
+        // An id the parser cannot size keeps its card with a 16:9 cue.
+        selector.setSelectedResolutionId("not-a-size");
+        assertEquals("not-a-size", selector.getSelectedResolutionId());
+        assertEquals(16f / 9f, selector.getAspectRatioAt(customIndex), 0.0001f);
+        selector.setSelectedResolutionId("3840x0");
+        assertEquals(16f / 9f, selector.getAspectRatioAt(customIndex), 0.0001f);
+    }
+
+    @Test
     public void unknownCurrentValueGetsASelectedCustomCardUntilAStandardChoiceWins() {
         XrResolutionSelector selector = new XrResolutionSelector(context);
         // 3840x1600 is a real ultrawide that is deliberately not on the ladder. A retired 1280x720

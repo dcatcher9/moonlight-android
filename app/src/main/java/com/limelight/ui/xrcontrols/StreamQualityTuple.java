@@ -41,6 +41,30 @@ public final class StreamQualityTuple {
         return resolution + " @ " + frameRate + " FPS, " + bitrateKbps + " Kbps";
     }
 
+    /**
+     * Width and height of a {@code WxH} resolution id such as {@link #resolution}, or null when
+     * the id is not usable: it must hold exactly one lower-case {@code x}, and each side, trimmed,
+     * must be a positive decimal integer. This is the only resolution-id parser in the XR settings
+     * and presentation code. It never substitutes a size; each caller states what null means for
+     * it.
+     */
+    public static int[] parseResolutionSize(String resolution) {
+        if (resolution == null) {
+            return null;
+        }
+        String[] parts = resolution.split("x", -1);
+        if (parts.length != 2) {
+            return null;
+        }
+        try {
+            int width = Integer.parseInt(parts[0].trim());
+            int height = Integer.parseInt(parts[1].trim());
+            return width > 0 && height > 0 ? new int[] {width, height} : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     private static String requireText(String value, String name) {
         Objects.requireNonNull(value, name);
         if (value.isEmpty()) {

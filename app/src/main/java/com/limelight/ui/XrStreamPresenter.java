@@ -2370,7 +2370,7 @@ public class XrStreamPresenter {
                 : durableLiveQualityTuple();
         StreamQualityTuple target =
                 panelRefreshRateState.capUserQuality(requestedTarget, prefConfig.fps);
-        int[] size = XrPresentationPolicy.parseResolutionSize(target.resolution);
+        int[] size = StreamQualityTuple.parseResolutionSize(target.resolution);
         float fps = XrPresentationPolicy.parseFrameRate(target.frameRate, prefConfig.fps);
         int fpsX100 = XrPresentationPolicy.frameRateX100(target.frameRate, prefConfig.fps);
         if (size == null || fps <= 0 || fpsX100 <= 0) {
@@ -2648,7 +2648,7 @@ public class XrStreamPresenter {
         }
 
         float currentFps = prefConfig.fps;
-        int[] size = XrPresentationPolicy.parseResolutionSize(target.resolution);
+        int[] size = StreamQualityTuple.parseResolutionSize(target.resolution);
         float fps = XrPresentationPolicy.parseFrameRate(target.frameRate, currentFps);
         int fpsX100 = XrPresentationPolicy.frameRateX100(target.frameRate, currentFps);
         if (size == null || fps <= 0 || fpsX100 <= 0) {
@@ -2969,7 +2969,7 @@ public class XrStreamPresenter {
     /** Stages an ACKed mode tuple without resizing the still-visible old producer. */
     private boolean stageAcknowledgedModeEntryQuality(
             com.limelight.Game game, StreamQualityTuple applied) {
-        int[] size = XrPresentationPolicy.parseResolutionSize(applied.resolution);
+        int[] size = StreamQualityTuple.parseResolutionSize(applied.resolution);
         float fps = XrPresentationPolicy.parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null || fps <= 0) {
             return false;
@@ -2992,7 +2992,7 @@ public class XrStreamPresenter {
      */
     private boolean applyAcknowledgedQualityWithoutGeometryChange(
             com.limelight.Game game, StreamQualityTuple applied) {
-        int[] size = XrPresentationPolicy.parseResolutionSize(applied.resolution);
+        int[] size = StreamQualityTuple.parseResolutionSize(applied.resolution);
         float fps = XrPresentationPolicy.parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null || size[0] != prefConfig.width || size[1] != prefConfig.height) {
             return false;
@@ -3009,7 +3009,7 @@ public class XrStreamPresenter {
             StreamContainer.SurfaceSwitchCallback clientSbsResizeCallback,
             BooleanSupplier transactionCurrent,
             StreamContainer.SurfaceSwitchCallback adoptionCompletion) {
-        int[] size = XrPresentationPolicy.parseResolutionSize(applied.resolution);
+        int[] size = StreamQualityTuple.parseResolutionSize(applied.resolution);
         float fps = XrPresentationPolicy.parseFrameRate(applied.frameRate, prefConfig.fps);
         if (size == null || transactionCurrent == null || adoptionCompletion == null
                 || !transactionCurrent.getAsBoolean()) {
@@ -3165,9 +3165,9 @@ public class XrStreamPresenter {
             StreamContainer streamContainer = game.getStreamContainer();
             if (streamContainer != null) {
                 int[] before = previousLiveQuality != null
-                        ? XrPresentationPolicy.parseResolutionSize(previousLiveQuality.resolution) : null;
+                        ? StreamQualityTuple.parseResolutionSize(previousLiveQuality.resolution) : null;
                 int[] after = acknowledgedLiveQuality != null
-                        ? XrPresentationPolicy.parseResolutionSize(acknowledgedLiveQuality.resolution) : null;
+                        ? StreamQualityTuple.parseResolutionSize(acknowledgedLiveQuality.resolution) : null;
                 boolean geometryChanged = before == null || after == null
                         || before[0] != after[0] || before[1] != after[1];
                 if (geometryChanged) {
