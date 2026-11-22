@@ -88,11 +88,14 @@ public class KeyBoardControllerConfigurationLoader {
                 if (down == ((pressedDirections & flag) != 0)) {
                     return;
                 }
-                pressedDirections = down ? pressedDirections | flag : pressedDirections & ~flag;
                 KeyEvent event = new KeyEvent(down ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP,
                         keyCode);
                 event.setSource(3);
-                controller.sendKeyEvent(event);
+                // A press the stream did not receive is retried on the next direction change; a
+                // release always clears the key, because a disconnected host holds no keys.
+                if (controller.sendKeyEvent(event) || !down) {
+                    pressedDirections = down ? pressedDirections | flag : pressedDirections & ~flag;
+                }
             }
         });
         return button;
@@ -104,10 +107,10 @@ public class KeyBoardControllerConfigurationLoader {
         KeyBoardAnalogStickButton analogStick = new KeyBoardAnalogStickButton(controller, elementId, context, keylist);
         analogStick.setListener(new KeyBoardAnalogStickButton.KeyBoardAnalogStickListener() {
             @Override
-            public void onkeyEvent(int code, boolean isPress) {
+            public boolean onkeyEvent(int code, boolean isPress) {
                 KeyEvent keyEvent = new KeyEvent(isPress ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP, code);
                 keyEvent.setSource(2);
-                controller.sendKeyEvent(keyEvent);
+                return controller.sendKeyEvent(keyEvent);
             }
         });
 

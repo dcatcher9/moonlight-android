@@ -20,12 +20,16 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
 
     private KeyBoardAnalogStickListener listener;
 
-    /** Sends only the direction keys whose state changed, so each press pairs with one release. */
+    /**
+     * Sends only the direction keys whose state changed, so each press pairs with one release. A
+     * press the stream did not receive stays unsent and is retried on the next move; a release
+     * always clears the key, because a disconnected host holds no keys.
+     */
     private void sendChangedDirectionKeys() {
         for (int i = 0; i < 4; i++) {
-            if (stickBool[i] != directionKeyDown[i]) {
+            if (stickBool[i] != directionKeyDown[i]
+                    && (listener.onkeyEvent(stickSender[i], stickBool[i]) || !stickBool[i])) {
                 directionKeyDown[i] = stickBool[i];
-                listener.onkeyEvent(stickSender[i], stickBool[i]);
             }
         }
     }
@@ -138,9 +142,8 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
 
             @Override
             public void onDoubleClick() {
-                if (!clickKeyDown) {
+                if (!clickKeyDown && listener.onkeyEvent(stickSender[4], true)) {
                     clickKeyDown = true;
-                    listener.onkeyEvent(stickSender[4], true);
                 }
             }
 
@@ -164,6 +167,7 @@ public class KeyBoardAnalogStickButton extends KeyAnalogStick {
     }
 
     public interface KeyBoardAnalogStickListener {
-        void onkeyEvent(int code,boolean isPress);
+        /** Returns whether the key event reached the stream. */
+        boolean onkeyEvent(int code,boolean isPress);
     }
 }

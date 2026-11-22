@@ -47,6 +47,8 @@ public final class KeyBoardDirectionKeysTest {
     private Activity activity;
     private KeyBoardController controller;
     private final List<String> sent = new ArrayList<>();
+    // Mirrors KeyBoardController.sendKeyEvent(), which drops events while no stream is connected.
+    private boolean connected = true;
 
     @Before
     public void setUp() {
@@ -54,10 +56,63 @@ public final class KeyBoardDirectionKeysTest {
         controller = mock(KeyBoardController.class);
         when(controller.getHandler()).thenReturn(new Handler(Looper.getMainLooper()));
         doAnswer(invocation -> {
+            if (!connected) {
+                return false;
+            }
             KeyEvent event = invocation.getArgument(0);
             sent.add(describe(event.getAction() == KeyEvent.ACTION_DOWN, event.getKeyCode()));
-            return null;
+            return true;
         }).when(controller).sendKeyEvent(any(KeyEvent.class));
+    }
+
+    @Test
+    public void stickDirectionHeldWhileDisconnectedIsPressedOnceTheStreamTakesIt() {
+        KeyBoardAnalogStickButton stick = stick();
+
+        connected = false;
+        touch(stick, MotionEvent.ACTION_DOWN, 0, 100, 100);
+        touch(stick, MotionEvent.ACTION_MOVE, 200, 100, 20);
+        assertEquals(Collections.emptyList(), sent);
+
+        connected = true;
+        touch(stick, MotionEvent.ACTION_MOVE, 250, 100, 25);
+        touch(stick, MotionEvent.ACTION_UP, 300, 100, 25);
+
+        assertEquals(Arrays.asList(describe(true, UP), describe(false, UP)), sent);
+    }
+
+    @Test
+    public void stickReleaseLostWhileDisconnectedDoesNotSuppressTheNextPress() {
+        KeyBoardAnalogStickButton stick = stick();
+
+        touch(stick, MotionEvent.ACTION_DOWN, 0, 100, 100);
+        touch(stick, MotionEvent.ACTION_MOVE, 200, 100, 20);
+        connected = false;
+        touch(stick, MotionEvent.ACTION_UP, 250, 100, 20);
+        connected = true;
+        touch(stick, MotionEvent.ACTION_DOWN, 1_000, 100, 100);
+        touch(stick, MotionEvent.ACTION_MOVE, 1_200, 100, 20);
+        touch(stick, MotionEvent.ACTION_UP, 1_250, 100, 20);
+
+        assertEquals(Arrays.asList(describe(true, UP), describe(true, UP), describe(false, UP)),
+                sent);
+    }
+
+    @Test
+    public void dpadDirectionHeldWhileDisconnectedIsPressedOnceTheStreamTakesIt() {
+        KeyboardDigitalPadButton dpad = KeyBoardControllerConfigurationLoader.createDiaitalPadButton(
+                "dpad", LEFT, RIGHT, UP, DOWN, controller, activity);
+        dpad.layout(0, 0, 300, 300);
+
+        connected = false;
+        touch(dpad, MotionEvent.ACTION_DOWN, 0, 150, 20);
+        assertEquals(Collections.emptyList(), sent);
+
+        connected = true;
+        touch(dpad, MotionEvent.ACTION_MOVE, 10, 150, 25);
+        touch(dpad, MotionEvent.ACTION_UP, 20, 150, 25);
+
+        assertEquals(Arrays.asList(describe(true, UP), describe(false, UP)), sent);
     }
 
     @Test

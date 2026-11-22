@@ -361,9 +361,10 @@ public class KeyBoardController {
         return currentMode;
     }
 
-    public void sendKeyEvent(KeyEvent keyEvent) {
+    /** Returns whether the event reached the stream; it is dropped while no stream is connected. */
+    public boolean sendKeyEvent(KeyEvent keyEvent) {
         if (Game.instance == null || !Game.instance.connected) {
-            return;
+            return false;
         }
         //1-鼠标 0-按键 2-摇杆 3-十字键
         if (keyEvent.getSource() == 1) {
@@ -371,6 +372,7 @@ public class KeyBoardController {
         } else {
             Game.instance.onKey(null, keyEvent.getKeyCode(), keyEvent);
         }
+        return true;
     }
 
     public void sendMouseMove(int x,int y){
