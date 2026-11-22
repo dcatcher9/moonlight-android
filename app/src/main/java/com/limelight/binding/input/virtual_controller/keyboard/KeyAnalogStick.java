@@ -138,7 +138,8 @@ public class KeyAnalogStick extends keyBoardVirtualControllerElement {
     private static double getAngle(float way_x, float way_y) {
         // prevent divisions by zero for corner cases
         if (way_x == 0) {
-            return way_y < 0 ? Math.PI : 0;
+            // Angle 0 is up (negative way_y) and PI is down, as in the quadrant cases below.
+            return way_y < 0 ? 0 : Math.PI;
         } else if (way_y == 0) {
             if (way_x > 0) {
                 return Math.PI * 3 / 2;
