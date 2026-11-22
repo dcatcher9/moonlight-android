@@ -709,14 +709,15 @@ public final class XrSessionSettingsControllerTest {
     @Test
     public void offLadderBitrateKeepsItsTenthInTheSettingsLabel() {
         assertTrue(globals.edit()
-                .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 187500)
+                .putInt(PreferenceConfiguration.BITRATE_PREF_STRING, 187650)
                 .commit());
         XrSessionSettingsController controller = controller();
 
+        // 187.65 Mbps rounds half up to 187.7; a float "%.1f" of 187.65f printed 187.6.
         SessionSettingsModel.Value value = controller.getSessionModel()
                 .get(SessionSettingsModel.Key.BITRATE);
-        assertEquals("187.5 Mbps", value.pendingValue);
-        assertEquals("187.5 Mbps", choiceLabel(value, "187500"));
+        assertEquals("187.7 Mbps", value.pendingValue);
+        assertEquals("187.7 Mbps", choiceLabel(value, "187650"));
     }
 
     @Test
