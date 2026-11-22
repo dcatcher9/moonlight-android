@@ -75,7 +75,6 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.graphics.Outline;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
@@ -104,7 +103,6 @@ import android.view.View;
 import android.view.View.OnGenericMotionListener;
 import android.view.View.OnSystemUiVisibilityChangeListener;
 import android.view.View.OnTouchListener;
-import android.view.ViewOutlineProvider;
 import android.view.ViewParent;
 import android.view.Window;
 import android.view.WindowManager;
@@ -396,7 +394,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     public GameMenuCallbacks gameMenuCallbacks;
 
-    public boolean isInputOnly = true;
     public boolean allowChangeMouseMode = true;
     private boolean onExternelDisplay = false;
     private ImageButton floatingMenuButton;
@@ -1156,8 +1153,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // The XR route is always stereoscopic (PreferenceConfiguration.isStereoMode()): it keeps
         // the configured resolution, forces STRETCH scaling, and never inverts for portrait.
-        final boolean shouldInvertDecoderResolution = false;
-
         prefConfig.videoScaleMode = PreferenceConfiguration.ScaleMode.STRETCH;
 
         if (prefConfig.autoOrientation) {
@@ -1412,7 +1407,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 tombstonePrefs.getInt("CrashCount", 0),
                 connMgr.isActiveNetworkMetered(),
                 willStreamHdr,
-                shouldInvertDecoderResolution,
+                false, // never invert the decoder resolution for portrait
                 glPrefs.glRenderer,
                 this);
         if (streamContainer != null) {
@@ -1565,7 +1560,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         if (Objects.equals(appUUID, NvApp.REMOTE_INPUT_UUID)) {
             // Force trackpad mode since we won't see anything on the screen
-            isInputOnly = true;
             allowChangeMouseMode = false;
             applyMouseMode(2);
         } else {
@@ -4362,8 +4356,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     computer.uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);
                     ShortcutHelper shortcutHelper = new ShortcutHelper(Game.this);
                     shortcutHelper.reportComputerShortcutUsed(computer);
-                    if (appName != null) {
-                    }
                 }, "Artemis shortcut reporting").start();
             }
         });
@@ -4599,29 +4591,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         showCenteredStreamMessage(
                 getString(R.string.xr_session_live_change_needs_reconnect),
                 Toast.LENGTH_LONG);
-        boolean attemptStagedCommit = shouldAttemptStagedCommitForAmbiguousVideoMode(
-                commitStagedSettings, xrSessionSettingsController != null);
-        boolean stagedCommitSucceeded = attemptStagedCommit
+        boolean stagedCommitSucceeded = commitStagedSettings
+                && xrSessionSettingsController != null
                 && xrSessionSettingsController.commitPending();
         if (commitStagedSettings && !stagedCommitSucceeded) {
             showCenteredStreamMessage(
                     getString(R.string.xr_session_stale_settings), Toast.LENGTH_LONG);
         }
-        if (shouldReconnectAfterAmbiguousVideoMode(
-                reconnectScheduled, stagedCommitSucceeded)) {
-            scheduleXrSessionReconnect();
-        }
-    }
-
-    static boolean shouldReconnectAfterAmbiguousVideoMode(
-            boolean reconnectAlreadyScheduled, boolean stagedCommitSucceeded) {
         // stagedCommitSucceeded deliberately does not gate mandatory resynchronization.
-        return !reconnectAlreadyScheduled;
-    }
-
-    static boolean shouldAttemptStagedCommitForAmbiguousVideoMode(
-            boolean commitStagedSettings, boolean controllerAvailable) {
-        return commitStagedSettings && controllerAvailable;
+        scheduleXrSessionReconnect();
     }
 
     @Override
@@ -4831,12 +4809,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     public int getStreamHdrMaxContentLightLevel() {
         return streamHdrMaxContentLightLevel;
-    }
-
-    public int getStreamEffectiveColorRange() {
-        return decoderRenderer != null
-                ? decoderRenderer.getEffectiveColorRange()
-                : MoonBridge.COLOR_RANGE_LIMITED;
     }
 
     @Override
@@ -5400,23 +5372,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-
-    // 设置surfaceView的圆角 setSurfaceviewCorner(UiHelper.dpToPx(this,24));
-    private void setSurfaceviewCorner(final float radius) {
-
-        streamContainer.setOutlineProvider(new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, Outline outline) {
-                Rect rect = new Rect();
-                view.getGlobalVisibleRect(rect);
-                int leftMargin = 0;
-                int topMargin = 0;
-                Rect selfRect = new Rect(leftMargin, topMargin, rect.right - rect.left - leftMargin, rect.bottom - rect.top - topMargin);
-                outline.setRoundRect(selfRect, radius);
-            }
-        });
-        streamContainer.setClipToOutline(true);
-    }
 
     @Override
     public boolean handleCommitText(CharSequence text) {
