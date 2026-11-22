@@ -2159,56 +2159,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         if (conn != null) {
-            int videoFormat = decoderRenderer.getActiveVideoFormat();
-
             displayedFailureDialog = true;
             stopConnection();
-            String message = null;
-            String selectedVideoFormat = "";
-
-            int averageFrameDecodePipelineLat =
-                    decoderRenderer.getAverageFrameDecodePipelineLatency();
-            int averageDecoderLat = decoderRenderer.getAverageDecoderLatency();
-
-            if (averageFrameDecodePipelineLat > 0) {
-                message = getResources().getString(R.string.conn_client_latency)
-                        + " " + averageFrameDecodePipelineLat + " ms";
-                if (averageDecoderLat > 0) {
-                    message += " (" + getResources().getString(R.string.conn_client_latency_hw) + " " + averageDecoderLat + " ms)";
-                }
-            } else if (averageDecoderLat > 0) {
-                message = getResources().getString(R.string.conn_hardware_latency) + " " + averageDecoderLat + " ms";
-            }
-
-            // Add the video codec to the post-stream toast
-            selectedVideoFormat += " [";
-
-            if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
-                selectedVideoFormat += "H.264";
-            } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
-                selectedVideoFormat += "HEVC";
-            } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
-                selectedVideoFormat += "AV1";
-            }
-            else {
-                selectedVideoFormat += "UNKNOWN";
-            }
-
-            if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0) {
-                selectedVideoFormat += " HDR";
-            }
-
-            selectedVideoFormat += "]";
-
-            if (message != null) {
-                message += selectedVideoFormat;
-            }
-
-            if (message != null) {
-                if (prefConfig.enableLatencyToast) {
-                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-                }
-            }
 
             // Clear the tombstone count if we terminated normally
             if (!reportedCrash && tombstonePrefs.getInt("CrashCount", 0) != 0) {
@@ -3677,7 +3629,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (!isConnectionUiActive() || prefConfig.disableWarnings) {
+                if (!isConnectionUiActive()) {
                     return;
                 }
 
@@ -3823,16 +3775,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void displayTransientMessage(final String message) {
-        if (!prefConfig.disableWarnings) {
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    if (isConnectionUiActive()) {
-                        showCenteredStreamMessage(message, Toast.LENGTH_LONG);
-                    }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isConnectionUiActive()) {
+                    showCenteredStreamMessage(message, Toast.LENGTH_LONG);
                 }
-            });
-        }
+            }
+        });
     }
 
     private void showCenteredStreamMessage(CharSequence message, int toastDuration) {

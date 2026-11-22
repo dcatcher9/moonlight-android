@@ -104,19 +104,13 @@ final class StreamClipboardSync {
                 public void run() {
                     try {
                         if (!httpConn.sendClipboard(clipboardText)) {
-                            if (prefConfig.smartClipboardSyncToast) {
-                                activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.clipboard_sync_unsupported), Toast.LENGTH_SHORT).show());
-                            }
+                            activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.clipboard_sync_unsupported), Toast.LENGTH_SHORT).show());
                         } else {
-                            if (prefConfig.smartClipboardSyncToast) {
-                                activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.send_clipboard_success), Toast.LENGTH_SHORT).show());
-                            }
+                            activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.send_clipboard_success), Toast.LENGTH_SHORT).show());
                         }
                     } catch (Exception e) {
                         e.printStackTrace();
-                        if (prefConfig.smartClipboardSyncToast) {
-                            activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.send_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
-                        }
+                        activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.send_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
                     }
                 }
             }.start();
@@ -162,14 +156,10 @@ final class StreamClipboardSync {
                     clipDescription.setExtras(newExtras);
 
                     clipboardManager.setPrimaryClip(clipData);
-                    if (prefConfig.smartClipboardSyncToast) {
-                        activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.get_clipboard_success), Toast.LENGTH_SHORT).show());
-                    }
+                    activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.get_clipboard_success), Toast.LENGTH_SHORT).show());
                 } catch (Exception e) {
                     e.printStackTrace();
-                    if (prefConfig.smartClipboardSyncToast) {
-                        activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.get_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
-                    }
+                    activity.runOnUiThread(() -> Toast.makeText(activity, activity.getString(R.string.get_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
                 }
                 clipboardSyncRunning = false;
             }
