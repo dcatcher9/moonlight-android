@@ -36,7 +36,7 @@ import com.limelight.utils.TrafficStatsHelper;
 
 import android.util.LongSparseArray;
 import android.app.Activity;
-import android.content.Context;
+
 import android.media.MediaCodec;
 import android.os.Bundle;
 import android.media.MediaCodecInfo;
@@ -348,7 +348,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final DecoderModeTransitionGate.InputCommitter inputCommitter =
             this::commitPendingInputBuffer;
 
-    private Context context;
     private Activity activity;
     /** Published across codec recovery and the dedicated frame-rendered callback Looper. */
     private volatile MediaCodec videoDecoder;
@@ -907,7 +906,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                      boolean meteredData, boolean requestedHdr, boolean invertResolution,
                                      String glRenderer, PerfOverlayListener perfListener) {
         this.modeTransitionHandler = new Handler(Looper.getMainLooper());
-        this.context = activity;
         this.activity = activity;
         this.prefs = prefs;
         int configuredFpsCeiling = Float.isFinite(prefs.fps) && prefs.fps > 0f
@@ -1135,14 +1133,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private String describeActualColorRange() {
         switch (getActualColorRange()) {
             case FULL:
-                return context.getString(R.string.video_range_full);
+                return activity.getString(R.string.video_range_full);
             case LIMITED:
-                return context.getString(R.string.video_range_limited);
+                return activity.getString(R.string.video_range_limited);
             case UNRECOGNIZED:
                 return "Unknown (decoder reported an unsupported value)";
             case UNKNOWN:
             default:
-                String requestedRange = context.getString(
+                String requestedRange = activity.getString(
                         getPreferredColorRange() == MoonBridge.COLOR_RANGE_FULL
                                 ? R.string.video_range_full : R.string.video_range_limited);
                 return "Unknown (decoder did not report; requested " + requestedRange + ")";
@@ -3697,13 +3695,4 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // best-effort
         }
     }
-
-
-
-    private boolean isMTKDecoderName(String name) {
-        if (name == null) return false;
-        String n = name.toLowerCase();
-        return n.startsWith("c2.mtk") || n.startsWith("omx.mtk");
-    }
-
 }
