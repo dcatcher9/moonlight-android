@@ -774,7 +774,16 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         NvApp app = runningApp != null ? runningApp.app :
                 new NvApp("app", computer != null ? computer.runningGameUUID : null,
                         runningAppId, false);
-        startApp(app);
+        // Resume must stay a resume. ServerHelper.doStart() would otherwise re-decide from the
+        // live host state and could turn this tap into a fresh Start.
+        if (computer == null || !ServerHelper.isResumeOfSameHostApp(computer, app)) {
+            Toast.makeText(this, R.string.xr_session_changed, Toast.LENGTH_SHORT).show();
+            if (managerBinder != null) {
+                managerBinder.pollComputerNow(uuidString);
+            }
+            return;
+        }
+        startApp(app, HostSessionLaunchRequest.resume(computer));
     }
 
     private void endCurrentSession() {

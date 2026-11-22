@@ -40,7 +40,7 @@ public class ServerHelper {
      * The host owns session lifetime (including Apollo's grace period), so this deliberately has
      * no client-side timer or remembered "recent disconnect" state.
      */
-    static boolean isResumeOfSameHostApp(ComputerDetails computer, NvApp app) {
+    public static boolean isResumeOfSameHostApp(ComputerDetails computer, NvApp app) {
         if (computer == null || app == null) {
             return false;
         }
