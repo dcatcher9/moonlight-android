@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -68,12 +69,21 @@ public final class ClientSbsFirstFrameGateTest {
     @Test
     public void cancelReleasesAHeldDrawWithoutAFrame() throws Exception {
         gate.arm();
+        // The gate evaluates its suppliers while holding its monitor, so once the draw thread has
+        // read freshFrame it either waits (releasing the monitor) or returns; cancel() cannot
+        // slip in before the hold. A cancel before the draw reaches the gate releases that draw
+        // instead, which is a different case.
+        CountDownLatch holding = new CountDownLatch(1);
         ExecutorService drawThread = Executors.newSingleThreadExecutor();
         try {
-            Future<Boolean> draw = drawThread.submit(() -> await(5_000L));
-            Thread.sleep(50L);
+            Future<Boolean> draw = drawThread.submit(() -> gate.awaitIfNeeded(5_000L, active::get,
+                    () -> {
+                        holding.countDown();
+                        return freshFrame.get();
+                    }));
+            assertTrue(holding.await(5, TimeUnit.SECONDS));
             gate.cancel();
-            assertFalse(draw.get(1, TimeUnit.SECONDS));
+            assertFalse(draw.get(5, TimeUnit.SECONDS));
         } finally {
             drawThread.shutdownNow();
         }
