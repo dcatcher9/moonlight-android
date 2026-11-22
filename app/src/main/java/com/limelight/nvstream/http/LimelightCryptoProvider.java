@@ -7,5 +7,4 @@ public interface LimelightCryptoProvider {
     X509Certificate getClientCertificate();
     PrivateKey getClientPrivateKey();
     byte[] getPemEncodedClientCertificate();
-    String encodeBase64String(byte[] data);
 }

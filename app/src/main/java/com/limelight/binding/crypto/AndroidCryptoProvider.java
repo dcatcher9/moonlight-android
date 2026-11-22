@@ -37,7 +37,6 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.util.Base64;
 
 import com.limelight.LimeLog;
 import com.limelight.nvstream.http.LimelightCryptoProvider;
@@ -250,10 +249,5 @@ public class AndroidCryptoProvider implements LimelightCryptoProvider {
             // Return a cached value if we have it
             return pemCertBytes;
         }
-    }
-
-    @Override
-    public String encodeBase64String(byte[] data) {
-        return Base64.encodeToString(data, Base64.NO_WRAP);
     }
 }
