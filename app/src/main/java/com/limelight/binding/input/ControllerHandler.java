@@ -375,17 +375,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         // Count all USB devices that match our drivers
-        if (PreferenceConfiguration.readPreferences(context).usbDriver) {
-            UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
-            if (usbManager != null) {
-                for (UsbDevice dev : usbManager.getDeviceList().values()) {
-                    // We explicitly check not to claim devices that appear as InputDevices
-                    // otherwise we will double count them.
-                    if (UsbDriverService.shouldClaimDevice(dev, false) &&
-                            !UsbDriverService.isRecognizedInputDevice(dev)) {
-                        LimeLog.info("Counting UsbDevice: "+dev.getDeviceName());
-                        mask |= 1 << count++;
-                    }
+        UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        if (usbManager != null) {
+            for (UsbDevice dev : usbManager.getDeviceList().values()) {
+                // We explicitly check not to claim devices that appear as InputDevices
+                // otherwise we will double count them.
+                if (UsbDriverService.shouldClaimDevice(dev) &&
+                        !UsbDriverService.isRecognizedInputDevice(dev)) {
+                    LimeLog.info("Counting UsbDevice: "+dev.getDeviceName());
+                    mask |= 1 << count++;
                 }
             }
         }
@@ -449,30 +447,19 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             InputDeviceContext devContext = (InputDeviceContext) context;
 
             if (context instanceof UsbDeviceContext) {
-                if (prefConfig.multiController) {
-                    LimeLog.info("Reserving the next available controller number for USB device");
-                    for (short i = 0; i < MAX_GAMEPADS; i++) {
-                        if ((currentControllers & (1 << i)) == 0) {
-                            // Found an unused controller value
-                            currentControllers |= (1 << i);
+                LimeLog.info("Reserving the next available controller number for USB device");
+                for (short i = 0; i < MAX_GAMEPADS; i++) {
+                    if ((currentControllers & (1 << i)) == 0) {
+                        // Found an unused controller value
+                        currentControllers |= (1 << i);
 
-                            // Take this value out of the initial gamepad set
-                            initialControllers &= ~(1 << i);
+                        // Take this value out of the initial gamepad set
+                        initialControllers &= ~(1 << i);
 
-                            context.controllerNumber = i;
-                            context.reservedControllerNumber = true;
-                            break;
-                        }
+                        context.controllerNumber = i;
+                        context.reservedControllerNumber = true;
+                        break;
                     }
-                }
-                else {
-                    LimeLog.info("Not reserving a controller number");
-                    context.controllerNumber = 0;
-                }
-
-                // If the gamepad doesn't have motion sensors, use the on-device sensors as a fallback for player 1
-                if (prefConfig.gamepadMotionSensorsFallbackToDevice && context.controllerNumber == 0 && (prefConfig.forceMotionSensorsFallbackToDevice || devContext.sensorManager == null)) {
-                    devContext.sensorManager = deviceSensorManager;
                 }
             } else {
 
@@ -481,7 +468,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     LimeLog.info("Built-in buttons hardcoded as controller 0");
                     context.controllerNumber = 0;
                 }
-                else if (prefConfig.multiController && devContext.hasJoystickAxes) {
+                else if (devContext.hasJoystickAxes) {
                     LimeLog.info("Reserving the next available controller number");
                     for (short i = 0; i < MAX_GAMEPADS; i++) {
                         if ((currentControllers & (1 << i)) == 0) {
@@ -538,11 +525,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 else {
                     LimeLog.info("Not reserving a controller number");
                     context.controllerNumber = 0;
-                }
-
-                // If the gamepad doesn't have motion sensors, use the on-device sensors as a fallback for player 1
-                if (prefConfig.gamepadMotionSensorsFallbackToDevice && context.controllerNumber == 0 && (prefConfig.forceMotionSensorsFallbackToDevice || devContext.sensorManager == null)) {
-                    devContext.sensorManager = deviceSensorManager;
                 }
             }
         }
@@ -722,34 +704,30 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         context.hasPaddles = MoonBridge.guessControllerHasPaddles(context.vendorId, context.productId);
         context.hasShare = MoonBridge.guessControllerHasShareButton(context.vendorId, context.productId);
 
-        if (prefConfig.enableDeviceRumble) {
-            context.vibrator = deviceVibrator;
-        } else {
-            // Try to use the InputDevice's associated vibrators first
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
-                context.vibratorManager = dev.getVibratorManager();
+        // Try to use the InputDevice's associated vibrators first
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
+            context.vibratorManager = dev.getVibratorManager();
+            context.quadVibrators = true;
+        }
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
+            context.vibratorManager = dev.getVibratorManager();
+            context.quadVibrators = false;
+        }
+        else if (dev.getVibrator().hasVibrator()) {
+            context.vibrator = dev.getVibrator();
+        }
+        else if (!context.external) {
+            // If this is an internal controller, try to use the device's vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
+                context.vibratorManager = deviceVibratorManager;
                 context.quadVibrators = true;
             }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
-                context.vibratorManager = dev.getVibratorManager();
+            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
+                context.vibratorManager = deviceVibratorManager;
                 context.quadVibrators = false;
             }
-            else if (dev.getVibrator().hasVibrator()) {
-                context.vibrator = dev.getVibrator();
-            }
-            else if (!context.external) {
-                // If this is an internal controller, try to use the device's vibrator
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
-                    context.vibratorManager = deviceVibratorManager;
-                    context.quadVibrators = true;
-                }
-                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
-                    context.vibratorManager = deviceVibratorManager;
-                    context.quadVibrators = false;
-                }
-                else if (deviceVibrator.hasVibrator()) {
-                    context.vibrator = deviceVibrator;
-                }
+            else if (deviceVibrator.hasVibrator()) {
+                context.vibrator = deviceVibrator;
             }
         }
         // On Android 12, we can try to use the InputDevice's sensors. This may not work if the
@@ -1055,13 +1033,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     private short getActiveControllerMask() {
-        if (prefConfig.multiController) {
-            return (short)(currentControllers | initialControllers | (prefConfig.onscreenController ? 1 : 0));
-        }
-        else {
-            // Only Player 1 is active with multi-controller disabled
-            return 1;
-        }
+        return (short)(currentControllers | initialControllers | (prefConfig.onscreenController ? 1 : 0));
     }
 
     private static boolean areBatteryCapacitiesEqual(float first, float second) {
@@ -1360,54 +1332,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
 
-        //fix joycon-left 十字键
-        if(prefConfig.enableJoyConFix&&context.vendorId == 0x057e && context.productId == 0x2006){
-            switch (event.getScanCode())
-            {
-                case 546://十字键
-                    return KeyEvent.KEYCODE_DPAD_LEFT;
-                case 547:
-                    return KeyEvent.KEYCODE_DPAD_RIGHT;
-                case 544:
-                    return KeyEvent.KEYCODE_DPAD_UP;
-                case 545:
-                    return KeyEvent.KEYCODE_DPAD_DOWN;
-                case 309://截图键
-                    return KeyEvent.KEYCODE_BUTTON_MODE;
-                case 310:
-                    return KeyEvent.KEYCODE_BUTTON_L1;
-                case 312:
-                    return KeyEvent.KEYCODE_BUTTON_L2;
-                case 314:
-                    return KeyEvent.KEYCODE_BUTTON_SELECT;
-                case 317:
-                    return KeyEvent.KEYCODE_BUTTON_THUMBL;
-            }
-        }
-        //fix JoyCon-right xy互换
-        if(prefConfig.enableJoyConFix&&context.vendorId == 0x057e && context.productId == 0x2007){
-            switch (event.getScanCode())
-            {
-                case 307://XY相反
-                    return KeyEvent.KEYCODE_BUTTON_Y;
-                case 308:
-                    return KeyEvent.KEYCODE_BUTTON_X;
-                case 304:
-                    return KeyEvent.KEYCODE_BUTTON_A;
-                case 305:
-                    return KeyEvent.KEYCODE_BUTTON_B;
-                case 311:
-                    return KeyEvent.KEYCODE_BUTTON_R1;
-                case 313:
-                    return KeyEvent.KEYCODE_BUTTON_R2;
-                case 315:
-                    return KeyEvent.KEYCODE_BUTTON_START;
-                case 316:
-                    return KeyEvent.KEYCODE_BUTTON_MODE;
-                case 318:
-                    return KeyEvent.KEYCODE_BUTTON_THUMBR;
-            }
-        }
 
 
         if (context.usesLinuxGamepadStandardFaceButtons) {
@@ -2146,20 +2070,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             if (!foundMatchingDevice && prefConfig.onscreenController) {
                 rumbleSingleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
             }
-            else if (foundMatchingDevice && !vibrated && prefConfig.vibrateFallbackToDevice) {
-                // We found a device to vibrate but it didn't have rumble support. The user
-                // has requested us to vibrate the device in this case.
-
-                // We cast the unsigned short value to a signed int before multiplying by
-                // the preferred strength. The resulting value is capped at 65534 before
-                // we cast it back to a short so it doesn't go above 100%.
-                short lowFreqMotorAdjusted = (short)(Math.min((((lowFreqMotor & 0xffff)
-                        * prefConfig.vibrateFallbackToDeviceStrength) / 100), Short.MAX_VALUE*2));
-                short highFreqMotorAdjusted = (short)(Math.min((((highFreqMotor & 0xffff)
-                        * prefConfig.vibrateFallbackToDeviceStrength) / 100), Short.MAX_VALUE*2));
-
-                rumbleSingleVibrator(deviceVibrator, lowFreqMotorAdjusted, highFreqMotorAdjusted);
-            }
         }
     }
 
@@ -2441,10 +2351,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             context.inputMap &= ~ControllerPacket.PLAY_FLAG;
             break;
         case KeyEvent.KEYCODE_BACK:
-            if (prefConfig.backAsGuide) {
-                context.inputMap &= ~ControllerPacket.SPECIAL_BUTTON_FLAG;
-                break;
-            }
         case KeyEvent.KEYCODE_BUTTON_SELECT:
             context.inputMap &= ~ControllerPacket.BACK_FLAG;
             break;
@@ -2663,11 +2569,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             context.inputMap |= ControllerPacket.PLAY_FLAG;
             break;
         case KeyEvent.KEYCODE_BACK:
-            if (prefConfig.backAsGuide) {
-                context.hasSelect = true;
-                context.inputMap |= ControllerPacket.SPECIAL_BUTTON_FLAG;
-                break;
-            }
         case KeyEvent.KEYCODE_BUTTON_SELECT:
             context.hasSelect = true;
             context.inputMap |= ControllerPacket.BACK_FLAG;
@@ -2990,21 +2891,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     return;
                 }
 
-                // Send mouse events from analog sticks
-                if (prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.RIGHT) {
-
-                    // Changed absolute value
-                    sendEmulatedMouseMove(leftStickX, leftStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                    sendEmulatedMouseScroll(rightStickX, rightStickY);
-                }
-                else if (prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.LEFT) {
-                    sendEmulatedMouseMove(rightStickX, rightStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                    sendEmulatedMouseScroll(leftStickX, leftStickY);
-                }
-                else {
-                    sendEmulatedMouseMove(leftStickX, leftStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                    sendEmulatedMouseMove(rightStickX, rightStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
-                }
+                // Send mouse events from analog sticks: the left stick moves, the right scrolls
+                sendEmulatedMouseMove(leftStickX, leftStickY, mouseEmulationXDown, mouseEmulationPixelMultiplier);
+                sendEmulatedMouseScroll(rightStickX, rightStickY);
 
                 // Requeue the callback
                 mainThreadHandler.postDelayed(this, mouseEmulationReportPeriod);
@@ -3294,9 +3183,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // After reporting arrival to the host, send initial battery state and begin monitoring
             // Might result in stutter in pointer device input. The problem happens within Android framework,
             // Here we can only provide a workaround by disabling this option if user wishes.
-            if (prefConfig.enableBatteryReport) {
-                backgroundThreadHandler.post(batteryStateUpdateRunnable);
-            }
+            backgroundThreadHandler.post(batteryStateUpdateRunnable);
         }
 
         public void migrateContext(InputDeviceContext oldContext) {

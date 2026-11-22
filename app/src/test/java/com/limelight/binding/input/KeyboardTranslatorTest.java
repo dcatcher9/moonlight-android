@@ -22,7 +22,7 @@ public final class KeyboardTranslatorTest {
     private static final int VK_DIVIDE = 0x6F;
 
     private final KeyboardTranslator translator =
-            new KeyboardTranslator(new PreferenceConfiguration());
+            new KeyboardTranslator();
 
     @Test
     public void printScreenIsTheWindowsSnapshotKey() {

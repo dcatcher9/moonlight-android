@@ -1223,7 +1223,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 httpsPort, uniqueId, config,
                 PlatformBinding.getCryptoProvider(this), serverCert);
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
-        keyboardTranslator = new KeyboardTranslator(prefConfig);
+        keyboardTranslator = new KeyboardTranslator();
 
         InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(keyboardTranslator, null);
@@ -2285,9 +2285,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         int deviceId = event.getDeviceId();
-        if (prefConfig.ignoreSynthEvents && deviceId <= 0) {
-            return false;
-        }
 
         // Handle a synthetic back button event that some Android OS versions
         // create as a result of a right-click. This event WILL repeat if
@@ -2329,24 +2326,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // as UTF-8 text (if it's a printable character).
             short translated = keyboardTranslator.translate(event.getKeyCode(), event.getScanCode(), deviceId);
             if (translated == 0) {
-                if (prefConfig.backAsMeta && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-                    translated = 0x5b; // Meta key
-                } else {
-                    // Make sure it has a valid Unicode representation and it's not a dead character
-                    // (which we don't support). If those are true, we can send it as UTF-8 text.
-                    //
-                    // NB: We need to be sure this happens before the getRepeatCount() check because
-                    // UTF-8 events don't auto-repeat on the host side.
-                    int unicodeChar = event.getUnicodeChar();
-                    if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0
-                            && Character.isValidCodePoint(unicodeChar)) {
-                        // A (char) cast would split a supplementary code point into a lone surrogate.
-                        conn.sendUtf8Text(new String(Character.toChars(unicodeChar)));
-                        return true;
-                    }
-
-                    return false;
+                // Make sure it has a valid Unicode representation and it's not a dead character
+                // (which we don't support). If those are true, we can send it as UTF-8 text.
+                //
+                // NB: We need to be sure this happens before the getRepeatCount() check because
+                // UTF-8 events don't auto-repeat on the host side.
+                int unicodeChar = event.getUnicodeChar();
+                if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0
+                        && Character.isValidCodePoint(unicodeChar)) {
+                    // A (char) cast would split a supplementary code point into a lone surrogate.
+                    conn.sendUtf8Text(new String(Character.toChars(unicodeChar)));
+                    return true;
                 }
+
+                return false;
             }
 
             // Eat repeat down events
@@ -2374,9 +2367,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         int deviceId = event.getDeviceId();
-        if (prefConfig.ignoreSynthEvents && deviceId <= 0) {
-            return false;
-        }
 
         // Handle a synthetic back button event that some Android OS versions
         // create as a result of a right-click.
@@ -2413,14 +2403,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             short translated = keyboardTranslator.translate(event.getKeyCode(), event.getScanCode(), deviceId);
             if (translated == 0) {
-                if (prefConfig.backAsMeta && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-                    translated = 0x5b; // Meta key
-                } else {
-                    // If we sent this event as UTF-8 on key down, also report that it was handled
-                    // when we get the key up event for it.
-                    int unicodeChar = event.getUnicodeChar();
-                    return (unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0;
-                }
+                // If we sent this event as UTF-8 on key down, also report that it was handled
+                // when we get the key up event for it.
+                int unicodeChar = event.getUnicodeChar();
+                return (unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0;
             }
 
             conn.sendKeyboardInput(translated, KeyboardPacket.KEY_UP, getModifierState(event),
@@ -2525,9 +2511,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         int deviceId = event.getDeviceId();
-        if (prefConfig.ignoreSynthEvents && deviceId <= 0) {
-            return false;
-        }
 
         int eventSource = event.getSource();
         int deviceSources = event.getDevice() != null ? event.getDevice().getSources() : 0;
@@ -3575,9 +3558,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 hideSystemUi(1000);
 
-                if (prefConfig.usbDriver) {
-                    bindUsbDriverService();
-                }
+                bindUsbDriverService();
 
                 // Shortcut/channel APIs can do disk or provider work. Start them only after the
                 // UI-thread cancellation guard above, then keep that work off the UI thread.

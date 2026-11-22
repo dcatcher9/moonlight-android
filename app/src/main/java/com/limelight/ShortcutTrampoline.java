@@ -147,7 +147,7 @@ public class ShortcutTrampoline extends AppCompatActivity {
                                             // Launch game if provided app ID, otherwise launch app view
                                             if (app != null) {
                                                 if (!requiresReplaceConfirmation(details, app)) {
-                                                    intentStack.add(ServerHelper.createStartIntent(ShortcutTrampoline.this, app, details, managerBinder, prefConfig.useVirtualDisplay));
+                                                    intentStack.add(ServerHelper.createStartIntent(ShortcutTrampoline.this, app, details, managerBinder, false));
 
                                                     // Close this activity
                                                     finish();
@@ -158,7 +158,7 @@ public class ShortcutTrampoline extends AppCompatActivity {
                                                     // Create the start intent immediately, so we can safely unbind the managerBinder
                                                     // below before we return. It carries Replace authority for the
                                                     // session observed now; it is used only after the user confirms.
-                                                    final Intent startIntent = createConfirmedReplaceIntent(ShortcutTrampoline.this, app, details, managerBinder, prefConfig.useVirtualDisplay);
+                                                    final Intent startIntent = createConfirmedReplaceIntent(ShortcutTrampoline.this, app, details, managerBinder, false);
 
                                                     UiHelper.displayQuitConfirmationDialog(ShortcutTrampoline.this, new Runnable() {
                                                         @Override
@@ -198,7 +198,7 @@ public class ShortcutTrampoline extends AppCompatActivity {
                                                 // If a game is running, we'll make the stream the top level activity
                                                 if (details.runningGameId != 0) {
                                                     intentStack.add(ServerHelper.createStartIntent(ShortcutTrampoline.this,
-                                                            new NvApp(null, null, details.runningGameId, false), details, managerBinder, prefConfig.useVirtualDisplay));
+                                                            new NvApp(null, null, details.runningGameId, false), details, managerBinder, false));
                                                 }
 
                                                 // Now start the activities

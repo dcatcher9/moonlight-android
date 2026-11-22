@@ -19,7 +19,6 @@ import android.widget.Toast;
 
 import com.limelight.LimeLog;
 import com.limelight.R;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -30,7 +29,6 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             "com.limelight.USB_PERMISSION";
 
     private UsbManager usbManager;
-    private PreferenceConfiguration prefConfig;
     private boolean started;
 
     private final UsbEventReceiver receiver = new UsbEventReceiver();
@@ -136,7 +134,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
     private void handleUsbDeviceState(UsbDevice device) {
         // Are we able to operate it?
-        if (shouldClaimDevice(device, prefConfig.bindAllUsb)) {
+        if (shouldClaimDevice(device)) {
             // Do we have permission yet?
             if (!usbManager.hasPermission(device)) {
                 // Let's ask for permission
@@ -267,13 +265,13 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         return true;
     }
 
-    public static boolean shouldClaimDevice(UsbDevice device, boolean claimAllAvailable) {
+    public static boolean shouldClaimDevice(UsbDevice device) {
         LimeLog.info("UsbDevice info: "+device.toString());
-        return ((!kernelSupportsXboxOne() || !isRecognizedInputDevice(device) || claimAllAvailable) && XboxOneController.canClaimDevice(device)) ||
-                ((!isRecognizedInputDevice(device) || claimAllAvailable) && Xbox360Controller.canClaimDevice(device)) ||
+        return ((!kernelSupportsXboxOne() || !isRecognizedInputDevice(device)) && XboxOneController.canClaimDevice(device)) ||
+                (!isRecognizedInputDevice(device) && Xbox360Controller.canClaimDevice(device)) ||
                 // We must not call isRecognizedInputDevice() because wireless controllers don't share the same product ID as the dongle
-                ((!kernelSupportsXbox360W() || claimAllAvailable) && Xbox360WirelessDongle.canClaimDevice(device)) ||
-                ((!isRecognizedInputDevice(device) || claimAllAvailable) && ProConController.canClaimDevice(device));
+                (!kernelSupportsXbox360W() && Xbox360WirelessDongle.canClaimDevice(device)) ||
+                (!isRecognizedInputDevice(device) && ProConController.canClaimDevice(device));
     }
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
@@ -297,7 +295,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
         // Enumerate existing devices
         for (UsbDevice dev : usbManager.getDeviceList().values()) {
-            if (shouldClaimDevice(dev, prefConfig.bindAllUsb)) {
+            if (shouldClaimDevice(dev)) {
                 // Start the process of claiming this device
                 handleUsbDeviceState(dev);
             }
@@ -324,7 +322,6 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     @Override
     public void onCreate() {
         this.usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
-        this.prefConfig = PreferenceConfiguration.readPreferences(this);
     }
 
     @Override

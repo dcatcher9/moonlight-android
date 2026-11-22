@@ -24,12 +24,6 @@ public class PreferenceConfiguration {
         FORCE_H264,
     };
 
-    public enum AnalogStickForScrolling {
-        NONE,
-        RIGHT,
-        LEFT
-    }
-
     public enum CinemaEnvironment {
         BLACK("black"),
         SYSTEM("system"),
@@ -54,14 +48,11 @@ public class PreferenceConfiguration {
     public static final String RESOLUTION_PREF_STRING = "list_resolution";
     public static final String FPS_PREF_STRING = "list_fps";
     public static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
-    private static final String USE_VIRTUAL_DISPLAY_PREF_STRING = "checkbox_use_virtual_display";
     public static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
     private static final String LANGUAGE_PREF_STRING = "list_languages";
-    private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     public static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     public static final String AUDIO_BOOST_PREF_STRING = "list_audio_boost_db";
-    private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     public static final String VIDEO_FORMAT_PREF_STRING = "video_format";
     /** Retired selector key retained only so the one-time migration can remove old values. */
     public static final String CLIENT_SBS_DEPTH_MODEL_PREF_STRING =
@@ -69,11 +60,7 @@ public class PreferenceConfiguration {
     public static final String CINEMA_ENVIRONMENT_PREF_STRING = "list_cinema_environment";
     public static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
-    private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
-    private static final String ANALOG_SCROLLING_PREF_STRING = "analog_scrolling";
-    private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
-    private static final String VIBRATE_FALLBACK_STRENGTH_PREF_STRING = "seekbar_vibrate_fallback_strength";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
     public static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
@@ -83,28 +70,18 @@ public class PreferenceConfiguration {
     public static final String STREAM_GAMMA_PREF_STRING = "stream_gamma";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
-    private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
-    private static final String FORCE_MOTION_SENSORS_FALLBACK_PREF_STRING = "checkbox_force_device_motion";
 
     private static final String ENABLE_RUMBLE_PREF_STRING = "checkbox_enable_rumble";
 
-    private static final String CHECKBOX_ENABLE_BATTERY_REPORT = "checkbox_gamepad_enable_battery_report";
-    private static final String CHECKBOX_FORCE_QWERTY = "checkbox_force_qwerty";
-    private static final String CHECKBOX_BACK_AS_META = "checkbox_back_as_meta";
-    private static final String CHECKBOX_IGNORE_SYNTH_EVENTS = "checkbox_ignore_synth_events";
-    private static final String CHECKBOX_BACK_AS_GUIDE = "checkbox_back_as_guide";
     private static final String CHECKBOX_SMART_CLIPBOARD_SYNC = "checkbox_smart_clipboard_sync";
     private static final String CHECKBOX_HIDE_CLIPBOARD_CONTENT = "checkbox_hide_clipboard_content";
 
     static final String DEFAULT_RESOLUTION = "3840x2160";
     static final String DEFAULT_FPS = "60";
     static final int DEFAULT_BITRATE_KBPS = 200000;
-    private static final boolean DEFAULT_USE_VIRTUAL_DISPLAY = false;
     static final boolean DEFAULT_HOST_AUDIO = false;
     private static final int DEFAULT_DEADZONE = 5;
     public static final String DEFAULT_LANGUAGE = "default";
-    private static final boolean DEFAULT_MULTI_CONTROLLER = true;
-    private static final boolean DEFAULT_USB_DRIVER = true;
     static final String DEFAULT_VIDEO_FORMAT = "forceh265";
     /** The sole Client SBS depth model. */
     public static final String CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16 =
@@ -122,11 +99,7 @@ public class PreferenceConfiguration {
 
     static final boolean DEFAULT_ENABLE_HDR = true;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
-    private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
-    private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "right";
-    private static final boolean DEFAULT_VIBRATE_FALLBACK = false;
-    private static final int DEFAULT_VIBRATE_FALLBACK_STRENGTH = 100;
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
     static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
     static final int DEFAULT_AUDIO_BOOST_DB = 3;
@@ -136,14 +109,7 @@ public class PreferenceConfiguration {
     public static final boolean DEFAULT_FULL_RANGE = true;
     private static final boolean DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE = false;
     private static final boolean DEFAULT_GAMEPAD_MOTION_SENSORS = true;
-    private static final boolean DEFAULT_GAMEPAD_MOTION_FALLBACK = false;
-    private static final boolean DEFAULT_FORCE_MOTION_SENSORS_FALLBACK = false;
     private static final boolean DEFAULT_ENABLE_RUMBLE = true;
-    private static final boolean DEFAULT_GAMEPAD_ENABLE_BATTERY_REPORT = true;
-    private static final boolean DEFAULT_FORCE_QWERTY = true;
-    private static final boolean DEFAULT_SEND_META_ON_PHYSICAL_BACK = false;
-    private static final boolean DEFAULT_IGNORE_SYNTH_EVENTS = false;
-    private static final boolean DEFAULT_BACK_AS_GUIDE = false;
     private static final boolean DEFAULT_SMART_CLIPBOARD_SYNC = false;
     private static final boolean DEFAULT_HIDE_CLIPBOARD_CONTENT = true;
 
@@ -221,24 +187,16 @@ public class PreferenceConfiguration {
     public CinemaEnvironment cinemaEnvironment = CinemaEnvironment.BLACK;
     public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
-    public boolean useVirtualDisplay, playHostAudio;
+    public boolean playHostAudio;
     public String language;
-    public boolean multiController, usbDriver, flipFaceButtons;
+    public boolean flipFaceButtons;
     public boolean onscreenController;
-    public boolean enableBatteryReport;
-    public boolean forceQwerty;
-    public boolean backAsMeta;
-    public boolean ignoreSynthEvents;
-    public boolean backAsGuide;
     public boolean smartClipboardSync;
     public boolean hideClipboardContent;
     public boolean enableHdr;
     public com.limelight.nvstream.StreamGamma streamGamma;
 
     public boolean enablePerfOverlay;
-
-    //修复JoyCon十字键
-    public boolean enableJoyConFix;
 
     public boolean enableFullExDisplay;
 
@@ -248,15 +206,8 @@ public class PreferenceConfiguration {
     //物理光标捕获
     public boolean enableMouseLocalCursor;
 
-    //强制使用设备自身的震动马达
-    public boolean enableDeviceRumble;
-
-    public boolean bindAllUsb;
     public boolean mouseEmulation;
-    public AnalogStickForScrolling analogStickForScrolling;
 
-    public boolean vibrateFallbackToDevice;
-    public int vibrateFallbackToDeviceStrength;
     public boolean touchscreenTrackpad;
     public MoonBridge.AudioConfiguration audioConfiguration;
     public int audioBoostDb;
@@ -266,8 +217,6 @@ public class PreferenceConfiguration {
     public boolean fullRange;
     public boolean gamepadMotionSensors;
     public boolean gamepadTouchpadAsMouse;
-    public boolean gamepadMotionSensorsFallbackToDevice;
-    public boolean forceMotionSensorsFallbackToDevice;
     public boolean enableRumble;
 
     public static boolean isNativeResolution(int width, int height) {
@@ -405,19 +354,6 @@ public class PreferenceConfiguration {
         }
     }
 
-    private static AnalogStickForScrolling getAnalogStickForScrollingValue(SharedPreferences prefs) {
-        String str = prefs.getString(ANALOG_SCROLLING_PREF_STRING, DEFAULT_ANALOG_STICK_FOR_SCROLLING);
-        if (str.equals("right")) {
-            return AnalogStickForScrolling.RIGHT;
-        }
-        else if (str.equals("left")) {
-            return AnalogStickForScrolling.LEFT;
-        }
-        else {
-            return AnalogStickForScrolling.NONE;
-        }
-    }
-
     /** Settings that configure the decoder, which the decoder-crash reset returns to defaults. */
     private static final List<String> STREAMING_SETTING_KEYS = Collections.unmodifiableList(
             Arrays.asList(
@@ -547,17 +483,12 @@ public class PreferenceConfiguration {
             config.framePacingWarpFactor = 4;
         }
 
-        config.analogStickForScrolling = getAnalogStickForScrollingValue(prefs);
-
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
 
         config.language = prefs.getString(LANGUAGE_PREF_STRING, DEFAULT_LANGUAGE);
 
         // Checkbox preferences
-        config.useVirtualDisplay = prefs.getBoolean(USE_VIRTUAL_DISPLAY_PREF_STRING, DEFAULT_USE_VIRTUAL_DISPLAY);
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
-        config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
-        config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
 
         // Touch starts in multi-touch mode; the in-stream mouse-mode menu changes these flags.
         config.enableMultiTouchScreen = true;
@@ -566,36 +497,21 @@ public class PreferenceConfiguration {
         config.streamGamma = com.limelight.nvstream.StreamGamma.fromPreference(
                 prefs.getString(STREAM_GAMMA_PREF_STRING, "default"));
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
-        config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
-        config.vibrateFallbackToDevice = prefs.getBoolean(VIBRATE_FALLBACK_PREF_STRING, DEFAULT_VIBRATE_FALLBACK);
-        config.vibrateFallbackToDeviceStrength = prefs.getInt(VIBRATE_FALLBACK_STRENGTH_PREF_STRING, DEFAULT_VIBRATE_FALLBACK_STRENGTH);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
-
-        //兼容joycon手柄
-        config.enableJoyConFix = prefs.getBoolean("checkbox_joycon_fix",false);
 
         config.enableFullExDisplay=prefs.getBoolean("checkbox_enable_fullexdisplay",false);
 
         config.enableMouseLocalCursor=prefs.getBoolean("checkbox_mouse_local_cursor",false);
 
-        config.enableDeviceRumble=prefs.getBoolean("checkbox_enable_device_rumble", false);
-
         config.absoluteMouseMode = prefs.getBoolean(ABSOLUTE_MOUSE_MODE_PREF_STRING, DEFAULT_ABSOLUTE_MOUSE_MODE);
         config.virtualDisplayOnly = prefs.getBoolean(
                 VIRTUAL_DISPLAY_ONLY_PREF_STRING, DEFAULT_VIRTUAL_DISPLAY_ONLY);
-        config.enableBatteryReport = prefs.getBoolean(CHECKBOX_ENABLE_BATTERY_REPORT, DEFAULT_GAMEPAD_ENABLE_BATTERY_REPORT);
-        config.forceQwerty = prefs.getBoolean(CHECKBOX_FORCE_QWERTY, DEFAULT_FORCE_QWERTY);
-        config.backAsMeta = prefs.getBoolean(CHECKBOX_BACK_AS_META, DEFAULT_SEND_META_ON_PHYSICAL_BACK);
-        config.ignoreSynthEvents = prefs.getBoolean(CHECKBOX_IGNORE_SYNTH_EVENTS, DEFAULT_IGNORE_SYNTH_EVENTS);
-        config.backAsGuide = prefs.getBoolean(CHECKBOX_BACK_AS_GUIDE, DEFAULT_BACK_AS_GUIDE);
         config.smartClipboardSync = prefs.getBoolean(CHECKBOX_SMART_CLIPBOARD_SYNC, DEFAULT_SMART_CLIPBOARD_SYNC);
         config.hideClipboardContent = prefs.getBoolean(CHECKBOX_HIDE_CLIPBOARD_CONTENT, DEFAULT_HIDE_CLIPBOARD_CONTENT);
         config.fullRange = prefs.getBoolean(FULL_RANGE_PREF_STRING, DEFAULT_FULL_RANGE);
         config.gamepadTouchpadAsMouse = prefs.getBoolean(GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING, DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE);
         config.gamepadMotionSensors = prefs.getBoolean(GAMEPAD_MOTION_SENSORS_PREF_STRING, DEFAULT_GAMEPAD_MOTION_SENSORS);
-        config.gamepadMotionSensorsFallbackToDevice = prefs.getBoolean(GAMEPAD_MOTION_FALLBACK_PREF_STRING, DEFAULT_GAMEPAD_MOTION_FALLBACK);
-        config.forceMotionSensorsFallbackToDevice = prefs.getBoolean(FORCE_MOTION_SENSORS_FALLBACK_PREF_STRING, DEFAULT_FORCE_MOTION_SENSORS_FALLBACK);
         config.enableRumble = prefs.getBoolean(ENABLE_RUMBLE_PREF_STRING, DEFAULT_ENABLE_RUMBLE);
 
         return config;
