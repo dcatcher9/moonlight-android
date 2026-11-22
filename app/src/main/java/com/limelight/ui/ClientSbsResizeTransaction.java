@@ -3,8 +3,8 @@ package com.limelight.ui;
 /**
  * State of the live Client SBS resize: the active request, the current stage with its watchdog,
  * and the post-ACK/cold-backend proof boundary.
- * StreamContainer drives every transition on the main thread; this type only groups the fields
- * and the resets that touch nothing else.
+ * ClientSbsResizeCoordinator drives every transition on the main thread; this type only groups
+ * the fields and the resets that touch nothing else.
  */
 final class ClientSbsResizeTransaction {
     /** Active request. The callback is non-null exactly while a resize is pending. */

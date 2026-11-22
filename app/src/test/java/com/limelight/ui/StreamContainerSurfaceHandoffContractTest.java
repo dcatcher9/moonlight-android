@@ -175,7 +175,9 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String init = methodBody(source, "public boolean init(Game game,");
         String parked = methodBody(source, "private void continueClientSbsSwitchAfterDecoderPark(");
         String completed = methodBody(source, "private void completeClientSbsSwitch(int generation,");
-        String resizeAttach = methodBody(source, "private void attachPendingClientSbsResize()");
+        // The live resize, including its attach, is ClientSbsResizeCoordinator's.
+        String resizeSource = readSource("ClientSbsResizeCoordinator.java");
+        String resizeAttach = methodBody(resizeSource, "void attachPending()");
 
         int initialHide = init.indexOf("setClientSbsInputLayoutEnabled(false)");
         int publishTarget = parked.indexOf(
@@ -188,11 +190,15 @@ public final class StreamContainerSurfaceHandoffContractTest {
                 completed.indexOf('{', completed.indexOf("if (success && !completedEnable)")));
         assertTrue(directSuccess.contains("setClientSbsInputLayoutEnabled(false)"));
         assertFalse(resizeAttach.contains("setClientSbsInputLayoutEnabled("));
+        assertFalse(resizeSource.contains("setClientSbsInputLayoutEnabled("));
         String inputEpoch = methodBody(source, "void setClientSbsInputLayoutEnabled(boolean enabled)");
         assertTrue(inputEpoch.contains("mSurfaceView.setVisibility(INVISIBLE)"));
         assertFalse(inputEpoch.contains("VISIBLE : INVISIBLE"));
         assertFalse(init.contains("holder.addCallback(this)"));
-        assertTrue(resizeAttach.contains("requestResume()"));
+        assertTrue(resizeAttach.contains("host.eglOwner().requestResume()"));
+        String eglOwner = blockBody(source, source.indexOf('{',
+                source.indexOf("@Override public ClientSbsRenderSurface eglOwner()")));
+        assertTrue(eglOwner.contains("return (ClientSbsRenderSurface) mSurfaceView;"));
     }
 
     @Test
@@ -201,7 +207,7 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String source = readSource("StreamContainer.java");
         String[] attachPaths = {
                 methodBody(source, "private void continueClientSbsSwitchAfterDecoderPark("),
-                methodBody(source, "private void attachPendingClientSbsResize()")};
+                methodBody(readSource("ClientSbsResizeCoordinator.java"), "void attachPending()")};
         String attachment = readSource("ClientSbsEglAttachment.java");
         String requestAttach = methodBody(attachment,
                 "void requestAttach(Surface target, int generation)");
@@ -213,9 +219,15 @@ public final class StreamContainerSurfaceHandoffContractTest {
         int requested = requestAttach.indexOf("requestedAttachGeneration = generation;", created);
         assertTrue(surface >= 0 && created > surface && requested > created);
         assertEquals(1, occurrences(attachment, "requestedAttachGeneration = generation;"));
-        // Both attach paths publish that request once, before resuming the EGL owner.
-        for (String attach : attachPaths) {
-            int request = attach.indexOf("mEglAttachment.requestAttach(");
+        // Both attach paths publish that request once, before resuming the EGL owner. The resize
+        // coordinator writes the container's own attachment.
+        String[] attachCalls = {
+                "mEglAttachment.requestAttach(target, eglOperationGeneration)",
+                "eglAttachment.requestAttach(replacement, resizeGeneration)"};
+        assertTrue(source.contains("}, mEglAttachment, mDecoderHandoff, mDeadlineHandler);"));
+        for (int i = 0; i < attachPaths.length; i++) {
+            String attach = attachPaths[i];
+            int request = attach.indexOf(attachCalls[i]);
             int resume = attach.indexOf("requestResume()", request);
             assertTrue(request >= 0 && resume > request);
             assertEquals(1, occurrences(attach, "requestAttach("));

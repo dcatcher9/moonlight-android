@@ -67,7 +67,6 @@ public class StreamContainer extends FrameLayout {
     private volatile int mActiveClientSbsDecoderGeneration;
     private boolean mPendingClientSbsEnable;
     private boolean mPendingHostSbsTarget;
-    private final ClientSbsResizeTransaction mClientSbsResize = new ClientSbsResizeTransaction();
     /** Host surface resize. Its deadline lives in the posted watchdog, not in this holder. */
     private final OwnedTransaction mHostSurfaceResize = new OwnedTransaction();
     /** Client SBS HDR transition. Its timeout is a relative postDelayed, not stored here. */
@@ -98,6 +97,23 @@ public class StreamContainer extends FrameLayout {
                 @Override public Game getGame() { return game; }
                 @Override public void post(Runnable action) { StreamContainer.this.post(action); }
             }, mDeadlineHandler);
+    /** Live Client SBS resize; it shares the EGL attachment and decoder handoff above. */
+    private final ClientSbsResizeCoordinator mClientSbsResize = new ClientSbsResizeCoordinator(
+            new ClientSbsResizeCoordinator.Host() {
+                @Override public boolean isDestroyed() { return mDestroyed; }
+                @Override public Stereo3DRenderer renderer() { return mStereoRenderer; }
+                @Override public boolean hasPresenter() { return mXrPresenter != null; }
+                @Override public Surface sizeClientSbsSurface(int width, int height) {
+                    return sizeSceneCoreSurface(
+                            () -> mXrPresenter.setClientSbsSurfaceSize(width, height),
+                            "Unable to resize the Client SBS SceneCore surface: ");
+                }
+                @Override public ClientSbsRenderSurface eglOwner() {
+                    return (ClientSbsRenderSurface) mSurfaceView;
+                }
+                @Override public void abandonPresentation() { abandonClientSbsPresentation(); }
+                @Override public void post(Runnable action) { StreamContainer.this.post(action); }
+            }, mEglAttachment, mDecoderHandoff, mDeadlineHandler);
 
     // Set once teardown starts. The EGL owner runs EGLWindowSurfaceFactory.destroySurface() on its
     // own thread for a pause or close request and posts the acknowledgement here; that posted
@@ -364,7 +380,7 @@ public class StreamContainer extends FrameLayout {
         // depth on the host's ordinary 2D frame; when the previous mode used a packed host wire
         // mode, the presenter's acknowledged request has already returned the host to 2D.
         if (mStereoRenderer == null || mDestroyed || mDummySurface == null
-                || !mDummySurface.isValid() || mClientSbsResize.pendingCallback != null) {
+                || !mDummySurface.isValid() || mClientSbsResize.isPending()) {
             callback.onComplete(false);
             return;
         }
@@ -508,12 +524,10 @@ public class StreamContainer extends FrameLayout {
                 && mPendingClientSbsEnable
                 && surfaceGeneration == mClientSbsSwitch.generation
                 && eglAttachGeneration == mPendingClientSbsSwitchEglGeneration;
-        boolean pendingResize = mClientSbsResize.pendingCallback != null
-                && ClientSbsResizePolicy.acceptsRendererReady(mClientSbsResize.stage)
-                && surfaceGeneration == mActiveClientSbsDecoderGeneration
-                && eglAttachGeneration == mClientSbsResize.pendingGeneration;
+        boolean pendingResize = mClientSbsResize.ownsRendererCallback(
+                surfaceGeneration, mActiveClientSbsDecoderGeneration, eglAttachGeneration);
         boolean contextRecovery = mClientSbsSwitch.callback == null
-                && mClientSbsResize.pendingCallback == null
+                && !mClientSbsResize.isPending()
                 && surfaceGeneration == mActiveClientSbsDecoderGeneration
                 && mStereoRenderer != null && mStereoRenderer.isClientSbs();
         // Entry is tested before resize, as every caller did; recovery excludes both.
@@ -548,7 +562,7 @@ public class StreamContainer extends FrameLayout {
         long ownerDeadlineMs = pendingEnable
                 ? mClientSbsSwitch.deadlineMs
                 : pendingResize
-                ? mClientSbsResize.stageDeadlineMs
+                ? mClientSbsResize.stageDeadlineMs()
                 : DecoderSurfaceHandoff.newDeadlineMs();
         mDecoderHandoff.bindAsync(surface, ownerDeadlineMs,
                 success -> finishClientSbsRendererSurfaceBind(
@@ -576,20 +590,7 @@ public class StreamContainer extends FrameLayout {
         if (pendingEnable) {
             completeClientSbsSwitch(surfaceGeneration, success);
         } else if (pendingResize) {
-            if (!success) {
-                completeClientSbsResize(eglAttachGeneration, false);
-            } else {
-                int resizeGeneration = eglAttachGeneration;
-                mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP;
-                boolean armed = mStereoRenderer.completeLiveStreamResizeAfterSwap(
-                        () -> post(() -> completeClientSbsResize(
-                                resizeGeneration, true)));
-                if (!armed) {
-                    completeClientSbsResize(resizeGeneration, false);
-                } else {
-                    armClientSbsResizeTimeoutForActiveStage();
-                }
-            }
+            mClientSbsResize.onRendererSurfaceBound(eglAttachGeneration, success);
         } else if (!success && game != null) {
             game.handleDecoderSurfaceSwitchFailure();
         }
@@ -610,7 +611,7 @@ public class StreamContainer extends FrameLayout {
         if (owner == RendererCallbackOwner.ENABLE) {
             completeClientSbsSwitch(surfaceGeneration, false);
         } else if (owner == RendererCallbackOwner.RESIZE) {
-            completeClientSbsResize(eglAttachGeneration, false);
+            mClientSbsResize.complete(eglAttachGeneration, false);
         } else if (game != null) {
             game.handleDecoderSurfaceSwitchFailure();
         }
@@ -668,10 +669,8 @@ public class StreamContainer extends FrameLayout {
 
         mEglAttachment.clearAfterDetach();
 
-        if (mClientSbsResize.pendingCallback != null
-                && mClientSbsResize.stage
-                == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
-            attachPendingClientSbsResize();
+        if (mClientSbsResize.isWaitingForDetach()) {
+            mClientSbsResize.attachPending();
             return;
         }
 
@@ -773,289 +772,21 @@ public class StreamContainer extends FrameLayout {
         if (callback == null || packed == null || mXrPresenter == null || mDestroyed
                 || mStereoRenderer == null || !mStereoRenderer.isClientSbs()
                 || mClientSbsSwitch.callback != null
-                || !ClientSbsResizePolicy.acceptsNewRequest(mClientSbsResize.stage)
+                || !mClientSbsResize.acceptsNewRequest()
                 || !mStereoRenderer.suspendPresentationForLiveStreamResize(width, height)) {
             return false;
         }
 
-        final int resizeGeneration = mEglAttachment.nextOperationGeneration();
-        if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.IDLE) {
-            mClientSbsResize.clearPostAckBoundary();
-        }
-        // While a detach is already acknowledged-in-flight, coalescing is safe: its factory
-        // callback will attach these latest values regardless of the older operation token.
-        mClientSbsResize.pendingCallback = callback;
-        mClientSbsResize.pendingGeneration = resizeGeneration;
-        mClientSbsResize.pendingWidth = width;
-        mClientSbsResize.pendingHeight = height;
-
-        if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.IDLE) {
-            mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
-            mEglAttachment.requestDetach(resizeGeneration);
-            armClientSbsResizeTimeoutForActiveStage();
-            ((ClientSbsRenderSurface) mSurfaceView).requestPause();
-        } else if (mClientSbsResize.stage
-                == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
-            // A newer request can safely replace the geometry while the same acknowledged detach
-            // is in flight. Rebind the watchdog to that latest active generation.
-            armClientSbsResizeTimeoutForActiveStage();
-        }
-
+        mClientSbsResize.start(width, height, callback);
         return true;
-    }
-
-    /** Runs after eglDestroySurface() has released SceneCore's previous producer. */
-    private void attachPendingClientSbsResize() {
-        if (mClientSbsResize.pendingCallback == null
-                || mClientSbsResize.stage
-                != ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH
-                || mStereoRenderer == null || mXrPresenter == null || mDestroyed) {
-            return;
-        }
-
-        int resizeGeneration = mClientSbsResize.pendingGeneration;
-        int width = mClientSbsResize.pendingWidth;
-        int height = mClientSbsResize.pendingHeight;
-        int[] packed = XrPresentationPolicy.clientSbsPackedDimensions(width, height);
-        boolean prepared = packed != null
-                && mStereoRenderer.prepareLiveStreamResize(
-                        width, height, packed[0], packed[1]);
-        Surface replacement = prepared
-                ? sizeSceneCoreSurface(
-                        () -> mXrPresenter.setClientSbsSurfaceSize(width, height),
-                        "Unable to resize the Client SBS SceneCore surface: ")
-                : null;
-        if (replacement == null) {
-            completeClientSbsResize(resizeGeneration, false);
-            return;
-        }
-
-        mEglAttachment.requestAttach(replacement, resizeGeneration);
-        mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH;
-        armClientSbsResizeTimeoutForActiveStage();
-        ((ClientSbsRenderSurface) mSurfaceView).requestResume();
-    }
-
-    private void completeClientSbsResize(int generation, boolean success) {
-        if (generation != mClientSbsResize.pendingGeneration) {
-            return;
-        }
-        if (!success) {
-            mDecoderHandoff.cancelAfterFailure();
-        }
-        SurfaceSwitchCallback callback = mClientSbsResize.pendingCallback;
-        mClientSbsResize.timeoutToken++;
-        if (!success) {
-            abandonClientSbsPresentation();
-        }
-        mClientSbsResize.clearPending();
-        mClientSbsResize.stageDeadlineMs = 0L;
-        mClientSbsResize.clearPostAckBoundary();
-        mClientSbsResize.stage = ClientSbsResizePolicy.Stage.IDLE;
-        if (callback != null) {
-            callback.onComplete(success);
-        }
-    }
-
-    private void failClientSbsResizeChain() {
-        if (mClientSbsResize.pendingCallback != null) {
-            completeClientSbsResize(mClientSbsResize.pendingGeneration, false);
-        }
     }
 
     /**
-     * Marks the exact active Client-SBS resize reached by the current post-ACK decoder
-     * generation. XrStreamPresenter rejects stale decoder generations before invoking this method;
-     * retaining the resize generation here also prevents an A -> B -> A geometry cycle from
-     * borrowing an older boundary.
+     * Hands the post-ACK decoder output edge to the active Client-SBS resize. XrStreamPresenter
+     * rejects stale decoder generations before invoking this method.
      */
     void onClientSbsPostAckDecoderOutput(int width, int height) {
-        if (mDestroyed || width <= 0 || height <= 0) {
-            return;
-        }
-
-        int matchedGeneration = 0;
-        if (mClientSbsResize.pendingCallback != null
-                && ClientSbsResizePolicy.sameGeometry(
-                        width, height,
-                        mClientSbsResize.pendingWidth, mClientSbsResize.pendingHeight)) {
-            matchedGeneration = mClientSbsResize.pendingGeneration;
-        }
-        if (matchedGeneration <= 0) {
-            return;
-        }
-
-        boolean newPostAckBoundary =
-                matchedGeneration != mClientSbsResize.postAckGeneration
-                        || !ClientSbsResizePolicy.sameGeometry(
-                                width, height,
-                                mClientSbsResize.postAckWidth,
-                                mClientSbsResize.postAckHeight);
-        mClientSbsResize.postAckGeneration = matchedGeneration;
-        mClientSbsResize.postAckWidth = width;
-        mClientSbsResize.postAckHeight = height;
-        if (newPostAckBoundary) {
-            mClientSbsResize.postAckStartedMs = android.os.SystemClock.uptimeMillis();
-            mClientSbsResize.coldBackendInitializationObserved = false;
-            mClientSbsResize.coldBackendReadyProofDeadlineMs = 0L;
-            mClientSbsResize.coldBackendWaitLogged = false;
-        }
-        if (ClientSbsResizePolicy.shouldRequestPostAckProofDraw(
-                mClientSbsResize.stage, matchedGeneration,
-                mClientSbsResize.pendingGeneration)) {
-            LimeLog.info("Client SBS post-ack decoder output matched " + width + "x" + height
-                    + "; allowing a fresh packed-presentation proof window");
-            if (mStereoRenderer == null
-                    || !mStereoRenderer.requestLiveStreamResizeProofDraw()) {
-                LimeLog.warning("Client SBS post-ack decoder output could not nudge the active "
-                        + "packed-presentation proof");
-            }
-            armClientSbsResizeTimeoutForActiveStage();
-        }
-    }
-
-    private boolean startClientSbsColdBackendReadyProofWindowIfNeeded(
-            ClientSbsResizePolicy.Stage stage, boolean postAckDecoderOutputReady,
-            boolean backendInitializing, long nowMillis, long postAckElapsedMillis,
-            int width, int height) {
-        boolean readyProofWindowStarted =
-                mClientSbsResize.coldBackendReadyProofDeadlineMs > 0L;
-        if (!ClientSbsResizePolicy.shouldStartColdBackendReadyProofWindow(
-                stage, postAckDecoderOutputReady,
-                mClientSbsResize.coldBackendInitializationObserved, backendInitializing,
-                readyProofWindowStarted, postAckElapsedMillis)) {
-            return false;
-        }
-
-        long proofMillis = ClientSbsResizePolicy.boundedColdBackendReadyProofMillis(
-                postAckElapsedMillis);
-        if (proofMillis <= 0L) {
-            return false;
-        }
-        mClientSbsResize.coldBackendReadyProofDeadlineMs = nowMillis + proofMillis;
-        LimeLog.info("Client SBS cold AI backend finished initializing at "
-                + width + "x" + height + "; granting one fresh " + proofMillis
-                + " ms post-ack packed-presentation proof window");
-        if (mStereoRenderer == null
-                || !mStereoRenderer.requestLiveStreamResizeProofDraw()) {
-            LimeLog.warning("Client SBS ready AI backend could not nudge the active "
-                    + "packed-presentation proof");
-        }
-        return true;
-    }
-
-    private void armClientSbsResizeTimeoutForActiveStage() {
-        int timeoutToken = ++mClientSbsResize.timeoutToken;
-        if (mClientSbsResize.pendingCallback == null) {
-            return;
-        }
-        int generation = mClientSbsResize.pendingGeneration;
-        int width = mClientSbsResize.pendingWidth;
-        int height = mClientSbsResize.pendingHeight;
-        ClientSbsResizePolicy.Stage stage = mClientSbsResize.stage;
-        boolean postAckDecoderOutputReady = mClientSbsResize.hasPostAckBoundaryForActiveResize();
-        long nowMillis = android.os.SystemClock.uptimeMillis();
-        long postAckElapsedMillis = mClientSbsResize.postAckStartedMs > 0L
-                ? Math.max(0L, nowMillis - mClientSbsResize.postAckStartedMs)
-                : -1L;
-        boolean backendInitializing = postAckDecoderOutputReady && mStereoRenderer != null
-                && mStereoRenderer.isClientSbsBackendInitializing();
-        if (backendInitializing
-                && mClientSbsResize.coldBackendReadyProofDeadlineMs <= 0L) {
-            mClientSbsResize.coldBackendInitializationObserved = true;
-        }
-        startClientSbsColdBackendReadyProofWindowIfNeeded(
-                stage, postAckDecoderOutputReady, backendInitializing,
-                nowMillis, postAckElapsedMillis, width, height);
-
-        long timeoutMillis = ClientSbsResizePolicy.timeoutMillis(
-                stage, postAckDecoderOutputReady);
-        if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_SWAP
-                && postAckDecoderOutputReady
-                && mClientSbsResize.coldBackendReadyProofDeadlineMs > 0L) {
-            // Repeated decoder notifications may re-arm this runnable, but never the proof window.
-            timeoutMillis = Math.max(1L,
-                    mClientSbsResize.coldBackendReadyProofDeadlineMs - nowMillis);
-        } else if (backendInitializing) {
-            long coldPollMillis =
-                    ClientSbsResizePolicy.boundedColdBackendPollMillis(postAckElapsedMillis);
-            // At the deadline, post an immediate final check rather than falling back to another
-            // full proof quantum. A duplicate decoder notification therefore cannot extend the
-            // absolute cold-start ceiling.
-            timeoutMillis = Math.max(1L, coldPollMillis);
-        }
-        if (timeoutMillis <= 0L) {
-            mClientSbsResize.stageDeadlineMs = 0L;
-            return;
-        }
-        final long stageDeadlineMs = nowMillis + timeoutMillis;
-        mClientSbsResize.stageDeadlineMs = stageDeadlineMs;
-        mDeadlineHandler.postAtTime(() -> {
-            if (timeoutToken != mClientSbsResize.timeoutToken) {
-                return;
-            }
-            if (generation == mClientSbsResize.pendingGeneration
-                    && mClientSbsResize.pendingCallback != null
-                    && stage == mClientSbsResize.stage) {
-                boolean backendInitializingNow = mStereoRenderer != null
-                        && mStereoRenderer.isClientSbsBackendInitializing();
-                long callbackNowMillis = android.os.SystemClock.uptimeMillis();
-                long callbackPostAckElapsedMillis = mClientSbsResize.postAckStartedMs > 0L
-                        ? Math.max(0L, callbackNowMillis - mClientSbsResize.postAckStartedMs)
-                        : -1L;
-                boolean readyProofWindowStarted =
-                        mClientSbsResize.coldBackendReadyProofDeadlineMs > 0L;
-                if (ClientSbsResizePolicy.shouldContinueWaitingForColdBackend(
-                        stage, postAckDecoderOutputReady,
-                        backendInitializingNow, readyProofWindowStarted,
-                        callbackPostAckElapsedMillis)) {
-                    mClientSbsResize.coldBackendInitializationObserved = true;
-                    if (!mClientSbsResize.coldBackendWaitLogged) {
-                        mClientSbsResize.coldBackendWaitLogged = true;
-                        LimeLog.info("Client SBS host/decoder geometry is confirmed at "
-                                + width + "x" + height
-                                + "; extending packed-presentation proof while the cold AI "
-                                + "backend initializes (bounded to "
-                                + ClientSbsResizePolicy.COLD_BACKEND_MAX_WAIT_MS + " ms)");
-                    }
-                    // Re-arming increments the token, so teardown, superseding geometry, or a
-                    // completed proof invalidates this callback before it can fire again.
-                    armClientSbsResizeTimeoutForActiveStage();
-                    return;
-                }
-                if (startClientSbsColdBackendReadyProofWindowIfNeeded(
-                        stage, postAckDecoderOutputReady, backendInitializingNow,
-                        callbackNowMillis, callbackPostAckElapsedMillis, width, height)) {
-                    armClientSbsResizeTimeoutForActiveStage();
-                    return;
-                }
-                if (readyProofWindowStarted
-                        && callbackNowMillis < mClientSbsResize.coldBackendReadyProofDeadlineMs) {
-                    // A runnable may fire early across uptime scheduling granularity. Preserve the
-                    // original absolute deadline instead of manufacturing another proof window.
-                    armClientSbsResizeTimeoutForActiveStage();
-                    return;
-                }
-                if (!mDecoderHandoff.currentDeadlineOwnsFailure()) {
-                    return;
-                }
-                String boundary;
-                if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH) {
-                    boundary = "EGL detachment";
-                } else if (stage == ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH) {
-                    boundary = "exact EGL attachment";
-                } else if (postAckDecoderOutputReady && backendInitializingNow) {
-                    boundary = "bounded cold AI initialization and post-ack packed presentation";
-                } else if (postAckDecoderOutputReady) {
-                    boundary = "post-ack packed presentation";
-                } else {
-                    boundary = "packed presentation or authoritative host outcome";
-                }
-                LimeLog.severe("Timed out waiting for Client SBS " + boundary
-                        + " at " + width + "x" + height);
-                failClientSbsResizeChain();
-            }
-        }, stageDeadlineMs);
+        mClientSbsResize.onPostAckDecoderOutput(width, height);
     }
 
     /**

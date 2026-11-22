@@ -121,7 +121,7 @@ final class ClientSbsContainerHarness implements AutoCloseable {
 
     /** Resolver: the live Client SBS resize transaction. */
     ClientSbsResizeTransaction resizeState() {
-        return ReflectionHelpers.getField(container, "mClientSbsResize");
+        return ReflectionHelpers.getField(ReflectionHelpers.getField(container, "mClientSbsResize"), "resize");
     }
 
     final List<String> events = Collections.synchronizedList(new ArrayList<>());
