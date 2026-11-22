@@ -1530,8 +1530,8 @@ the pane explains how to enable performance sampling while retaining basic depth
 Hidden decoder windows retain aggregate stream/loss accounting without allocating completed-window
 snapshots or histogram copies, and do not sample a pruning clock for absent timing records. Visible
 Stats retain unchanged row text and share one pending panel-sizing callback, cancelled when the
-panel is hidden or destroyed. The end-of-stream latency message averages only frames measured
-while Stats was visible and omits the averages when no frame was measured. Client SBS rows with
+panel is hidden or destroyed. The session latency averages in the decoder crash report count only
+frames measured while Stats was visible and read 0 when no frame was measured. Client SBS rows with
 no sample in the current window read as not sampled rather than zero.
 
 The pane shows the video size, HDR/SDR and range, negotiated codec/profile and Android decoder,
