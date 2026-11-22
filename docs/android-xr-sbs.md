@@ -150,10 +150,11 @@ its manual format choices are independent of this Game protocol.
 `HOST_SBS_RAW` remains only as a `PresentationMode` enum constant so stored records that name it
 still parse. The client has no Raw transport arithmetic, packing choice, controls or strings. Raw is
 absent from the dock and Global Settings, and `PresentationMode.safeStartupMode` restores **2D** for
-an old last-mode selection. `SessionSettingsStore` copies valid legacy resolution/FPS/bitrate
-overrides once into Movie when Movie has no explicit tuple; the original Raw data, shared settings
-and session identity remain preserved. `XrSessionSettingsController` commits and global resets
-cover every mode except Raw, so the stored Raw overrides are not rewritten. Raw's Full/Half field
+an old last-mode selection. When `SessionSettingsStore` decodes a record, its `SessionRecordCodec`
+copies valid legacy resolution/FPS/bitrate overrides once into Movie when Movie has no explicit
+tuple; the original Raw data, shared settings and session identity remain preserved.
+`XrSessionSettingsController` commits and global resets cover every mode except Raw, so the stored
+Raw overrides are not rewritten. Raw's Full/Half field
 is not read, not copied into Movie, and not used as readiness evidence.
 
 Historically, Raw **Full** treated the selected `W x H` as per-eye dimensions and negotiated a
