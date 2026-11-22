@@ -98,7 +98,7 @@ public final class ClientSbsDecoderFrameSourceLifecycleTest {
 
     /** The object holding the frame source's fields and methods. */
     private Object source() {
-        return renderer;
+        return ReflectionHelpers.getField(renderer, "frameSource");
     }
 
     @Test

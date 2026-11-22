@@ -66,31 +66,33 @@ public class Stereo3DRendererHostSourceReuseTest {
         assertTrue(slots.markActive(originalColor));
         set("activeColorFrameLease", originalColor);
         set("lastCapturedFrameSequence", 10L);
-        set("latchedFrameSequence", 11L);
+        ReflectionHelpers.setField(source(), "latchedFrameSequence", 11L);
         set("lastModelInferenceFrameSequence", 8L);
         set("lastModelInferenceCapturedAtNs", 500L);
         DecodedSourceIdentityTracker.Sample presented = repeat.presented;
         presented.epoch = tracker.getEpoch();
         presented.sourceId = 7;
         presented.frameNumber = 100;
-        candidate = ReflectionHelpers.getField(renderer, "latchedSourceIdentity");
+        candidate = ReflectionHelpers.getField(source(), "latchedSourceIdentity");
         candidate.copyFrom(presented);
         candidate.frameNumber = 101;
-        float[] transform = ReflectionHelpers.getField(renderer, "videoTextureTransform");
+        float[] transform = ReflectionHelpers.getField(source(), "videoTextureTransform");
         float[] presentedTransform = repeat.presentedTransform;
         System.arraycopy(transform, 0, presentedTransform, 0, 16);
     }
 
     @After
     public void tearDown() {
-        if (renderer != null) invoke("shutdownFrameCallbackThread", void.class);
+        if (renderer != null) {
+            ReflectionHelpers.callInstanceMethod(source(), "shutdownFrameCallbackThread");
+        }
     }
 
     @Test
     public void longStaticSequenceRetainsColorAndInferenceOwnerWithoutDrawRequests() {
         for (int i = 0; i < 1000; i++) {
             candidate.frameNumber = 101 + i;
-            set("latchedFrameSequence", 11L + i);
+            ReflectionHelpers.setField(source(), "latchedFrameSequence", 11L + i);
             assertTrue(consume());
         }
         assertSame(originalColor, ReflectionHelpers.getField(renderer, "activeColorFrameLease"));
@@ -131,7 +133,7 @@ public class Stereo3DRendererHostSourceReuseTest {
 
     @Test
     public void decoderResetAndCropChangeRejectOtherwiseMatchingSource() {
-        float[] transform = ReflectionHelpers.getField(renderer, "videoTextureTransform");
+        float[] transform = ReflectionHelpers.getField(source(), "videoTextureTransform");
         transform[12] += 0.25f;
         assertFalse(consume());
         transform[12] -= 0.25f;
@@ -177,6 +179,11 @@ public class Stereo3DRendererHostSourceReuseTest {
         assertTrue(HostSourceRepeatTracker.hasSettled(100L, Long.MAX_VALUE));
         assertFalse(HostSourceRepeatTracker.hasSettled(0L, Long.MAX_VALUE));
         assertFalse(HostSourceRepeatTracker.hasSettled(100L, 99L));
+    }
+
+    /** The renderer's decoder frame source, which holds the latched frame. */
+    private Object source() {
+        return ReflectionHelpers.getField(renderer, "frameSource");
     }
 
     private boolean consume() {

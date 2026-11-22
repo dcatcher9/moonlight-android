@@ -47,7 +47,7 @@ public class Stereo3DRendererSchedulingTest {
         AtomicInteger generation = new AtomicInteger(7);
         StringBuilder order = new StringBuilder();
 
-        int advancedGeneration = Stereo3DRenderer.advanceLiveResizeFrameBoundary(
+        int advancedGeneration = ClientSbsDecoderFrameSource.advanceLiveResizeFrameBoundary(
                 generation,
                 () -> {
                     assertEquals(7, generation.get());
@@ -73,7 +73,7 @@ public class Stereo3DRendererSchedulingTest {
         boolean[] cleared = {false};
 
         try {
-            Stereo3DRenderer.advanceLiveResizeFrameBoundary(
+            ClientSbsDecoderFrameSource.advanceLiveResizeFrameBoundary(
                     generation,
                     () -> { },
                     () -> { throw new IllegalStateException("no EGL image"); },
@@ -110,39 +110,45 @@ public class Stereo3DRendererSchedulingTest {
 
     @Test
     public void decoderCallbackRequiresTheExactLiveRegistrationAndSurfaceGeneration() {
-        assertTrue(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertTrue(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 41L, 41L, true, true, false, false, 7, 7));
-        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertFalse(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 40L, 41L, true, true, false, false, 7, 7));
-        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertFalse(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 41L, 41L, false, true, false, false, 7, 7));
-        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertFalse(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 41L, 41L, true, false, false, false, 7, 7));
-        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertFalse(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 41L, 41L, true, true, true, false, 7, 7));
-        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertFalse(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 41L, 41L, true, true, false, true, 7, 7));
-        assertFalse(Stereo3DRenderer.isFrameCallbackCurrent(
+        assertFalse(ClientSbsDecoderFrameSource.isFrameCallbackCurrent(
                 41L, 41L, true, true, false, false, 6, 7));
     }
 
     @Test
     public void surfaceTextureCallbacksUseOneExplicitUrgentDisplayLooper() throws IOException {
         String source = rendererSource();
+        String frameSource = frameSourceSource();
         String constructor = source.substring(
                 source.indexOf("public Stereo3DRenderer(ClientSbsRenderSurface view,"),
                 source.indexOf("Atomically drains all Client-SBS counters into one elapsed"));
-        assertTrue(constructor.contains("new HandlerThread("));
-        assertTrue(constructor.contains("Process.THREAD_PRIORITY_URGENT_DISPLAY"));
-        assertTrue(constructor.contains("new Handler(frameCallbackThread.getLooper())"));
-        assertTrue(constructor.contains("In Normal/Host modes this Looper remains idle"));
+        assertTrue(constructor.contains("new ClientSbsDecoderFrameSource("));
+        String sourceConstructor = frameSource.substring(
+                frameSource.indexOf("ClientSbsDecoderFrameSource(ClientSbsRenderSurface glSurfaceView,"),
+                frameSource.indexOf("void createDecoderSurface()"));
+        assertTrue(sourceConstructor.contains("new HandlerThread("));
+        assertTrue(sourceConstructor.contains("Process.THREAD_PRIORITY_URGENT_DISPLAY"));
+        assertTrue(sourceConstructor.contains("new Handler(frameCallbackThread.getLooper())"));
+        assertTrue(sourceConstructor.contains("In Normal/Host modes this Looper remains idle"));
 
-        String registration = source.substring(
-                source.indexOf("private void registerFrameAvailableListener"),
-                source.indexOf("private void invalidateFrameCallbackRegistration"));
+        String registration = frameSource.substring(
+                frameSource.indexOf("void registerFrameAvailableListener("),
+                frameSource.indexOf("void invalidateFrameCallbackRegistration()"));
         assertTrue(registration.contains(
                 "texture.setOnFrameAvailableListener(listener, frameCallbackHandler)"));
         assertFalse(source.contains("setOnFrameAvailableListener(this)"));
+        assertFalse(frameSource.contains("setOnFrameAvailableListener(this)"));
 
         String surfaceCreation = source.substring(
                 source.indexOf("private void onSurfaceCreatedLocked"),
@@ -150,9 +156,18 @@ public class Stereo3DRendererSchedulingTest {
         String surfaceReplacement = source.substring(
                 source.indexOf("private void onSurfaceChangedLocked"),
                 source.indexOf("private boolean initializeFbo()"));
-        assertTrue(surfaceCreation.contains(
-                "registerFrameAvailableListener(videoSurfaceTexture)"));
+        assertTrue(surfaceCreation.contains("frameSource.createDecoderSurface()"));
         assertTrue(surfaceReplacement.contains(
+                "frameSource.replaceDecoderSurface(requestedGeneration)"));
+        String sourceCreation = frameSource.substring(
+                frameSource.indexOf("void createDecoderSurface()"),
+                frameSource.indexOf("void replaceDecoderSurface("));
+        String sourceReplacement = frameSource.substring(
+                frameSource.indexOf("void replaceDecoderSurface("),
+                frameSource.indexOf("void releaseDecoderSurface()"));
+        assertTrue(sourceCreation.contains(
+                "registerFrameAvailableListener(videoSurfaceTexture)"));
+        assertTrue(sourceReplacement.contains(
                 "registerFrameAvailableListener(videoSurfaceTexture)"));
     }
 
@@ -160,9 +175,10 @@ public class Stereo3DRendererSchedulingTest {
     public void callbackBoundariesRetokenizeBeforeDiscardAndTerminalShutdownNeverJoins()
             throws IOException {
         String source = rendererSource();
-        String callback = source.substring(
-                source.indexOf("private void onFrameAvailable("),
-                source.indexOf("static boolean isFrameCallbackCurrent"));
+        String frameSource = frameSourceSource();
+        String callback = frameSource.substring(
+                frameSource.indexOf("private void onFrameAvailable("),
+                frameSource.indexOf("static boolean isFrameCallbackCurrent"));
         assertEquals(2, occurrences(callback, "isFrameCallbackCurrent("));
         assertTrue(callback.contains("queueFrameDrain(surfaceTexture, callbackGeneration)"));
         assertFalse(callback.contains("GLES"));
@@ -170,9 +186,9 @@ public class Stereo3DRendererSchedulingTest {
         assertFalse(callback.contains("captureLatestFrameIfReady"));
         assertFalse(callback.contains("presentClientSbs"));
 
-        String resize = source.substring(
-                source.indexOf("private int discardPendingFrameAndAdvanceLiveResizeGeneration"),
-                source.indexOf("static int advanceLiveResizeFrameBoundary"));
+        String resize = frameSource.substring(
+                frameSource.indexOf("int discardPendingFrameAndAdvanceLiveResizeGeneration()"),
+                frameSource.indexOf("static int advanceLiveResizeFrameBoundary"));
         assertTrue(resize.indexOf("registerFrameAvailableListener(texture)")
                 < resize.indexOf("advanceLiveResizeFrameBoundary("));
 
@@ -185,9 +201,9 @@ public class Stereo3DRendererSchedulingTest {
         assertTrue(hdrRegistration >= 0 && hdrRegistration < hdrDiscard);
         assertTrue(hdrDiscard < hdrCommitState);
 
-        String shutdown = source.substring(
-                source.indexOf("private void shutdownFrameCallbackThread"),
-                source.indexOf("private void invalidateQueuedFrameDrain"));
+        String shutdown = frameSource.substring(
+                frameSource.indexOf("void shutdownFrameCallbackThread()"),
+                frameSource.indexOf("void invalidateQueuedFrameDrain()"));
         assertTrue(shutdown.contains(
                 "frameCallbackThreadStopped.compareAndSet(false, true)"));
         assertTrue(shutdown.indexOf("invalidateFrameCallbackRegistration()")
@@ -284,7 +300,7 @@ public class Stereo3DRendererSchedulingTest {
     @Test
     public void frameDrainHotPathReusesOneRunnableAndSnapshotsAGuardedTicket()
             throws IOException {
-        String source = rendererSource();
+        String source = frameSourceSource();
         assertTrue(source.contains(
                 "private final Runnable frameDrainRunnable = this::drainQueuedFrameWithoutSwap"));
 
@@ -298,7 +314,7 @@ public class Stereo3DRendererSchedulingTest {
 
         String drain = source.substring(
                 source.indexOf("private void drainQueuedFrameWithoutSwap()"),
-                source.indexOf("private void drainLatestFrameWithoutSwap("));
+                source.indexOf("boolean latchPendingVideoFrame()"));
         assertTrue(drain.contains("synchronized (frameLock)"));
         assertTrue(drain.indexOf("token = queuedFrameDrainToken")
                 < drain.indexOf("clearQueuedFrameDrainTicketLocked()"));
@@ -440,10 +456,16 @@ public class Stereo3DRendererSchedulingTest {
         assertTrue(acknowledge >= 0);
         assertTrue(acknowledge < draw.indexOf("serviceRendererFinishRequest()"));
         assertTrue(acknowledge < draw.indexOf("awaitFirstModeEntryFrameIfNeeded()"));
-        String admission = source.substring(source.indexOf("private void queueFrameDrain("),
-                source.indexOf("private void drainQueuedFrameWithoutSwap()"));
-        assertTrue(admission.contains("!surfaceLifecycleReady"));
-        assertTrue(admission.contains("!outputSurfaceValidated"));
+        String frameSource = frameSourceSource();
+        String admission = frameSource.substring(
+                frameSource.indexOf("private void queueFrameDrain("),
+                frameSource.indexOf("private void drainQueuedFrameWithoutSwap()"));
+        assertTrue(admission.contains("!host.isSurfaceLifecycleReady()"));
+        assertTrue(admission.contains("!host.isOutputSurfaceValidated()"));
+        // The renderer answers those reads with its own lifecycle and output flags.
+        String host = source.substring(source.indexOf("private final class FrameSourceHost"));
+        assertTrue(host.contains("return surfaceLifecycleReady;"));
+        assertTrue(host.contains("return outputSurfaceValidated;"));
     }
 
     private static String rendererSource() throws IOException {
@@ -451,6 +473,13 @@ public class Stereo3DRendererSchedulingTest {
                 "src/main/java/com/limelight/utils/Stereo3DRenderer.java").toPath(),
                 StandardCharsets.UTF_8)
                 // Assertions use "\n"; the checkout may carry CRLF.
+                .replace("\r\n", "\n");
+    }
+
+    private static String frameSourceSource() throws IOException {
+        return Files.readString(new File(
+                "src/main/java/com/limelight/utils/ClientSbsDecoderFrameSource.java").toPath(),
+                StandardCharsets.UTF_8)
                 .replace("\r\n", "\n");
     }
 

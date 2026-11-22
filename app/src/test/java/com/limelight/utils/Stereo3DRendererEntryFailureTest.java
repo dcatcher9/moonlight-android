@@ -83,7 +83,9 @@ public final class Stereo3DRendererEntryFailureTest {
             renderer.onDrawFrame(null);
             assertFalse(renderer.consumeFrameForSwap());
         } finally {
-            ReflectionHelpers.callInstanceMethod(renderer, "shutdownFrameCallbackThread");
+            ReflectionHelpers.callInstanceMethod(
+                    ReflectionHelpers.getField(renderer, "frameSource"),
+                    "shutdownFrameCallbackThread");
         }
     }
 
@@ -146,7 +148,9 @@ public final class Stereo3DRendererEntryFailureTest {
                 boolean.class);
         failureCallback.setAccessible(true);
 
-        Object driverLock = ReflectionHelpers.getField(renderer, lockName);
+        // The frame lock belongs to the renderer's decoder frame source.
+        Object driverLock = ReflectionHelpers.getField("frameLock".equals(lockName)
+                ? ReflectionHelpers.getField(renderer, "frameSource") : renderer, lockName);
         CountDownLatch driverEntered = new CountDownLatch(1);
         CountDownLatch releaseDriver = new CountDownLatch(1);
         AtomicBoolean driverTimedOut = new AtomicBoolean();

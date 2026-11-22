@@ -178,7 +178,8 @@ public final class Stereo3DRendererAsyncLifecycleTest {
         ReflectionHelpers.setField(renderer, "clientSbs", true);
         Object initialization = ReflectionHelpers.getField(renderer, "surfaceLifecycleLock");
         Object draw = ReflectionHelpers.getField(renderer, "glCallbackLifecycleLock");
-        Object frame = ReflectionHelpers.getField(renderer, "frameLock");
+        Object frame = ReflectionHelpers.getField(
+                ReflectionHelpers.getField(renderer, "frameSource"), "frameLock");
         Object resize = ReflectionHelpers.getField(renderer, "liveStreamResizeLock");
         CountDownLatch blocked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
