@@ -90,9 +90,9 @@ public class Stereo3DRendererSchedulingTest {
     public void staleResultReleaseCannotClearNewOverlapClaim() {
         AtomicLong claim = new AtomicLong(41L);
 
-        assertTrue(Stereo3DRenderer.releaseInferenceClaimToken(claim, 41L));
+        assertTrue(ClientSbsInferenceOwner.releaseInferenceClaimToken(claim, 41L));
         assertTrue(claim.compareAndSet(0L, 42L));
-        assertFalse(Stereo3DRenderer.releaseInferenceClaimToken(claim, 41L));
+        assertFalse(ClientSbsInferenceOwner.releaseInferenceClaimToken(claim, 41L));
         assertEquals(42L, claim.get());
     }
 
@@ -223,7 +223,7 @@ public class Stereo3DRendererSchedulingTest {
                 source.indexOf("private boolean adoptNearIdenticalReuseLocked"));
         String reuseAdoption = source.substring(
                 source.indexOf("private boolean adoptNearIdenticalReuseLocked"),
-                source.indexOf("private boolean closeGpuInferenceOnWorker"));
+                source.indexOf("private boolean validateCurrentOutputSurface("));
         assertFalse(inferenceAdoption.contains("captureLatestFrameIfReady();"));
         assertFalse(reuseAdoption.contains("captureLatestFrameIfReady();"));
     }
@@ -414,7 +414,7 @@ public class Stereo3DRendererSchedulingTest {
         consumer.start();
         assertTrue(consumerStarted.await(1, TimeUnit.SECONDS));
 
-        assertTrue(Stereo3DRenderer.offerControlMessage(
+        assertTrue(ClientSbsInferenceOwner.offerControlMessage(
                 queue, "shutdown", 1, TimeUnit.SECONDS));
         consumer.join(TimeUnit.SECONDS.toMillis(1));
         assertFalse(consumer.isAlive());
@@ -426,7 +426,7 @@ public class Stereo3DRendererSchedulingTest {
         BlockingQueue<String> queue = new ArrayBlockingQueue<>(1);
         assertTrue(queue.offer("frame"));
 
-        assertFalse(Stereo3DRenderer.offerControlMessage(
+        assertFalse(ClientSbsInferenceOwner.offerControlMessage(
                 queue, "shutdown", 1, TimeUnit.MILLISECONDS));
         assertEquals("frame", queue.poll());
     }

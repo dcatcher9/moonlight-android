@@ -35,16 +35,16 @@ public final class Stereo3DRendererAsyncLifecycleTest {
         Stereo3DRenderer renderer = createRenderer(surface);
         EGLContext ownerContext = mock(EGLContext.class);
         EGLContext differentContext = mock(EGLContext.class);
-        ReflectionHelpers.setField(renderer, "rendererOwnerContext", ownerContext);
+        ReflectionHelpers.setField(owner(renderer), "rendererOwnerContext", ownerContext);
         doAnswer(call -> { ((Runnable) call.getArgument(0)).run(); return null; })
                 .when(surface).queueEvent(any());
         try (MockedStatic<EGL14> egl = mockStatic(EGL14.class);
              MockedStatic<GLES20> gl = mockStatic(GLES20.class)) {
             egl.when(EGL14::eglGetCurrentContext).thenReturn(differentContext);
-            assertFalse(ReflectionHelpers.callInstanceMethod(renderer, "requestRendererFinishAndAwait"));
+            assertFalse(ReflectionHelpers.callInstanceMethod(owner(renderer), "requestRendererFinishAndAwait"));
             gl.verifyNoInteractions();
             egl.when(EGL14::eglGetCurrentContext).thenReturn(ownerContext);
-            assertTrue(ReflectionHelpers.callInstanceMethod(renderer, "requestRendererFinishAndAwait"));
+            assertTrue(ReflectionHelpers.callInstanceMethod(owner(renderer), "requestRendererFinishAndAwait"));
             gl.verify(GLES20::glFinish);
             verify(surface, times(2)).queueEvent(any());
             verify(surface, never()).requestRender();
@@ -60,7 +60,7 @@ public final class Stereo3DRendererAsyncLifecycleTest {
         Stereo3DRenderer renderer = createRenderer(surface);
         EGLContext lostContext = mock(EGLContext.class);
         EGLContext replacementContext = mock(EGLContext.class);
-        ReflectionHelpers.setField(renderer, "rendererOwnerContext", lostContext);
+        ReflectionHelpers.setField(owner(renderer), "rendererOwnerContext", lostContext);
         try (MockedStatic<EGL14> egl = mockStatic(EGL14.class);
              MockedStatic<GLES20> gl = mockStatic(GLES20.class)) {
             egl.when(EGL14::eglGetCurrentContext).thenReturn(replacementContext);
@@ -69,14 +69,14 @@ public final class Stereo3DRendererAsyncLifecycleTest {
                     anyInt())).thenReturn(false);
 
             // Context-loss recovery runs before the inference owner reports its failure.
-            ReflectionHelpers.callInstanceMethod(renderer, "retireDestroyedRendererOwnerContext");
+            ReflectionHelpers.callInstanceMethod(owner(renderer), "retireDestroyedRendererOwnerContext");
             ((AtomicBoolean) ReflectionHelpers.getField(
-                    renderer, "gpuFailureNeedsRendererFinish")).set(true);
+                    owner(renderer), "gpuFailureNeedsRendererFinish")).set(true);
 
             // The replacement context cannot glFinish the destroyed one, and nothing may wait
             // for a GL-thread event while that thread is joining the inference owner.
             assertTrue(ReflectionHelpers.callInstanceMethod(
-                    renderer, "requestRendererFinishAndAwait"));
+                    owner(renderer), "requestRendererFinishAndAwait"));
             gl.verifyNoInteractions();
             verify(surface, never()).queueEvent(any());
         } finally {
@@ -91,22 +91,22 @@ public final class Stereo3DRendererAsyncLifecycleTest {
         ClientSbsRenderSurface surface = mock(ClientSbsRenderSurface.class);
         Stereo3DRenderer renderer = createRenderer(surface);
         EGLContext lostContext = mock(EGLContext.class);
-        ReflectionHelpers.setField(renderer, "rendererOwnerContext", lostContext);
+        ReflectionHelpers.setField(owner(renderer), "rendererOwnerContext", lostContext);
         ((AtomicBoolean) ReflectionHelpers.getField(
-                renderer, "gpuFailureNeedsRendererFinish")).set(true);
+                owner(renderer), "gpuFailureNeedsRendererFinish")).set(true);
         ExecutorService worker = Executors.newSingleThreadExecutor();
         try (MockedStatic<EGL14> egl = mockStatic(EGL14.class);
              MockedStatic<GLES20> gl = mockStatic(GLES20.class)) {
             // The queued finish never runs: the GL thread is busy recovering the context.
             Future<Boolean> waiting = worker.submit(() -> ReflectionHelpers.callInstanceMethod(
-                    renderer, "requestRendererFinishAndAwait"));
+                    owner(renderer), "requestRendererFinishAndAwait"));
             verify(surface, timeout(1000)).queueEvent(any());
 
             egl.when(EGL14::eglGetCurrentContext).thenReturn(mock(EGLContext.class));
             egl.when(EGL14::eglGetCurrentDisplay).thenReturn(mock(EGLDisplay.class));
             egl.when(() -> EGL14.eglQueryContext(any(), eq(lostContext), anyInt(), any(),
                     anyInt())).thenReturn(false);
-            ReflectionHelpers.callInstanceMethod(renderer, "retireDestroyedRendererOwnerContext");
+            ReflectionHelpers.callInstanceMethod(owner(renderer), "retireDestroyedRendererOwnerContext");
 
             assertTrue(waiting.get(1, TimeUnit.SECONDS));
             gl.verifyNoInteractions();
@@ -123,7 +123,7 @@ public final class Stereo3DRendererAsyncLifecycleTest {
         Stereo3DRenderer renderer = createRenderer(surface);
         EGLContext ownerContext = mock(EGLContext.class);
         EGLContext otherContext = mock(EGLContext.class);
-        ReflectionHelpers.setField(renderer, "rendererOwnerContext", ownerContext);
+        ReflectionHelpers.setField(owner(renderer), "rendererOwnerContext", ownerContext);
         doAnswer(call -> { ((Runnable) call.getArgument(0)).run(); return null; })
                 .when(surface).queueEvent(any());
         try (MockedStatic<EGL14> egl = mockStatic(EGL14.class);
@@ -133,12 +133,12 @@ public final class Stereo3DRendererAsyncLifecycleTest {
             egl.when(() -> EGL14.eglQueryContext(any(), eq(ownerContext), anyInt(), any(),
                     anyInt())).thenReturn(true);
 
-            ReflectionHelpers.callInstanceMethod(renderer, "retireDestroyedRendererOwnerContext");
+            ReflectionHelpers.callInstanceMethod(owner(renderer), "retireDestroyedRendererOwnerContext");
             ((AtomicBoolean) ReflectionHelpers.getField(
-                    renderer, "gpuFailureNeedsRendererFinish")).set(true);
+                    owner(renderer), "gpuFailureNeedsRendererFinish")).set(true);
 
             assertFalse(ReflectionHelpers.callInstanceMethod(
-                    renderer, "requestRendererFinishAndAwait"));
+                    owner(renderer), "requestRendererFinishAndAwait"));
             gl.verifyNoInteractions();
             verify(surface).queueEvent(any());
         } finally {
@@ -146,6 +146,11 @@ public final class Stereo3DRendererAsyncLifecycleTest {
             renderer.onSurfaceDestroyedAsync(Runnable::run, cleaned::countDown);
             assertTrue(cleaned.await(5, TimeUnit.SECONDS));
         }
+    }
+
+    /** The renderer-finish handshake state lives in the renderer's inference owner. */
+    private static Object owner(Stereo3DRenderer renderer) {
+        return ReflectionHelpers.getField(renderer, "inferenceOwner");
     }
 
     private static Stereo3DRenderer createRenderer(ClientSbsRenderSurface surface) {

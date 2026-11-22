@@ -104,7 +104,7 @@ public final class ClientSbsNativeFenceOrderingContractTest {
     @Test
     public void inferenceOwnerTransfersRunFencesOnlyAfterJavaValidation() throws Exception {
         String source = new String(Files.readAllBytes(new File(
-                "src/main/java/com/limelight/utils/Stereo3DRenderer.java").toPath()),
+                "src/main/java/com/limelight/utils/ClientSbsInferenceOwner.java").toPath()),
                 StandardCharsets.UTF_8);
         String worker = functionBody(source, "private class AiTask implements Runnable");
 

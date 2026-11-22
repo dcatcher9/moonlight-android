@@ -34,22 +34,17 @@ import com.limelight.utils.ClientSbsGlPrograms.ContractiveWarpMapRefinementProgr
 import com.limelight.utils.ClientSbsGlPrograms.GpuPackProgramBindings;
 import com.limelight.utils.ClientSbsGlPrograms.QuadProgramBindings;
 import com.limelight.utils.ClientSbsGlPrograms.WarpedReprojectionProgramBindings;
+import com.limelight.utils.ClientSbsInferenceOwner.GpuInferenceResult;
+import com.limelight.utils.ClientSbsInferenceOwner.RenderResult;
 import com.limelight.utils.ClientSbsPerfStats.DepthHealthState;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import javax.microedition.khronos.egl.EGLConfig;
@@ -69,12 +64,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private static final float[] TEXTURE_VERTICES = {0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f};
     private static final float[] OES_TEXTURE_VERTICES = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
     private static final long THERMAL_STATUS_POLL_INTERVAL_NS = 1_000_000_000L;
-    private static final long RENDERER_FINISH_ACK_TIMEOUT_MS = 1_500L;
     /** Prevents The EGL owner's initial draw from replacing the retained frame with black. */
     // Cover MediaCodec's 2.5 s fresh-IDR watchdog plus the 2 s post-IDR packed-swap proof. Those
     // state-machine watchdogs own failure; this final bound only prevents an orphaned GL wait.
     private static final long MODE_ENTRY_FIRST_FRAME_WAIT_MS = 5_000L;
-    private static final int GPU_CLOSE_ATTEMPTS_ON_OWNER_WORKER = 3;
     /**
      * Refine only along the horizontal inverse axis. The exact 1x map remains the seed, so this
      * doubles destination-X sampling without multiplying its eleven-step solve across both axes.
@@ -124,7 +117,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean frameSubmittedForSwap;
 
     // Final Member Variables
-    private final Context context;
     private final PowerManager powerManager;
     private final ClientSbsRenderSurface glSurfaceView;
     /** Routes decoder availability off the main Looper without ever performing GL work there. */
@@ -139,14 +131,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private final Object surfaceLifecycleLock = new Object();
     /** Terminal request never waits for context initialization or a driver call on the UI thread. */
     private volatile boolean terminalSurfaceDestroyRequested;
-    /** Exact context whose renderer writes the inference owner may need to drain on failure. */
-    private volatile android.opengl.EGLContext rendererOwnerContext = EGL14.EGL_NO_CONTEXT;
-    /**
-     * True after context-loss recovery found {@link #rendererOwnerContext} destroyed and before a
-     * replacement owner is installed. No command on a destroyed context can still access the
-     * shared tensor buffers, so its destruction stands in for the renderer-finish acknowledgement.
-     */
-    private volatile boolean rendererOwnerContextDestroyed;
     /** Serializes bounded terminal-teardown attempts after the lifecycle terminal bit is set. */
     private final Object terminalTeardownLock = new Object();
     /** Exactly one background coordinator owns terminal worker joining and native-close retries. */
@@ -157,14 +141,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      * final onDrawFrame() acknowledgement on the renderer context.
      */
     private final Object glCallbackLifecycleLock = new Object();
-    /**
-     * Protects CPU ownership transitions for GL buffers shared with the inference context.
-     *
-     * <p>The lock is held only while renderer commands are submitted and their final cross-context
-     * fence is published, or while the inference owner snapshots those fences and destroys the
-     * native engine. GPU execution remains asynchronous and does not hold this monitor.</p>
-     */
-    private final Object gpuBufferOwnershipLock = new Object();
     private final Object frameLock = new Object();
     private final ClientSbsFirstFrameGate firstModeEntryFrameGate = new ClientSbsFirstFrameGate();
     /** Evaluated by the gate under its own monitor; reads only volatile or GL-thread state. */
@@ -207,13 +183,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** Prevents a callback race from counting the same latest-only buffer twice. */
     private long lastLatchedSurfaceTimestampNs = Long.MIN_VALUE;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
-    /** GL-side fatal GPU errors are handed to AiTask so LiteRT is closed on its owner thread. */
-    private final AtomicBoolean gpuShutdownRequested = new AtomicBoolean(false);
-    /** Inference failure teardown cannot release shared buffers until the renderer queue finishes. */
-    private final AtomicReference<RendererFinishRequest> rendererFinishRequest =
-            new AtomicReference<>(null);
-    private final AtomicBoolean rendererFinishConfirmed = new AtomicBoolean(false);
-    private final AtomicBoolean gpuFailureNeedsRendererFinish = new AtomicBoolean(false);
     private final AtomicInteger clientSbsGeneration = new AtomicInteger(0);
     /** Surface handoff generation requested by StreamContainer before the EGL owner resumes. */
     private volatile int requestedDecoderSurfaceGeneration;
@@ -274,18 +243,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private WarpedReprojectionProgramBindings warpedReprojectionProgramBindings;
 
     // AI & LiteRT Variables
-    /** LiteRT 2.x CompiledModel using shared GL tensor buffers. Published after worker init. */
-    private volatile ClientSbsGpuInferenceEngine gpuInferenceEngine;
-    /** Shared EGL shell created by the GL thread and initialized by the inference worker. */
-    private volatile ClientSbsGpuInferenceEngine pendingGpuInferenceEngine;
-    /** 0=AiTask queued, 1=AiTask owns/finished cleanup, 2=dedicated retry owns cleanup. */
-    private final AtomicInteger aiTaskOwnership = new AtomicInteger(1);
-    /** False means a native engine remains retained and surface destruction must be retried. */
-    private volatile boolean aiTaskCleanupSucceeded = true;
-    /** Retained across lifecycle retries so renderer teardown cannot outrun native cleanup. */
-    private final Object neverStartedCleanupLock = new Object();
-    private Thread neverStartedCleanupThread;
-    private boolean neverStartedCleanupSucceeded;
+    /** Native engine worker, single-flight claim, slot fences and renderer-finish handshake. */
+    private final ClientSbsInferenceOwner inferenceOwner;
     /** GLES compute depth/profile pipeline owned exclusively by the renderer context. */
     private ClientSbsGpuDepthProcessor gpuDepthProcessor;
     /** Optional host-style slope conditioner over the calibrated ZipDepth disparity candidate. */
@@ -299,28 +258,15 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean gpuNearReuseResetPending;
     /** Stats counters, sampling epoch, GPU-timer stride and depth-health polling state. */
     private final ClientSbsPerfStats perf = new ClientSbsPerfStats();
-    private final AtomicReference<GpuInferenceResult> latestGpuInferenceResult =
-            new AtomicReference<>(null);
-    /** Renderer-consumed fences are tracked per native tensor slot and transferred on reuse. */
-    private final ClientSbsSlotFenceLedger gpuSlotFences = new ClientSbsSlotFenceLedger(
-            ClientSbsGpuInferenceEngine.BUFFER_SLOT_COUNT, GLES30::glDeleteSync);
     private int gpuDepthTextureId;
     private int gpuProfileTextureId;
     private int gpuParallaxTextureId;
     private boolean contractiveDisparityValid;
     private boolean gpuDepthActive;
-    private volatile String activeInferenceBackend = "Initializing";
-    // Non-zero from matched capture through native infer/reuse arbitration and renderer adoption.
-    // A unique token prevents a stale generation from releasing a newer claim. Keeping the claim
-    // through history commit ensures N+1 cannot compare against an owner older than N.
-    private final AtomicLong inferenceClaim = new AtomicLong(0L);
-    private final AtomicLong nextInferenceClaimToken = new AtomicLong(1L);
 
     // Other Member Variables
     private long lastThermalStatusPollNs;
     private volatile int currentThermalStatus;
-    private ExecutorService executorService;
-    private BlockingQueue<RenderResult> inferenceInputQueue = new ArrayBlockingQueue<>(1);
     private PreferenceConfiguration prefConfig;
     private volatile Surface videoSurface;
     private volatile SurfaceTexture videoSurfaceTexture;
@@ -418,7 +364,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
         });
         this.onSurfaceReadyListener = listener;
-        this.context = context;
         powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         this.prefConfig = prefConfig;
         perf.performanceSamplingEnabled = performanceSamplingEnabled;
@@ -431,6 +376,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         aiModel.validateFloatGpuRendererContract();
         modelInputWidth = aiModel.getInputWidth();
         modelInputHeight = aiModel.getInputHeight();
+        inferenceOwner = new ClientSbsInferenceOwner(view, context, aiModel,
+                modelInputWidth, modelInputHeight, shuttingDown, colorFrameSlots, perf,
+                this::requestReadyRender);
         depthMapWidth = pipelineContract.getDepthOutputWidth();
         depthMapHeight = pipelineContract.getDepthOutputHeight();
         warpMapWidth = depthMapWidth;
@@ -476,7 +424,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             long startedNs = perf.performanceWindowStartedNs.getAndSet(nowNs);
             long elapsedNs = Math.max(1L, nowNs - startedNs);
             String activeBackend = shuttingDown.get()
-                    ? "Unavailable" : activeInferenceBackend;
+                    ? "Unavailable" : inferenceOwner.activeInferenceBackend;
             return new ClientSbsPerformanceSnapshot(
                     perf, clientSbs, activeBackend, aiModel.getId(),
                     modelInputWidth, modelInputHeight, aiModel.getV2RawCoordinateScale(),
@@ -589,7 +537,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private boolean releaseTerminalSurfaceResources() {
         // The native LiteRT engine is created, invoked, and closed by AiTask. It is
         // thread-affine and must never be closed here.
-        GpuInferenceResult abandonedGpuResult = latestGpuInferenceResult.getAndSet(null);
+        GpuInferenceResult abandonedGpuResult =
+                inferenceOwner.latestGpuInferenceResult.getAndSet(null);
         if (abandonedGpuResult != null) {
             // The window context is no longer guaranteed current here. EGL will reclaim the
             // shared sync object with the context, so only release CPU-side ownership.
@@ -603,7 +552,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         abandonGpuProcessorsAfterContextLoss();
         perf.resetDepthTelemetryEra();
         invalidateDepthOutputs();
-        clearGpuOutputConsumedFenceHandles(false);
+        inferenceOwner.clearGpuOutputConsumedFenceHandles(false);
         matchedOutputPresented = false;
         warpMapFboHandle = 0;
         warpMapTextureId = 0;
@@ -626,7 +575,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // Context-loss reinitialization is handled separately in onSurfaceCreated().
 
         prefConfig = null;
-        activeInferenceBackend = "Unavailable";
+        inferenceOwner.activeInferenceBackend = "Unavailable";
         surfaceLifecycleReady = false;
         outputSurfaceValidated = false;
         rejectedOutputSurfaceGeneration = 0;
@@ -679,111 +628,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         synchronized (frameLock) {
             clearPendingDecoderFrameLocked();
         }
-        clearInferenceClaim();
-        boolean cleanupPending;
-        synchronized (neverStartedCleanupLock) {
-            cleanupPending = neverStartedCleanupThread != null;
-        }
-        if (cleanupPending) {
-            // A previous bounded wait may have returned while its dedicated cleanup still owned
-            // native fences and engine state. Join/retry it before inspecting the executor,
-            // because a terminated executor alone does not prove cleanup finished.
-            if (!closeNeverStartedGpuEngine()) {
-                return false;
-            }
-        }
-        if (aiTaskOwnership.get() == 2 && !aiTaskCleanupSucceeded
-                && hasRetainedGpuInferenceEngine()) {
-            // The previous lifecycle call observed a terminated AiTask whose bounded owner-thread
-            // close still failed. Retry only now, after preserving the surface for another turn.
-            if (!closeNeverStartedGpuEngine()) {
-                return false;
-            }
-        }
-        ExecutorService workers = executorService;
-        if (workers == null) {
-            if (hasRetainedGpuInferenceEngine() && !aiTaskCleanupSucceeded) {
-                int owner = aiTaskOwnership.get();
-                if ((owner == 0 && aiTaskOwnership.compareAndSet(0, 2))
-                        || (owner == 1 && aiTaskOwnership.compareAndSet(1, 2))
-                        || aiTaskOwnership.get() == 2) {
-                    return closeNeverStartedGpuEngine();
-                }
-                return false;
-            }
-            return true;
-        }
-
-        // shutdown() still executes an AiTask that was queued but not started. Its finally block is
-        // the owner of the shared EGL shell; shutdownNow() would silently strand that shell.
-        workers.shutdown();
-        try {
-            RenderResult shutdownRequest = RenderResult.shutdownRequest();
-            if (!offerControlMessage(inferenceInputQueue, shutdownRequest,
-                    250, TimeUnit.MILLISECONDS)) {
-                // A full queue normally drains immediately. If it does not, interrupt AiTask so
-                // its finally block can retain every queued fence and close the native engine
-                // instead of waiting the full lifecycle timeout on a poison item that was lost.
-                LimeLog.warning("AI input queue did not accept shutdown control; interrupting worker");
-                workers.shutdownNow();
-                // The executor may have accepted AiTask without ever entering run(). Claim its
-                // thread-affine shell before a terminated pool can strand ownership at QUEUED.
-                // If AiTask races us and wins 0 -> 1, its finally block remains the sole closer.
-                if (aiTaskOwnership.compareAndSet(0, 2)
-                        && !closeNeverStartedGpuEngine()) {
-                    return false;
-                }
-            }
-            if (!workers.awaitTermination(5, TimeUnit.SECONDS)) {
-                workers.shutdownNow();
-                if (aiTaskOwnership.compareAndSet(0, 2)) {
-                    if (!closeNeverStartedGpuEngine()) {
-                        return false;
-                    }
-                    if (workers.awaitTermination(1, TimeUnit.SECONDS)) {
-                        if (!aiTaskCleanupSucceeded || hasRetainedGpuInferenceEngine()) {
-                            return false;
-                        }
-                        executorService = null;
-                        return true;
-                    }
-                }
-                LimeLog.severe("AI worker pool did not terminate; refusing to start a second generation");
-                return false;
-            }
-            if (!aiTaskCleanupSucceeded || hasRetainedGpuInferenceEngine()) {
-                // Native close already retried on the same owner worker. Keep the terminated
-                // executor/reference visible, claim a dedicated retry, and make the surface owner
-                // call us again before allowing EGL/context destruction.
-                aiTaskOwnership.compareAndSet(1, 2);
-                LimeLog.severe("Client SBS native cleanup remains deferred after AI worker exit");
-                return false;
-            }
-            executorService = null;
-            return true;
-        } catch (InterruptedException e) {
-            workers.shutdownNow();
-            // shutdownNow() can return the queued AiTask without running its finally block. Claim
-            // and close its shell even though the interrupted lifecycle operation still fails.
-            if (aiTaskOwnership.compareAndSet(0, 2)) {
-                Thread.interrupted();
-                closeNeverStartedGpuEngine();
-            }
-            Thread.currentThread().interrupt();
-            return false;
-        }
-    }
-
-    /**
-     * Gives a full single-slot data queue a bounded opportunity to drain before shutdown falls
-     * back to interrupting its consumer. The immediate attempt keeps the normal path allocation-
-     * and wait-free, while the timed attempt prevents a transiently full queue from dropping the
-     * only control message that lets the owner thread close its thread-affine resources.
-     */
-    static <T> boolean offerControlMessage(BlockingQueue<T> queue, T message,
-                                           long timeout, TimeUnit unit)
-            throws InterruptedException {
-        return queue.offer(message) || queue.offer(message, timeout, unit);
+        return inferenceOwner.stopWorkers();
     }
 
     public Surface getVideoSurface() {
@@ -816,10 +661,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    private boolean hasRetainedGpuInferenceEngine() {
-        return gpuInferenceEngine != null || pendingGpuInferenceEngine != null;
-    }
-
     /** Requests a fresh MediaCodec input Surface for one StreamContainer handoff generation. */
     public void prepareDecoderSurfaceGeneration(int generation) {
         if (generation <= 0) {
@@ -848,7 +689,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /** Lightweight live status for the Client SBS options pane; reads one volatile string. */
     public String getClientSbsBackendStatus() {
-        return shuttingDown.get() ? "Unavailable" : activeInferenceBackend;
+        return shuttingDown.get() ? "Unavailable" : inferenceOwner.activeInferenceBackend;
     }
 
     /**
@@ -858,7 +699,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      */
     public boolean isClientSbsBackendInitializing() {
         return clientSbs && !shuttingDown.get()
-                && "Initializing".equals(activeInferenceBackend);
+                && "Initializing".equals(inferenceOwner.activeInferenceBackend);
     }
 
     public void setHdrInput(boolean enabled) {
@@ -1014,7 +855,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             if (!targetsAlreadyMatch && !initializeColorFrameSlots()) {
                 pendingLiveStreamResize = null;
                 LimeLog.severe("Client SBS live resize could not recreate color targets");
-                requestGpuShutdown("color target resize failed");
+                inferenceOwner.requestGpuShutdown("color target resize failed");
                 return false;
             }
 
@@ -1495,7 +1336,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
         if (!matchedOutputPresented || !hasPresentableDepth()
                 || activeClientSbsGeneration != clientSbsGeneration.get()
-                || gpuShutdownRequested.get()) {
+                || inferenceOwner.gpuShutdownRequested.get()) {
             requestPriorityRender();
             return;
         }
@@ -1514,12 +1355,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     /** Starts one exact capture plus GPU inference/reuse arbitration on the GL thread, if ready. */
     private boolean captureLatestFrameIfReady() {
         resetNearReuseClassifierWhenIdle();
-        ClientSbsGpuInferenceEngine engine = gpuInferenceEngine;
+        ClientSbsGpuInferenceEngine engine = inferenceOwner.gpuInferenceEngine;
         int currentGeneration = clientSbsGeneration.get();
         boolean hasUncapturedFrame = hasFrameForActiveGeneration
                 && latchedFrameSequence > lastCapturedFrameSequence;
         if (engine == null || !engine.isInitialized() || !hasUncapturedFrame
-                || shuttingDown.get() || gpuShutdownRequested.get() || !clientSbs
+                || shuttingDown.get() || inferenceOwner.gpuShutdownRequested.get() || !clientSbs
                 || activeClientSbsGeneration != currentGeneration
                 || hdrInputTransition.isBlockingFrames()) {
             return false;
@@ -1535,12 +1376,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             sampleThermalStatus(System.nanoTime());
         }
 
-        long inferenceClaimToken = tryClaimInference();
+        long inferenceClaimToken = inferenceOwner.tryClaimInference();
         if (inferenceClaimToken == 0L) {
             return false;
         }
         if (!submitGpuInferenceCapture(engine, inferenceClaimToken)) {
-            releaseInferenceClaim(inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(inferenceClaimToken);
             return false;
         }
         return true;
@@ -1565,7 +1406,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 || !surfaceLifecycleReady || !outputSurfaceValidated
                 || activeClientSbsGeneration != clientSbsGeneration.get()
                 || hdrInputTransition.isBlockingFrames() || presentationCompletion.hasPending()
-                || gpuShutdownRequested.get() || shuttingDown.get() || inferenceClaim.get() != 0L
+                || inferenceOwner.gpuShutdownRequested.get() || shuttingDown.get()
+                || inferenceOwner.inferenceClaim.get() != 0L
                 || latchedFrameSequence <= lastCapturedFrameSequence
                 || !hostSourceRepeat.matchesPresented(videoTextureTransform,
                         latchedSourceIdentity, tracker.getEpoch())) {
@@ -1712,59 +1554,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    /** Dedicated retry after AiTask never began or exhausted owner-thread close attempts. */
-    private boolean closeNeverStartedGpuEngine() {
-        Thread cleanupThread;
-        synchronized (neverStartedCleanupLock) {
-            cleanupThread = neverStartedCleanupThread;
-            if (cleanupThread != null && !cleanupThread.isAlive()) {
-                if (neverStartedCleanupSucceeded) {
-                    neverStartedCleanupThread = null;
-                    return true;
-                }
-                // A failed close is safe to retry: the Java/native close paths retain opaque
-                // handles and transferred fences until destruction actually succeeds.
-                neverStartedCleanupThread = null;
-                cleanupThread = null;
-            }
-            if (cleanupThread == null) {
-                neverStartedCleanupSucceeded = false;
-                cleanupThread = new Thread(() -> {
-                    boolean succeeded = false;
-                    try {
-                        succeeded = closeGpuInferenceOnWorker(
-                                rendererFinishConfirmed.get());
-                    } catch (Throwable error) {
-                        LimeLog.severe("Client SBS retained engine cleanup failed: "
-                                + error.getMessage());
-                    } finally {
-                        aiTaskCleanupSucceeded = succeeded;
-                        synchronized (neverStartedCleanupLock) {
-                            neverStartedCleanupSucceeded = succeeded;
-                            neverStartedCleanupLock.notifyAll();
-                        }
-                    }
-                }, "ClientSbsGpuCleanup");
-                neverStartedCleanupThread = cleanupThread;
-                cleanupThread.start();
-            }
-        }
-        try {
-            cleanupThread.join(TimeUnit.SECONDS.toMillis(5));
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-        synchronized (neverStartedCleanupLock) {
-            if (cleanupThread.isAlive() || !neverStartedCleanupSucceeded) {
-                LimeLog.severe("Client SBS retained engine cleanup did not terminate");
-                return false;
-            }
-            neverStartedCleanupThread = null;
-        }
-        return true;
-    }
-
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
         synchronized (surfaceLifecycleLock) {
@@ -1787,7 +1576,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         cancelStaleDepthWatchdog();
         // Release a worker waiting for the lost context's renderer finish before any early return
         // below and before stopAiWorkers() joins that worker on this thread.
-        retireDestroyedRendererOwnerContext();
+        inferenceOwner.retireDestroyedRendererOwnerContext();
         Surface decoderSurfaceBeforeContextLoss = videoSurface;
         int decoderGenerationBeforeContextLoss = decoderSurfaceGeneration;
         if (clientSbs && decoderSurfaceBeforeContextLoss != null
@@ -1795,7 +1584,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 && (onSurfaceReadyListener == null
                 || !onSurfaceReadyListener.onStereo3DContextRecoveryParkRequested(
                 decoderSurfaceBeforeContextLoss, decoderGenerationBeforeContextLoss))) {
-            activeInferenceBackend = "Unavailable";
+            inferenceOwner.activeInferenceBackend = "Unavailable";
             LimeLog.severe("Client SBS context recovery could not park MediaCodec for generation "
                     + decoderGenerationBeforeContextLoss);
             return;
@@ -1812,12 +1601,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             }
             return;
         }
-        rendererOwnerContext = EGL14.eglGetCurrentContext();
-        rendererOwnerContextDestroyed = false;
+        inferenceOwner.installRendererOwnerContext(EGL14.eglGetCurrentContext());
         // onSurfaceCreated() denotes a replacement context. Old names must never be deleted
         // through the new context because GLES may already have reused their integer values.
         abandonGpuProcessorsAfterContextLoss();
-        GpuInferenceResult staleGpuResult = latestGpuInferenceResult.getAndSet(null);
+        GpuInferenceResult staleGpuResult = inferenceOwner.latestGpuInferenceResult.getAndSet(null);
         if (staleGpuResult != null) {
             colorFrameSlots.release(staleGpuResult.colorFrameLease);
         }
@@ -1844,17 +1632,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         hdrWindowCapable = false;
         colorTargets.forgetAfterContextLoss();
         invalidateDepthOutputs();
-        clearGpuOutputConsumedFenceHandles(false);
-        RendererFinishRequest staleFinishRequest = rendererFinishRequest.getAndSet(null);
-        if (staleFinishRequest != null) {
-            staleFinishRequest.complete(false);
-        }
-        rendererFinishConfirmed.set(false);
-        gpuFailureNeedsRendererFinish.set(false);
-        gpuShutdownRequested.set(false);
-        pendingGpuInferenceEngine = null;
-        gpuInferenceEngine = null;
-        activeInferenceBackend = "Initializing";
+        inferenceOwner.resetForReplacementContext();
         hasFrameForActiveGeneration = false;
         releaseDecoderSurface();
         shuttingDown.set(false);
@@ -1979,34 +1757,23 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         boolean geometryReady = gpuComputeReady && warpMapAvailable
                 && gpuDisparityProcessor != null;
         if (aiGlPipelineReady && geometryReady) {
-            pendingGpuInferenceEngine = ClientSbsGpuInferenceEngine.createShared();
-            if (pendingGpuInferenceEngine != null) {
-                aiTaskOwnership.set(0);
-            }
+            inferenceOwner.createPendingEngine();
         }
-        if (!aiGlPipelineReady || !geometryReady || pendingGpuInferenceEngine == null) {
-            activeInferenceBackend = "Unavailable";
+        if (!aiGlPipelineReady || !geometryReady || !inferenceOwner.hasPendingEngine()) {
+            inferenceOwner.activeInferenceBackend = "Unavailable";
             LimeLog.severe("Client SBS native GPU pipeline unavailable; using flat duplicated output"
                     + " (programs=" + programsReady
                     + ", colorTargets=" + colorTargetsReady
                      + ", modelInputTarget=" + modelInputTargetReady
                      + ", gpuCompute=" + gpuComputeReady
                      + ", geometry=" + geometryReady
-                     + ", sharedContext=" + (pendingGpuInferenceEngine != null) + ")");
+                     + ", sharedContext=" + inferenceOwner.hasPendingEngine() + ")");
         }
         latchedFrameSequence = 0L;
         lastCapturedFrameSequence = 0L;
         pendingColorFrameLease = null;
         activeClientSbsGeneration = clientSbsGeneration.get();
-        inferenceInputQueue = new ArrayBlockingQueue<>(1);
-        aiTaskOwnership.set(pendingGpuInferenceEngine != null ? 0 : 1);
-        aiTaskCleanupSucceeded = pendingGpuInferenceEngine == null;
-        executorService = pendingGpuInferenceEngine != null
-                ? Executors.newSingleThreadExecutor() : null;
-
-        if (executorService != null) {
-            executorService.execute(new AiTask());
-        }
+        inferenceOwner.startWorker();
         surfaceLifecycleReady = true;
     }
 
@@ -2239,7 +2006,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         // This acknowledgement must run before the normal lifecycle early-return. An inference
         // failure can race shutdown after its worker transferred shared fences but before native
         // LiteRT teardown; only this thread can prove the renderer context is fully drained.
-        if (serviceRendererFinishRequest()) {
+        if (inferenceOwner.serviceRendererFinishRequest()) {
             return;
         }
         if (shuttingDown.get() || !surfaceLifecycleReady || !outputSurfaceValidated) {
@@ -2261,9 +2028,9 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (activeClientSbsGeneration != currentClientSbsGeneration) {
             resetPresentationForGeneration(currentClientSbsGeneration);
         }
-        if (gpuShutdownRequested.get() && gpuInferenceEngine == null
+        if (inferenceOwner.gpuShutdownRequested.get() && inferenceOwner.gpuInferenceEngine == null
                 && (gpuDepthActive || activeColorFrameLease != null
-                || latestGpuInferenceResult.get() != null)) {
+                || inferenceOwner.latestGpuInferenceResult.get() != null)) {
             // The worker has completed thread-affine teardown. Invalidate the last stereo pair so
             // a terminal backend failure shows the current stream as flat SBS instead of freezing
             // an indefinitely cached old frame.
@@ -2457,7 +2224,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 + (reason != null ? reason : "unknown failure"));
         // The strict route cannot return until the context is recreated. Stop capture and
         // inference instead of producing depth that can only be presented flat.
-        requestGpuShutdown("strict V2 geometry unavailable");
+        inferenceOwner.requestGpuShutdown("strict V2 geometry unavailable");
     }
 
     /** Uninstalls the conditioner and invalidates its published field; the caller closes it. */
@@ -2571,105 +2338,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    private static final class RendererFinishRequest {
-        private final CountDownLatch completion = new CountDownLatch(1);
-        private volatile boolean succeeded;
-
-        void complete(boolean succeeded) {
-            this.succeeded = succeeded;
-            completion.countDown();
-        }
-
-        boolean await(long timeout, TimeUnit unit) throws InterruptedException {
-            return completion.await(timeout, unit);
-        }
-    }
-
-    private static class RenderResult {
-        final long inputReadyFence;
-        final long previousOutputConsumedFence;
-        final int bufferSlot;
-        final ClientSbsFrameSlots.Lease colorFrameLease;
-        final int generation;
-        final long inferenceClaimToken;
-        /** Non-null when the classifier packed this capture and published its decision. */
-        final ClientSbsGpuNearReuseClassifier nearReuseClassifier;
-        final boolean nearIdenticalCandidate;
-        final int modelInputTextureId;
-        final int nearIdenticalDecisionBufferId;
-        final int nearIdenticalDecisionByteOffset;
-        final long performanceEpoch;
-        final boolean shutdownRequest;
-
-        RenderResult(long inputReadyFence, long previousOutputConsumedFence, int bufferSlot,
-                     ClientSbsFrameSlots.Lease colorFrameLease,
-                     long inferenceClaimToken,
-                     ClientSbsGpuNearReuseClassifier nearReuseClassifier,
-                     boolean nearIdenticalCandidate, int nearIdenticalDecisionBufferId,
-                     int nearIdenticalDecisionByteOffset, long performanceEpoch,
-                     int modelInputTextureId) {
-            this.inputReadyFence = inputReadyFence;
-            this.previousOutputConsumedFence = previousOutputConsumedFence;
-            this.bufferSlot = bufferSlot;
-            this.colorFrameLease = colorFrameLease;
-            this.generation = colorFrameLease.getGeneration();
-            this.inferenceClaimToken = inferenceClaimToken;
-            this.nearReuseClassifier = nearReuseClassifier;
-            this.nearIdenticalCandidate = nearIdenticalCandidate;
-            this.modelInputTextureId = modelInputTextureId;
-            this.nearIdenticalDecisionBufferId = nearIdenticalDecisionBufferId;
-            this.nearIdenticalDecisionByteOffset = nearIdenticalDecisionByteOffset;
-            this.performanceEpoch = performanceEpoch;
-            this.shutdownRequest = false;
-        }
-
-        private RenderResult() {
-            this.inputReadyFence = 0L;
-            this.previousOutputConsumedFence = 0L;
-            this.bufferSlot = -1;
-            this.colorFrameLease = null;
-            this.generation = -1;
-            this.inferenceClaimToken = 0L;
-            this.nearReuseClassifier = null;
-            this.nearIdenticalCandidate = false;
-            this.modelInputTextureId = 0;
-            this.nearIdenticalDecisionBufferId = 0;
-            this.nearIdenticalDecisionByteOffset = 0;
-            this.performanceEpoch = 0L;
-            this.shutdownRequest = true;
-        }
-
-        static RenderResult shutdownRequest() {
-            return new RenderResult();
-        }
-    }
-
-    private static final class GpuInferenceResult {
-        final long outputReadyFence;
-        final int bufferSlot;
-        final ClientSbsFrameSlots.Lease colorFrameLease;
-        final int generation;
-        final long inferenceClaimToken;
-        final ClientSbsGpuNearReuseClassifier nearReuseClassifier;
-        final boolean reusedDepth;
-        final long performanceEpoch;
-
-        GpuInferenceResult(long outputReadyFence, int bufferSlot,
-                           ClientSbsFrameSlots.Lease colorFrameLease,
-                           int generation, long inferenceClaimToken,
-                           ClientSbsGpuNearReuseClassifier nearReuseClassifier,
-                           boolean reusedDepth, long performanceEpoch) {
-            this.outputReadyFence = outputReadyFence;
-            this.bufferSlot = bufferSlot;
-            this.colorFrameLease = colorFrameLease;
-            this.generation = generation;
-            this.inferenceClaimToken = inferenceClaimToken;
-            this.nearReuseClassifier = nearReuseClassifier;
-            this.reusedDepth = reusedDepth;
-            this.performanceEpoch = performanceEpoch;
-        }
-    }
-
     /**
      * Renders the model input, publishes the near-reuse decision (packing LiteRT's Float32 input
      * here only when native lazy packing is unavailable), captures the matched color, and queues
@@ -2678,12 +2346,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      */
     private boolean submitGpuInferenceCapture(ClientSbsGpuInferenceEngine engine,
                                               long inferenceClaimToken) {
-        synchronized (gpuBufferOwnershipLock) {
+        synchronized (inferenceOwner.gpuBufferOwnershipLock) {
             // captureLatestFrameIfReady() checked lifecycle and generation before acquiring the
             // single-flight token, but either may change while the GL thread waits for this monitor.
             // Never touch a shared buffer after closeGpuInferenceOnWorker() has snapshotted it, or
             // label an old active-generation latch as belonging to a newly requested generation.
-            if (shuttingDown.get() || gpuShutdownRequested.get() || !clientSbs) {
+            if (shuttingDown.get() || inferenceOwner.gpuShutdownRequested.get() || !clientSbs) {
                 return false;
             }
             int captureGeneration = activeClientSbsGeneration;
@@ -2807,13 +2475,13 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             int glError = GLES20.glGetError();
             pendingColorFrameLease = null;
             if (inputReadyFence == 0L || glError != GLES20.GL_NO_ERROR
-                    || !clientSbs || shuttingDown.get() || gpuShutdownRequested.get()
+                    || !clientSbs || shuttingDown.get() || inferenceOwner.gpuShutdownRequested.get()
                     || captureGeneration != clientSbsGeneration.get()
                     || !colorFrameSlots.markInference(colorFrameLease)) {
                 // The model-input and classifier writes were already issued, so this fence is the
                 // slot's newest dependency; keep it for bounded teardown. The ledger hands it to
                 // the slot's next run only when native holds an output there awaiting consumption.
-                replaceGpuFinalFence(bufferSlot, inputReadyFence);
+                inferenceOwner.replaceGpuFinalFence(bufferSlot, inputReadyFence);
                 colorFrameSlots.release(colorFrameLease);
                 markLastCaptureForRetry();
                 LimeLog.warning("Client SBS GPU input submission failed: GL=0x"
@@ -2821,7 +2489,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 return false;
             }
 
-            long previousOutputFence = gpuSlotFences.takeFenceForRun(bufferSlot);
+            long previousOutputFence = inferenceOwner.gpuSlotFences.takeFenceForRun(bufferSlot);
             RenderResult task = new RenderResult(inputReadyFence, previousOutputFence, bufferSlot,
                     colorFrameLease, inferenceClaimToken,
                     tensorPackedByClassifier ? nearReuseClassifier : null,
@@ -2829,10 +2497,10 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                     tensorPackedByClassifier ? nearIdenticalDecisionBufferId : 0,
                     tensorPackedByClassifier ? nearIdenticalDecisionByteOffset : 0,
                     performanceEpoch, tensorPackedByClassifier && lazyInputPacking ? fboTextureId : 0);
-            if (!inferenceInputQueue.offer(task)) {
+            if (!inferenceOwner.offerCapture(task)) {
                 // inputReadyFence was submitted after previousOutputFence on this context, so it
                 // alone covers the slot.
-                gpuSlotFences.retainUnsubmittedRun(
+                inferenceOwner.gpuSlotFences.retainUnsubmittedRun(
                         bufferSlot, inputReadyFence, previousOutputFence);
                 colorFrameSlots.release(colorFrameLease,
                         ClientSbsFrameSlots.State.INFERENCE);
@@ -2879,150 +2547,6 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    /** Runs on the EGL owner, from a draw or a terminal cleanup event after presentation failed. */
-    private boolean serviceRendererFinishRequest() {
-        RendererFinishRequest request = rendererFinishRequest.get();
-        if (request == null) {
-            return false;
-        }
-        android.opengl.EGLContext currentContext = EGL14.eglGetCurrentContext();
-        if (currentContext == null || currentContext.equals(EGL14.EGL_NO_CONTEXT)
-                || !currentContext.equals(rendererOwnerContext)) {
-            // Events can run after pause/context loss. A different or absent context cannot prove
-            // that this renderer's shared-buffer writes finished.
-            rendererFinishRequest.compareAndSet(request, null);
-            request.complete(false);
-            return true;
-        }
-
-        // Ignore stale GL errors from the failure which requested teardown. The acknowledgement
-        // is specifically whether this glFinish() completed without introducing a new error.
-        drainGlErrors();
-        GLES20.glFinish();
-        int finishError = GLES20.glGetError();
-        boolean succeeded = finishError == GLES20.GL_NO_ERROR;
-        if (succeeded) {
-            // glFinish supersedes renderer-side slot fences. A discarded inference-ready fence is
-            // also safe to retire here: native teardown separately inserts and waits its own final
-            // fence on the inference context before releasing LiteRT buffers.
-            clearGpuOutputConsumedFenceHandles(true);
-            rendererFinishConfirmed.set(true);
-        } else {
-            LimeLog.severe("Client SBS renderer finish acknowledgement failed: GL=0x"
-                    + Integer.toHexString(finishError));
-        }
-        rendererFinishRequest.compareAndSet(request, null);
-        request.complete(succeeded);
-        return true;
-    }
-
-    /** Called by the inference owner after a fatal pipeline error, never by the GL thread. */
-    private boolean requestRendererFinishAndAwait() {
-        if (rendererFinishConfirmed.get()) {
-            return true;
-        }
-        if (rendererOwnerContextDestroyed) {
-            // A queued glFinish could only run on the replacement context, and the GL thread may
-            // be joining this worker inside onSurfaceCreated().
-            acknowledgeRendererFinishForDestroyedContext();
-            return true;
-        }
-        RendererFinishRequest requested = new RendererFinishRequest();
-        RendererFinishRequest pending = rendererFinishRequest.get();
-        while (pending == null && !rendererFinishRequest.compareAndSet(null, requested)) {
-            pending = rendererFinishRequest.get();
-        }
-        RendererFinishRequest acknowledged = pending != null ? pending : requested;
-        try {
-            // A failed swap stops ordinary rendering but can leave this context current. Queue
-            // only the cleanup operation; it proves its exact context before issuing glFinish.
-            // No failed presentation or new inference is restarted just to service teardown.
-            glSurfaceView.queueEvent(this::serviceRendererFinishRequest);
-        } catch (Throwable error) {
-            LimeLog.severe("Unable to request Client SBS renderer finish: "
-                    + error.getMessage());
-            return false;
-        }
-        try {
-            if (!acknowledged.await(RENDERER_FINISH_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                LimeLog.severe("Client SBS renderer finish acknowledgement timed out; "
-                        + "native resources remain retained");
-                return false;
-            }
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-        return acknowledged.succeeded && rendererFinishConfirmed.get();
-    }
-
-    /**
-     * Runs on the GL thread when the EGL owner has created a replacement context. The owner
-     * replaces its context only after EGL_CONTEXT_LOST and destroys the old one first; when EGL no
-     * longer accepts the previous owner context, a renderer-finish request (pending, or raised by
-     * a later inference failure) is acknowledged without the glFinish that the new, unshared
-     * context cannot perform for the old one.
-     */
-    private void retireDestroyedRendererOwnerContext() {
-        android.opengl.EGLContext previous = rendererOwnerContext;
-        if (previous == null || previous.equals(EGL14.EGL_NO_CONTEXT)
-                || previous.equals(EGL14.eglGetCurrentContext())
-                || isEglContextValid(previous)) {
-            return;
-        }
-        rendererOwnerContextDestroyed = true;
-        if (gpuFailureNeedsRendererFinish.get()) {
-            acknowledgeRendererFinishForDestroyedContext();
-        }
-    }
-
-    private static boolean isEglContextValid(android.opengl.EGLContext context) {
-        EGLDisplay display = EGL14.eglGetCurrentDisplay();
-        if (display == null || display.equals(EGL14.EGL_NO_DISPLAY)) {
-            // Without a display the context cannot be proven destroyed.
-            return true;
-        }
-        int[] clientType = new int[1];
-        return EGL14.eglQueryContext(display, context, EGL14.EGL_CONTEXT_CLIENT_TYPE,
-                clientType, 0);
-    }
-
-    /** The destroyed-context counterpart of a successful {@link #serviceRendererFinishRequest}. */
-    private void acknowledgeRendererFinishForDestroyedContext() {
-        synchronized (gpuBufferOwnershipLock) {
-            // These fences belong to the destroyed context; no current context may delete them.
-            gpuSlotFences.clear(false);
-            rendererFinishConfirmed.set(true);
-        }
-        RendererFinishRequest pending = rendererFinishRequest.getAndSet(null);
-        if (pending != null) {
-            pending.complete(true);
-        }
-    }
-
-    /**
-     * Stops new captures and wakes the inference owner thread to close native LiteRT. This method
-     * runs only with the renderer GL context current; the terminal control item preserves the
-     * engine's thread-affine destruction contract.
-     */
-    private void requestGpuShutdown(String reason) {
-        if (!gpuShutdownRequested.compareAndSet(false, true)) {
-            return;
-        }
-        gpuFailureNeedsRendererFinish.set(true);
-        activeInferenceBackend = "Unavailable";
-        LimeLog.severe("Client SBS GPU pipeline disabled: " + reason);
-
-        if (!inferenceInputQueue.offer(RenderResult.shutdownRequest())) {
-            LimeLog.severe("Unable to queue Client SBS GPU shutdown control message");
-            ExecutorService workers = executorService;
-            if (workers != null) {
-                workers.shutdownNow();
-            }
-        }
-        requestReadyRender();
-    }
-
     private void dropPendingCapture() {
         boolean ownedOnlyByCapture = pendingColorFrameLease != null;
         colorFrameSlots.release(pendingColorFrameLease,
@@ -3032,7 +2556,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (ownedOnlyByCapture) {
             // No inference task owns this pair yet. Release the single-flight claim so entering
             // Client SBS again cannot inherit a permanently busy pipeline.
-            clearInferenceClaim();
+            inferenceOwner.clearInferenceClaim();
         }
     }
 
@@ -3043,124 +2567,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         }
     }
 
-    /**
-     * Initializes native LiteRT on the inference worker. Its EGL context requires creation,
-     * invocation, and destruction on the same thread, so this must never run on the GL thread.
-     */
-    private boolean initializeGpuInference() {
-        ClientSbsGpuInferenceEngine gpuCandidate = pendingGpuInferenceEngine;
-        pendingGpuInferenceEngine = null;
-        if (gpuCandidate == null) {
-            activeInferenceBackend = "Unavailable";
-            return false;
-        }
-        try {
-            gpuCandidate.initialize(context, aiModel);
-            gpuInferenceEngine = gpuCandidate;
-            // Publish the volatile backend after the engine it describes.
-            activeInferenceBackend = aiModel.getGpuExecutionPolicy().getBackendId()
-                    + " | " + aiModel.getId()
-                    + " " + modelInputWidth + "x" + modelInputHeight;
-            requestReadyRender();
-            return true;
-        } catch (Throwable gpuError) {
-            LimeLog.severe("Client SBS native GPU initialization failed: "
-                    + gpuError.getMessage());
-            // Retain the partially initialized shell for AiTask's owner-thread finally block. A
-            // bounded native close can fail and must remain observable to surface teardown.
-            gpuInferenceEngine = gpuCandidate;
-            activeInferenceBackend = "Unavailable";
-            requestReadyRender();
-            return false;
-        }
-    }
-
-    private long tryClaimInference() {
-        long token;
-        do {
-            token = nextInferenceClaimToken.getAndIncrement();
-        } while (token == 0L);
-        return inferenceClaim.compareAndSet(0L, token) ? token : 0L;
-    }
-
-    private void releaseInferenceClaim(long token) {
-        releaseInferenceClaimToken(inferenceClaim, token);
-    }
-
-    /** Token-specific release used by the N-to-N+1 handoff; a stale owner cannot clear N+1. */
-    static boolean releaseInferenceClaimToken(AtomicLong claim, long token) {
-        return token != 0L && claim.compareAndSet(token, 0L);
-    }
-
-    private void clearInferenceClaim() {
-        inferenceClaim.set(0L);
-    }
-
-    /**
-     * Retains the newest fence that covers all GL access to a slot for bounded native teardown.
-     * The caller guarantees {@code newerFence} was submitted after the existing slot fence on the
-     * same renderer queue, so deleting the older sync handle cannot weaken the dependency.
-     */
-    private void replaceGpuFinalFence(int slot, long newerFence) {
-        synchronized (gpuBufferOwnershipLock) {
-            gpuSlotFences.retainFinalFence(slot, newerFence);
-        }
-    }
-
-    /** Retains a native ready fence whose result never reaches the renderer's adoption path. */
-    private void retainNativeResultFence(int slot, long readyFence) {
-        synchronized (gpuBufferOwnershipLock) {
-            gpuSlotFences.retainNativeResultFence(slot, readyFence);
-        }
-    }
-
-    /**
-     * Reclaims a capture that never transferred its fences to nativeRun(). The input-ready fence
-     * is newer than the prior output-consumer fence on the same renderer context, so it alone is
-     * sufficient as that slot's final teardown dependency.
-     */
-    private void retainUnsubmittedTaskForClose(RenderResult task) {
-        synchronized (gpuBufferOwnershipLock) {
-            retainUnsubmittedTaskForCloseLocked(task);
-        }
-    }
-
-    private void retainUnsubmittedTaskForCloseLocked(RenderResult task) {
-        if (task == null || task.shutdownRequest) {
-            return;
-        }
-        gpuSlotFences.retainUnsubmittedRun(task.bufferSlot, task.inputReadyFence,
-                task.previousOutputConsumedFence);
-        colorFrameSlots.release(task.colorFrameLease,
-                ClientSbsFrameSlots.State.INFERENCE);
-        releaseInferenceClaim(task.inferenceClaimToken);
-    }
-
-    /**
-     * Every successful native transaction requires a consumed fence before that tensor slot is
-     * reused. If no renderer work reads an inferred output, or native skipped LiteRT entirely,
-     * its returned ready fence is itself a sufficient no-op consumption dependency.
-     */
-    private void preserveDiscardedGpuOutputFence(GpuInferenceResult result) {
-        if (gpuShutdownRequested.get() || gpuInferenceEngine == null) {
-            GLES30.glDeleteSync(result.outputReadyFence);
-            return;
-        }
-        if (!gpuSlotFences.storeConsumedFence(result.bufferSlot, result.outputReadyFence)) {
-            GLES30.glDeleteSync(result.outputReadyFence);
-            requestGpuShutdown("discarded output fence collided for slot "
-                    + result.bufferSlot);
-        }
-    }
-
-    private void clearGpuOutputConsumedFenceHandles(boolean glContextValid) {
-        synchronized (gpuBufferOwnershipLock) {
-            gpuSlotFences.clear(glContextValid);
-        }
-    }
-
     private void clearPublishedPresentationState(boolean glContextValid) {
-        synchronized (gpuBufferOwnershipLock) {
+        synchronized (inferenceOwner.gpuBufferOwnershipLock) {
             clearPublishedPresentationStateLocked(glContextValid);
         }
     }
@@ -3168,23 +2576,23 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     private void clearPublishedPresentationStateLocked(boolean glContextValid) {
         latchedSourceIdentity.clear();
         hostSourceRepeat.reset();
-        GpuInferenceResult unpublishedGpu = latestGpuInferenceResult.getAndSet(null);
+        GpuInferenceResult unpublishedGpu = inferenceOwner.latestGpuInferenceResult.getAndSet(null);
         if (unpublishedGpu != null) {
             if (glContextValid) {
-                preserveDiscardedGpuOutputFence(unpublishedGpu);
+                inferenceOwner.preserveDiscardedGpuOutputFence(unpublishedGpu);
             }
             // After context replacement the old sync vanished with its share group, so only the
             // normal same-context generation reset explicitly deletes it.
             colorFrameSlots.release(unpublishedGpu.colorFrameLease);
-            releaseInferenceClaim(unpublishedGpu.inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(unpublishedGpu.inferenceClaimToken);
         }
         colorFrameSlots.release(activeColorFrameLease, ClientSbsFrameSlots.State.ACTIVE);
         activeColorFrameLease = null;
         // A native run owns its slot-specific input/output pair until the result is consumed. A
         // mode-generation change may invalidate presentation, but it must not allow GL to
         // overwrite either in-flight slot while the shared-context GPU is still reading it.
-        if (gpuInferenceEngine == null || shuttingDown.get()) {
-            clearInferenceClaim();
+        if (inferenceOwner.gpuInferenceEngine == null || shuttingDown.get()) {
+            inferenceOwner.clearInferenceClaim();
         }
         invalidateDepthDerivedState();
         resetModelOwnerTracking();
@@ -3266,7 +2674,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             try {
                 gpuDepthProcessor.resetTemporalState();
             } catch (Throwable error) {
-                requestGpuShutdown("depth-state reset failed: " + error.getMessage());
+                inferenceOwner.requestGpuShutdown("depth-state reset failed: " + error.getMessage());
             }
         }
         resetNearReuseClassifierWhenIdle();
@@ -3281,7 +2689,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
      * fence, so writing it while a claim is live would be an unsynchronized cross-context race.
      */
     private void resetNearReuseClassifierWhenIdle() {
-        if (!gpuNearReuseResetPending || inferenceClaim.get() != 0L) {
+        if (!gpuNearReuseResetPending || inferenceOwner.inferenceClaim.get() != 0L) {
             return;
         }
         gpuNearReuseResetPending = false;
@@ -3301,14 +2709,14 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     /** Consumes a shared-context LiteRT result through one GPU-side dependency and GL submission. */
     private boolean adoptLatestGpuInferenceResult() {
-        synchronized (gpuBufferOwnershipLock) {
+        synchronized (inferenceOwner.gpuBufferOwnershipLock) {
             // A GL callback that began before terminal teardown may reach this monitor after the
             // inference owner has already destroyed the shared names. The owner drains the mailbox
             // while holding this same lock, so leave it untouched for that path once shutdown wins.
-            if (shuttingDown.get() || gpuShutdownRequested.get()) {
+            if (shuttingDown.get() || inferenceOwner.gpuShutdownRequested.get()) {
                 return false;
             }
-            if (latestGpuInferenceResult.get() == null) {
+            if (inferenceOwner.latestGpuInferenceResult.get() == null) {
                 return false;
             }
             Trace.beginSection("ClientSbs.adopt");
@@ -3321,23 +2729,23 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
     }
 
     private boolean adoptLatestGpuInferenceResultLocked() {
-        GpuInferenceResult result = latestGpuInferenceResult.get();
+        GpuInferenceResult result = inferenceOwner.latestGpuInferenceResult.get();
         if (result == null) {
             return false;
         }
 
         if (result.generation != clientSbsGeneration.get()) {
-            if (latestGpuInferenceResult.compareAndSet(result, null)) {
-                preserveDiscardedGpuOutputFence(result);
+            if (inferenceOwner.latestGpuInferenceResult.compareAndSet(result, null)) {
+                inferenceOwner.preserveDiscardedGpuOutputFence(result);
                 colorFrameSlots.release(result.colorFrameLease,
                         ClientSbsFrameSlots.State.INFERENCE);
-                releaseInferenceClaim(result.inferenceClaimToken);
+                inferenceOwner.releaseInferenceClaim(result.inferenceClaimToken);
                 requestReadyRender();
             }
             return false;
         }
 
-        if (!latestGpuInferenceResult.compareAndSet(result, null)) {
+        if (!inferenceOwner.latestGpuInferenceResult.compareAndSet(result, null)) {
             return false;
         }
 
@@ -3357,11 +2765,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         if (waitError != GLES20.GL_NO_ERROR || deleteError != GLES20.GL_NO_ERROR) {
             colorFrameSlots.release(result.colorFrameLease,
                     ClientSbsFrameSlots.State.INFERENCE);
-            releaseInferenceClaim(result.inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(result.inferenceClaimToken);
             LimeLog.severe("Client SBS GPU output fence dependency failed: wait=0x"
                     + Integer.toHexString(waitError) + " delete=0x"
                     + Integer.toHexString(deleteError));
-            requestGpuShutdown("output fence dependency failed");
+            inferenceOwner.requestGpuShutdown("output fence dependency failed");
             return false;
         }
 
@@ -3371,7 +2779,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         boolean colorAdopted = false;
         try {
             ClientSbsGpuDepthProcessor processor = gpuDepthProcessor;
-            ClientSbsGpuInferenceEngine engine = gpuInferenceEngine;
+            ClientSbsGpuInferenceEngine engine = inferenceOwner.gpuInferenceEngine;
             if (processor == null || engine == null || !engine.isInitialized()) {
                 throw new IllegalStateException("GPU depth pipeline is no longer available");
             }
@@ -3433,7 +2841,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             if (outputConsumedFence == 0L) {
                 throw new IllegalStateException("Unable to fence GPU depth consumption");
             }
-            if (!gpuSlotFences.storeConsumedFence(result.bufferSlot, outputConsumedFence)) {
+            if (!inferenceOwner.gpuSlotFences.storeConsumedFence(
+                    result.bufferSlot, outputConsumedFence)) {
                 GLES30.glDeleteSync(outputConsumedFence);
                 throw new IllegalStateException(
                         "Output-consumed fence collision for slot " + result.bufferSlot);
@@ -3450,7 +2859,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
             // Keep the single-flight claim until history is committed. Otherwise N+1 could pack
             // against the previous owner while N's copy is still absent from the renderer queue.
-            releaseInferenceClaim(result.inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(result.inferenceClaimToken);
             return true;
         } catch (Throwable error) {
             LimeLog.severe("Client SBS GPU postprocess failed: " + error.getMessage());
@@ -3461,11 +2870,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 invalidateDepthDerivedState();
             }
             resetModelOwnerTracking();
-            requestGpuShutdown(error.getMessage());
+            inferenceOwner.requestGpuShutdown(error.getMessage());
             return false;
         } finally {
             // Token-specific release is idempotent and cannot clear a later post-swap claim.
-            releaseInferenceClaim(result.inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(result.inferenceClaimToken);
         }
     }
 
@@ -3483,7 +2892,8 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
             // Native deliberately marks a reuse transaction as requiring this returned fence on
             // the slot's next invocation. No renderer work reads the untouched LiteRT output, so
             // the ready fence itself is the correct no-op consumer dependency.
-            if (!gpuSlotFences.storeConsumedFence(result.bufferSlot, result.outputReadyFence)) {
+            if (!inferenceOwner.gpuSlotFences.storeConsumedFence(
+                    result.bufferSlot, result.outputReadyFence)) {
                 throw new IllegalStateException(
                         "Reused output fence collision for slot " + result.bufferSlot);
             }
@@ -3514,12 +2924,12 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
             hostSourceRepeat.ownerConfirmed = result.nearReuseClassifier != null
                     && result.nearReuseClassifier == gpuNearReuseClassifier;
-            releaseInferenceClaim(result.inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(result.inferenceClaimToken);
             return true;
         } catch (Throwable error) {
             LimeLog.severe("Client SBS near-identical reuse failed: " + error.getMessage());
             if (!completionFenceRetained) {
-                preserveDiscardedGpuOutputFence(result);
+                inferenceOwner.preserveDiscardedGpuOutputFence(result);
             }
             if (!colorAdopted) {
                 colorFrameSlots.release(result.colorFrameLease);
@@ -3527,95 +2937,11 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 invalidateDepthDerivedState();
             }
             resetModelOwnerTracking();
-            requestGpuShutdown(error.getMessage());
+            inferenceOwner.requestGpuShutdown(error.getMessage());
             return false;
         } finally {
-            releaseInferenceClaim(result.inferenceClaimToken);
+            inferenceOwner.releaseInferenceClaim(result.inferenceClaimToken);
         }
-    }
-
-    private boolean closeGpuInferenceOnWorker(boolean rendererFinishWasConfirmed) {
-        boolean finishConfirmed = rendererFinishWasConfirmed
-                || rendererFinishConfirmed.get();
-        if (gpuFailureNeedsRendererFinish.get() && gpuInferenceEngine != null
-                && !finishConfirmed) {
-            // A prior request can time out or receive a transient GL error. Cleanup retries must
-            // issue a fresh handshake; merely retrying native close would retain the engine and
-            // the process-wide model slot forever.
-            finishConfirmed = requestRendererFinishAndAwait()
-                    || rendererFinishConfirmed.get();
-            if (!finishConfirmed) {
-                LimeLog.severe("Client SBS native cleanup retained until renderer GL finish ack");
-                return false;
-            }
-        }
-
-        synchronized (gpuBufferOwnershipLock) {
-            return closeGpuInferenceOnWorkerLocked(finishConfirmed);
-        }
-    }
-
-    private boolean closeGpuInferenceOnWorkerLocked(boolean finishConfirmed) {
-        // shutdownNow() may stop the owner loop before it takes an already-enqueued capture. Fold
-        // those renderer-owned fences into the per-slot final dependency instead of leaking them
-        // or destroying shared buffers while the renderer is still writing.
-        RenderResult queued;
-        while ((queued = inferenceInputQueue.poll()) != null) {
-            retainUnsubmittedTaskForClose(queued);
-        }
-
-        GpuInferenceResult unpublished = latestGpuInferenceResult.getAndSet(null);
-        if (unpublished != null) {
-            retainNativeResultFence(unpublished.bufferSlot, unpublished.outputReadyFence);
-            colorFrameSlots.release(unpublished.colorFrameLease,
-                    ClientSbsFrameSlots.State.INFERENCE);
-            releaseInferenceClaim(unpublished.inferenceClaimToken);
-        }
-
-        ClientSbsGpuInferenceEngine gpuEngine = gpuInferenceEngine;
-        long slotZeroFence = gpuSlotFences.takeCloseFence(0);
-        long slotOneFence = gpuSlotFences.takeCloseFence(1);
-        boolean allClosed = true;
-        if (gpuEngine != null) {
-            boolean closed = gpuEngine.close(slotZeroFence, slotOneFence, finishConfirmed);
-            for (int attempt = 1;
-                 !closed && attempt < GPU_CLOSE_ATTEMPTS_ON_OWNER_WORKER;
-                 attempt++) {
-                closed = gpuEngine.retryCloseOnCurrentWorker(finishConfirmed);
-            }
-            if (closed) {
-                gpuInferenceEngine = null;
-            } else {
-                allClosed = false;
-            }
-        } else if (slotZeroFence != 0L || slotOneFence != 0L) {
-            // Never discard an untransferred renderer dependency. This indicates an ownership bug,
-            // so retain the handles and make lifecycle teardown retry instead of guessing safety.
-            gpuSlotFences.restoreCloseFence(0, slotZeroFence);
-            gpuSlotFences.restoreCloseFence(1, slotOneFence);
-            LimeLog.severe("Client SBS final renderer fences have no native engine owner");
-            allClosed = false;
-        }
-        ClientSbsGpuInferenceEngine pendingGpu = pendingGpuInferenceEngine;
-        if (pendingGpu == gpuEngine) {
-            if (gpuInferenceEngine == null) {
-                pendingGpuInferenceEngine = null;
-            }
-        } else if (pendingGpu != null) {
-            boolean closed = pendingGpu.close(0L, 0L, false);
-            for (int attempt = 1;
-                 !closed && attempt < GPU_CLOSE_ATTEMPTS_ON_OWNER_WORKER;
-                 attempt++) {
-                closed = pendingGpu.retryCloseOnCurrentWorker(false);
-            }
-            if (closed) {
-                pendingGpuInferenceEngine = null;
-            } else {
-                allClosed = false;
-            }
-        }
-        requestReadyRender();
-        return allClosed;
     }
 
     /** Queries the current EGL draw surface and GL limits while this renderer context is current. */
@@ -3691,7 +3017,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
 
     private void rejectCurrentOutputSurface(int surfaceGeneration, String reason) {
         outputSurfaceValidated = false;
-        activeInferenceBackend = "Unavailable";
+        inferenceOwner.activeInferenceBackend = "Unavailable";
         if (surfaceGeneration <= 0
                 || rejectedOutputSurfaceGeneration == surfaceGeneration) {
             LimeLog.severe("Client SBS EGL output rejected: " + reason);
@@ -3977,7 +3303,7 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
                 "Client SBS disparity cleanup after warp-map failure failed: ");
         releaseWarpMapTarget();
         warpMapAvailable = false;
-        requestGpuShutdown("strict V2 warp-map pipeline unavailable");
+        inferenceOwner.requestGpuShutdown("strict V2 warp-map pipeline unavailable");
     }
 
     private String warpMapReprojectionPath() {
@@ -4017,159 +3343,5 @@ public class Stereo3DRenderer implements ClientSbsRenderSurface.FrameSubmissionR
         GLES20.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
         GLES20.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
         return textureId;
-    }
-
-    private class AiTask implements Runnable {
-        @Override
-        public void run() {
-            if (!aiTaskOwnership.compareAndSet(0, 1)) {
-                return;
-            }
-            boolean rendererFinishRequired = false;
-            try {
-                if (shuttingDown.get()) {
-                    return;
-                }
-                if (!initializeGpuInference()) {
-                    gpuShutdownRequested.set(true);
-                    return;
-                }
-
-                while (!Thread.currentThread().isInterrupted() && !shuttingDown.get()) {
-                    RenderResult renderResult = null;
-                    boolean handedToRenderer = false;
-                    boolean fencesTransferredToNative = false;
-                    try {
-                        renderResult = inferenceInputQueue.take();
-                        if (renderResult.shutdownRequest) {
-                            rendererFinishRequired = gpuFailureNeedsRendererFinish.get()
-                                    && gpuInferenceEngine != null;
-                            handedToRenderer = true;
-                            break;
-                        }
-
-                        boolean samplePerformance = perf.performanceSamplingEnabled
-                                && renderResult.performanceEpoch != 0L
-                                && renderResult.performanceEpoch == perf.performanceSamplingEpoch.get();
-                        ClientSbsGpuInferenceEngine gpuEngine = gpuInferenceEngine;
-                        if (gpuEngine == null || !gpuEngine.isInitialized()) {
-                            throw new IllegalStateException("Native GPU engine disappeared");
-                        }
-
-                        // Even a generation that became stale after enqueue must run once. The
-                        // native call consumes both shared-context fences and is the only ordering
-                        // edge preventing output overwrite while the prior GPU dispatch reads it.
-                        // A rejected argument throws here, while this task still owns its fences.
-                        ClientSbsGpuInferenceEngine.validateRunArguments(renderResult.bufferSlot,
-                                renderResult.inputReadyFence,
-                                renderResult.nearIdenticalCandidate,
-                                renderResult.nearIdenticalDecisionBufferId,
-                                renderResult.nearIdenticalDecisionByteOffset,
-                                renderResult.nearReuseClassifier != null
-                                        ? renderResult.inferenceClaimToken : 0L);
-                        // From this point, native owns both task fences even when run() fails.
-                        fencesTransferredToNative = true;
-                        long outputReadyFence = gpuEngine.run(renderResult.bufferSlot,
-                                renderResult.inputReadyFence,
-                                renderResult.previousOutputConsumedFence,
-                                renderResult.nearIdenticalCandidate,
-                                renderResult.nearIdenticalDecisionBufferId,
-                                renderResult.nearIdenticalDecisionByteOffset,
-                                renderResult.nearReuseClassifier != null
-                                        ? renderResult.inferenceClaimToken : 0L,
-                                renderResult.modelInputTextureId);
-                        ClientSbsGpuInferenceEngine.RunDisposition disposition =
-                                gpuEngine.getLastRunDisposition(renderResult.bufferSlot);
-                        if (samplePerformance && renderResult.nearIdenticalCandidate) {
-                            perf.recordNearIdenticalDecisionReason(
-                                    gpuEngine.getLastNearIdenticalDecisionReason(
-                                            renderResult.bufferSlot),
-                                    renderResult.performanceEpoch);
-                            perf.recordNearIdenticalDecisionReadTiming(
-                                    gpuEngine.getLastNearIdenticalDecisionReadWallNanos(
-                                            renderResult.bufferSlot),
-                                    renderResult.performanceEpoch);
-                        }
-                        if (samplePerformance
-                                && disposition
-                                == ClientSbsGpuInferenceEngine.RunDisposition.INFER) {
-                            perf.recordNativeInferenceTiming(
-                                    gpuEngine.getLastLiteRtRunWallNanos(
-                                            renderResult.bufferSlot),
-                                    renderResult.performanceEpoch);
-                        }
-
-                        boolean terminating = shuttingDown.get() || gpuShutdownRequested.get()
-                                || Thread.currentThread().isInterrupted();
-                        if (terminating) {
-                            retainNativeResultFence(renderResult.bufferSlot, outputReadyFence);
-                            colorFrameSlots.release(renderResult.colorFrameLease,
-                                    ClientSbsFrameSlots.State.INFERENCE);
-                            releaseInferenceClaim(renderResult.inferenceClaimToken);
-                            handedToRenderer = true;
-                            requestReadyRender();
-                            break;
-                        }
-
-                        GpuInferenceResult gpuResult = new GpuInferenceResult(
-                                outputReadyFence, renderResult.bufferSlot,
-                                renderResult.colorFrameLease,
-                                renderResult.generation,
-                                renderResult.inferenceClaimToken,
-                                renderResult.nearReuseClassifier,
-                                disposition == ClientSbsGpuInferenceEngine.RunDisposition.REUSE,
-                                renderResult.performanceEpoch);
-                        if (!latestGpuInferenceResult.compareAndSet(null, gpuResult)) {
-                            retainNativeResultFence(renderResult.bufferSlot, outputReadyFence);
-                            throw new IllegalStateException(
-                                    "GPU result mailbox was unexpectedly occupied");
-                        }
-                        handedToRenderer = true;
-                        requestReadyRender();
-                    } catch (InterruptedException error) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Throwable error) {
-                        activeInferenceBackend = "Unavailable";
-                        gpuShutdownRequested.set(true);
-                        gpuFailureNeedsRendererFinish.set(true);
-                        rendererFinishRequired = gpuInferenceEngine != null;
-                        LimeLog.severe("AI inference failed on "
-                                + aiModel.getGpuExecutionPolicy().getBackendId() + ": "
-                                + error.getMessage());
-                        break;
-                    } finally {
-                        if (!handedToRenderer && renderResult != null
-                                && !renderResult.shutdownRequest) {
-                            if (!fencesTransferredToNative) {
-                                retainUnsubmittedTaskForClose(renderResult);
-                                renderResult = null;
-                            }
-                        }
-                        if (!handedToRenderer && renderResult != null
-                                && !renderResult.shutdownRequest) {
-                            releaseInferenceClaim(renderResult.inferenceClaimToken);
-                            colorFrameSlots.release(renderResult.colorFrameLease,
-                                    ClientSbsFrameSlots.State.INFERENCE);
-                            requestReadyRender();
-                        }
-                    }
-                }
-            } finally {
-                rendererFinishRequired |= gpuFailureNeedsRendererFinish.get()
-                        && gpuInferenceEngine != null;
-                if (rendererFinishRequired) {
-                    requestRendererFinishAndAwait();
-                }
-                try {
-                    aiTaskCleanupSucceeded = closeGpuInferenceOnWorker(
-                            rendererFinishConfirmed.get());
-                } catch (Throwable cleanupError) {
-                    aiTaskCleanupSucceeded = false;
-                    LimeLog.severe("Client SBS inference owner cleanup failed: "
-                            + cleanupError.getMessage());
-                }
-            }
-        }
     }
 }

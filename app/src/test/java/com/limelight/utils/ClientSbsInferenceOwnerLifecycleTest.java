@@ -122,7 +122,7 @@ public final class ClientSbsInferenceOwnerLifecycleTest {
 
     /** The object holding the inference owner's fields, nested classes and methods. */
     private Object owner() {
-        return renderer;
+        return ReflectionHelpers.getField(renderer, "inferenceOwner");
     }
 
     @Test

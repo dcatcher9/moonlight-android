@@ -141,7 +141,8 @@ public class Stereo3DRendererHostSourceReuseTest {
 
     @Test
     public void pendingInferenceAndPresentationCannotBeSkipped() {
-        AtomicLong claim = ReflectionHelpers.getField(renderer, "inferenceClaim");
+        AtomicLong claim = ReflectionHelpers.getField(
+                ReflectionHelpers.getField(renderer, "inferenceOwner"), "inferenceClaim");
         claim.set(99L);
         assertFalse(consume());
         claim.set(0L);
