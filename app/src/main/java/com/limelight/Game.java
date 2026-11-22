@@ -455,113 +455,22 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     };
 
     private SharedPreferences prepareCurrentSessionPreferences() {
-        SharedPreferences globalPreferences =
-                PreferenceManager.getDefaultSharedPreferences(this);
-        Intent intent = getIntent();
-        String pcUuid = intent.getStringExtra(EXTRA_PC_UUID);
-        String fallbackHost = intent.getStringExtra(EXTRA_HOST);
-        String launchAppName = intent.getStringExtra(EXTRA_APP_NAME);
-        String launchAppUuid = intent.getStringExtra(EXTRA_APP_UUID);
-        int launchAppId = readAppId(intent);
-        HostSessionLaunchRequest launchRequest = getHostSessionLaunchRequest(intent);
-        String publishedHostSessionId = launchRequest.expectedToken;
-        hostSessionIdSupported = launchRequest.tokenSupported;
-
-        try {
-            sessionPc = new SessionSettingsStore.PcIdentity(pcUuid, fallbackHost);
-            sessionApp = new SessionSettingsStore.AppIdentity(
-                    launchAppId != StreamConfiguration.INVALID_APP_ID
-                            ? Integer.toString(launchAppId) : null,
-                    launchAppUuid, launchAppName);
+        XrSessionBootstrap.Startup startup = XrSessionBootstrap.prepare(this, getIntent());
+        hostSessionIdSupported = startup.hostSessionIdSupported;
+        sessionSettingsStore = startup.store;
+        sessionPc = startup.pc;
+        sessionApp = startup.app;
+        sessionLocalSessionId = startup.localSessionId;
+        sessionHostSessionId = startup.hostSessionId;
+        if (startup.controller != null) {
+            xrSessionSettingsController = startup.controller;
+            // Live presentation controls are enabled only after mutual RTSP v2 negotiation.
+            xrSessionSettingsController.setLiveVideoModeSupported(atomicPresentationV2Supported);
         }
-        catch (IllegalArgumentException missingIdentity) {
-            LimeLog.warning("Unable to establish XR session settings identity: "
-                    + missingIdentity.getMessage());
-            sessionPc = null;
-            sessionApp = null;
-            return globalPreferences;
-        }
-
-        sessionSettingsStore = new SessionSettingsStore(this);
-        // Only a resume that matches this PC's local session record continues its mode.
-        boolean resume = false;
-        if (launchRequest.kind == HostSessionLaunchRequest.Kind.RESUME) {
-            SessionSettingsStore.SessionRecord restored = hostSessionIdSupported
-                    ? sessionSettingsStore.confirmHostResume(sessionPc, sessionApp,
-                            publishedHostSessionId, System.currentTimeMillis())
-                    : sessionSettingsStore.confirmLegacyHostResume(
-                            sessionPc, sessionApp, System.currentTimeMillis());
-            resume = restored != null;
-            if (restored == null && (!hostSessionIdSupported
-                    || SessionSettingsStore.ResumeMetadata.isValidHostSessionId(
-                            publishedHostSessionId))) {
-                // The user explicitly selected Resume from a fresh serverinfo snapshot. A new
-                // token generation (or a standard host with no saved local record) may be
-                // resumed with fresh ownership and this app's saved settings. No local record
-                // proves its presentation, so it starts in 2D like any new session.
-                sessionSettingsStore.startNewSession(sessionPc, sessionApp,
-                        hostSessionIdSupported ? publishedHostSessionId : null,
-                        System.currentTimeMillis());
-            }
-        }
-        else {
-            // A non-resume launch gets a fresh local generation and host capability. Its settings
-            // come from this app's profile on this PC, independently of the ended session identity.
-            // Its presentation mode does not: a new host session starts in 2D (see below).
-            sessionSettingsStore.startNewSession(sessionPc, sessionApp, null,
-                    System.currentTimeMillis());
-        }
-
-        SessionSettingsStore.Snapshot snapshot =
-                sessionSettingsStore.snapshot(sessionPc, globalPreferences);
-        PresentationMode startupModeOverride = null;
-        PresentationMode savedMode = snapshot.getRecord() != null
-                ? snapshot.getRecord().getLastSuccessfulMode() : PresentationMode.NORMAL;
-        // Only a confirmed resume continues the previous presentation mode. A new host session,
-        // including an unconfirmed Resume, starts in 2D whatever the app's profile last used;
-        // its saved per-mode quality is kept.
-        boolean freshSessionStartsNormal = !resume && savedMode != PresentationMode.NORMAL;
-        boolean hostAiUnavailable = savedMode == PresentationMode.HOST_SBS_AI
-                && !hostSessionIdSupported;
-        if (snapshot.getRecord() != null && (freshSessionStartsNormal || hostAiUnavailable)) {
-            if (freshSessionStartsNormal) {
-                LimeLog.info("New host session starts in Normal; saved mode " + savedMode
-                        + " applies only to a resume");
-            }
-            else {
-                LimeLog.warning("Host SBS AI is unavailable on a standard Sunshine/Apollo host; "
-                        + "restoring Normal");
-            }
-            boolean repaired = sessionSettingsStore.edit(
-                            sessionPc, sessionApp,
-                            snapshot.getRecord().getLocalSessionId())
-                    .setLastSuccessfulMode(PresentationMode.NORMAL)
-                    .commit();
-            if (repaired) {
-                snapshot = sessionSettingsStore.snapshot(sessionPc, globalPreferences);
-            }
-            else {
-                startupModeOverride = PresentationMode.NORMAL;
-                LimeLog.warning("Unable to persist the Normal startup mode; "
-                        + "forcing Normal for this launch");
-            }
-        }
-        sessionLocalSessionId = snapshot.getRecord() != null
-                ? snapshot.getRecord().getLocalSessionId() : null;
-        SessionSettingsStore.ResumeMetadata resumeMetadata = snapshot.getRecord() != null
-                ? snapshot.getRecord().getResumeMetadata() : null;
-        sessionHostSessionId = hostSessionIdSupported && resumeMetadata != null
-                ? resumeMetadata.getHostSessionId() : null;
-        xrSessionSettingsController = new XrSessionSettingsController(
-                sessionSettingsStore, sessionPc, sessionApp, globalPreferences, snapshot,
-                startupModeOverride);
-        // Live presentation controls are enabled only after mutual RTSP v2 negotiation.
-        xrSessionSettingsController.setLiveVideoModeSupported(atomicPresentationV2Supported);
-
-        return xrSessionSettingsController.getStartupPreferences();
+        return startup.preferences;
     }
 
-    private static int readAppId(Intent intent) {
+    static int readAppId(Intent intent) {
         Bundle extras = intent != null ? intent.getExtras() : null;
         Object value = extras != null ? extras.get(EXTRA_APP_ID) : null;
         if (value instanceof Number) {
@@ -3586,9 +3495,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         ownsEstablishedHostSession = true;
         // Without a session identity/record only the durable write is skipped; the live
         // capability and the presenter are still updated below.
-        boolean canPersist = sessionSettingsStore != null && sessionPc != null
-                && sessionApp != null && sessionLocalSessionId != null;
-
         boolean compatibilityReconnect = hostCapabilityRequiresNormalReconnect(
                 hostSessionIdSupported,
                 xrSessionSettingsController != null
@@ -3601,24 +3507,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // this Game generation and NvConnection serializes replacement sessions behind stop().
         this.hostSessionIdSupported = hostSessionIdSupported;
         sessionHostSessionId = hostSessionIdSupported ? hostSessionId : null;
-        if (canPersist) {
-            SessionSettingsStore.Editor sessionEditor = sessionSettingsStore.edit(
-                            sessionPc, sessionApp, sessionLocalSessionId)
-                    .setResumeMetadata(metadata);
-            if (compatibilityReconnect) {
-                // Discovery can race a host restart/downgrade. Persist the safe interpretation
-                // before replacing the Activity so a mono standard-host stream can never remain
-                // stuck in a disabled Host SBS AI presentation.
-                sessionEditor.setLastSuccessfulMode(
-                        PresentationMode.NORMAL);
-            }
-            if (!sessionEditor.commit()) {
-                LimeLog.warning("Unable to persist the established host session capability");
-            }
-        }
-        else {
-            LimeLog.warning("No XR session record; host session capability is not persisted");
-        }
+        XrSessionBootstrap.recordEstablishedHostSession(sessionSettingsStore, sessionPc,
+                sessionApp, sessionLocalSessionId, metadata, compatibilityReconnect);
         runOnUiThread(() -> {
             // Activity recreation resumes the established session instead of replaying
             // Start/Replace. The Intent is read and copied on the UI thread, so it is also
