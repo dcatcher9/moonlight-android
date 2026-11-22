@@ -64,6 +64,47 @@ public final class ShortcutTrampolineLaunchTest {
         assertEquals(7, intent.getIntExtra(Game.EXTRA_APP_ID, 0));
     }
 
+    public static final class DatabaseTrackingTrampoline extends ShortcutTrampoline {
+        static com.limelight.computers.ComputerDatabaseManager database;
+        static int opened;
+
+        @Override com.limelight.computers.ComputerDatabaseManager openComputerDatabase() {
+            opened++;
+            return database;
+        }
+
+        @Override public boolean bindService(Intent service,
+                                             android.content.ServiceConnection connection,
+                                             int flags) {
+            return false;
+        }
+    }
+
+    @Test public void lookupByPcNameClosesTheComputerDatabase() {
+        DatabaseTrackingTrampoline.database =
+                mock(com.limelight.computers.ComputerDatabaseManager.class);
+        DatabaseTrackingTrampoline.opened = 0;
+        Intent byName = new Intent().putExtra(AppView.NAME_EXTRA, "Unknown PC");
+
+        Robolectric.buildActivity(DatabaseTrackingTrampoline.class, byName).create();
+
+        assertEquals(1, DatabaseTrackingTrampoline.opened);
+        org.mockito.Mockito.verify(DatabaseTrackingTrampoline.database).getComputerByName("Unknown PC");
+        org.mockito.Mockito.verify(DatabaseTrackingTrampoline.database).close();
+    }
+
+    @Test public void lookupByPcUuidOpensNoComputerDatabase() {
+        DatabaseTrackingTrampoline.database =
+                mock(com.limelight.computers.ComputerDatabaseManager.class);
+        DatabaseTrackingTrampoline.opened = 0;
+        Intent byUuid = new Intent().putExtra(AppView.UUID_EXTRA,
+                "6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+
+        Robolectric.buildActivity(DatabaseTrackingTrampoline.class, byUuid).create();
+
+        assertEquals(0, DatabaseTrackingTrampoline.opened);
+    }
+
     private static ComputerDetails host(int runningId, String runningUuid) {
         ComputerDetails details = new ComputerDetails();
         details.runningGameId = runningId;

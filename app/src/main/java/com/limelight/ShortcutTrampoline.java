@@ -261,6 +261,11 @@ public class ShortcutTrampoline extends AppCompatActivity {
                 HostSessionLaunchRequest.replace(details));
     }
 
+    /** Opened only for a shortcut that names its PC; the caller closes it. */
+    ComputerDatabaseManager openComputerDatabase() {
+        return new ComputerDatabaseManager(this);
+    }
+
     protected boolean validateHostInput(String hostUUID, String hostName) {
         // Validate PC UUID/Name
         if (hostUUID == null && hostName == null) {
@@ -379,7 +384,6 @@ public class ShortcutTrampoline extends AppCompatActivity {
         prefConfig = PreferenceConfiguration.readPreferences(this);
 
         UiHelper.notifyNewRootView(this);
-        ComputerDatabaseManager dbManager = new ComputerDatabaseManager(this);
         ComputerDetails _computer = null;
 
         Intent intent = getIntent();
@@ -433,7 +437,12 @@ public class ShortcutTrampoline extends AppCompatActivity {
 
         if (hostUUID == null || hostUUID.isEmpty()) {
             // Use hostName to find the corresponding UUID
-            _computer = dbManager.getComputerByName(hostName);
+            ComputerDatabaseManager dbManager = openComputerDatabase();
+            try {
+                _computer = dbManager.getComputerByName(hostName);
+            } finally {
+                dbManager.close();
+            }
 
             if (_computer == null) {
                 Dialog.displayDialog(ShortcutTrampoline.this,
