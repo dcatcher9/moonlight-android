@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ClipboardManager;
-import android.os.Build;
 import android.os.PersistableBundle;
 import android.widget.Toast;
 
@@ -49,18 +48,10 @@ final class StreamClipboardSync {
         if (clipboardManager.hasPrimaryClip()) {
             ClipDescription clipDescription = clipboardManager.getPrimaryClipDescription();
             if (!force && clipDescription != null) {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                    PersistableBundle extras = clipDescription.getExtras();
-                    if (extras != null && extras.getBoolean(CLIPBOARD_IDENTIFIER)) {
-                        // We're getting the clipboard data we just set/read a while ago
-                        return null;
-                    }
-                } else {
-                    CharSequence clipLabel = clipDescription.getLabel();
-                    if (clipLabel != null && clipLabel.equals(CLIPBOARD_IDENTIFIER)) {
-                        // We're getting the clipboard data we set a while ago
-                        return null;
-                    }
+                PersistableBundle extras = clipDescription.getExtras();
+                if (extras != null && extras.getBoolean(CLIPBOARD_IDENTIFIER)) {
+                    // We're getting the clipboard data we just set/read a while ago
+                    return null;
                 }
             }
 
@@ -90,14 +81,12 @@ final class StreamClipboardSync {
 
     private static @NonNull ClipData cloneClipData(ClipDescription clipDescription, ClipData.Item item) {
         ClipDescription clonedDescription = new ClipDescription(clipDescription);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            PersistableBundle extras = clipDescription.getExtras();
-            if (extras == null) {
-                extras = new PersistableBundle();
-            }
-            extras.putBoolean(CLIPBOARD_IDENTIFIER, true);
-            clonedDescription.setExtras(extras);
+        PersistableBundle extras = clipDescription.getExtras();
+        if (extras == null) {
+            extras = new PersistableBundle();
         }
+        extras.putBoolean(CLIPBOARD_IDENTIFIER, true);
+        clonedDescription.setExtras(extras);
 
         return new ClipData(clonedDescription, item);
     }
@@ -163,16 +152,14 @@ final class StreamClipboardSync {
                     String clipboardContent = httpConn.getClipboard();
                     ClipData clipData = ClipData.newPlainText(CLIPBOARD_IDENTIFIER, clipboardContent);
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        ClipDescription clipDescription = clipData.getDescription();
-                        PersistableBundle newExtras = new PersistableBundle();
-                        newExtras.putBoolean(CLIPBOARD_IDENTIFIER, true);
-                        if (prefConfig.hideClipboardContent) {
-                            // We don't know if the message is sensitive or not, to be safe mark them all as sensitive.
-                            newExtras.putBoolean("android.content.extra.IS_SENSITIVE", true);
-                        }
-                        clipDescription.setExtras(newExtras);
+                    ClipDescription clipDescription = clipData.getDescription();
+                    PersistableBundle newExtras = new PersistableBundle();
+                    newExtras.putBoolean(CLIPBOARD_IDENTIFIER, true);
+                    if (prefConfig.hideClipboardContent) {
+                        // We don't know if the message is sensitive or not, to be safe mark them all as sensitive.
+                        newExtras.putBoolean("android.content.extra.IS_SENSITIVE", true);
                     }
+                    clipDescription.setExtras(newExtras);
 
                     clipboardManager.setPrimaryClip(clipData);
                     if (prefConfig.smartClipboardSyncToast) {
