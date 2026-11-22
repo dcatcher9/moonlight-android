@@ -2,6 +2,7 @@ package com.limelight;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -41,13 +42,27 @@ public final class XrSettingsApplyCoordinatorTest {
 
         @Override public boolean isConnected() { return true; }
         @Override public boolean isConnectionUiActive() { return true; }
-        @Override public boolean isReconnectScheduled() { return false; }
         @Override public XrSessionSettingsController settingsController() { return controller; }
         @Override public XrStreamPresenter presenterOrNull() { return presenter; }
         @Override public boolean canAutoRestartPendingSettings() { return canAutoRestart; }
         @Override public void showStaleSettingsMessage() { staleMessages++; }
         @Override public void scheduleSessionReconnect() { reconnects++; }
         @Override public void refreshSettingsModels() { refreshes++; }
+        boolean reconnectScheduled;
+        int refusalReconnects;
+        java.util.List<Boolean> mandatoryReconnects = new java.util.ArrayList<>();
+        java.util.List<com.limelight.ui.PresentationMode> persistedModes =
+                new java.util.ArrayList<>();
+        int disconnects;
+        @Override public boolean isReconnectScheduled() { return reconnectScheduled; }
+        @Override public void scheduleReconnectForLiveVideoModeRefusal() { refusalReconnects++; }
+        @Override public void scheduleMandatoryReconnect(boolean commit) {
+            mandatoryReconnects.add(commit);
+        }
+        @Override public void persistLastSuccessfulMode(com.limelight.ui.PresentationMode mode) {
+            persistedModes.add(mode);
+        }
+        @Override public void disconnectFromControls() { disconnects++; }
     }
 
     private FakeHost host;
@@ -98,6 +113,53 @@ public final class XrSettingsApplyCoordinatorTest {
         assertFalse((Boolean) ReflectionHelpers.getField(coordinator, "gammaChangeQueued"));
         debounce();
         verify(host.presenter, never()).applyLiveStreamQuality(any());
+    }
+
+    @Test public void liveCommittedModeWithoutPendingEditsIsPersisted() {
+        coordinator.forcedReconnect = true;
+
+        coordinator.controlActionListener().onPresentationModeCommitted(
+                com.limelight.ui.PresentationMode.MOVIE_3D);
+
+        verify(host.controller).selectPresentationMode(com.limelight.ui.PresentationMode.MOVIE_3D);
+        assertFalse(coordinator.forcedReconnect);
+        assertEquals(java.util.Collections.singletonList(
+                com.limelight.ui.PresentationMode.MOVIE_3D), host.persistedModes);
+    }
+
+    @Test public void modeThatNeedsAReconnectForcesItThroughTheDebounce() {
+        when(host.controller.hasPendingChanges()).thenReturn(false);
+
+        coordinator.controlActionListener().onPresentationModeNeedsReconnect(
+                com.limelight.ui.PresentationMode.HOST_SBS_AI);
+        assertTrue(coordinator.forcedReconnect);
+        debounce();
+
+        verify(host.controller).commitPending();
+        assertEquals(1, host.reconnects);
+        assertFalse(coordinator.forcedReconnect);
+    }
+
+    @Test public void gesturesAreRefusedWhileAReconnectIsScheduled() {
+        host.reconnectScheduled = true;
+
+        assertFalse(coordinator.controlActionListener().onSharedSettingSelected(
+                com.limelight.ui.xrcontrols.SessionSettingsModel.Key.HDR, "true", null));
+        coordinator.controlActionListener().onPresentationModeNeedsReconnect(
+                com.limelight.ui.PresentationMode.HOST_SBS_AI);
+
+        verify(host.controller, never()).selectSharedSetting(any(), any());
+        assertFalse(coordinator.forcedReconnect);
+    }
+
+    @Test public void hostRequestsAreRoutedToTheHost() {
+        coordinator.controlActionListener().onLiveStreamQualityNeedsReconnect();
+        coordinator.controlActionListener().onLiveStreamQualityResyncRequired(true);
+        assertTrue(coordinator.controlActionListener().onDisconnectRequested());
+
+        assertEquals(1, host.refusalReconnects);
+        assertEquals(java.util.Collections.singletonList(true), host.mandatoryReconnects);
+        assertEquals(1, host.disconnects);
     }
 
     private void debounce() {

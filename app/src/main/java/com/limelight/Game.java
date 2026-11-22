@@ -49,8 +49,6 @@ import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
 import com.limelight.ui.XrStreamPresenter;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
-import com.limelight.ui.xrcontrols.SessionSettingsModel;
-import com.limelight.ui.xrcontrols.StreamQualityTuple;
 import com.limelight.utils.ClientSbsPerformanceSnapshot;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ExternalDisplayControlActivity;
@@ -257,6 +255,31 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 @Override
                 public void refreshSettingsModels() {
                     refreshXrSessionSettingsModels();
+                }
+
+                @Override
+                public void scheduleReconnectForLiveVideoModeRefusal() {
+                    Game.this.scheduleReconnectForLiveVideoModeRefusal();
+                }
+
+                @Override
+                public void scheduleMandatoryReconnect(boolean commitStagedSettings) {
+                    scheduleMandatoryReconnectForAmbiguousLiveVideoMode(commitStagedSettings);
+                }
+
+                @Override
+                public void persistLastSuccessfulMode(PresentationMode mode) {
+                    if (sessionSettingsStore != null && sessionPc != null && sessionApp != null
+                            && sessionLocalSessionId != null) {
+                        sessionSettingsStore.edit(sessionPc, sessionApp, sessionLocalSessionId)
+                                .setLastSuccessfulMode(mode)
+                                .commit();
+                    }
+                }
+
+                @Override
+                public void disconnectFromControls() {
+                    disconnectFromXrControls();
                 }
             }, reconnectHandler);
     private final StreamNetworkMonitor streamNetwork = new StreamNetworkMonitor(
@@ -566,164 +589,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         presenter.setAtomicPresentationV2Supported(atomicPresentationV2Supported);
         presenter.setGameProviderV1Supported(gameProviderV1Supported);
         refreshXrSessionSettingsModels();
-        presenter.setControlActionListener(new XrStreamPresenter.ControlActionListener() {
-            @Override
-            public boolean onSharedSettingSelected(SessionSettingsModel.Key key,
-                                                   String choiceId,
-                                                   SessionSettingsModel current) {
-                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
-                    return false;
-                }
-                try {
-                    xrSessionSettingsController.selectSharedSetting(key, choiceId);
-                }
-                catch (IllegalArgumentException e) {
-                    // A control update and a user gesture can cross on the main thread. Reject
-                    // the choice from the previous model instead of crashing the streaming
-                    // activity.
-                    LimeLog.warning("Rejected stale XR shared choice "
-                            + key + "=" + choiceId + ": " + e.getMessage());
-                    refreshXrSessionSettingsModels();
-                    return false;
-                }
-                refreshXrSessionSettingsModels();
-                xrSettingsApply.scheduleAutoApply(key == SessionSettingsModel.Key.STREAM_GAMMA);
-                return true;
-            }
-
-            @Override
-            public void onUseGlobalDefaultsRequested(SessionSettingsModel current) {
-                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
-                    return;
-                }
-                xrSessionSettingsController.useGlobalDefaults();
-                refreshXrSessionSettingsModels();
-                xrSettingsApply.scheduleAutoApply(true);
-            }
-
-            @Override
-            public boolean onModeQualitySettingSelected(
-                    PresentationMode mode,
-                    SessionSettingsModel.Key key,
-                    String choiceId,
-                    ModeStreamQualityModel current) {
-                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
-                    return false;
-                }
-                try {
-                    xrSessionSettingsController.selectModeQualitySetting(
-                            mode, key, choiceId);
-                }
-                catch (IllegalArgumentException e) {
-                    // A control update and a user gesture can cross on the main thread. Reject a
-                    // choice from the previous model instead of allowing stale UI state to crash
-                    // the streaming activity.
-                    LimeLog.warning("Rejected stale XR mode-quality choice "
-                            + key + "=" + choiceId + ": " + e.getMessage());
-                    refreshXrSessionSettingsModels();
-                    return false;
-                }
-                refreshXrSessionSettingsModels();
-                xrSettingsApply.scheduleAutoApply(false);
-                return true;
-            }
-
-            @Override
-            public void onUseSessionModeDefaultsRequested(
-                    PresentationMode mode,
-                    ModeStreamQualityModel current) {
-                if (reconnectScheduled || xrSettingsApply.transactionPending()) {
-                    return;
-                }
-                xrSessionSettingsController.useSessionModeDefaults(
-                        mode);
-                refreshXrSessionSettingsModels();
-                xrSettingsApply.scheduleAutoApply(false);
-            }
-
-            @Override
-            public void onLiveStreamQualityApplied(PresentationMode mode,
-                                                   StreamQualityTuple applied) {
-                if (reconnectScheduled || xrSessionSettingsController == null
-                        || applied == null) {
-                    return;
-                }
-                xrSessionSettingsController.notifyLiveStreamQualityApplied(
-                        mode, applied);
-                // Make the acknowledged geometry/FPS and requested total wire bitrate durable.
-                // Apollo's lower post-audio/FEC encoder bitrate never enters this settings path.
-                if (!xrSessionSettingsController.commitPending()) {
-                    LimeLog.warning("XR: live stream quality applied but not persisted");
-                } else {
-                    xrSessionSettingsController.markAutoPreferencesCommitted();
-                }
-                xrSettingsApply.liveQualityPending = false;
-                refreshXrSessionSettingsModels();
-                xrSettingsApply.process();
-            }
-
-            @Override
-            public void onLiveStreamQualityFailed() {
-                // Keep the requested tuple and last confirmed output; another gesture can retry.
-                xrSettingsApply.onLiveStreamQualityFailed();
-                refreshXrSessionSettingsModels();
-            }
-
-            @Override
-            public void onLiveStreamQualityNeedsReconnect() {
-                scheduleReconnectForLiveVideoModeRefusal();
-            }
-
-            @Override
-            public void onLiveStreamQualityResyncRequired(boolean commitStagedSettings) {
-                scheduleMandatoryReconnectForAmbiguousLiveVideoMode(commitStagedSettings);
-            }
-
-            @Override
-            public void onPresentationModeCommitted(PresentationMode selected) {
-                if (xrSettingsApply.transactionPending()) return;
-                xrSettingsApply.forcedReconnect = false;
-                if (!selectXrPresentationMode(selected)) {
-                    return;
-                }
-                if (xrSessionSettingsController.hasPendingChanges()) {
-                    xrSettingsApply.scheduleAutoApply(false);
-                    return;
-                }
-                if (sessionSettingsStore != null && sessionPc != null && sessionApp != null
-                        && sessionLocalSessionId != null) {
-                    sessionSettingsStore.edit(sessionPc, sessionApp, sessionLocalSessionId)
-                            .setLastSuccessfulMode(selected)
-                            .commit();
-                }
-            }
-
-            @Override
-            public void onPresentationModeNeedsReconnect(
-                    PresentationMode selected) {
-                if (reconnectScheduled || xrSessionSettingsController == null || xrSettingsApply.transactionPending()) {
-                    return;
-                }
-                xrSettingsApply.forcedReconnect = true;
-                if (!selectXrPresentationMode(selected)) {
-                    xrSettingsApply.forcedReconnect = false;
-                    return;
-                }
-                xrSettingsApply.scheduleAutoApply(false);
-            }
-
-            @Override
-            public boolean onDisconnectRequested() {
-                disconnectFromXrControls();
-                return true;
-            }
-        });
-    }
-
-    private boolean selectXrPresentationMode(PresentationMode selected) {
-        xrSessionSettingsController.selectPresentationMode(selected);
-        refreshXrSessionSettingsModels();
-        return true;
+        presenter.setControlActionListener(xrSettingsApply.controlActionListener());
     }
 
     static Intent createLibraryIntent(Context context, Intent streamIntent) {

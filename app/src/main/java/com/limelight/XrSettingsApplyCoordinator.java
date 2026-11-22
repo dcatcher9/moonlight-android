@@ -4,14 +4,20 @@ import android.os.Handler;
 
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.preferences.XrSessionSettingsController;
+import com.limelight.ui.PresentationMode;
 import com.limelight.ui.XrStreamPresenter;
+import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
+import com.limelight.ui.xrcontrols.SessionSettingsModel;
+import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
 /**
- * Debounces in-headset settings gestures and applies the staged result to the running stream:
- * a reconnect, a live stream-gamma request with its timeout, or a live stream-quality request.
+ * Receives the in-headset settings and presentation gestures from the presenter's control
+ * listener, debounces them, and applies the staged result to the running stream: a reconnect,
+ * a live stream-gamma request with its timeout, or a live stream-quality request.
  *
- * <p>Main-thread only. The handler is {@link Game}'s reconnect handler, so the debounce and
- * gamma-timeout callbacks posted here are also removed when {@code Game} clears that handler.</p>
+ * <p>Main-thread only, including every {@link #controlActionListener()} callback. The handler
+ * is {@link Game}'s reconnect handler, so the debounce and gamma-timeout callbacks posted here
+ * are also removed when {@code Game} clears that handler.</p>
  */
 final class XrSettingsApplyCoordinator {
     /** The {@link Game} state and actions this coordinator reads at the moment it needs them. */
@@ -35,6 +41,17 @@ final class XrSettingsApplyCoordinator {
         void scheduleSessionReconnect();
 
         void refreshSettingsModels();
+
+        /** The host refused a live change that a reconnect can apply; commit and restart. */
+        void scheduleReconnectForLiveVideoModeRefusal();
+
+        /** The host's live tuple is unprovable; resynchronize by reconnecting. */
+        void scheduleMandatoryReconnect(boolean commitStagedSettings);
+
+        /** Records a live-committed presentation mode as this session's last successful mode. */
+        void persistLastSuccessfulMode(PresentationMode mode);
+
+        void disconnectFromControls();
     }
 
     private final Host host;
@@ -46,9 +63,165 @@ final class XrSettingsApplyCoordinator {
     private final Runnable autoApplyRunnable = this::process;
     private Runnable gammaTimeoutRunnable;
 
+    private final XrStreamPresenter.ControlActionListener controlActionListener =
+            new XrStreamPresenter.ControlActionListener() {
+        @Override
+        public boolean onSharedSettingSelected(SessionSettingsModel.Key key,
+                                               String choiceId,
+                                               SessionSettingsModel current) {
+            if (host.isReconnectScheduled() || transactionPending()) {
+                return false;
+            }
+            try {
+                host.settingsController().selectSharedSetting(key, choiceId);
+            }
+            catch (IllegalArgumentException e) {
+                // A control update and a user gesture can cross on the main thread. Reject
+                // the choice from the previous model instead of crashing the streaming
+                // activity.
+                LimeLog.warning("Rejected stale XR shared choice "
+                        + key + "=" + choiceId + ": " + e.getMessage());
+                host.refreshSettingsModels();
+                return false;
+            }
+            host.refreshSettingsModels();
+            scheduleAutoApply(key == SessionSettingsModel.Key.STREAM_GAMMA);
+            return true;
+        }
+
+        @Override
+        public void onUseGlobalDefaultsRequested(SessionSettingsModel current) {
+            if (host.isReconnectScheduled() || transactionPending()) {
+                return;
+            }
+            host.settingsController().useGlobalDefaults();
+            host.refreshSettingsModels();
+            scheduleAutoApply(true);
+        }
+
+        @Override
+        public boolean onModeQualitySettingSelected(
+                PresentationMode mode,
+                SessionSettingsModel.Key key,
+                String choiceId,
+                ModeStreamQualityModel current) {
+            if (host.isReconnectScheduled() || transactionPending()) {
+                return false;
+            }
+            try {
+                host.settingsController().selectModeQualitySetting(
+                        mode, key, choiceId);
+            }
+            catch (IllegalArgumentException e) {
+                // A control update and a user gesture can cross on the main thread. Reject a
+                // choice from the previous model instead of allowing stale UI state to crash
+                // the streaming activity.
+                LimeLog.warning("Rejected stale XR mode-quality choice "
+                        + key + "=" + choiceId + ": " + e.getMessage());
+                host.refreshSettingsModels();
+                return false;
+            }
+            host.refreshSettingsModels();
+            scheduleAutoApply(false);
+            return true;
+        }
+
+        @Override
+        public void onUseSessionModeDefaultsRequested(
+                PresentationMode mode,
+                ModeStreamQualityModel current) {
+            if (host.isReconnectScheduled() || transactionPending()) {
+                return;
+            }
+            host.settingsController().useSessionModeDefaults(
+                    mode);
+            host.refreshSettingsModels();
+            scheduleAutoApply(false);
+        }
+
+        @Override
+        public void onLiveStreamQualityApplied(PresentationMode mode,
+                                               StreamQualityTuple applied) {
+            XrSessionSettingsController controller = host.settingsController();
+            if (host.isReconnectScheduled() || controller == null
+                    || applied == null) {
+                return;
+            }
+            controller.notifyLiveStreamQualityApplied(
+                    mode, applied);
+            // Make the acknowledged geometry/FPS and requested total wire bitrate durable.
+            // Apollo's lower post-audio/FEC encoder bitrate never enters this settings path.
+            if (!controller.commitPending()) {
+                LimeLog.warning("XR: live stream quality applied but not persisted");
+            } else {
+                controller.markAutoPreferencesCommitted();
+            }
+            liveQualityPending = false;
+            host.refreshSettingsModels();
+            process();
+        }
+
+        @Override
+        public void onLiveStreamQualityFailed() {
+            // Keep the requested tuple and last confirmed output; another gesture can retry.
+            XrSettingsApplyCoordinator.this.onLiveStreamQualityFailed();
+            host.refreshSettingsModels();
+        }
+
+        @Override
+        public void onLiveStreamQualityNeedsReconnect() {
+            host.scheduleReconnectForLiveVideoModeRefusal();
+        }
+
+        @Override
+        public void onLiveStreamQualityResyncRequired(boolean commitStagedSettings) {
+            host.scheduleMandatoryReconnect(commitStagedSettings);
+        }
+
+        @Override
+        public void onPresentationModeCommitted(PresentationMode selected) {
+            if (transactionPending()) return;
+            forcedReconnect = false;
+            selectPresentationMode(selected);
+            if (host.settingsController().hasPendingChanges()) {
+                scheduleAutoApply(false);
+                return;
+            }
+            host.persistLastSuccessfulMode(selected);
+        }
+
+        @Override
+        public void onPresentationModeNeedsReconnect(
+                PresentationMode selected) {
+            if (host.isReconnectScheduled() || host.settingsController() == null
+                    || transactionPending()) {
+                return;
+            }
+            forcedReconnect = true;
+            selectPresentationMode(selected);
+            scheduleAutoApply(false);
+        }
+
+        @Override
+        public boolean onDisconnectRequested() {
+            host.disconnectFromControls();
+            return true;
+        }
+    };
+
     XrSettingsApplyCoordinator(Host host, Handler handler) {
         this.host = host;
         this.handler = handler;
+    }
+
+    /** The presenter's control listener; every callback runs on the main thread. */
+    XrStreamPresenter.ControlActionListener controlActionListener() {
+        return controlActionListener;
+    }
+
+    private void selectPresentationMode(PresentationMode selected) {
+        host.settingsController().selectPresentationMode(selected);
+        host.refreshSettingsModels();
     }
 
     /** Drops every queued or pending settings step when the connection stops. */
