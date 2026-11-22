@@ -1593,9 +1593,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return;
         }
 
-        // The connection will be started when the surface gets created
-        //streamContainer.getHolder().addCallback(this);
-
+        // The connection starts when the presentation owner reports its first Surface.
         streamContainer.setOnSurfaceAvailable(this::onStreamSurfaceAvailable);
 
         gameMenuCallbacks = new GameMenu(this);
