@@ -1,7 +1,7 @@
 package com.limelight.ui.xrcontrols;
 
 import com.limelight.nvstream.jni.MoonBridge;
-import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.HostSbsGeometry;
 
 import java.util.Arrays;
 import java.util.List;
@@ -66,7 +66,7 @@ public final class XrBitrateRecommendation {
         if (packed) {
             // The host fits the packed 2W x H raster inside the codec's axis limit before
             // encoding, so cost the fitted raster. Auto is fitted with the HEVC/AV1 limit.
-            int[] fitted = PreferenceConfiguration.hostSbsPackedDimensions(modeWidth, height,
+            int[] fitted = HostSbsGeometry.packedDimensions(modeWidth, height,
                     CODEC_H264.equals(codecId)
                             ? MoonBridge.VIDEO_FORMAT_H264 : MoonBridge.VIDEO_FORMAT_H265);
             pixels = (long) fitted[0] * fitted[1];

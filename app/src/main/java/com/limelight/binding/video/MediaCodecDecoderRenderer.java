@@ -29,6 +29,7 @@ import com.limelight.R;
 import com.limelight.binding.PlaybackThreadPriority;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.HostSbsGeometry;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.utils.TrafficStatsHelper;
 
@@ -1087,7 +1088,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                           boolean extended,
                                           int decoderMaxWidth, int decoderMaxHeight) {
         // Same per-codec ceiling used for host SBS packing: 4096 for H.264, 8192 for HEVC/AV1.
-        int codecCap = PreferenceConfiguration.maxHostSbsPackedWidthForVideoFormat(videoFormat);
+        int codecCap = HostSbsGeometry.maxPackedWidthForVideoFormat(videoFormat);
         int width = initialWidth;
         int height = initialHeight;
         if (extended) {

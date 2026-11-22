@@ -74,7 +74,7 @@ final class XrLiveApplyClassifier {
         long decodedWidth;
         long decodedHeight;
         if (mode == PresentationMode.HOST_SBS_AI) {
-            int[] packed = PreferenceConfiguration.hostSbsPackedDimensions(
+            int[] packed = HostSbsGeometry.packedDimensions(
                     dimensions[0], dimensions[1], hostSbsFitVideoFormat(appliedCodec));
             decodedWidth = packed[0];
             decodedHeight = packed[1];

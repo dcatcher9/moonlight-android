@@ -8,6 +8,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParseException;
 import com.google.gson.annotations.SerializedName;
+import com.limelight.preferences.HostSbsGeometry;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore.AppIdentity;
 import com.limelight.preferences.session.SessionSettingsStore.ResumeMetadata;
@@ -185,8 +186,8 @@ final class SessionRecordCodec {
                 int width = Integer.parseInt(axes[0]);
                 int height = Integer.parseInt(axes[1]);
                 if (width > 0 && height > 0 && (width & 1) == 0 && (height & 1) == 0
-                        && width <= PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1
-                        && height <= PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1) {
+                        && width <= HostSbsGeometry.MAX_PACKED_WIDTH_HEVC_AV1
+                        && height <= HostSbsGeometry.MAX_PACKED_WIDTH_HEVC_AV1) {
                     quality.put(PreferenceConfiguration.RESOLUTION_PREF_STRING, resolution);
                 }
             } catch (NumberFormatException ignored) {

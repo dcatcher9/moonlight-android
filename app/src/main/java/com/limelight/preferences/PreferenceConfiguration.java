@@ -121,42 +121,6 @@ public class PreferenceConfiguration {
     // The render-mode preference is deprecated: streaming always uses the single XR route (starts
     // in Normal/2D, modes switched from the in-headset bar). The per-variant render modes are gone.
 
-    // Conservative per-axis Host SBS encode limits. The host doubles the logical width to 2W,
-    // then fits that packed raster inside both codec axes with one aspect-preserving scale.
-    // Runtime capability discovery and the applied-state ACK remain authoritative when lower.
-    public static final int MAX_HOST_SBS_PACKED_WIDTH_H264 = 4096;
-    public static final int MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1 = 8192;
-
-    public static int maxHostSbsPackedWidthForVideoFormat(int videoFormat) {
-        return (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0
-                ? MAX_HOST_SBS_PACKED_WIDTH_H264
-                : MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
-    }
-
-    public static int[] hostSbsPackedDimensions(int eyeWidth, int eyeHeight,
-                                                 int videoFormat) {
-        if (eyeWidth <= 0 || eyeHeight <= 0) {
-            return new int[] {0, 0};
-        }
-
-        int axisCap = maxHostSbsPackedWidthForVideoFormat(videoFormat) & ~1;
-        long requestedPackedWidth = (long) eyeWidth * 2L;
-        if (requestedPackedWidth <= axisCap && eyeHeight <= axisCap) {
-            return new int[] {
-                    Math.max(2, (int) requestedPackedWidth & ~1),
-                    Math.max(2, eyeHeight & ~1)
-            };
-        }
-
-        double scale = Math.min(
-                axisCap / (double) requestedPackedWidth,
-                axisCap / (double) eyeHeight);
-        return new int[] {
-                Math.max(2, ((int) Math.round(requestedPackedWidth * scale)) & ~1),
-                Math.max(2, ((int) Math.round(eyeHeight * scale)) & ~1)
-        };
-    }
-
     public static final String RES_360P = "640x360";
     public static final String RES_480P = "854x480";
     public static final String RES_720P = "1280x720";

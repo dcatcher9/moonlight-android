@@ -42,6 +42,7 @@ import com.limelight.R;
 import com.limelight.Game;
 import com.limelight.binding.video.StreamPerformanceSnapshot;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.preferences.HostSbsGeometry;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.xrcontrols.ClientSbsModeSettingsModel;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
@@ -4553,7 +4554,7 @@ public class XrStreamPresenter {
             w = currentExactEncodedWidth;
             h = currentExactEncodedHeight;
         } else if (sbs) {
-            int[] packed = PreferenceConfiguration.hostSbsPackedDimensions(
+            int[] packed = HostSbsGeometry.packedDimensions(
                     logicalWidth, logicalHeight, hostSbsVideoFormat);
             w = packed[0];
             h = packed[1];

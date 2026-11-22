@@ -1,7 +1,7 @@
 package com.limelight.ui;
 
 import com.limelight.nvstream.jni.MoonBridge;
-import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.HostSbsGeometry;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.ui.xrcontrols.StreamQualityTuple;
 
@@ -47,7 +47,7 @@ final class XrPresentationPolicy {
     }
 
     static boolean isUsableLiveVideoModeWireDimensions(int width, int height) {
-        int cap = PreferenceConfiguration.MAX_HOST_SBS_PACKED_WIDTH_HEVC_AV1;
+        int cap = HostSbsGeometry.MAX_PACKED_WIDTH_HEVC_AV1;
         return width >= 2 && height >= 2
                 && width <= cap && height <= cap
                 && (width & 1) == 0 && (height & 1) == 0;
@@ -402,9 +402,9 @@ final class XrPresentationPolicy {
         if (mode != PresentationMode.HOST_SBS_AI || oldFormat == newFormat) {
             return false;
         }
-        int[] oldDimensions = PreferenceConfiguration.hostSbsPackedDimensions(
+        int[] oldDimensions = HostSbsGeometry.packedDimensions(
                 width, height, oldFormat);
-        int[] newDimensions = PreferenceConfiguration.hostSbsPackedDimensions(
+        int[] newDimensions = HostSbsGeometry.packedDimensions(
                 width, height, newFormat);
         return oldDimensions[0] != newDimensions[0]
                 || oldDimensions[1] != newDimensions[1];
@@ -415,7 +415,7 @@ final class XrPresentationPolicy {
                                                int logicalHeight,
                                                int hostAiVideoFormat) {
         if (isHostDepthPresenterMode(mode)) {
-            return PreferenceConfiguration.hostSbsPackedDimensions(
+            return HostSbsGeometry.packedDimensions(
                     logicalWidth, logicalHeight, hostAiVideoFormat);
         }
         return new int[] {logicalWidth, logicalHeight};
