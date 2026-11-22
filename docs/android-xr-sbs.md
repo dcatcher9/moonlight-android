@@ -224,7 +224,8 @@ invalidate the packet's playback generation so pre-flush PCM cannot resume on a 
 When native pending audio reaches 40 ms, recovery discards stale audio until the queue reaches one
 actual device output-buffer duration, capped at 20 ms. Audio focus authorizes writes but does not
 start an empty track: current-generation PCM primes the existing device start threshold before
-playback begins. Focus loss, stop, and track replacement reset that priming. This avoids playing
+playback begins. Focus loss, stop, and track replacement reset that priming. A permanent focus
+loss or a refused focus request is requested again when the stream window regains focus. This avoids playing
 through the native startup resync/discard interval. Queue and AudioTrack allocation sizes are unchanged.
 Client gain/limiting always applies. Temporary per-sample peak/RMS metering and five-second level
 logs have been removed; bounded backlog-recovery warnings remain operational logs. A recovery
@@ -924,7 +925,8 @@ resume and the standard tokenless cancel request. Absence is not equivalent to a
   (`NORMAL`), with 2D's saved stream quality. It does not continue the presentation mode the app
   last used; each mode's saved quality remains available when the user selects it. An app without
   a saved profile inherits Global Settings. The new active-session record receives fresh ownership
-  and generation identity, and its recorded mode is 2D.
+  and generation identity, and its recorded mode is 2D. A Resume request that no local session
+  record confirms is such a new session and also starts in 2D.
 - Resuming the same host session/app, including an automatic in-place settings restart,
   starts with the last successfully applied presentation intent and that mode's saved stream-quality
   tuple. A live mode switch becomes durable only after its surface handoff (and transition IDR when
@@ -952,9 +954,11 @@ loop runs first; subsequent transient transport/time-out or HTTP 503 failures ma
 attempt with 1/2/4/8/8-second backoff, up to five attempts. The budget resets only after a decoded
 frame followed by ten seconds of connected foreground playback. This is a retry budget, not a
 decision that the host session has expired; fresh serverinfo remains authoritative. A changed or
-ended session, authentication refusal, graceful host termination, protected content, or decoder/
-conversion failure remains terminal. The dock's Disconnect action and the startup spinner's Cancel
-remain available. Explicit exit, backgrounding while the device is awake, or destruction cancels
+ended session, authentication refusal, host-session contract violation (stage failure -200),
+graceful host termination, protected content, or decoder/conversion failure remains terminal. The
+dock's Disconnect action and the startup spinner's Cancel remain available. Quit while a reconnect
+is scheduled or held, or after a native start failed behind a successful launch, still sends the
+host's cancel request once, and only while no other connection holds the host-session transaction. Explicit exit, backgrounding while the device is awake, or destruction cancels
 pending recovery; lifecycle events belonging to the actual recreate operation cannot finish its
 replacement. No internet validation requirement is imposed on local-network hosts.
 
@@ -1526,7 +1530,9 @@ the pane explains how to enable performance sampling while retaining basic depth
 Hidden decoder windows retain aggregate stream/loss accounting without allocating completed-window
 snapshots or histogram copies, and do not sample a pruning clock for absent timing records. Visible
 Stats retain unchanged row text and share one pending panel-sizing callback, cancelled when the
-panel is hidden or destroyed.
+panel is hidden or destroyed. The end-of-stream latency message averages only frames measured
+while Stats was visible and omits the averages when no frame was measured. Client SBS rows with
+no sample in the current window read as not sampled rather than zero.
 
 The pane shows the video size, HDR/SDR and range, negotiated codec/profile and Android decoder,
 low-latency component/options, output-pacing policy, sender/receive/output/release/surface FPS,
