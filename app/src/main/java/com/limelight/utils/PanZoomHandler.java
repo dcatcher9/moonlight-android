@@ -66,7 +66,7 @@ public class PanZoomHandler {
 
     public void handleSurfaceChange() {
         if (childWidth == 0 || parent == null) {
-            // Retrieve parent, should handle both built-in display and external display
+            // Retrieve the parent once the view is attached
             parent = (View)streamView.getParent();
             return;
         }

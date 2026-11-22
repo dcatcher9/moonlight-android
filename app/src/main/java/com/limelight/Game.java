@@ -2,12 +2,7 @@ package com.limelight;
 
 import com.limelight.ui.PresentationMode;
 
-import static com.limelight.StartExternalDisplayControlReceiver.requestFocusToExternalDisplayControl;
 import static com.limelight.binding.input.KeyboardTranslator.getModifier;
-import static com.limelight.utils.ExternalDisplayControlActivity.SECONDARY_SCREEN_NOTIFICATION_ID;
-import static com.limelight.utils.ExternalDisplayControlActivity.closeExternalDisplayControl;
-import static com.limelight.utils.ServerHelper.getActiveDisplay;
-import static com.limelight.utils.ServerHelper.getSecondaryDisplay;
 
 import com.limelight.binding.PlatformBinding;
 import com.limelight.binding.audio.AndroidAudioRenderer;
@@ -44,14 +39,12 @@ import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.XrSessionSettingsController;
 import com.limelight.preferences.session.SessionSettingsStore;
-import com.limelight.ui.ExternalControllerView;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamContainer;
 import com.limelight.ui.XrStreamPresenter;
 import com.limelight.ui.xrcontrols.ModeStreamQualityModel;
 import com.limelight.utils.ClientSbsPerformanceSnapshot;
 import com.limelight.utils.Dialog;
-import com.limelight.utils.ExternalDisplayControlActivity;
 import com.limelight.utils.MouseModeOption;
 import com.limelight.utils.PanZoomHandler;
 import com.limelight.utils.ServerHelper;
@@ -103,7 +96,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ImageButton;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.NotificationManagerCompat;
 import androidx.preference.PreferenceManager;
 
 import android.os.Looper;
@@ -134,7 +126,6 @@ import android.view.ViewGroup;
 public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener, MouseInputListener,
         OnSystemUiVisibilityChangeListener, GameGestures, StreamContainer.InputCallbacks,
-        ExternalControllerView.InputCallbacks,
         PerfOverlayListener, View.OnKeyListener {
     public static Game instance;
     private static final int ON_SCREEN_MOUSE_DEVICE_ID = Integer.MIN_VALUE;
@@ -399,7 +390,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public static final String EXTRA_LAUNCH_REQUEST = "HostSessionLaunchRequest";
     public static final String EXTRA_SERVER_CERT = "ServerCert";
     public static final String EXTRA_VDISPLAY = "VirtualDisplay";
-    public static final String EXTRA_DISPLAY_ID = "DisplayID";
 
 
     private String appUUID;
@@ -425,7 +415,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public GameMenuCallbacks gameMenuCallbacks;
 
     public boolean allowChangeMouseMode = true;
-    private boolean onExternelDisplay = false;
     private ImageButton floatingMenuButton;
     private ImageButton overlayToggleButton;
     private float floatingButtonDX, floatingButtonDY;
@@ -854,14 +843,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         : getString(R.string.conn_establishing_msg), true);
 
 
-        int displayId = getIntent().getIntExtra(EXTRA_DISPLAY_ID, Display.DEFAULT_DISPLAY);
-        Display currentDisplay = getSystemService(DisplayManager.class).getDisplay(displayId);
+        Display currentDisplay = getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
 
         if (currentDisplay == null) {
             currentDisplay = getWindowManager().getDefaultDisplay();
         }
-
-        onExternelDisplay = currentDisplay.getDisplayId() != Display.DEFAULT_DISPLAY;
 
         // The XR route keeps the configured resolution, stretches the video to its surface, and
         // never inverts the resolution for portrait.
@@ -1043,28 +1029,23 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Check if the user has enabled HDR
         boolean willStreamHdr = false;
         if (prefConfig.enableHdr) {
-            if (onExternelDisplay) {
-                // Enforce HDR on unsupported hardware can still enable 10bit streaming for better quality
-                willStreamHdr = true;
-            } else {
-                // Start our HDR checklist
-                Display.HdrCapabilities hdrCaps = currentDisplay.getHdrCapabilities();
+            // Start our HDR checklist
+            Display.HdrCapabilities hdrCaps = currentDisplay.getHdrCapabilities();
 
-                // We must now ensure our display is compatible with HDR10
-                if (hdrCaps != null) {
-                    // getHdrCapabilities() returns null on Lenovo Lenovo Mirage Solo (vega), Android 8.0
-                    for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
-                        if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
-                            willStreamHdr = true;
-                            break;
-                        }
+            // We must now ensure our display is compatible with HDR10
+            if (hdrCaps != null) {
+                // getHdrCapabilities() returns null on Lenovo Lenovo Mirage Solo (vega), Android 8.0
+                for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
+                    if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
+                        willStreamHdr = true;
+                        break;
                     }
                 }
+            }
 
-                if (!willStreamHdr) {
-                    // Nope, no HDR for us :(
-                    Toast.makeText(this, "Display does not support HDR10", Toast.LENGTH_LONG).show();
-                }
+            if (!willStreamHdr) {
+                // Nope, no HDR for us :(
+                Toast.makeText(this, "Display does not support HDR10", Toast.LENGTH_LONG).show();
             }
         }
 
@@ -1238,10 +1219,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             allowChangeMouseMode = false;
             applyMouseMode(2);
         } else {
-            if (prefConfig.enableFullExDisplay && onExternelDisplay) {
-                requestFocusToExternalDisplayControl(this);
-                listenForExternalDisplayRemoval();
-            }
             listenForPanelRefreshRateChanges();
 
             // Initialize touch contexts based on preferences
@@ -1326,31 +1303,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    private void listenForExternalDisplayRemoval() {
-        DisplayManager displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
-        displayManager.registerDisplayListener(new DisplayManager.DisplayListener() {
-            @Override
-            public void onDisplayAdded(int displayId) {
-            }
-
-            @Override
-            public void onDisplayRemoved(int displayId) {
-                if (getSecondaryDisplay(getBaseContext()) == null) {
-                    handleDisplayRemoved();
-                    finish();
-                }
-            }
-
-            @Override
-            public void onDisplayChanged(int displayId) {
-            }
-        }, null);
-    }
-
-    private void handleDisplayRemoved() {
-        NotificationManagerCompat.from(getBaseContext()).cancel(SECONDARY_SCREEN_NOTIFICATION_ID);
-        closeExternalDisplayControl();
-    }
 
     /**
      * Follows the headset's own display-rate changes.
@@ -1378,7 +1330,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             @Override
             public void onDisplayChanged(int displayId) {
-                Display display = getActiveDisplay(Game.this, prefConfig);
+                Display display = ServerHelper.getDefaultDisplay(Game.this);
                 if (display == null || display.getDisplayId() != displayId) {
                     return;
                 }
@@ -1393,7 +1345,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // DisplayManager does not promise an initial callback. Seed the state machine now so a
         // session that starts while the panel is thermally capped follows that rate after its
         // first decoded frame instead of waiting for an unrelated display event.
-        Display display = getActiveDisplay(this, prefConfig);
+        Display display = ServerHelper.getDefaultDisplay(this);
         XrStreamPresenter presenter = presenterOrNull();
         if (display != null && presenter != null) {
             presenter.onClientRefreshRateChanged(display.getRefreshRate());
@@ -1497,10 +1449,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     public void toggleFullKeyboard() {
-        if (isOnExternalDisplay()) {
-            ExternalDisplayControlActivity.toggleFullKeyboard();
-            return;
-        }
         if (keyBoardLayoutController == null) {
             initkeyBoardLayoutController();
             return;
@@ -1519,7 +1467,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void setPreferredOrientationForActivity() {
-        Display display = getActiveDisplay(Game.this, prefConfig);
+        Display display = ServerHelper.getDefaultDisplay(Game.this);
 
         // For semi-square displays, we use more complex logic to determine which orientation to use (if any)
         if (PreferenceConfiguration.isSquarishScreen(display)) {
@@ -1747,10 +1695,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS;
     }
 
-    public boolean isOnExternalDisplay() {
-        return onExternelDisplay;
-    }
-
     private float prepareDisplayForRendering(Display currentDisplay) {
         WindowManager.LayoutParams windowLayoutParams = getWindow().getAttributes();
         float displayRefreshRate;
@@ -1877,10 +1821,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         desiredRefreshRate = displayRefreshRate;
 
         if (getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEVISION) ||
-                getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-                || isOnExternalDisplay()) {// TVs may take a few moments to switch refresh rates, and we can probably assume
+                getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+            // TVs may take a few moments to switch refresh rates, and we can probably assume
             // it will be eventually activated.
-            // external displays cant be compared with displaymanager currents display refreshrate
             // TODO: Improve this
             return displayRefreshRate;
         }
@@ -1963,8 +1906,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             instance = null;
         }
         timerHandler.removeCallbacksAndMessages(null);
-
-        if (prefConfig.enableFullExDisplay) handleDisplayRemoved();
 
         if (controllerHandler != null) {
             controllerHandler.destroy();
@@ -2493,13 +2434,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void toggleKeyboard() {
-        if (isOnExternalDisplay()) {
-            ExternalDisplayControlActivity.toggleKeyboard();
-        } else {
-            LimeLog.info("Toggling keyboard overlay");
-            InputMethodManager inputManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-            inputManager.toggleSoftInput(0, 0);
-        }
+        LimeLog.info("Toggling keyboard overlay");
+        InputMethodManager inputManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        inputManager.toggleSoftInput(0, 0);
     }
 
     // Returns true if the event was consumed
@@ -3362,7 +3299,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     }
 
                     Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title), dialogText, true);
-                    finishSecondScreen();
                 }
             }
         });
@@ -3370,18 +3306,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         return false;
     }
 
-    private void finishSecondScreen() {
-        // Otherwise screen stays connected but not working with no way of quitting it
-        if (prefConfig.enableFullExDisplay) {
-            Handler h = new Handler();
-            h.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    finish();
-                }
-            }, 2000);
-        }
-    }
 
     @Override
     public void connectionTerminated(final int errorCode) {
@@ -4261,10 +4185,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             Toast.makeText(this, getString(R.string.pan_zoom_mode_disabled), Toast.LENGTH_SHORT).show();
         }
         updateZoomButtonAppearance();
-
-        if (ExternalDisplayControlActivity.instance != null) {
-            ExternalDisplayControlActivity.instance.toggleZoomMode(false);
-        }
     }
 
     public void rotateScreen() {
@@ -4278,96 +4198,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     /**
-     * Initializes and applies the appropriate mouse mode based on user preferences
-     * and whether the app is running in secondary display mode (such as Samsung DeX).
-     *
-     * Behavior:
-     * - If the app is in secondary display mode:
-     *   - Applies the user's saved mouse mode if it's one of the supported modes:
-     *     "Trackpad Natural", "Trackpad Gaming", or "Disabled".
-     *   - Otherwise, defaults to applying the "Trackpad Natural" mode.
-     *
-     * - If the app is not in secondary display mode:
-     *   - Applies the user's saved mouse mode as is.
-     *
-     * This ensures the correct input mode is applied depending on the environment,
-     * improving compatibility with desktop-like multi-display modes.
+     * Applies the starting mouse mode. No mouse mode is persisted, so touch starts in
+     * multi-touch mode.
      */
     private void initMouseMode() {
-        String[] mouseModes = getResources().getStringArray(R.array.mouse_mode_names);
-
-        String savedMouseModeIndexStr = PreferenceManager.getDefaultSharedPreferences(this)
-                .getString("mouse_mode_list", "0");
-
-        int savedMouseModeIndex;
-        try {
-            savedMouseModeIndex = Integer.parseInt(savedMouseModeIndexStr);
-        } catch (NumberFormatException e) {
-            savedMouseModeIndex = 0;
-        }
-
-        String savedMouseModeString = (savedMouseModeIndex >= 0 && savedMouseModeIndex < mouseModes.length)
-                ? mouseModes[savedMouseModeIndex]
-                : null;
-
-        String natural = getString(R.string.mouse_mode_track_pad_natural);
-        String gaming = getString(R.string.mouse_mode_track_pad_gaming);
-        String disabled = getString(R.string.mouse_mode_disabled);
-
-        int naturalIndex = 2; //fallback natural mode for secondary screen
-        for (int i = 0; i < mouseModes.length; i++) {
-            if (mouseModes[i].equals(natural)) {
-                naturalIndex = i;
-                break;
-            }
-        }
-        // We only want to temporary override the mouse mode to work with external, but not store it
-        if (isOnExternalDisplay()) {
-            if (savedMouseModeString != null &&
-                    (savedMouseModeString.equals(natural) ||
-                            savedMouseModeString.equals(gaming) ||
-                            savedMouseModeString.equals(disabled))) {
-                applyMouseMode(savedMouseModeIndex);
-            } else {
-                applyMouseMode(naturalIndex);
-            }
-        } else {
-            applyMouseMode(savedMouseModeIndex);
-        }
+        applyMouseMode(0);
     }
 
     /**
      * Displays a dialog allowing the user to select a mouse input mode.
      *
-     * Behavior:
-     * - On regular displays, all available mouse modes are shown.
-     * - On secondary displays (e.g. Samsung DeX), only a limited set of modes are allowed:
-     *   "Trackpad Natural", "Trackpad Gaming", and "Disabled".
-     * - An additional option to toggle the local mouse cursor is always included.
-     *
-     * When the user selects a mode:
-     * - If it's the toggle option, the local mouse cursor mode is toggled.
-     * - Otherwise, the selected mode is applied and saved to shared preferences.
+     * All mouse modes are shown, plus an option to toggle the local mouse cursor. Selecting a
+     * mode applies it for this stream; it is not saved.
      *
      * @param context The context to use to decide where to show the dialog.
      */
     public void selectMouseMode(Context context){
         String[] allModes = getResources().getStringArray(R.array.mouse_mode_names);
 
-        Set<String> allowedLabels = new HashSet<>(Arrays.asList(
-                getString(R.string.mouse_mode_track_pad_natural),
-                getString(R.string.mouse_mode_track_pad_gaming),
-                getString(R.string.mouse_mode_disabled)
-        ));
-
         List<MouseModeOption> options = new ArrayList<>();
 
         for (int i = 0; i < allModes.length; i++) {
-            String label = allModes[i];
-            boolean isAllowed = !isOnExternalDisplay() || allowedLabels.contains(label);
-            if (isAllowed) {
-                options.add(new MouseModeOption(i, label));
-            }
+            options.add(new MouseModeOption(i, allModes[i]));
         }
 
         options.add(new MouseModeOption(-1, getString(R.string.toggle_local_mouse_cursor)));
@@ -4474,12 +4326,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     public void quit() {
-        Context context;
-        if (isOnExternalDisplay() && ExternalDisplayControlActivity.instance != null) {
-            context = ExternalDisplayControlActivity.instance;
-        } else {
-            context = this;
-        }
+        Context context = this;
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(R.string.game_dialog_title_quit_confirm);
         builder.setMessage(R.string.game_dialog_message_quit_confirm);
@@ -4520,12 +4367,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public void showGameMenu(GameInputDevice device) {
-        if(isOnExternalDisplay()) {
-            ExternalDisplayControlActivity.toggleGameMenu();
-        } else {
-            if (gameMenuCallbacks != null) {
-                gameMenuCallbacks.showMenu(device);
-            }
+        if (gameMenuCallbacks != null) {
+            gameMenuCallbacks.showMenu(device);
         }
     }
 
@@ -4545,16 +4388,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-
-    @Override
-    public boolean handleCommitText(CharSequence text) {
-        return false;
-    }
-
-    @Override
-    public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
-        return false;
-    }
 
     /** Helper ricorsivo per trovare la prima SurfaceView nel layout corrente */
     private SurfaceView findFirstSurfaceViewFrom(View v) {

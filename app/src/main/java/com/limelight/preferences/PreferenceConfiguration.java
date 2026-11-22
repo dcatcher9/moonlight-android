@@ -198,7 +198,6 @@ public class PreferenceConfiguration {
 
     public boolean enablePerfOverlay;
 
-    public boolean enableFullExDisplay;
 
     //多点触控模式
     public boolean enableMultiTouchScreen;
@@ -500,7 +499,6 @@ public class PreferenceConfiguration {
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
 
-        config.enableFullExDisplay=prefs.getBoolean("checkbox_enable_fullexdisplay",false);
 
         config.enableMouseLocalCursor=prefs.getBoolean("checkbox_mouse_local_cursor",false);
 

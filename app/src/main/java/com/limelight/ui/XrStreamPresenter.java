@@ -200,7 +200,7 @@ public class XrStreamPresenter {
 
                 @Override
                 public android.view.Display activeDisplay() {
-                    return ServerHelper.getActiveDisplay(activity, prefConfig);
+                    return ServerHelper.getDefaultDisplay(activity);
                 }
 
                 @Override

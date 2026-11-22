@@ -63,7 +63,6 @@
         android:theme="@style/AppTheme"
         >
 
-        <receiver android:name=".StartExternalDisplayControlReceiver" />
         <!-- Samsung multi-window support -->
         <uses-library
             android:name="com.sec.android.app.multiwindow"
@@ -132,13 +131,6 @@
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
-        <activity android:name=".utils.ExternalDisplayControlActivity"
-            android:exported="false"
-            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
-            android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
-            android:taskAffinity=""
-            android:theme="@style/ExternalDisplayControllerTheme"/>
         <activity
             android:name=".preferences.StreamSettings"
             android:resizeableActivity="true"
