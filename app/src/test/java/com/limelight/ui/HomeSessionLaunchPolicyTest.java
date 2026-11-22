@@ -10,19 +10,19 @@ public class HomeSessionLaunchPolicyTest {
     @Test
     public void startsWhenHostHasNoCurrentSession() {
         assertEquals(HomeSessionLaunchPolicy.Action.START_OR_RESUME,
-                HomeSessionLaunchPolicy.actionFor(0, 42));
+                HomeSessionLaunchPolicy.actionFor(0, null, 42, null));
     }
 
     @Test
     public void resumesWhenSelectedAppOwnsCurrentSession() {
         assertEquals(HomeSessionLaunchPolicy.Action.START_OR_RESUME,
-                HomeSessionLaunchPolicy.actionFor(42, 42));
+                HomeSessionLaunchPolicy.actionFor(42, null, 42, null));
     }
 
     @Test
     public void guardsReplacementWhenAnotherAppIsRunning() {
         assertEquals(HomeSessionLaunchPolicy.Action.CONFIRM_REPLACE,
-                HomeSessionLaunchPolicy.actionFor(7, 42));
+                HomeSessionLaunchPolicy.actionFor(7, null, 42, null));
     }
 
     @Test

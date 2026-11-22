@@ -14,10 +14,6 @@ public final class HomeSessionLaunchPolicy {
     private HomeSessionLaunchPolicy() {
     }
 
-    public static Action actionFor(int runningAppId, int selectedAppId) {
-        return actionFor(runningAppId, null, selectedAppId, null);
-    }
-
     public static Action actionFor(int runningAppId, String runningAppUuid,
                                    int selectedAppId, String selectedAppUuid) {
         boolean hasRunningSession = runningAppId != 0
