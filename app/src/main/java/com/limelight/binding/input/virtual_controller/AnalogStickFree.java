@@ -378,6 +378,11 @@ public class AnalogStickFree extends VirtualControllerElement {
                     touchStartX = event.getX();
                     touchStartY = event.getY();
                     bIsFingerOnScreen = true;
+                    // The way above was measured from the previous touch's start point; the new
+                    // stick starts centred under the finger.
+                    relative_x = relative_y = 0;
+                    movement_radius = 0;
+                    movement_angle = getAngle(0, 0);
                 }
 
                 if (touchID == event.getPointerId(event.getActionIndex())) {
@@ -422,6 +427,12 @@ public class AnalogStickFree extends VirtualControllerElement {
                     setPressed(false);
                     bIsFingerOnScreen = false;
                 }
+                break;
+            }
+            // The system took the gesture; release the stick like a lifted finger.
+            case MotionEvent.ACTION_CANCEL: {
+                setPressed(false);
+                bIsFingerOnScreen = false;
                 break;
             }
         }
