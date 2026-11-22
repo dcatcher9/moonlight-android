@@ -58,7 +58,9 @@ public final class StreamContainerAsyncEglLifecycleTest {
                     @Override public void resume() { active.countDown(); }
                     @Override public boolean draw() { return true; }
                     @Override public void pause() {
-                        int generation = ReflectionHelpers.getField(container, "mRequestedEglDetachGeneration");
+                        int generation = ReflectionHelpers.getField(
+                                ReflectionHelpers.getField(container, "mEglAttachment"),
+                                "requestedDetachGeneration");
                         detaching.countDown();
                         try { assertTrue(release.await(3, TimeUnit.SECONDS)); }
                         catch (InterruptedException error) { throw new AssertionError(error); }

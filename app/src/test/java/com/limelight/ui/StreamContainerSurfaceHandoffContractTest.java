@@ -178,7 +178,8 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String resizeAttach = methodBody(source, "private void attachPendingClientSbsResize()");
 
         int initialHide = init.indexOf("setClientSbsInputLayoutEnabled(false)");
-        int publishTarget = parked.indexOf("mExpectedEglOutputSurface = target");
+        int publishTarget = parked.indexOf(
+                "mEglAttachment.requestAttach(target, eglOperationGeneration)");
         int clientShow = parked.indexOf("setClientSbsInputLayoutEnabled(true)");
         assertTrue(initialHide >= 0 && initialHide < init.indexOf("addView(mSurfaceView, childParams)"));
         assertTrue(publishTarget >= 0 && clientShow > publishTarget);
@@ -201,17 +202,23 @@ public final class StreamContainerSurfaceHandoffContractTest {
         String[] attachPaths = {
                 methodBody(source, "private void continueClientSbsSwitchAfterDecoderPark("),
                 methodBody(source, "private void attachPendingClientSbsResize()")};
+        String attachment = readSource("ClientSbsEglAttachment.java");
+        String requestAttach = methodBody(attachment,
+                "void requestAttach(Surface target, int generation)");
 
         // The EGL thread reads the generation before the surface, so main writes the surface
         // first: a factory that sees the new generation also sees its exact target.
+        int surface = requestAttach.indexOf("expectedOutputSurface = target;");
+        int created = requestAttach.indexOf("createdAttachGeneration = 0;", surface);
+        int requested = requestAttach.indexOf("requestedAttachGeneration = generation;", created);
+        assertTrue(surface >= 0 && created > surface && requested > created);
+        assertEquals(1, occurrences(attachment, "requestedAttachGeneration = generation;"));
+        // Both attach paths publish that request once, before resuming the EGL owner.
         for (String attach : attachPaths) {
-            int surface = attach.indexOf("mExpectedEglOutputSurface = ");
-            int created = attach.indexOf("mCreatedEglAttachGeneration = 0;", surface);
-            int requested = attach.indexOf("mRequestedEglAttachGeneration = ", created);
-            int resume = attach.indexOf("requestResume()", requested);
-            assertTrue(surface >= 0 && created > surface && requested > created
-                    && resume > requested);
-            assertEquals(1, occurrences(attach, "mRequestedEglAttachGeneration = "));
+            int request = attach.indexOf("mEglAttachment.requestAttach(");
+            int resume = attach.indexOf("requestResume()", request);
+            assertTrue(request >= 0 && resume > request);
+            assertEquals(1, occurrences(attach, "requestAttach("));
         }
     }
 
@@ -219,59 +226,75 @@ public final class StreamContainerSurfaceHandoffContractTest {
     public void eglWindowFactoryReadsTheRequestBeforeTheDriverAndAcksOnlyAfterDestroy()
             throws Exception {
         String source = readSource("StreamContainer.java");
-        String create = methodBody(source,
-                "public javax.microedition.khronos.egl.EGLSurface createWindowSurface(");
-        String destroy = methodBody(source,
-                "public void destroySurface(javax.microedition.khronos.egl.EGL10 egl,");
+        String attachment = readSource("ClientSbsEglAttachment.java");
+        String create = methodBody(attachment, "public EGLSurface createWindowSurface(");
+        String destroy = methodBody(attachment, "public void destroySurface(EGL10 egl,");
+        // init() hands the attachment itself to the EGL owner as its window-surface factory.
+        String init = methodBody(source, "public boolean init(Game game,");
+        int initialize = init.indexOf(
+                "renderSurface.initialize(mStereoRenderer, new ClientSbsEglConfigChooser(),");
+        assertTrue(initialize >= 0
+                && init.indexOf("mEglAttachment, error -> {", initialize) > initialize);
+        // The factory's target is the presenter's current surface, read on the EGL thread.
+        String host = blockBody(source, source.indexOf('{',
+                source.indexOf("@Override public Surface currentVideoSurface()")));
+        assertTrue(host.contains("return mXrPresenter != null ? mXrPresenter.getVideoSurface() : null;"));
 
-        int target = create.indexOf("mXrPresenter.getVideoSurface()");
-        int request = create.indexOf("int attachGeneration = mRequestedEglAttachGeneration;");
-        int check = create.indexOf("xrTarget != mExpectedEglOutputSurface");
+        int target = create.indexOf("host.currentVideoSurface()");
+        int request = create.indexOf("int attachGeneration = requestedAttachGeneration;");
+        int check = create.indexOf("xrTarget != expectedOutputSurface");
         int driver = create.indexOf("egl.eglCreateWindowSurface(display, config, xrTarget, null)");
-        int recheck = create.indexOf("xrTarget == mExpectedEglOutputSurface", driver);
-        int publish = create.indexOf("mCreatedEglAttachGeneration = created != EGL10.EGL_NO_SURFACE");
+        int recheck = create.indexOf("xrTarget == expectedOutputSurface", driver);
+        int publish = create.indexOf("createdAttachGeneration = created != EGL10.EGL_NO_SURFACE");
         assertTrue(target >= 0 && request > target && check > request && driver > check
                 && publish > driver && recheck > publish);
-        assertEquals(1, occurrences(create, "mRequestedEglAttachGeneration"));
+        assertEquals(1, occurrences(create, "requestedAttachGeneration"));
 
         int release = destroy.indexOf("egl.eglDestroySurface(display, surface)");
-        int detach = destroy.indexOf("int detachGeneration = mRequestedEglDetachGeneration;");
-        int ack = destroy.indexOf("post(() -> onClientSbsEglDetached(detachGeneration))");
+        int detach = destroy.indexOf("int detachGeneration = requestedDetachGeneration;");
+        int ack = destroy.indexOf("host.postDetached(detachGeneration)");
         assertTrue(release >= 0 && destroy.indexOf("throw new IllegalStateException(") > release
                 && detach > destroy.indexOf("throw new IllegalStateException(")
                 && ack > detach);
+        String postDetached = blockBody(source, source.indexOf('{',
+                source.indexOf("@Override public void postDetached(int detachGeneration)")));
+        assertTrue(postDetached.contains("post(() -> onClientSbsEglDetached(detachGeneration))"));
     }
 
     @Test
     public void eglAttachmentClearsTheGenerationBeforeTheSurfaceOnEveryRetirement()
             throws Exception {
         String source = readSource("StreamContainer.java");
-        String[] fullClears = {
-                methodBody(source, "public void abandonClientSbsPresentation()"),
-                methodBody(source, "public void onDestroy(Runnable onCleanupComplete)")};
-        for (String clear : fullClears) {
-            int requested = clear.indexOf("mRequestedEglAttachGeneration = 0;");
-            int created = clear.indexOf("mCreatedEglAttachGeneration = 0;", requested);
-            int detach = clear.indexOf("mRequestedEglDetachGeneration = 0;", created);
-            int surface = clear.indexOf("mExpectedEglOutputSurface = null;", detach);
-            assertTrue(requested >= 0 && created > requested && detach > created
-                    && surface > detach);
-        }
-        String abandon = fullClears[0];
+        String attachment = readSource("ClientSbsEglAttachment.java");
+        String clearAll = methodBody(attachment, "void clear()");
+        int requested = clearAll.indexOf("requestedAttachGeneration = 0;");
+        int created = clearAll.indexOf("createdAttachGeneration = 0;", requested);
+        int detach = clearAll.indexOf("requestedDetachGeneration = 0;", created);
+        int surface = clearAll.indexOf("expectedOutputSurface = null;", detach);
+        assertTrue(requested >= 0 && created > requested && detach > created
+                && surface > detach);
+        // Abandon and teardown clear it completely before the renderer is abandoned or torn down.
+        String abandon = methodBody(source, "public void abandonClientSbsPresentation()");
         assertTrue(abandon.indexOf("mStereoRenderer.abandonPresentation()")
-                > abandon.indexOf("mExpectedEglOutputSurface = null;"));
-        String destroy = fullClears[1];
+                > abandon.indexOf("mEglAttachment.clear();"));
+        assertTrue(abandon.indexOf("mEglAttachment.clear();") >= 0);
+        String destroy = methodBody(source, "public void onDestroy(Runnable onCleanupComplete)");
+        assertTrue(destroy.indexOf("mEglAttachment.clear();") >= 0);
         assertTrue(destroy.indexOf("destroyStereoRenderer()")
-                > destroy.indexOf("mExpectedEglOutputSurface = null;"));
+                > destroy.indexOf("mEglAttachment.clear();"));
 
         // An exact detach ack retires the detach, the created generation and the surface, in
         // that order, and keeps the attach request.
         String detached = methodBody(source, "private void onClientSbsEglDetached(int detachGeneration)");
-        int detach = detached.indexOf("mRequestedEglDetachGeneration = 0;");
-        int created = detached.indexOf("mCreatedEglAttachGeneration = 0;", detach);
-        int surface = detached.indexOf("mExpectedEglOutputSurface = null;", created);
+        assertEquals(1, occurrences(detached, "mEglAttachment.clearAfterDetach();"));
+        assertFalse(detached.contains("mEglAttachment.clear();"));
+        assertFalse(detached.contains("requestAttach("));
+        String clearAfterDetach = methodBody(attachment, "void clearAfterDetach()");
+        detach = clearAfterDetach.indexOf("requestedDetachGeneration = 0;");
+        created = clearAfterDetach.indexOf("createdAttachGeneration = 0;", detach);
+        surface = clearAfterDetach.indexOf("expectedOutputSurface = null;", created);
         assertTrue(detach >= 0 && created > detach && surface > created);
-        assertFalse(detached.contains("mRequestedEglAttachGeneration = "));
+        assertFalse(clearAfterDetach.contains("requestedAttachGeneration = "));
     }
 
     @Test

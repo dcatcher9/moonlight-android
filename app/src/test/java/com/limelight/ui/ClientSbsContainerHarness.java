@@ -108,13 +108,13 @@ final class ClientSbsContainerHarness implements AutoCloseable {
 
     /** Resolver: the object that holds the Client SBS EGL attachment state. */
     Object eglState() {
-        return container;
+        return ReflectionHelpers.getField(container, "mEglAttachment");
     }
 
     /** Resolver: that state's field names, in the order operation, attach, created, detach, surface. */
-    private static final String[] EGL_FIELDS = {"mClientSbsEglOperationGeneration",
-            "mRequestedEglAttachGeneration", "mCreatedEglAttachGeneration",
-            "mRequestedEglDetachGeneration", "mExpectedEglOutputSurface"};
+    private static final String[] EGL_FIELDS = {"operationGeneration",
+            "requestedAttachGeneration", "createdAttachGeneration",
+            "requestedDetachGeneration", "expectedOutputSurface"};
 
     /** Resolver: the live Client SBS resize transaction. */
     ClientSbsResizeTransaction resizeState() {

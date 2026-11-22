@@ -111,10 +111,12 @@ public final class Stereo3DRendererEntryFailureTest {
         StreamContainer container = new StreamContainer(game, null);
         ReflectionHelpers.setField(container, "game", game);
         ReflectionHelpers.setField(container, "mStereoRenderer", renderer);
-        ReflectionHelpers.setField(container, "mRequestedEglAttachGeneration", 7);
-        ReflectionHelpers.setField(container, "mCreatedEglAttachGeneration", 7);
-        ReflectionHelpers.setField(container, "mRequestedEglDetachGeneration", 6);
-        ReflectionHelpers.setField(container, "mExpectedEglOutputSurface", mock(Surface.class));
+        // The container's EGL attachment state lives in its ClientSbsEglAttachment.
+        Object eglAttachment = ReflectionHelpers.getField(container, "mEglAttachment");
+        ReflectionHelpers.setField(eglAttachment, "requestedAttachGeneration", 7);
+        ReflectionHelpers.setField(eglAttachment, "createdAttachGeneration", 7);
+        ReflectionHelpers.setField(eglAttachment, "requestedDetachGeneration", 6);
+        ReflectionHelpers.setField(eglAttachment, "expectedOutputSurface", mock(Surface.class));
         ReflectionHelpers.setField(game, "streamContainer", container);
         XrStreamPresenter presenter = new XrStreamPresenter(game, prefs,
                 surface -> { }, visible -> { });
@@ -178,10 +180,10 @@ public final class Stereo3DRendererEntryFailureTest {
             assertTrue(ReflectionHelpers.getField(renderer, "terminalSurfaceDestroyRequested"));
             assertFalse(ReflectionHelpers.getField(renderer, "outputSurfaceValidated"));
             assertFalse(proof.hasPending());
-            assertEquals(0, (int) ReflectionHelpers.getField(container, "mRequestedEglAttachGeneration"));
-            assertEquals(0, (int) ReflectionHelpers.getField(container, "mCreatedEglAttachGeneration"));
-            assertEquals(0, (int) ReflectionHelpers.getField(container, "mRequestedEglDetachGeneration"));
-            assertNull(ReflectionHelpers.getField(container, "mExpectedEglOutputSurface"));
+            assertEquals(0, (int) ReflectionHelpers.getField(eglAttachment, "requestedAttachGeneration"));
+            assertEquals(0, (int) ReflectionHelpers.getField(eglAttachment, "createdAttachGeneration"));
+            assertEquals(0, (int) ReflectionHelpers.getField(eglAttachment, "requestedDetachGeneration"));
+            assertNull(ReflectionHelpers.getField(eglAttachment, "expectedOutputSurface"));
             assertEquals(ackFirst ? 0 : 1, game.surfaceFailures);
             assertEquals(ackFirst ? 1 : 0, reconnects.get());
             assertEquals(PresentationMode.NORMAL,

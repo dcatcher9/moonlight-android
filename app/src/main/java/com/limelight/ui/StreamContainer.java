@@ -2,7 +2,6 @@ package com.limelight.ui;
 
 import android.content.Context;
 import android.graphics.PixelFormat;
-import android.opengl.GLSurfaceView;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -22,8 +21,6 @@ import com.limelight.utils.ClientSbsPerformanceSnapshot;
 import com.limelight.utils.Stereo3DRenderer;
 
 import java.util.function.BooleanSupplier;
-
-import javax.microedition.khronos.egl.EGL10;
 
 /** Owns the single XR presentation route, guarded decoder/GL surface handoffs, and input bridge. */
 public class StreamContainer extends FrameLayout {
@@ -66,8 +63,6 @@ public class StreamContainer extends FrameLayout {
      * of the current mode handoff.
      */
     private final OwnedTransaction mClientSbsSwitch = new OwnedTransaction();
-    /** EGL attachment/detachment identity is independent from the renderer input generation. */
-    private int mClientSbsEglOperationGeneration;
     private int mPendingClientSbsSwitchEglGeneration;
     private volatile int mActiveClientSbsDecoderGeneration;
     private boolean mPendingClientSbsEnable;
@@ -78,13 +73,16 @@ public class StreamContainer extends FrameLayout {
     /** Client SBS HDR transition. Its timeout is a relative postDelayed, not stored here. */
     private final OwnedTransaction mClientSbsHdrSwitch = new OwnedTransaction();
     private int mRendererHdrTransitionGeneration;
-    /** UI-thread request read by the external EGL owner. */
-    private volatile int mRequestedEglAttachGeneration;
-    /** Exact generation whose XR window surface was created successfully on the EGL thread. */
-    private volatile int mCreatedEglAttachGeneration;
-    /** UI-thread pause request acknowledged only after eglDestroySurface() returns successfully. */
-    private volatile int mRequestedEglDetachGeneration;
-    private volatile Surface mExpectedEglOutputSurface;
+    /** Client SBS EGL attachment state; also the EGL owner's window-surface factory. */
+    private final ClientSbsEglAttachment mEglAttachment = new ClientSbsEglAttachment(
+            new ClientSbsEglAttachment.Host() {
+                @Override public Surface currentVideoSurface() {
+                    return mXrPresenter != null ? mXrPresenter.getVideoSurface() : null;
+                }
+                @Override public void postDetached(int detachGeneration) {
+                    StreamContainer.this.post(() -> onClientSbsEglDetached(detachGeneration));
+                }
+            });
     private Runnable onSurfaceAvailable;
     private InputCallbacks mInputCallbacks;
 
@@ -281,46 +279,13 @@ public class StreamContainer extends FrameLayout {
             mDummySurfaceTexture.detachFromGLContext();
             mDummySurface = new Surface(mDummySurfaceTexture);
 
-            GLSurfaceView.EGLWindowSurfaceFactory windowFactory = new GLSurfaceView.EGLWindowSurfaceFactory() {
-                @Override
-                public javax.microedition.khronos.egl.EGLSurface createWindowSurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLConfig config, Object nativeWindow) {
-                    // The EGL owner must acquire the exact requested SceneCore producer.
-                    Surface xrTarget = mXrPresenter != null
-                            ? mXrPresenter.getVideoSurface() : null;
-                    int attachGeneration = mRequestedEglAttachGeneration;
-                    if (xrTarget == null || !xrTarget.isValid() || attachGeneration <= 0
-                            || xrTarget != mExpectedEglOutputSurface) {
-                        return EGL10.EGL_NO_SURFACE;
-                    }
-                    javax.microedition.khronos.egl.EGLSurface created =
-                            egl.eglCreateWindowSurface(display, config, xrTarget, null);
-                    mCreatedEglAttachGeneration = created != EGL10.EGL_NO_SURFACE
-                            && attachGeneration > 0 && xrTarget == mExpectedEglOutputSurface
-                            ? attachGeneration : 0;
-                    return created;
-                }
-                @Override
-                public void destroySurface(javax.microedition.khronos.egl.EGL10 egl, javax.microedition.khronos.egl.EGLDisplay display, javax.microedition.khronos.egl.EGLSurface surface) {
-                    boolean detached = egl.eglDestroySurface(display, surface);
-                    if (!detached) {
-                        throw new IllegalStateException("Client SBS EGL window release failed");
-                    }
-                    int detachGeneration = mRequestedEglDetachGeneration;
-                    if (detached && detachGeneration > 0) {
-                        // eglDestroySurface() is the only authoritative point at which SceneCore's
-                        // producer is no longer owned by EGL. Finish the decoder handoff on UI.
-                        post(() -> onClientSbsEglDetached(detachGeneration));
-                    }
-                }
-            };
-
             mStereoRenderer = new Stereo3DRenderer(renderSurface, new Stereo3DRenderer.OnSurfaceReadyListener() {
                 @Override
                 public void onStereo3DSurfaceReady(Surface surface, int surfaceGeneration) {
                     // This value was written by createWindowSurface() earlier on this same GL
                     // thread. Pairing both generations prevents a stale renderer Surface from
                     // being rebound while a replacement EGL context is still being established.
-                    int eglAttachGeneration = mCreatedEglAttachGeneration;
+                    int eglAttachGeneration = mEglAttachment.createdAttachGeneration();
                     // Renderer callbacks arrive on the GL thread. Keep the complete switch
                     // transaction, including its timeout, serialized on the main/UI thread.
                     post(() -> onClientSbsRendererSurfaceReady(surface,
@@ -353,7 +318,7 @@ public class StreamContainer extends FrameLayout {
                         int surfaceGeneration, String reason) {
                     // Pair the renderer generation with the EGL attachment written earlier on
                     // this same GL thread, exactly like the success callback.
-                    int eglAttachGeneration = mCreatedEglAttachGeneration;
+                    int eglAttachGeneration = mEglAttachment.createdAttachGeneration();
                     post(() -> onClientSbsRendererSurfaceValidationFailed(
                             surfaceGeneration, eglAttachGeneration, reason));
                 }
@@ -365,7 +330,7 @@ public class StreamContainer extends FrameLayout {
             mStereoRenderer.setOutputSizeOverride(mXrPresenter.getClientSbsSurfaceWidth(),
                     mXrPresenter.getClientSbsSurfaceHeight());
             renderSurface.initialize(mStereoRenderer, new ClientSbsEglConfigChooser(),
-                    windowFactory, error -> {
+                    mEglAttachment, error -> {
                         LimeLog.severe("Client SBS EGL lifecycle failed: " + error);
                         if (!mDestroyed) {
                             game.handleDecoderSurfaceSwitchFailure();
@@ -405,7 +370,7 @@ public class StreamContainer extends FrameLayout {
         }
         ClientSbsRenderSurface glView = (ClientSbsRenderSurface) mSurfaceView;
         final int switchGeneration = ++mClientSbsSwitch.generation;
-        final int eglOperationGeneration = nextClientSbsEglOperationGeneration();
+        final int eglOperationGeneration = mEglAttachment.nextOperationGeneration();
         final long switchDeadlineMs = DecoderSurfaceHandoff.newDeadlineMs();
         mClientSbsSwitch.callback = callback;
         mClientSbsSwitch.deadlineMs = switchDeadlineMs;
@@ -474,9 +439,7 @@ public class StreamContainer extends FrameLayout {
                 completeClientSbsSwitch(switchGeneration, false);
                 return;
             }
-            mExpectedEglOutputSurface = target;
-            mCreatedEglAttachGeneration = 0;
-            mRequestedEglAttachGeneration = eglOperationGeneration;
+            mEglAttachment.requestAttach(target, eglOperationGeneration);
             mStereoRenderer.prepareDecoderSurfaceGeneration(switchGeneration);
             // The measured input bridge stays invisible; View attachment/layout supply geometry
             // independently of the external EGL owner and never wait for renderer/GPU work.
@@ -484,7 +447,7 @@ public class StreamContainer extends FrameLayout {
             glView.requestResume();
         } else {
             // This is an asynchronous owner request. Wait for this exact eglDestroySurface ack.
-            mRequestedEglDetachGeneration = eglOperationGeneration;
+            mEglAttachment.requestDetach(eglOperationGeneration);
             glView.requestPause();
         }
     }
@@ -493,10 +456,7 @@ public class StreamContainer extends FrameLayout {
     public void abandonClientSbsPresentation() {
         // A late factory/renderer callback cannot become an ordinary context recovery after
         // this presentation owner has failed. Native and surface release still follow stop.
-        mRequestedEglAttachGeneration = 0;
-        mCreatedEglAttachGeneration = 0;
-        mRequestedEglDetachGeneration = 0;
-        mExpectedEglOutputSurface = null;
+        mEglAttachment.clear();
         if (mStereoRenderer != null) {
             mStereoRenderer.abandonPresentation();
         }
@@ -538,9 +498,9 @@ public class StreamContainer extends FrameLayout {
     private RendererCallbackOwner classifyRendererCallback(int surfaceGeneration,
                                                            int eglAttachGeneration) {
         if (mDestroyed || eglAttachGeneration <= 0
-                || eglAttachGeneration != mRequestedEglAttachGeneration
+                || eglAttachGeneration != mEglAttachment.requestedAttachGeneration()
                 || mXrPresenter == null
-                || mXrPresenter.getVideoSurface() != mExpectedEglOutputSurface) {
+                || mXrPresenter.getVideoSurface() != mEglAttachment.expectedOutputSurface()) {
             return RendererCallbackOwner.NONE;
         }
 
@@ -701,14 +661,12 @@ public class StreamContainer extends FrameLayout {
 
     private void onClientSbsEglDetached(int detachGeneration) {
         if (mDestroyed || detachGeneration <= 0
-                || detachGeneration != mRequestedEglDetachGeneration
+                || detachGeneration != mEglAttachment.requestedDetachGeneration()
                 || mXrPresenter == null) {
             return;
         }
 
-        mRequestedEglDetachGeneration = 0;
-        mCreatedEglAttachGeneration = 0;
-        mExpectedEglOutputSurface = null;
+        mEglAttachment.clearAfterDetach();
 
         if (mClientSbsResize.pendingCallback != null
                 && mClientSbsResize.stage
@@ -798,14 +756,6 @@ public class StreamContainer extends FrameLayout {
         return target != null && target.isValid() ? target : null;
     }
 
-    private int nextClientSbsEglOperationGeneration() {
-        mClientSbsEglOperationGeneration++;
-        if (mClientSbsEglOperationGeneration <= 0) {
-            mClientSbsEglOperationGeneration = 1;
-        }
-        return mClientSbsEglOperationGeneration;
-    }
-
     /**
      * Re-pins the Client SBS source targets and packed SceneCore/EGL output to {@code 2W x H}.
      *
@@ -828,7 +778,7 @@ public class StreamContainer extends FrameLayout {
             return false;
         }
 
-        final int resizeGeneration = nextClientSbsEglOperationGeneration();
+        final int resizeGeneration = mEglAttachment.nextOperationGeneration();
         if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.IDLE) {
             mClientSbsResize.clearPostAckBoundary();
         }
@@ -841,7 +791,7 @@ public class StreamContainer extends FrameLayout {
 
         if (mClientSbsResize.stage == ClientSbsResizePolicy.Stage.IDLE) {
             mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_DETACH;
-            mRequestedEglDetachGeneration = resizeGeneration;
+            mEglAttachment.requestDetach(resizeGeneration);
             armClientSbsResizeTimeoutForActiveStage();
             ((ClientSbsRenderSurface) mSurfaceView).requestPause();
         } else if (mClientSbsResize.stage
@@ -880,9 +830,7 @@ public class StreamContainer extends FrameLayout {
             return;
         }
 
-        mExpectedEglOutputSurface = replacement;
-        mCreatedEglAttachGeneration = 0;
-        mRequestedEglAttachGeneration = resizeGeneration;
+        mEglAttachment.requestAttach(replacement, resizeGeneration);
         mClientSbsResize.stage = ClientSbsResizePolicy.Stage.WAITING_FOR_ATTACH;
         armClientSbsResizeTimeoutForActiveStage();
         ((ClientSbsRenderSurface) mSurfaceView).requestResume();
@@ -1408,10 +1356,7 @@ public class StreamContainer extends FrameLayout {
         mHostSurfaceResize.cancel();
         mClientSbsHdrSwitch.cancel();
         mRendererHdrTransitionGeneration = 0;
-        mRequestedEglAttachGeneration = 0;
-        mCreatedEglAttachGeneration = 0;
-        mRequestedEglDetachGeneration = 0;
-        mExpectedEglOutputSurface = null;
+        mEglAttachment.clear();
         // Terminal renderer cleanup owns its final mode state. Ordinary mode-switch setters can
         // wait for frame bookkeeping and must not precede the asynchronous teardown request.
         mContainerCleanupPending = true;
