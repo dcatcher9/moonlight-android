@@ -1127,7 +1127,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         boolean portraitStream = prefs != null && prefs.height > prefs.width;
         int[] envelope = adaptivePlaybackEnvelope(initialWidth, initialHeight, portraitStream,
-                prefs != null && prefs.isHostDoubledWidthMode(), getActiveVideoFormat(),
+                prefs != null, getActiveVideoFormat(),
                 extendedAdaptiveEnvelope, decoderMaxWidth, decoderMaxHeight);
         adaptiveEnvelopeWidth = envelope[0];
         adaptiveEnvelopeHeight = envelope[1];

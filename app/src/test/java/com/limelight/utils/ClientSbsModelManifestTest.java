@@ -7,7 +7,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
-import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.RetiredClientSbsModelIds;
 
 import org.junit.Test;
 
@@ -62,9 +62,9 @@ public class ClientSbsModelManifestTest {
     @Test
     public void retiredAndUnknownFamiliesCannotReachTheProductionRuntime() {
         String[] unsupportedIds = {
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
+                RetiredClientSbsModelIds.DA_V2_STATIC,
+                RetiredClientSbsModelIds.MIDAS_V2,
+                RetiredClientSbsModelIds.DEPTHART_S448_FP16,
                 "depth-anything-v2-small-static-buckets",
                 "depth-anything-v2-small-dynamic",
                 "depth-anything-v2-small-static-350",

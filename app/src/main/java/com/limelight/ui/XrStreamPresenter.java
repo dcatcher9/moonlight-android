@@ -2512,8 +2512,7 @@ public class XrStreamPresenter {
                         wasClientSbs, isClientSbs, null, false);
             } else {
                 streamContainer.switchToClientSbs(isClientSbs,
-                        prefConfig.isHostDoubledWidthMode()
-                                && XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(nextMode)),
+                        XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(nextMode)),
                         success -> finishModeSwitch(item, previousMode, nextMode,
                                 wasClientSbs,
                                 isClientSbs, streamContainer, success));
@@ -3081,8 +3080,7 @@ public class XrStreamPresenter {
         }
 
         return streamContainer.resizeHostSbsSurface(
-                prefConfig.isHostDoubledWidthMode()
-                        && XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(geometryMode)),
+                XrPresentationPolicy.isPackedWireMode(effectiveTargetWireMode(geometryMode)),
                 width, height, success -> {
                     if (!transactionCurrent.getAsBoolean()
                             || currentPresenterMode != geometryMode) {
@@ -3576,7 +3574,6 @@ public class XrStreamPresenter {
             return;
         }
         if (surfaceSwitchSucceeded && !isClientSbs && !wasClientSbs
-                && prefConfig.isHostDoubledWidthMode()
                 && (XrPresentationPolicy.requiresHostSurfaceResize(previousMode, nextMode)
                 || isAckFirstModeTransitionPending())) {
             if (streamContainer != null && streamContainer.resizeHostSbsSurface(

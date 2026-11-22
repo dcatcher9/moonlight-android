@@ -162,26 +162,9 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     static final String DEFAULT_VIDEO_FORMAT = "forceh265";
-    /** Historical model ids retained for offline evaluation; production always uses ZipDepth. */
-    public static final String CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC =
-            "depth-anything-v2-small-static-performance";
-    public static final String CLIENT_SBS_DEPTH_MODEL_MIDAS_V2 = "midas-v2-float";
-    public static final String CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16 =
-            "depthart-s448-fp16";
+    /** The sole Client SBS depth model. */
     public static final String CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16 =
             "zipdepth-base-fp16";
-    public static final String DEFAULT_CLIENT_SBS_DEPTH_MODEL =
-            CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16;
-
-    /**
-     * Compatibility boundary for retired Client SBS model preferences.
-     *
-     * <p>ZipDepth Base is the sole production model. Historical, corrupt, and future values all
-     * resolve to it; the one-time startup migration removes the retired persisted selector.</p>
-     */
-    public static String normalizeClientSbsDepthModelId(String modelId) {
-        return CLIENT_SBS_DEPTH_MODEL_ZIPDEPTH_BASE_FP16;
-    }
 
     public static int normalizeAudioBoostDb(String storedValue) {
         if ("0".equals(storedValue)) {
@@ -468,14 +451,6 @@ public class PreferenceConfiguration {
         return true;
     }
 
-    /**
-     * The XR route can switch to Host SBS AI at any time via the bar, so the
-     * host may double the encoded width to a packed 2W frame; the decoder always pre-sizes for it.
-     */
-    public boolean isHostDoubledWidthMode() {
-        return true;
-    }
-
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option.
         if (width == 640 && height == 360) {
@@ -547,14 +522,6 @@ public class PreferenceConfiguration {
 
     private static int getHeightFromResolutionString(String resString) {
         return Integer.parseInt(resString.split("x")[1]);
-    }
-
-    public static int getDefaultBitrate(String resString, String fpsString) {
-        return DEFAULT_BITRATE_KBPS;
-    }
-
-    public static int getDefaultBitrate(Context context) {
-        return DEFAULT_BITRATE_KBPS;
     }
 
     /** Persist the in-headset Stats choice so an activity reconnect/recreate cannot lose it. */

@@ -44,7 +44,6 @@ $focusedTests = @(
     "com.limelight.binding.video.MediaCodecDecoderRendererTelemetryTest",
     "com.limelight.binding.video.MediaCodecDecoderRendererTransitionTest",
     "com.limelight.binding.video.MediaCodecHelperRegularDecoderTest",
-    "com.limelight.preferences.PreferenceConfigurationClientSbsModelMigrationTest",
     "com.limelight.utils.ClientSbsGpuInferenceEngineTest",
     "com.limelight.utils.ClientSbsModelArchiveTest",
     "com.limelight.utils.ClientSbsPackagedModelArchiveTest",

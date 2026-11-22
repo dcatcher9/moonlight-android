@@ -10,6 +10,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.RetiredClientSbsModelIds;
 import com.limelight.preferences.session.SessionSettingsStore.AppIdentity;
 import com.limelight.preferences.session.SessionSettingsStore.PcIdentity;
 import com.limelight.ui.PresentationMode;
@@ -283,12 +284,12 @@ public final class SessionSettingsStoreTest {
     @Test
     public void modeOverridesAndResumeMetadataSurviveResume() {
         assertTrue(globals.edit().putString(MODEL,
-                PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC).commit());
+                RetiredClientSbsModelIds.DA_V2_STATIC).commit());
         assertTrue(store.startNewSession(pc, firstApp, "initial", 100L));
         assertTrue(store.edit(pc, firstApp)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
+                        RetiredClientSbsModelIds.MIDAS_V2,
+                        RetiredClientSbsModelIds.DA_V2_STATIC)
                 .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 
@@ -302,10 +303,10 @@ public final class SessionSettingsStoreTest {
         assertEquals("initial", resumed.getResumeMetadata().getHostSessionId());
         assertEquals(500L, resumed.getResumeMetadata().getHostConfirmedAtEpochMillis());
         Snapshot snapshot = store.snapshot(pc, globals);
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
+        assertEquals(RetiredClientSbsModelIds.MIDAS_V2,
                 snapshot.preferencesForMode(PresentationMode.CLIENT_SBS_AI)
                         .getString(MODEL, null));
-        assertEquals(PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+        assertEquals(RetiredClientSbsModelIds.DA_V2_STATIC,
                 snapshot.preferencesForMode(PresentationMode.NORMAL).getString(MODEL, null));
         assertTrue(snapshot.isModeOverridden(PresentationMode.CLIENT_SBS_AI, MODEL));
     }
@@ -565,8 +566,8 @@ public final class SessionSettingsStoreTest {
         assertTrue(store.startNewSession(pc, firstApp, null, 100L));
         assertTrue(store.edit(pc, firstApp)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI, MODEL,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC)
+                        RetiredClientSbsModelIds.MIDAS_V2,
+                        RetiredClientSbsModelIds.DA_V2_STATIC)
                 .setLastSuccessfulMode(PresentationMode.CLIENT_SBS_AI)
                 .commit());
 

@@ -109,7 +109,7 @@ public final class LegacyProfileMigrationTest {
                 .putBoolean(LegacyProfileMigration.MIGRATION_COMPLETE_KEY, true)
                 .putBoolean(LegacyProfileMigration.RETIRED_SETTINGS_CLEANED_KEY, true)
                 .putString(modelKey,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                        RetiredClientSbsModelIds.MIDAS_V2)
                 .commit());
 
         SessionSettingsStore store = new SessionSettingsStore(context);
@@ -125,18 +125,18 @@ public final class LegacyProfileMigrationTest {
         assertTrue(store.startNewSession(secondPc, secondApp, "host-2", 2L));
         assertTrue(store.edit(firstPc, firstApp)
                 .setSharedValue(modelKey,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                        RetiredClientSbsModelIds.DA_V2_STATIC,
+                        RetiredClientSbsModelIds.MIDAS_V2)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI, modelKey,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                        RetiredClientSbsModelIds.DEPTHART_S448_FP16,
+                        RetiredClientSbsModelIds.MIDAS_V2)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.FPS_PREF_STRING, "30", "60")
                 .commit());
         assertTrue(store.edit(secondPc, secondApp)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI, modelKey,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                        RetiredClientSbsModelIds.DA_V2_STATIC,
+                        RetiredClientSbsModelIds.MIDAS_V2)
                 .commit());
 
         LegacyProfileMigration.retireClientSbsModelSelection(context);

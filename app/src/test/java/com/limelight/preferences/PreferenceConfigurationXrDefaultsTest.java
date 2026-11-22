@@ -98,10 +98,7 @@ public final class PreferenceConfigurationXrDefaultsTest {
     }
 
     @Test
-    public void fixedBitrateDefaultIgnoresResolutionAndFps() {
-        assertEquals(200000,
-                PreferenceConfiguration.getDefaultBitrate("3840x2160", "90"));
-        assertEquals(200000,
-                PreferenceConfiguration.getDefaultBitrate("3840x2160", "60"));
+    public void fixedBitrateDefaultIs200Mbps() {
+        assertEquals(200000, PreferenceConfiguration.DEFAULT_BITRATE_KBPS);
     }
 }

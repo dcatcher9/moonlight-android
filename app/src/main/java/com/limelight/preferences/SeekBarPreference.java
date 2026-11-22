@@ -41,9 +41,9 @@ public class SeekBarPreference extends Preference {
                              int defStyleAttr) {
         super(context, attrs, defStyleAttr);
 
-        defaultValue = attrs == null ? PreferenceConfiguration.getDefaultBitrate(context)
+        defaultValue = attrs == null ? PreferenceConfiguration.DEFAULT_BITRATE_KBPS
                 : attrs.getAttributeIntValue(ANDROID_SCHEMA_URL, "defaultValue",
-                PreferenceConfiguration.getDefaultBitrate(context));
+                PreferenceConfiguration.DEFAULT_BITRATE_KBPS);
         maxValue = attrs == null ? 100
                 : attrs.getAttributeIntValue(ANDROID_SCHEMA_URL, "max", 100);
         suffix = readTextAttribute(context, attrs, "text");

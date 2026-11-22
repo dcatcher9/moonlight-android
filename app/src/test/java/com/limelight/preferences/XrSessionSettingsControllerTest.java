@@ -608,7 +608,7 @@ public final class XrSessionSettingsControllerTest {
                 .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
                         "future-model-family",
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                        RetiredClientSbsModelIds.MIDAS_V2)
                 .commit());
 
         XrSessionSettingsController controller = withFullEnvelope(controller());
@@ -1320,8 +1320,8 @@ public final class XrSessionSettingsControllerTest {
         assertTrue(store.edit(pc, app)
                 .setModeValue(PresentationMode.CLIENT_SBS_AI,
                         PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_PREF_STRING,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2)
+                        RetiredClientSbsModelIds.DA_V2_STATIC,
+                        RetiredClientSbsModelIds.MIDAS_V2)
                 .commit());
         XrSessionSettingsController controller = controller();
 

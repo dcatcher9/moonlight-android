@@ -6,7 +6,7 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
-import com.limelight.preferences.PreferenceConfiguration;
+import com.limelight.preferences.RetiredClientSbsModelIds;
 
 import org.junit.Test;
 
@@ -71,14 +71,14 @@ public class ClientSbsPipelineContractTest {
     public void retiredFamiliesCannotCreateAProductionPipelineContract() {
         assertThrows(IllegalArgumentException.class,
                 () -> ClientSbsPipelineContract.forStream(
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_MIDAS_V2, 16.0 / 9.0));
+                        RetiredClientSbsModelIds.MIDAS_V2, 16.0 / 9.0));
         assertThrows(IllegalArgumentException.class,
                 () -> ClientSbsPipelineContract.forStream(
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DA_V2_STATIC,
+                        RetiredClientSbsModelIds.DA_V2_STATIC,
                         16.0 / 9.0));
         assertThrows(IllegalArgumentException.class,
                 () -> ClientSbsPipelineContract.forStream(
-                        PreferenceConfiguration.CLIENT_SBS_DEPTH_MODEL_DEPTHART_S448_FP16,
+                        RetiredClientSbsModelIds.DEPTHART_S448_FP16,
                         16.0 / 9.0));
     }
 }
