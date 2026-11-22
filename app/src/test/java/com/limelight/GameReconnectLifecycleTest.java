@@ -5,23 +5,37 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.content.Intent;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.limelight.binding.input.ControllerHandler;
+import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.session.SessionSettingsStore;
 import com.limelight.nvstream.HostSessionLaunchRequest;
+import com.limelight.nvstream.NvConnection;
+import com.limelight.ui.StreamContainer;
+import com.limelight.ui.XrStreamPresenter;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
+import org.robolectric.util.ReflectionHelpers;
 
-import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, shadows = {
@@ -68,29 +82,62 @@ public final class GameReconnectLifecycleTest {
 
     @Test
     public void stopConnectionClosesHostTelemetryBeforeNativeTeardown() throws Exception {
-        File file = new File("src/main/java/com/limelight/Game.java");
-        String source = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-        int methodStart = source.indexOf("private void stopConnection()");
-        int methodEnd = source.indexOf("public void runAfterConnectionStop", methodStart);
-        assertTrue("stopConnection source contract is missing", methodStart >= 0 && methodEnd > 0);
+        assertHostTelemetryClosesBeforeNativeTeardown(false);
+    }
 
-        String method = source.substring(methodStart, methodEnd);
-        int preStopHook = method.indexOf("presenter.onConnectionStopping()");
-        // stopConnection() hands the connection to ConnectionStopCoordinator, whose stop thread
-        // starts with NvConnection.stop(), the native transport teardown.
-        int nativeStop = method.indexOf("connectionStop.stop(conn,");
-        assertTrue("Host telemetry must close before NvConnection destroys native transport",
-                preStopHook >= 0 && nativeStop > preStopHook);
+    @Test
+    public void stopWhileConnectingClosesHostTelemetryBeforeNativeTeardown() throws Exception {
+        assertHostTelemetryClosesBeforeNativeTeardown(true);
+    }
 
-        String coordinator = new String(Files.readAllBytes(new File(
-                "src/main/java/com/limelight/ConnectionStopCoordinator.java").toPath()),
-                StandardCharsets.UTF_8);
-        int threadStart = coordinator.indexOf("stopThread = new Thread(");
-        int teardown = coordinator.indexOf("conn.stop(heldSessionTransaction -> {", threadStart);
-        int threadEnd = coordinator.indexOf("stopThread.start();", threadStart);
-        assertTrue("The stop thread must begin with NvConnection.stop()",
-                threadStart >= 0 && teardown > threadStart && threadEnd > teardown
-                        && coordinator.substring(threadStart, teardown).indexOf(';') < 0);
+    /**
+     * NvConnection.stop() destroys moonlight-common's control transport and its mutexes, so the
+     * presenter's pre-stop hook, which unsubscribes host telemetry over that transport, must have
+     * run on the main thread before the stop thread enters it.
+     */
+    private static void assertHostTelemetryClosesBeforeNativeTeardown(boolean connecting)
+            throws Exception {
+        Game game = Robolectric.buildActivity(Game.class).get();
+        ReflectionHelpers.setField(game, "prefConfig", new PreferenceConfiguration());
+        ReflectionHelpers.setField(game, "controllerHandler", mock(ControllerHandler.class));
+        ReflectionHelpers.setField(game, "connecting", connecting);
+        game.connected = !connecting;
+        game.conn = mock(NvConnection.class);
+        XrStreamPresenter presenter = mock(XrStreamPresenter.class);
+        StreamContainer container = mock(StreamContainer.class);
+        when(container.getXrPresenter()).thenReturn(presenter);
+        ReflectionHelpers.setField(game, "streamContainer", container);
+
+        Thread mainThread = Thread.currentThread();
+        Object connectionStop = ReflectionHelpers.getField(game, "connectionStop");
+        List<String> events = Collections.synchronizedList(new ArrayList<>());
+        doAnswer(invocation -> {
+            // Checked when the hook runs, so a hook moved after the hand-off fails every time
+            // rather than only when the stop thread wins the race.
+            boolean stopThreadStarted =
+                    ReflectionHelpers.getField(connectionStop, "stopThread") != null;
+            events.add("pre-stop hook on main " + (Thread.currentThread() == mainThread)
+                    + ", stop thread started " + stopThreadStarted);
+            return null;
+        }).when(presenter).onConnectionStopping();
+        CountDownLatch nativeStopEntered = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            events.add("native stop on main " + (Thread.currentThread() == mainThread));
+            nativeStopEntered.countDown();
+            return null;
+        }).when(game.conn).stop(any());
+
+        ReflectionHelpers.callInstanceMethod(game, "stopConnection");
+        assertTrue(nativeStopEntered.await(5, TimeUnit.SECONDS));
+        Thread stopThread = ReflectionHelpers.getField(connectionStop, "stopThread");
+        if (stopThread != null) {
+            stopThread.join(5000);
+            assertFalse(stopThread.isAlive());
+        }
+
+        assertEquals(Arrays.asList(
+                "pre-stop hook on main true, stop thread started false",
+                "native stop on main false"), events);
     }
 
     @Test
