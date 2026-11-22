@@ -33,6 +33,10 @@ import java.util.UUID;
  * lock. This avoids partially applied reconnect settings and prevents separate store instances
  * from overwriting each other's unrelated changes.</p>
  *
+ * <p>{@code WRITE_LOCK} is owned here. {@link AppProfileIndex} (the per-app profiles) and
+ * {@link SessionRecordCodec} (the JSON documents) hold no lock and are called only inside it;
+ * {@link SnapshotPreferences} views are built from copied values and never take it.</p>
+ *
  * <p>Global defaults deliberately remain in the application's existing default
  * SharedPreferences. This store contains only values that differ from those defaults. A caller
  * should pass the global value when setting an override; equal values are converted to inheritance
@@ -43,11 +47,11 @@ public final class SessionSettingsStore {
     public static final int SCHEMA_VERSION = 1;
 
     private static final String RECORD_PREFIX = "session.";
-    private static final String SETTINGS_PREFIX = "settings.";
     private static final Object WRITE_LOCK = new Object();
     private static final Object REMOVE = new Object();
 
     private final SharedPreferences preferences;
+    private final AppProfileIndex profiles;
 
     /** Stable storage identity for a PC. The host is used only when no UUID is available. */
     public static final class PcIdentity {
@@ -504,6 +508,7 @@ public final class SessionSettingsStore {
     /** Visible for tests and dependency injection. */
     public SessionSettingsStore(SharedPreferences preferences) {
         this.preferences = Objects.requireNonNull(preferences, "preferences");
+        profiles = new AppProfileIndex(preferences);
     }
 
     /** Returns the current record, or null when this PC has no compatible schema record. */
@@ -559,7 +564,7 @@ public final class SessionSettingsStore {
             SharedPreferences.Editor editor = null;
             for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
                 boolean session = entry.getKey().startsWith(RECORD_PREFIX);
-                if ((!session && !entry.getKey().startsWith(SETTINGS_PREFIX))
+                if ((!session && !entry.getKey().startsWith(AppProfileIndex.KEY_PREFIX))
                         || !(entry.getValue() instanceof String)) {
                     continue;
                 }
@@ -642,10 +647,10 @@ public final class SessionSettingsStore {
         synchronized (WRITE_LOCK) {
             SessionRecord current = readRecord(pc);
             SavedSettings currentProfile = current != null
-                    ? readSavedSettings(pc, current.currentApp) : null;
+                    ? profiles.find(pc, current.currentApp) : null;
             AppIdentity currentIdentity = currentProfile != null
                     ? currentProfile.app : current != null ? current.currentApp : null;
-            SavedSettings saved = readSavedSettings(pc, app);
+            SavedSettings saved = profiles.find(pc, app);
             if (currentIdentity != null && currentIdentity.isSameApplication(app)
                     && (app.appUuid == null || currentIdentity.appUuid != null || saved == null)) {
                 saved = savedSettings(current);
@@ -657,7 +662,7 @@ public final class SessionSettingsStore {
                     new ResumeMetadata(false, hostSessionId, hostConfirmedAtEpochMillis));
             SharedPreferences.Editor editor = preferences.edit();
             if (current != null) {
-                putSavedSettings(editor, pc, current);
+                profiles.put(editor, pc, current);
             }
             putRecord(editor, pc, record);
             return editor.commit();
@@ -787,12 +792,7 @@ public final class SessionSettingsStore {
         Objects.requireNonNull(pc, "pc");
         synchronized (WRITE_LOCK) {
             SharedPreferences.Editor editor = preferences.edit().remove(recordKey(pc));
-            String profilePrefix = settingsPrefix(pc);
-            for (String key : preferences.getAll().keySet()) {
-                if (key.startsWith(profilePrefix)) {
-                    editor.remove(key);
-                }
-            }
+            profiles.removeAll(editor, pc);
             return editor.commit();
         }
     }
@@ -849,87 +849,19 @@ public final class SessionSettingsStore {
         SessionRecord current = readRecord(pc);
         if (current != null) {
             // Also migrates a pre-profile active record when ending or invalidating that session.
-            putSavedSettings(editor, pc, current);
+            profiles.put(editor, pc, current);
         }
         return editor.commit();
     }
 
     private void putRecord(SharedPreferences.Editor editor, PcIdentity pc, SessionRecord record) {
         editor.putString(recordKey(pc), SessionRecordCodec.encodeRecord(record));
-        putSavedSettings(editor, pc, record);
-    }
-
-    private void putSavedSettings(SharedPreferences.Editor editor, PcIdentity pc,
-                                  SessionRecord record) {
-        SavedSettings previous = readSavedSettings(pc, record.currentApp);
-        AppIdentity identity = previous == null ? record.currentApp : new AppIdentity(
-                record.currentApp.appId != null ? record.currentApp.appId : previous.app.appId,
-                record.currentApp.appUuid != null ? record.currentApp.appUuid : previous.app.appUuid,
-                record.currentApp.displayName != null
-                        ? record.currentApp.displayName : previous.app.displayName);
-        String key = settingsKey(pc, identity);
-        // Stronger host app identity can arrive later (for example, a UUID after a numeric ID).
-        // Retire compatible aliases so they cannot restore older settings on a later launch.
-        for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
-            if (entry.getKey().startsWith(settingsPrefix(pc)) && !entry.getKey().equals(key)) {
-                SavedSettings saved = parseSavedSettings(entry.getValue());
-                if (saved != null && saved.app.isSameApplication(identity)
-                        && (identity.appUuid != null || saved.app.appUuid == null)
-                        && (identity.appId != null || saved.app.appId == null)) {
-                    editor.remove(entry.getKey());
-                }
-            }
-        }
-        editor.putString(key, SessionRecordCodec.encodeProfile(record, identity));
-    }
-
-    private SavedSettings readSavedSettings(PcIdentity pc, AppIdentity app) {
-        String key = settingsKey(pc, app);
-        SavedSettings saved = parseSavedSettings(preferences.getAll().get(key));
-        if (saved != null && saved.app.isSameApplication(app)) {
-            return saved;
-        }
-        SavedSettings match = null;
-        for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
-            if (entry.getKey().startsWith(settingsPrefix(pc)) && !entry.getKey().equals(key)) {
-                saved = parseSavedSettings(entry.getValue());
-                if (saved != null && saved.app.isSameApplication(app)) {
-                    if (match != null && !match.app.isSameApplication(saved.app)) {
-                        // A weaker lookup must not choose between two distinct UUID identities.
-                        return null;
-                    }
-                    match = saved;
-                }
-            }
-        }
-        return match;
-    }
-
-    private static SavedSettings parseSavedSettings(Object json) {
-        if (!(json instanceof String)) {
-            return null;
-        }
-        try {
-            return SessionRecordCodec.decodeProfile((String) json);
-        } catch (JsonParseException | IllegalArgumentException | ClassCastException ignored) {
-            return null;
-        }
+        profiles.put(editor, pc, record);
     }
 
     private static SavedSettings savedSettings(SessionRecord record) {
         return new SavedSettings(record.currentApp, record.sharedOverrides,
                 record.modeOverrides, record.lastSuccessfulMode);
-    }
-
-    private static String settingsPrefix(PcIdentity pc) {
-        return SETTINGS_PREFIX + pc.storageId + ".app.";
-    }
-
-    private static String settingsKey(PcIdentity pc, AppIdentity app) {
-        String identity = app.appUuid != null ? "uuid." + app.appUuid.toLowerCase(Locale.US)
-                : app.appId != null ? "id." + app.appId
-                : "name." + app.displayName.toLowerCase(Locale.US);
-        return settingsPrefix(pc) + safeComponent(identity, true);
     }
 
     private static String recordKey(PcIdentity pc) {
@@ -1029,7 +961,7 @@ public final class SessionSettingsStore {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    private static String safeComponent(String value, boolean alwaysHash) {
+    static String safeComponent(String value, boolean alwaysHash) {
         String sanitized = value.replaceAll("[^a-z0-9._-]+", "_")
                 .replaceAll("_+", "_");
         if (sanitized.length() > 64) {
