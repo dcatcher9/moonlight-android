@@ -376,7 +376,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean reportedCrash;
     private int consecutiveCrashCount;
     private String glRenderer;
-    private volatile boolean foreground = true;
     private PerfOverlayListener perfListener;
 
     // The codec-recovery lock. CodecRecoveryCoordinator runs every recovery with it held, and
@@ -1023,14 +1022,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 + ", transfer=" + colorTransferName(format)
                 + ", hdr-static=" + (format != null
                         && format.containsKey(MediaFormat.KEY_HDR_STATIC_INFO)));
-    }
-
-    public void notifyVideoForeground() {
-        foreground = true;
-    }
-
-    public void notifyVideoBackground() {
-        foreground = false;
     }
 
     public int getActiveVideoFormat() {
