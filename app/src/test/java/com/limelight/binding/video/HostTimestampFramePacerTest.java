@@ -108,11 +108,38 @@ public class HostTimestampFramePacerTest {
         for (int frame = 0; frame < 400; frame++) {
             // Every tenth frame carries a time 3 ms before its predecessor's.
             long host = hostMs(frame) - (frame % 10 == 9 ? 14L : 0L);
-            pacer.releaseTimeNs(host, hostMs(frame) * MS + CLOCK_OFFSET_NS);
+            long readyNs = hostMs(frame) * MS + CLOCK_OFFSET_NS;
+            long releaseNs = pacer.releaseTimeNs(host, readyNs);
+            if (frame % 10 == 9) {
+                assertEquals("frame " + frame, readyNs, releaseNs);
+            }
         }
         String report = pacer.takeReport();
         assertNotNull(report);
         assertTrue(report, report.contains("resets=0"));
+        assertTrue(report, report.contains("untimed=40"));
+    }
+
+    @Test
+    public void aPictureSentAgainDoesNotLengthenTheDelay() {
+        HostTimestampFramePacer pacer = new HostTimestampFramePacer(FRAME_NS);
+        int frame = 0;
+        for (; frame < 400; frame++) {
+            pacer.releaseTimeNs(hostMs(frame), earliestReadyNs(frame));
+        }
+        long delayNs = pacer.delayNs();
+        // The picture stands still: the host sends it again every 100 ms under the same time.
+        long stillHostMs = hostMs(frame - 1);
+        for (int again = 1; again <= 20; again++) {
+            long readyNs = earliestReadyNs(frame - 1) + again * 100L * MS;
+            assertEquals(readyNs, pacer.releaseTimeNs(stillHostMs, readyNs));
+        }
+        assertEquals(delayNs, pacer.delayNs());
+        // Motion resumes two seconds later and is paced as before.
+        int resumed = frame + 180;
+        long readyNs = earliestReadyNs(resumed);
+        assertTrue(pacer.releaseTimeNs(hostMs(resumed), readyNs) - readyNs <= delayNs);
+        assertEquals(delayNs, pacer.delayNs());
     }
 
     @Test

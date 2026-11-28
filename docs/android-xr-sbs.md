@@ -210,13 +210,18 @@ host's spacing. The host time is the RTP timestamp of the frame, in milliseconds
 the decode unit to `HostTimestampFramePacer`. That class learns the offset between the two clocks
 from the frames that met the least delay and sizes the delay to the variation it measures, within
 two frame intervals; it lengthens the delay after a few late frames and shortens it slowly. A
-frame later than the delay is submitted when it is ready. Two releases are kept four fifths of a
+frame later than the delay is submitted when it is ready. A frame whose host time is no newer
+than its predecessor's is the same picture sent again, or one the host finished out of turn: it
+is submitted when it is ready and is left out of the measurement, so that a still picture does
+not lengthen the delay. Two releases are kept four fifths of a
 frame interval apart, so a frame stamped at or before its predecessor's time follows it instead
 of replacing it unseen; only a frame overtaken while this thread was a whole spacing behind is
 discarded. The output dequeue's timeout is the release timer up to 1.5 ms before a release, and
 the thread parks for the rest. On the Galaxy XR the latest release in a five-second report still
 runs 1.4-2.9 ms behind its time, and handing a frame to the display takes up to 3-8 ms; polling
-the decoder through the last milliseconds did not improve either. Even does not align releases to
+the decoder through the last milliseconds did not improve either. The report gives the average
+release lag and the number of releases more than a millisecond late beside the latest one,
+because the latest alone says little about the usual release. Even does not align releases to
 display refreshes. Every
 mode logs the same measurement every five seconds as `Frame timing [...]`, so Lowest latency and
 Even can be compared on one stream. The former LFR /

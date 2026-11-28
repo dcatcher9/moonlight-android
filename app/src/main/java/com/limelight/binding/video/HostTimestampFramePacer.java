@@ -58,6 +58,7 @@ final class HostTimestampFramePacer {
     private long reportMaxVariationNs;
     private long reportVariationSumNs;
     private int reportResets;
+    private int reportUntimedFrames;
 
     /**
      * @param frameIntervalNs the stream's frame interval; the delay never exceeds two of them
@@ -80,6 +81,13 @@ final class HostTimestampFramePacer {
     long releaseTimeNs(long hostTimeMs, long readyNs) {
         long hostNs = hostTimeMs * NS_PER_MS;
         long offsetNs = readyNs - hostNs;
+        if (synced && hostNs <= lastHostNs && lastHostNs - hostNs <= RESET_GAP_NS) {
+            // No newer than the frame before it: the same picture sent again, or one the host
+            // finished out of turn. Its lateness says nothing about the path, and counting it
+            // would lengthen the delay after every still picture. It goes out as it is.
+            reportUntimedFrames++;
+            return readyNs;
+        }
         if (synced) {
             long hostStepNs = hostNs - lastHostNs;
             long baseNs = Math.min(currentMinOffsetNs, previousMinOffsetNs);
@@ -207,11 +215,13 @@ final class HostTimestampFramePacer {
      * @return null when no frame was recorded
      */
     String takeReport() {
-        if (reportFrames == 0) {
+        if (reportFrames == 0 && reportUntimedFrames == 0) {
             return null;
         }
         String report = "frames=" + reportFrames
-                + " variation_ms_avg/max=" + tenths(reportVariationSumNs / reportFrames)
+                + " untimed=" + reportUntimedFrames
+                + " variation_ms_avg/max="
+                + tenths(reportFrames > 0 ? reportVariationSumNs / reportFrames : 0L)
                 + "/" + tenths(reportMaxVariationNs)
                 + " delay_ms=" + tenths(delayNs)
                 + " later_than_delay=" + reportLateFrames
@@ -221,6 +231,7 @@ final class HostTimestampFramePacer {
         reportMaxVariationNs = 0L;
         reportVariationSumNs = 0L;
         reportResets = 0;
+        reportUntimedFrames = 0;
         return report;
     }
 

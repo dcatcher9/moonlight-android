@@ -490,6 +490,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int evenPacingSuperseded;
     private long evenPacingMaxReleaseLagNs;
     private long evenPacingMaxCommitNs;
+    // The worst release says little about the usual one: the report also carries their average
+    // and how many ran more than a millisecond late.
+    private long evenPacingReleaseLagSumNs;
+    private int evenPacingReleases;
+    private int evenPacingReleasesOverOneMs;
     // The output dequeue's timeout serves as the release timer up to this long before a release;
     // the thread parks for the rest. Polling the decoder through those last milliseconds was
     // tried and brought the releases no closer to their times.
@@ -2398,8 +2403,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 evenPacingSuperseded++;
                 continue;
             }
-            evenPacingMaxReleaseLagNs = Math.max(
-                    evenPacingMaxReleaseLagNs, nowNs - head.releaseTimeNs);
+            long releaseLagNs = nowNs - head.releaseTimeNs;
+            evenPacingMaxReleaseLagNs = Math.max(evenPacingMaxReleaseLagNs, releaseLagNs);
+            evenPacingReleaseLagSumNs += releaseLagNs;
+            evenPacingReleases++;
+            if (releaseLagNs > 1_000_000L) {
+                evenPacingReleasesOverOneMs++;
+            }
             renderEvenPacedOutput(head);
             long renderedNs = System.nanoTime();
             evenPacingMaxCommitNs = Math.max(evenPacingMaxCommitNs, renderedNs - nowNs);
@@ -2438,12 +2448,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (report != null) {
             LimeLog.info("Frame timing [" + describeOutputPacing(prefs.framePacing) + "]: " + report
                     + " superseded=" + evenPacingSuperseded
-                    + " release_lag_us_max=" + evenPacingMaxReleaseLagNs / 1000L
+                    + " release_lag_us_avg/max="
+                    + (evenPacingReleases > 0
+                            ? evenPacingReleaseLagSumNs / evenPacingReleases / 1000L : 0L)
+                    + "/" + evenPacingMaxReleaseLagNs / 1000L
+                    + " releases_over_1ms=" + evenPacingReleasesOverOneMs
+                    + "/" + evenPacingReleases
                     + " commit_us_max=" + evenPacingMaxCommitNs / 1000L);
         }
         evenPacingSuperseded = 0;
         evenPacingMaxReleaseLagNs = 0L;
         evenPacingMaxCommitNs = 0L;
+        evenPacingReleaseLagSumNs = 0L;
+        evenPacingReleases = 0;
+        evenPacingReleasesOverOneMs = 0;
     }
 
     private void startRendererThread() {
