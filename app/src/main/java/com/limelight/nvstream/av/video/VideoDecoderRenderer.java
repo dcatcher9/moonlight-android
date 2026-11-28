@@ -22,6 +22,11 @@ public abstract class VideoDecoderRenderer {
                 frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
     }
     
+    // The host's time for the frame whose decode units follow on this thread, in milliseconds
+    // from the start of the stream. Renderers that do not pace by it ignore it.
+    public void noteHostFrameTime(int frameNumber, long hostFrameTimeMs) {
+    }
+
     public abstract void cleanup();
 
     public abstract int getCapabilities();

@@ -164,12 +164,14 @@
         <item>@string/xr_pacing_balanced</item>
         <item>@string/xr_pacing_fps_cap</item>
         <item>@string/xr_pacing_smooth</item>
+        <item>@string/xr_pacing_even</item>
     </string-array>
     <string-array name="xr_video_frame_pacing_values" translatable="false">
         <item>latency</item>
         <item>balanced</item>
         <item>cap-fps</item>
         <item>smoothness</item>
+        <item>even</item>
     </string-array>
 
     <string-array name="xr_audio_config_names">

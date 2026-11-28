@@ -13,6 +13,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
@@ -258,6 +259,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 return "FPS cap";
             case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                 return "Maximum smoothness";
+            case PreferenceConfiguration.FRAME_PACING_EVEN:
+                return "Even (host frame times)";
             case PreferenceConfiguration.FRAME_PACING_MIN_LATENCY:
             default:
                 return "Lowest latency (latest frame)";
@@ -451,10 +454,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final class DecodedOutputBuffer {
         final int index;
         final long presentationTimeUs;
+        /** Even pacing only: the System.nanoTime() at which to release the buffer. */
+        final long releaseTimeNs;
 
         DecodedOutputBuffer(int index, long presentationTimeUs) {
+            this(index, presentationTimeUs, 0L);
+        }
+
+        DecodedOutputBuffer(int index, long presentationTimeUs, long releaseTimeNs) {
             this.index = index;
             this.presentationTimeUs = presentationTimeUs;
+            this.releaseTimeNs = releaseTimeNs;
         }
     }
 
@@ -466,6 +476,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private LinkedBlockingQueue<DecodedOutputBuffer> outputBufferQueue = new LinkedBlockingQueue<>();
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
+    // Even pacing holds a decoded frame for at most two frame intervals, so a fourth one waiting
+    // means the releases have fallen behind.
+    private static final int EVEN_PACING_QUEUE_LIMIT = 3;
+    private static final long FRAME_TIMING_REPORT_INTERVAL_NS = 5_000_000_000L;
+    /** Host frame times by decoder timestamp: written by the input thread, taken by the renderer. */
+    private final HostFrameTimeRing hostFrameTimes = new HostFrameTimeRing();
+    /** Set by noteHostFrameTime() on the input thread for the decode units that follow it. */
+    private long pendingHostFrameTimeMs = HostFrameTimeRing.UNKNOWN;
+    // Renderer thread only.
+    private HostTimestampFramePacer frameTimingPacer;
+    private long frameTimingReportedAtNs;
+    private int evenPacingSuperseded;
+    private long evenPacingMaxReleaseLagNs;
+    private long evenPacingMaxCommitNs;
+    // The output dequeue's timeout serves as the release timer up to this long before a release;
+    // the thread parks for the rest. Polling the decoder through those last milliseconds was
+    // tried and brought the releases no closer to their times.
+    private static final long EVEN_PACING_FINAL_WAIT_NS = 1_500_000L;
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
@@ -1964,6 +1992,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         nextInputBuffer = null;
         nextInputBufferIndex = -1;
         outputBufferQueue.clear();
+        hostFrameTimes.clear();
         synchronized (videoStatsLock) {
             // These outputs were invalidated by the recovery transaction and can never
             // produce a matching dequeue callback.
@@ -2337,6 +2366,86 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         });
     }
 
+    /**
+     * Even pacing: renders every held output whose release time has come and returns how long the
+     * next output dequeue may block, in microseconds. Renderer thread only.
+     */
+    private long releaseDueEvenPacedOutputs(long defaultTimeoutUs) {
+        long nowNs = System.nanoTime();
+        DecodedOutputBuffer head;
+        while ((head = outputBufferQueue.peek()) != null) {
+            long untilReleaseNs = head.releaseTimeNs - nowNs;
+            if (untilReleaseNs > EVEN_PACING_FINAL_WAIT_NS) {
+                // The dequeue is this thread's coarse timer: it returns at a new output or
+                // shortly before this release.
+                return Math.min(defaultTimeoutUs,
+                        (untilReleaseNs - EVEN_PACING_FINAL_WAIT_NS + 999L) / 1000L);
+            }
+            if (untilReleaseNs > 0L) {
+                // An output that arrives meanwhile is taken right after this release.
+                LockSupport.parkNanos(untilReleaseNs);
+                nowNs = System.nanoTime();
+                continue;
+            }
+            head = outputBufferQueue.poll();
+            if (head == null) {
+                break;
+            }
+            DecodedOutputBuffer next = outputBufferQueue.peek();
+            if (next != null && next.releaseTimeNs <= nowNs) {
+                // This thread fell a whole spacing behind. Only the newest due frame is shown.
+                videoDecoder.releaseOutputBuffer(head.index, false);
+                evenPacingSuperseded++;
+                continue;
+            }
+            evenPacingMaxReleaseLagNs = Math.max(
+                    evenPacingMaxReleaseLagNs, nowNs - head.releaseTimeNs);
+            renderEvenPacedOutput(head);
+            long renderedNs = System.nanoTime();
+            evenPacingMaxCommitNs = Math.max(evenPacingMaxCommitNs, renderedNs - nowNs);
+            nowNs = renderedNs;
+        }
+        return defaultTimeoutUs;
+    }
+
+    private void renderEvenPacedOutput(DecodedOutputBuffer output) {
+        DecoderModeTransitionGate.OutputDecision outputDecision =
+                commitOutputBufferForRender(output.index, output.presentationTimeUs);
+        if (outputDecision == DecoderModeTransitionGate.OutputDecision.DROP) {
+            videoDecoder.releaseOutputBuffer(output.index, false);
+        } else if (outputDecision == DecoderModeTransitionGate.OutputDecision.ACCEPT_AND_OPEN) {
+            LimeLog.info("XR mode transition: fresh IDR output reached render gate");
+        }
+    }
+
+    /**
+     * Records when a decoded output became ready against its host time and returns when even
+     * pacing would release it. Every pacing mode records, so that their logs can be compared;
+     * the balanced queue records each output once, when it is dequeued.
+     */
+    private long recordFrameTiming(long presentationTimeUs, long readyNs) {
+        long hostFrameTimeMs = hostFrameTimes.take(presentationTimeUs);
+        return hostFrameTimeMs == HostFrameTimeRing.UNKNOWN
+                ? readyNs : frameTimingPacer.releaseTimeNs(hostFrameTimeMs, readyNs);
+    }
+
+    private void reportFrameTiming(long nowNs) {
+        if (nowNs - frameTimingReportedAtNs < FRAME_TIMING_REPORT_INTERVAL_NS) {
+            return;
+        }
+        frameTimingReportedAtNs = nowNs;
+        String report = frameTimingPacer.takeReport();
+        if (report != null) {
+            LimeLog.info("Frame timing [" + describeOutputPacing(prefs.framePacing) + "]: " + report
+                    + " superseded=" + evenPacingSuperseded
+                    + " release_lag_us_max=" + evenPacingMaxReleaseLagNs / 1000L
+                    + " commit_us_max=" + evenPacingMaxCommitNs / 1000L);
+        }
+        evenPacingSuperseded = 0;
+        evenPacingMaxReleaseLagNs = 0L;
+        evenPacingMaxCommitNs = 0L;
+    }
+
     private void startRendererThread() {
         rendererThread = new Thread() {
             @Override
@@ -2344,14 +2453,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Boost thread priority to reduce decoding latency
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
 
+                final boolean evenPacing =
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_EVEN;
+                frameTimingPacer = new HostTimestampFramePacer(
+                        1_000_000_000L / Math.max(1, refreshRate));
+                frameTimingReportedAtNs = System.nanoTime();
+
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
                         // MediaCodec wakes this call as soon as output is available. A small blocking
                         // timeout therefore preserves minimum latency without polling the codec on an
                         // urgent-display thread thousands of times per second between frames.
-                        int outIndex = videoDecoder.dequeueOutputBuffer(
-                                info, OUTPUT_DEQUEUE_TIMEOUT_US);
+                        long dequeueTimeoutUs = evenPacing
+                                ? releaseDueEvenPacedOutputs(OUTPUT_DEQUEUE_TIMEOUT_US)
+                                : OUTPUT_DEQUEUE_TIMEOUT_US;
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, dequeueTimeoutUs);
 
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
@@ -2363,8 +2480,31 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                             numFramesOut++;
 
+                            long readyNs = System.nanoTime();
+                            long releaseTimeNs = recordFrameTiming(presentationTimeUs, readyNs);
+                            reportFrameTiming(readyNs);
+
+                            if (evenPacing) {
+                                // Held until its host time plus the pacer's delay; the loop's next
+                                // pass releases it. The transition gate sees it at both ends, as
+                                // it does a frame that waits in the balanced queue.
+                                if (evaluatePresentationTransitionOutput(presentationTimeUs)
+                                        == DecoderModeTransitionGate.OutputDecision.DROP) {
+                                    videoDecoder.releaseOutputBuffer(lastIndex, false);
+                                    continue;
+                                }
+                                if (outputBufferQueue.size() >= EVEN_PACING_QUEUE_LIMIT) {
+                                    DecodedOutputBuffer oldestOutputBuffer = outputBufferQueue.poll();
+                                    if (oldestOutputBuffer != null) {
+                                        renderEvenPacedOutput(oldestOutputBuffer);
+                                    }
+                                }
+                                outputBufferQueue.add(new DecodedOutputBuffer(
+                                        lastIndex, presentationTimeUs,
+                                        frameTimingPacer.spacedReleaseNs(releaseTimeNs, readyNs)));
+                            }
                             // Direct pacing modes keep only the newest output already waiting.
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            else if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
 
@@ -2372,6 +2512,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
                                     updateDecodeLatencyStats(presentationTimeUs);
+                                    recordFrameTiming(presentationTimeUs, System.nanoTime());
                                 }
 
                                 if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -2790,6 +2931,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     @Override
+    public void noteHostFrameTime(int frameNumber, long hostFrameTimeMs) {
+        pendingHostFrameTimeMs = hostFrameTimeMs;
+    }
+
+    @Override
     public int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                 int frameNumber, int frameType, char frameHostProcessingLatency,
                                 long receiveTimeMs, long enqueueTimeMs) {
@@ -3184,6 +3330,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         lastTimestampUs = timestampUs;
         final long queuedTimestampUs = timestampUs;
+        // Published before queueing: a fast decoder can return the output first.
+        hostFrameTimes.put(queuedTimestampUs, pendingHostFrameTimeMs);
 
         numFramesIn++;
 

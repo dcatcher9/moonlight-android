@@ -53,7 +53,8 @@ final class XrSettingChoices {
             choice("latency", "Latency"),
             choice("balanced", "Balanced"),
             choice("cap-fps", "FPS cap"),
-            choice("smoothness", "Smooth"));
+            choice("smoothness", "Smooth"),
+            choice("even", "Even"));
     static final List<SessionSettingsModel.Choice> AUDIO_CHOICES = choices(
             choice("2", "Stereo"), choice("51", "5.1"), choice("71", "7.1"));
 

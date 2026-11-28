@@ -493,6 +493,7 @@
     <string name="xr_pacing_balanced">Balanced</string>
     <string name="xr_pacing_fps_cap">FPS cap</string>
     <string name="xr_pacing_smooth">Smooth</string>
+    <string name="xr_pacing_even">Even</string>
     <string name="xr_depth_model_zipdepth_base">ZipDepth Base FP16 · short 384</string>
     <string name="xr_audio_stereo">Stereo</string>
     <string name="xr_audio_51" translatable="false">5.1</string>

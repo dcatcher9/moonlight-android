@@ -203,7 +203,23 @@ launch/resume. Every new connection still requires fresh host confirmation befor
 
 The standard **Video frame pacing** list is the only decoder release-policy control. **Prefer lowest
 latency** nonblockingly drains ready MediaCodec outputs, discards superseded buffers, and immediately
-submits only the newest. **Balanced** alone uses the two-buffer Choreographer queue. The former LFR /
+submits only the newest. **Balanced** alone uses the two-buffer Choreographer queue. **Even** holds
+each decoded output until its host frame time plus one delay and then submits it immediately, so
+that frames the host, the network or the decoder finished at uneven moments are shown at the
+host's spacing. The host time is the RTP timestamp of the frame, in milliseconds, carried beside
+the decode unit to `HostTimestampFramePacer`. That class learns the offset between the two clocks
+from the frames that met the least delay and sizes the delay to the variation it measures, within
+two frame intervals; it lengthens the delay after a few late frames and shortens it slowly. A
+frame later than the delay is submitted when it is ready. Two releases are kept four fifths of a
+frame interval apart, so a frame stamped at or before its predecessor's time follows it instead
+of replacing it unseen; only a frame overtaken while this thread was a whole spacing behind is
+discarded. The output dequeue's timeout is the release timer up to 1.5 ms before a release, and
+the thread parks for the rest. On the Galaxy XR the latest release in a five-second report still
+runs 1.4-2.9 ms behind its time, and handing a frame to the display takes up to 3-8 ms; polling
+the decoder through the last milliseconds did not improve either. Even does not align releases to
+display refreshes. Every
+mode logs the same measurement every five seconds as `Frame timing [...]`, so Lowest latency and
+Even can be compared on one stream. The former LFR /
 "Prefer lower delays" checkbox was an inverted duplicate and must not be reintroduced.
 
 Stopping suppresses MediaCodec frame-rendered callback work immediately but keeps its callback

@@ -1190,6 +1190,9 @@ public class XrStreamPresenter {
             case PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS:
                 pacing = "Maximum smoothness";
                 break;
+            case PreferenceConfiguration.FRAME_PACING_EVEN:
+                pacing = "Even";
+                break;
             default:
                 pacing = "Lowest latency";
                 break;

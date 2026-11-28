@@ -239,9 +239,11 @@ public class MoonBridge {
     // Called from native code; callbacks.c looks it up by name and signature.
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
-                                               int frameSourceId, long receiveTimeMs, long enqueueTimeMs) {
+                                               int frameSourceId, long receiveTimeMs, long enqueueTimeMs,
+                                               long hostFrameTimeMs) {
         BridgeSession session = bridgeSession;
         if (session != null) {
+            session.videoRenderer.noteHostFrameTime(frameNumber, hostFrameTimeMs);
             return session.videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
                     decodeUnitType, frameNumber, frameType, frameHostProcessingLatency,
                     frameSourceId, receiveTimeMs, enqueueTimeMs);

@@ -117,6 +117,7 @@ public class PreferenceConfiguration {
     public static final int FRAME_PACING_BALANCED = 1;
     public static final int FRAME_PACING_CAP_FPS = 2;
     public static final int FRAME_PACING_MAX_SMOOTHNESS = 3;
+    public static final int FRAME_PACING_EVEN = 4;
 
     // The render-mode preference is deprecated: streaming always uses the single XR route (starts
     // in Normal/2D, modes switched from the in-headset bar). The per-variant render modes are gone.
@@ -310,6 +311,9 @@ public class PreferenceConfiguration {
         }
         else if (str.equals("smoothness")) {
             return FRAME_PACING_MAX_SMOOTHNESS;
+        }
+        else if (str.equals("even")) {
+            return FRAME_PACING_EVEN;
         }
         else {
             // Should never get here
